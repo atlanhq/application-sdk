@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from application_sdk.outputs.parquet import ParquetOutput
+from application_sdk.common.types import DFType
+from application_sdk.io.parquet import ParquetWriter
 
 
 @pytest.fixture
@@ -95,12 +96,12 @@ def mock_consolidation_files():
     return _create_mock_files
 
 
-class TestParquetOutputInit:
-    """Test ParquetOutput initialization."""
+class TestParquetWriterInit:
+    """Test ParquetWriter initialization."""
 
     def test_init_default_values(self, base_output_path: str):
-        """Test ParquetOutput initialization with default values."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        """Test ParquetWriter initialization with default values."""
+        parquet_output = ParquetWriter(output_path=base_output_path)
 
         # The output path gets modified by adding suffix, so check it ends with the base path
         assert base_output_path in parquet_output.output_path
@@ -116,8 +117,8 @@ class TestParquetOutputInit:
         # partition_cols was removed from the implementation
 
     def test_init_custom_values(self, base_output_path: str):
-        """Test ParquetOutput initialization with custom values."""
-        parquet_output = ParquetOutput(
+        """Test ParquetWriter initialization with custom values."""
+        parquet_output = ParquetWriter(
             output_path=base_output_path,
             output_suffix="test_suffix",
             typename="test_table",
@@ -144,7 +145,7 @@ class TestParquetOutputInit:
 
     def test_init_creates_output_directory(self, base_output_path: str):
         """Test that initialization creates the output directory."""
-        parquet_output = ParquetOutput(
+        parquet_output = ParquetWriter(
             output_path=base_output_path,
             output_suffix="test_dir",
             typename="test_table",
@@ -155,50 +156,52 @@ class TestParquetOutputInit:
         assert parquet_output.output_path == expected_path
 
 
-class TestParquetOutputPathGen:
-    """Test ParquetOutput path generation."""
+class TestParquetWriterPathGen:
+    """Test ParquetWriter path generation."""
 
     def test_path_gen_with_markers(self, base_output_path: str):
         """Test path generation with start and end markers."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        from application_sdk.io._utils import path_gen
 
-        path = parquet_output.path_gen(start_marker="start_123", end_marker="end_456")
+        path = path_gen(
+            start_marker="start_123", end_marker="end_456", extension=".parquet"
+        )
 
         assert path == "start_123_end_456.parquet"
 
     def test_path_gen_without_chunk_start(self, base_output_path: str):
         """Test path generation without chunk count."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        from application_sdk.io._utils import path_gen
 
-        path = parquet_output.path_gen(chunk_part=5)
+        path = path_gen(chunk_part=5, extension=".parquet")
 
         assert path == "5.parquet"
 
     def test_path_gen_with_chunk_count(self, base_output_path: str):
         """Test path generation with chunk count."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        from application_sdk.io._utils import path_gen
 
-        path = parquet_output.path_gen(chunk_count=10, chunk_part=3)
+        path = path_gen(chunk_count=10, chunk_part=3, extension=".parquet")
 
         assert path == "chunk-10-part3.parquet"
 
 
-class TestParquetOutputWriteDataframe:
-    """Test ParquetOutput pandas DataFrame writing."""
+class TestParquetWriterWriteDataframe:
+    """Test ParquetWriter pandas DataFrame writing."""
 
     @pytest.mark.asyncio
     async def test_write_empty_dataframe(self, base_output_path: str):
         """Test writing an empty DataFrame."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        parquet_output = ParquetWriter(output_path=base_output_path)
         empty_df = pd.DataFrame()
 
-        await parquet_output.write_dataframe(empty_df)
+        await parquet_output.write(empty_df)
 
         assert parquet_output.chunk_count == 0
         assert parquet_output.total_record_count == 0
 
     @pytest.mark.asyncio
-    async def test_write_dataframe_success(
+    async def test_write_success(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test successful DataFrame writing."""
@@ -207,12 +210,12 @@ class TestParquetOutputWriteDataframe:
         ) as mock_upload, patch(
             "pandas.DataFrame.to_parquet"
         ) as mock_to_parquet, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             mock_upload.return_value = AsyncMock()
             mock_prefix.return_value = "test/output/path"
 
-            parquet_output = ParquetOutput(
+            parquet_output = ParquetWriter(
                 output_path=base_output_path,
                 output_suffix="test",
                 use_consolidation=False,
@@ -220,7 +223,7 @@ class TestParquetOutputWriteDataframe:
 
             # Mock os.path.exists after initialization to return True for upload check
             with patch("os.path.exists", return_value=True):
-                await parquet_output.write_dataframe(sample_dataframe)
+                await parquet_output.write(sample_dataframe)
 
             assert parquet_output.chunk_count == 1
 
@@ -232,7 +235,7 @@ class TestParquetOutputWriteDataframe:
             # We can verify this by checking the chunk count and that to_parquet was called
 
     @pytest.mark.asyncio
-    async def test_write_dataframe_with_custom_path_gen(
+    async def test_write_with_custom_path_gen(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test DataFrame writing with custom path generation."""
@@ -241,18 +244,18 @@ class TestParquetOutputWriteDataframe:
         ) as mock_upload, patch(
             "pandas.DataFrame.to_parquet"
         ) as mock_to_parquet, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             mock_upload.return_value = AsyncMock()
             mock_prefix.return_value = "test/output/path"
 
-            parquet_output = ParquetOutput(
+            parquet_output = ParquetWriter(
                 output_path=base_output_path,
                 start_marker="test_start",
                 end_marker="test_end",
             )
 
-            await parquet_output.write_dataframe(sample_dataframe)
+            await parquet_output.write(sample_dataframe)
 
             # Check that to_parquet was called
             mock_to_parquet.assert_called()
@@ -265,44 +268,44 @@ class TestParquetOutputWriteDataframe:
             assert "chunk-" in call_args and ".parquet" in call_args
 
     @pytest.mark.asyncio
-    async def test_write_dataframe_error_handling(
+    async def test_write_error_handling(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test error handling during DataFrame writing."""
         with patch("pandas.DataFrame.to_parquet") as mock_to_parquet:
             mock_to_parquet.side_effect = Exception("Test error")
 
-            parquet_output = ParquetOutput(output_path=base_output_path)
+            parquet_output = ParquetWriter(output_path=base_output_path)
 
             with pytest.raises(Exception, match="Test error"):
-                await parquet_output.write_dataframe(sample_dataframe)
+                await parquet_output.write(sample_dataframe)
 
 
-class TestParquetOutputWriteDaftDataframe:
-    """Test ParquetOutput daft DataFrame writing."""
+class TestParquetWriterWriteDaftDataframe:
+    """Test ParquetWriter daft DataFrame writing."""
 
     @pytest.mark.asyncio
-    async def test_write_daft_dataframe_empty(self, base_output_path: str):
+    async def test_write_empty(self, base_output_path: str):
         """Test writing an empty daft DataFrame."""
         with patch("daft.from_pydict") as mock_daft:
             mock_df = MagicMock()
             mock_df.count_rows.return_value = 0
             mock_daft.return_value = mock_df
 
-            parquet_output = ParquetOutput(output_path=base_output_path)
+            parquet_output = ParquetWriter(output_path=base_output_path)
 
-            await parquet_output.write_daft_dataframe(mock_df)
+            await parquet_output.write(mock_df)
 
             assert parquet_output.chunk_count == 0
             assert parquet_output.total_record_count == 0
 
     @pytest.mark.asyncio
-    async def test_write_daft_dataframe_success(self, base_output_path: str):
+    async def test_write_success(self, base_output_path: str):
         """Test successful daft DataFrame writing."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             mock_upload.return_value = AsyncMock()
             mock_prefix.return_value = "test/output/path"
@@ -316,11 +319,12 @@ class TestParquetOutputWriteDaftDataframe:
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetOutput(
+            parquet_output = ParquetWriter(
                 output_path=base_output_path,
+                df_type=DFType.daft,
             )
 
-            await parquet_output.write_daft_dataframe(mock_df)
+            await parquet_output.write(mock_df)
 
             assert parquet_output.chunk_count == 1
             assert parquet_output.total_record_count == 1000
@@ -336,16 +340,14 @@ class TestParquetOutputWriteDaftDataframe:
             mock_upload.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_write_daft_dataframe_with_parameter_overrides(
-        self, base_output_path: str
-    ):
+    async def test_write_with_parameter_overrides(self, base_output_path: str):
         """Test daft DataFrame writing with parameter overrides."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.services.objectstore.ObjectStore.delete_prefix"
         ) as mock_delete, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             mock_upload.return_value = AsyncMock()
             mock_delete.return_value = AsyncMock()
@@ -360,12 +362,13 @@ class TestParquetOutputWriteDaftDataframe:
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetOutput(
+            parquet_output = ParquetWriter(
                 output_path=base_output_path,
+                df_type=DFType.daft,
             )
 
             # Override parameters in method call
-            await parquet_output.write_daft_dataframe(
+            await parquet_output.write(
                 mock_df, partition_cols=["department", "year"], write_mode="overwrite"
             )
 
@@ -380,14 +383,12 @@ class TestParquetOutputWriteDaftDataframe:
             mock_delete.assert_called_once_with(prefix="test/output/path")
 
     @pytest.mark.asyncio
-    async def test_write_daft_dataframe_with_default_parameters(
-        self, base_output_path: str
-    ):
+    async def test_write_with_default_parameters(self, base_output_path: str):
         """Test daft DataFrame writing with default parameters (uses method default write_mode='append')."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             mock_upload.return_value = AsyncMock()
             mock_prefix.return_value = "test/output/path"
@@ -401,12 +402,13 @@ class TestParquetOutputWriteDaftDataframe:
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetOutput(
+            parquet_output = ParquetWriter(
                 output_path=base_output_path,
+                df_type=DFType.daft,
             )
 
             # Use default parameters
-            await parquet_output.write_daft_dataframe(mock_df)
+            await parquet_output.write(mock_df)
 
             # Check that default method parameters were used
             mock_df.write_parquet.assert_called_once_with(
@@ -416,14 +418,12 @@ class TestParquetOutputWriteDaftDataframe:
             )
 
     @pytest.mark.asyncio
-    async def test_write_daft_dataframe_with_execution_configuration(
-        self, base_output_path: str
-    ):
+    async def test_write_with_execution_configuration(self, base_output_path: str):
         """Test that DAPR limit is properly configured."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             mock_upload.return_value = AsyncMock()
             mock_prefix.return_value = "test/output/path"
@@ -437,9 +437,12 @@ class TestParquetOutputWriteDaftDataframe:
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetOutput(output_path=base_output_path)
+            parquet_output = ParquetWriter(
+                output_path=base_output_path,
+                df_type=DFType.daft,
+            )
 
-            await parquet_output.write_daft_dataframe(mock_df)
+            await parquet_output.write(mock_df)
 
             # Check that execution context was called (don't check exact value since DAPR_MAX_GRPC_MESSAGE_LENGTH is imported)
             mock_ctx.assert_called_once()
@@ -451,20 +454,23 @@ class TestParquetOutputWriteDaftDataframe:
             assert call_args.kwargs["default_morsel_size"] > 0
 
     @pytest.mark.asyncio
-    async def test_write_daft_dataframe_error_handling(self, base_output_path: str):
+    async def test_write_error_handling(self, base_output_path: str):
         """Test error handling during daft DataFrame writing."""
         # Test that count_rows error is properly handled
         mock_df = MagicMock()
         mock_df.count_rows.side_effect = Exception("Count rows error")
 
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        parquet_output = ParquetWriter(
+            output_path=base_output_path,
+            df_type=DFType.daft,
+        )
 
         with pytest.raises(Exception, match="Count rows error"):
-            await parquet_output.write_daft_dataframe(mock_df)
+            await parquet_output.write(mock_df)
 
 
-class TestParquetOutputMetrics:
-    """Test ParquetOutput metrics recording."""
+class TestParquetWriterMetrics:
+    """Test ParquetWriter metrics recording."""
 
     @pytest.mark.asyncio
     async def test_pandas_write_metrics(
@@ -474,18 +480,18 @@ class TestParquetOutputMetrics:
         with patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
-            "application_sdk.outputs.parquet.get_metrics"
+            "application_sdk.io.parquet.get_metrics"
         ) as mock_get_metrics, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             mock_upload.return_value = AsyncMock()
             mock_prefix.return_value = "test/output/path"
             mock_metrics = MagicMock()
             mock_get_metrics.return_value = mock_metrics
 
-            parquet_output = ParquetOutput(output_path=base_output_path)
+            parquet_output = ParquetWriter(output_path=base_output_path)
 
-            await parquet_output.write_dataframe(sample_dataframe)
+            await parquet_output.write(sample_dataframe)
 
             # Check that record metrics were called
             assert (
@@ -498,9 +504,9 @@ class TestParquetOutputMetrics:
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
-            "application_sdk.outputs.parquet.get_metrics"
+            "application_sdk.io.parquet.get_metrics"
         ) as mock_get_metrics, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             mock_upload.return_value = AsyncMock()
             mock_prefix.return_value = "test/output/path"
@@ -516,9 +522,12 @@ class TestParquetOutputMetrics:
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetOutput(output_path=base_output_path)
+            parquet_output = ParquetWriter(
+                output_path=base_output_path,
+                df_type=DFType.daft,
+            )
 
-            await parquet_output.write_daft_dataframe(mock_df)
+            await parquet_output.write(mock_df)
 
             # Check that record metrics were called with correct labels
             assert (
@@ -533,12 +542,12 @@ class TestParquetOutputMetrics:
                 assert labels["type"] == "daft"
 
 
-class TestParquetOutputConsolidation:
-    """Test ParquetOutput consolidation functionality."""
+class TestParquetWriterConsolidation:
+    """Test ParquetWriter consolidation functionality."""
 
     def test_consolidation_init_attributes(self, base_output_path: str):
         """Test that consolidation attributes are properly initialized."""
-        parquet_output = ParquetOutput(
+        parquet_output = ParquetWriter(
             output_path=base_output_path,
             chunk_size=1000,
             buffer_size=200,
@@ -555,7 +564,7 @@ class TestParquetOutputConsolidation:
 
     def test_consolidation_init_with_none_chunk_size(self, base_output_path: str):
         """Test consolidation threshold when chunk_size is None."""
-        parquet_output = ParquetOutput(
+        parquet_output = ParquetWriter(
             output_path=base_output_path, chunk_size=None, buffer_size=200
         )
 
@@ -564,7 +573,7 @@ class TestParquetOutputConsolidation:
 
     def test_temp_folder_path_generation(self, base_output_path: str):
         """Test temp folder path generation."""
-        parquet_output = ParquetOutput(
+        parquet_output = ParquetWriter(
             output_path=base_output_path,
             output_suffix="test_suffix",
             typename="test_type",
@@ -583,7 +592,7 @@ class TestParquetOutputConsolidation:
 
     def test_consolidated_file_path_generation(self, base_output_path: str):
         """Test consolidated file path generation."""
-        parquet_output = ParquetOutput(
+        parquet_output = ParquetWriter(
             output_path=base_output_path,
             output_suffix="test_suffix",
             typename="test_type",
@@ -600,7 +609,7 @@ class TestParquetOutputConsolidation:
 
     def test_start_new_temp_folder(self, base_output_path: str):
         """Test starting a new temp folder."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        parquet_output = ParquetWriter(output_path=base_output_path)
 
         # Initially no temp folder
         assert parquet_output.current_temp_folder_path is None
@@ -629,7 +638,7 @@ class TestParquetOutputConsolidation:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test writing chunk to temp folder."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        parquet_output = ParquetWriter(output_path=base_output_path)
 
         # Start temp folder first
         parquet_output._start_new_temp_folder()
@@ -656,7 +665,7 @@ class TestParquetOutputConsolidation:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test writing chunk to temp folder when no path is set."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        parquet_output = ParquetWriter(output_path=base_output_path)
 
         # Should raise error when no temp folder path is set
         with pytest.raises(ValueError, match="No temp folder path available"):
@@ -672,7 +681,7 @@ class TestParquetOutputConsolidation:
         ) as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             # Setup mocks
             mock_upload.return_value = AsyncMock()
@@ -684,7 +693,7 @@ class TestParquetOutputConsolidation:
             mock_df = MagicMock()
             mock_read.return_value = mock_df
 
-            parquet_output = ParquetOutput(output_path=base_output_path)
+            parquet_output = ParquetWriter(output_path=base_output_path)
             parquet_output._start_new_temp_folder()
             parquet_output.current_folder_records = 500  # Simulate some records
 
@@ -718,7 +727,7 @@ class TestParquetOutputConsolidation:
     @pytest.mark.asyncio
     async def test_consolidate_empty_folder(self, base_output_path: str):
         """Test consolidating when folder is empty."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        parquet_output = ParquetWriter(output_path=base_output_path)
         parquet_output.current_folder_records = 0
         parquet_output.current_temp_folder_path = None
 
@@ -731,7 +740,7 @@ class TestParquetOutputConsolidation:
     @pytest.mark.asyncio
     async def test_cleanup_temp_folders(self, base_output_path: str):
         """Test cleanup of temp folders."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        parquet_output = ParquetWriter(output_path=base_output_path)
 
         # Create multiple temp folders
         parquet_output._start_new_temp_folder()
@@ -759,16 +768,16 @@ class TestParquetOutputConsolidation:
         assert parquet_output.current_folder_records == 0
 
     @pytest.mark.asyncio
-    async def test_write_batched_dataframe_with_consolidation(
+    async def test_write_batches_with_consolidation(
         self, base_output_path: str, mock_consolidation_files
     ):
-        """Test write_batched_dataframe with consolidation enabled."""
+        """Test write_batches with consolidation enabled."""
         with patch("daft.read_parquet") as mock_read, patch(
             "daft.execution_config_ctx"
         ) as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             # Setup mocks
             mock_upload.return_value = AsyncMock()
@@ -783,7 +792,7 @@ class TestParquetOutputConsolidation:
             mock_result.to_pydict.return_value = {"path": ["test_file.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetOutput(
+            parquet_output = ParquetWriter(
                 output_path=base_output_path,
                 chunk_size=500,  # Small threshold for testing
                 buffer_size=100,  # Small buffer for testing
@@ -808,7 +817,7 @@ class TestParquetOutputConsolidation:
             ):
                 mock_df.write_parquet.return_value = create_mock_result(file_paths)
 
-                await parquet_output.write_batched_dataframe(create_test_dataframes())
+                await parquet_output.write_batches(create_test_dataframes())
 
                 # Should have triggered consolidation (600 records > 500 threshold)
                 assert parquet_output.total_record_count == 600
@@ -821,11 +830,9 @@ class TestParquetOutputConsolidation:
                 assert not os.path.exists(temp_base) or len(os.listdir(temp_base)) == 0
 
     @pytest.mark.asyncio
-    async def test_write_batched_dataframe_without_consolidation(
-        self, base_output_path: str
-    ):
-        """Test write_batched_dataframe with consolidation disabled."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+    async def test_write_batches_without_consolidation(self, base_output_path: str):
+        """Test write_batches with consolidation disabled."""
+        parquet_output = ParquetWriter(output_path=base_output_path)
         parquet_output.use_consolidation = False
 
         def create_test_dataframes():
@@ -833,12 +840,10 @@ class TestParquetOutputConsolidation:
             yield df
 
         # Mock the super() call to avoid actual file operations
-        with patch(
-            "application_sdk.outputs.Output.write_batched_dataframe"
-        ) as mock_base_method:
+        with patch("application_sdk.io.Writer.write_batches") as mock_base_method:
             mock_base_method.return_value = AsyncMock()
 
-            await parquet_output.write_batched_dataframe(create_test_dataframes())
+            await parquet_output.write_batches(create_test_dataframes())
 
             # Should have called base class method
             mock_base_method.assert_called_once()
@@ -846,7 +851,7 @@ class TestParquetOutputConsolidation:
     @pytest.mark.asyncio
     async def test_accumulate_dataframe(self, base_output_path: str):
         """Test accumulating DataFrame into temp folders."""
-        parquet_output = ParquetOutput(
+        parquet_output = ParquetWriter(
             output_path=base_output_path,
             chunk_size=500,  # This sets consolidation_threshold internally
             buffer_size=100,
@@ -867,10 +872,10 @@ class TestParquetOutputConsolidation:
             "_start_new_temp_folder",
             wraps=parquet_output._start_new_temp_folder,
         ) as mock_start_folder, patch.object(
-            parquet_output, "write_chunk"
-        ) as mock_write_chunk:
+            parquet_output, "_write_chunk"
+        ) as mock__write_chunk:
             mock_consolidate.return_value = AsyncMock()
-            mock_write_chunk.return_value = AsyncMock()
+            mock__write_chunk.return_value = AsyncMock()
 
             await parquet_output._accumulate_dataframe(large_df)
 
@@ -881,7 +886,7 @@ class TestParquetOutputConsolidation:
     @pytest.mark.asyncio
     async def test_consolidation_error_handling(self, base_output_path: str):
         """Test error handling in consolidation with cleanup."""
-        parquet_output = ParquetOutput(
+        parquet_output = ParquetWriter(
             output_path=base_output_path, use_consolidation=True
         )
 
@@ -900,14 +905,14 @@ class TestParquetOutputConsolidation:
 
             # Should raise the exception and call cleanup
             with pytest.raises(Exception, match="Test error"):
-                await parquet_output.write_batched_dataframe(create_test_dataframes())
+                await parquet_output.write_batches(create_test_dataframes())
 
             mock_cleanup.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_async_generator_support(self, base_output_path: str):
         """Test that consolidation works with async generators."""
-        parquet_output = ParquetOutput(
+        parquet_output = ParquetWriter(
             output_path=base_output_path, use_consolidation=True
         )
 
@@ -929,7 +934,7 @@ class TestParquetOutputConsolidation:
             mock_accumulate.return_value = AsyncMock()
             mock_cleanup.return_value = AsyncMock()
 
-            await parquet_output.write_batched_dataframe(create_async_dataframes())
+            await parquet_output.write_batches(create_async_dataframes())
 
             # Should have called accumulate for each DataFrame
             assert mock_accumulate.call_count == 2
@@ -939,10 +944,10 @@ class TestParquetOutputConsolidation:
     async def test_multiple_write_batched_calls_with_consolidation(
         self, base_output_path: str
     ):
-        """Test multiple calls to write_batched_dataframe with consolidation enabled.
+        """Test multiple calls to write_batches with consolidation enabled.
 
         This test verifies that:
-        1. Multiple calls to write_batched_dataframe work correctly
+        1. Multiple calls to write_batches work correctly
         2. Each call generates separate consolidated files
         3. Chunk counts accumulate across calls
         4. Low thresholds trigger multiple consolidations within a single call
@@ -952,7 +957,7 @@ class TestParquetOutputConsolidation:
         ) as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             # Setup mocks
             mock_upload.return_value = AsyncMock()
@@ -985,8 +990,8 @@ class TestParquetOutputConsolidation:
 
             mock_df.write_parquet.side_effect = mock_write_parquet
 
-            # Create ParquetOutput with very low thresholds to trigger multiple consolidations
-            parquet_output = ParquetOutput(
+            # Create ParquetWriter with very low thresholds to trigger multiple consolidations
+            parquet_output = ParquetWriter(
                 output_path=base_output_path,
                 chunk_size=100,  # Very small consolidation threshold
                 buffer_size=50,  # Very small buffer size
@@ -1009,8 +1014,8 @@ class TestParquetOutputConsolidation:
             # Files are now created by the mock_write_parquet function
 
             try:
-                # First call to write_batched_dataframe
-                await parquet_output.write_batched_dataframe(create_first_batch())
+                # First call to write_batches
+                await parquet_output.write_batches(create_first_batch())
 
                 # Verify first call results
                 first_call_total = parquet_output.total_record_count
@@ -1035,8 +1040,8 @@ class TestParquetOutputConsolidation:
                         )
                         yield df
 
-                # Second call to write_batched_dataframe on the same instance
-                await parquet_output.write_batched_dataframe(create_second_batch())
+                # Second call to write_batches on the same instance
+                await parquet_output.write_batches(create_second_batch())
 
                 # Verify accumulated results across both calls
                 total_records = parquet_output.total_record_count
@@ -1083,7 +1088,7 @@ class TestParquetOutputConsolidation:
         ) as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
-            "application_sdk.outputs.parquet.get_object_store_prefix"
+            "application_sdk.io.parquet.get_object_store_prefix"
         ) as mock_prefix:
             # Setup mocks
             mock_upload.return_value = AsyncMock()
@@ -1101,7 +1106,7 @@ class TestParquetOutputConsolidation:
 
                 # Extreme settings: buffer_size=10, consolidation_threshold=200
                 # This should create many small chunk files before consolidation
-                parquet_output = ParquetOutput(
+                parquet_output = ParquetWriter(
                     output_path=base_output_path,
                     chunk_size=200,  # consolidation_threshold
                     buffer_size=10,  # Very small buffer - each dataframe chunk becomes a file
@@ -1124,7 +1129,7 @@ class TestParquetOutputConsolidation:
                     yield df
 
                 # Files are created by the fixture automatically
-                await parquet_output.write_batched_dataframe(create_large_batch())
+                await parquet_output.write_batches(create_large_batch())
 
                 # Verify results
                 assert parquet_output.total_record_count == 250

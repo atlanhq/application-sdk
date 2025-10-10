@@ -13,7 +13,6 @@ from application_sdk.common.utils import (
 )
 from application_sdk.constants import SQL_QUERIES_PATH, SQL_SERVER_MIN_VERSION
 from application_sdk.handlers import HandlerInterface
-from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import MetadataType
 
@@ -77,10 +76,7 @@ class BaseSQLHandler(HandlerInterface):
         if self.metadata_sql is None:
             raise ValueError("metadata_sql is not defined")
 
-        sql_input = SQLQueryInput(
-            engine=self.sql_client.engine, query=self.metadata_sql, chunk_size=None
-        )
-        df = await sql_input.get_dataframe()
+        df = await self.sql_client.get_results(self.metadata_sql)
         result: List[Dict[Any, Any]] = []
         try:
             for row in df.to_dict(orient="records"):
@@ -103,12 +99,7 @@ class BaseSQLHandler(HandlerInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
-            sql_input = SQLQueryInput(
-                engine=self.sql_client.engine,
-                query=self.test_authentication_sql,
-                chunk_size=None,
-            )
-            df = await sql_input.get_dataframe()
+            df = await self.sql_client.get_results(self.test_authentication_sql)
             df.to_dict(orient="records")
             return True
         except Exception as exc:
@@ -336,7 +327,7 @@ class BaseSQLHandler(HandlerInterface):
                 activities = BaseSQLMetadataExtractionActivities()
                 activities.multidb = True
                 concatenated_df = await activities.query_executor(
-                    sql_engine=self.sql_client.engine if self.sql_client else None,
+                    sql_client=self.sql_client,
                     sql_query=self.tables_check_sql,
                     workflow_args=payload,
                     output_suffix="raw/table",
@@ -344,7 +335,6 @@ class BaseSQLHandler(HandlerInterface):
                     write_to_file=False,
                     concatenate=True,
                     return_dataframe=True,
-                    sql_client=self.sql_client,
                 )
 
                 if concatenated_df is None:
@@ -362,12 +352,9 @@ class BaseSQLHandler(HandlerInterface):
             )
             if not query:
                 raise ValueError("tables_check_sql is not defined")
-            sql_input = SQLQueryInput(
-                engine=self.sql_client.engine, query=query, chunk_size=None
-            )
-            sql_input = await sql_input.get_dataframe()
+            sql_results = await self.sql_client.get_results(query)
             try:
-                total = _sum_counts_from_records(sql_input.to_dict(orient="records"))
+                total = _sum_counts_from_records(sql_results.to_dict(orient="records"))
                 return _build_success(total)
             except Exception as exc:
                 return _build_failure(exc)
@@ -404,13 +391,9 @@ class BaseSQLHandler(HandlerInterface):
 
             # If dialect version not available and client_version_sql is defined, use SQL query
             if not client_version and self.client_version_sql:
-                sql_input = await SQLQueryInput(
-                    query=self.client_version_sql,
-                    engine=self.sql_client.engine,
-                    chunk_size=None,
-                ).get_dataframe()
+                sql_results = await self.sql_client.get_results(self.client_version_sql)
                 version_string = next(
-                    iter(sql_input.to_dict(orient="records")[0].values())
+                    iter(sql_results.to_dict(orient="records")[0].values())
                 )
                 version_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", version_string)
                 if version_match:

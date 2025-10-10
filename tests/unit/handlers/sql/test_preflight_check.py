@@ -249,7 +249,7 @@ async def test_check_client_version_sql_query(
     }
 
     with patch(
-        "application_sdk.inputs.sql_query.SQLQueryInput", new_callable=AsyncMock
+        "application_sdk.clients.sql.BaseSQLClient.run_query", new_callable=AsyncMock
     ) as mock_sql_input:
         # Configure the mock to return our mock dataframe
         mock_instance = mock_sql_input.return_value

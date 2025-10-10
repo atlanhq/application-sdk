@@ -16,9 +16,8 @@ from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.handlers import HandlerInterface
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.inputs.sql_query import SQLQueryInput
+from application_sdk.io.parquet import ParquetWriter
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.services.objectstore import ObjectStore
 from application_sdk.services.secretstore import SecretStore
 from application_sdk.transformers import TransformerInterface
@@ -202,21 +201,24 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         try:
             state = await self._get_state(workflow_args)
-            sql_input = SQLQueryInput(
-                engine=state.sql_client.engine,
-                query=self.get_formatted_query(self.fetch_queries_sql, workflow_args),
-                chunk_size=None,
-            )
-            sql_input = await sql_input.get_dataframe()
+            sql_client = state.sql_client
+            if not sql_client:
+                logger.error("SQL client not initialized")
+                raise ValueError("SQL client not initialized")
 
-            raw_output = ParquetOutput(
+            formatted_query = self.get_formatted_query(
+                self.fetch_queries_sql, workflow_args
+            )
+            sql_results = await sql_client.get_results(formatted_query)
+
+            raw_output = ParquetWriter(
                 output_path=workflow_args["output_path"],
                 output_suffix="raw/query",
                 chunk_size=workflow_args["miner_args"].get("chunk_size", 100000),
                 start_marker=workflow_args["start_marker"],
                 end_marker=workflow_args["end_marker"],
             )
-            await raw_output.write_dataframe(sql_input)
+            await raw_output.write(sql_results)
             logger.info(
                 f"Query fetch completed, {raw_output.total_record_count} records processed",
             )
