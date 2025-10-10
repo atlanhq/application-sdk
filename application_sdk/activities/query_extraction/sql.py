@@ -588,6 +588,43 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
+    async def fetch_single_batch(
+        self, workflow_args: Dict[str, Any], batch_index: int
+    ) -> Dict[str, Any]:
+        """Fetch a single batch by index from StateStore.
+
+        Args:
+            workflow_args (Dict[str, Any]): Workflow arguments containing workflow_id
+            batch_index (int): Index of the batch to fetch
+
+        Returns:
+            Dict[str, Any]: The single batch data
+
+        Raises:
+            Exception: If batch retrieval fails
+        """
+        try:
+            from application_sdk.services.statestore import StateStore, StateType
+
+            workflow_id: str = workflow_args.get("workflow_id") or get_workflow_id()
+            state = await StateStore.get_state(workflow_id, StateType.WORKFLOWS)
+            batches: List[Dict[str, Any]] = state.get("query_batches", [])
+
+            if batch_index >= len(batches):
+                raise IndexError(
+                    f"Batch index {batch_index} out of range for {len(batches)} batches"
+                )
+
+            batch = batches[batch_index]
+            logger.info(f"Fetched batch {batch_index + 1}/{len(batches)}")
+            return batch
+
+        except Exception as e:
+            logger.error(f"Failed to fetch batch {batch_index}: {e}")
+            raise
+
+    @activity.defn
+    @auto_heartbeater
     async def write_final_marker(self, workflow_args: Dict[str, Any]) -> None:
         """Write final marker after all fetches complete.
 

@@ -63,6 +63,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         return [
             activities.get_query_batches,
             activities.load_query_batches,
+            activities.fetch_single_batch,
             activities.fetch_queries,
             activities.write_final_marker,
             activities.preflight_check,
@@ -100,7 +101,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         )
 
         # Generate and persist batch markers (activity returns only a small handle)
-        await workflow.execute_activity_method(
+        batch_handles: List[Dict[str, Any]] = await workflow.execute_activity_method(
             self.activities_cls.get_query_batches,
             workflow_args,
             retry_policy=retry_policy,
@@ -108,23 +109,27 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
 
-        # Load the actual batches from StateStore to avoid oversized activity results
-        results: List[Dict[str, Any]] = await workflow.execute_activity_method(
-            self.activities_cls.load_query_batches,
-            workflow_args,
-            retry_policy=retry_policy,
-            start_to_close_timeout=self.default_start_to_close_timeout,
-            heartbeat_timeout=self.default_heartbeat_timeout,
-        )
+        batch_count = batch_handles[0]["count"] if batch_handles else 0
+        logger.info(f"Processing {batch_count} query batches")
 
         miner_activities: List[Coroutine[Any, Any, None]] = []
 
-        # Extract Queries
-        for result in results:
+        # Fetch and process each batch individually to avoid size limits
+        for batch_index in range(batch_count):
+            # Fetch the specific batch
+            batch_data = await workflow.execute_activity(
+                self.activities_cls.fetch_single_batch,
+                args=[workflow_args, batch_index],
+                retry_policy=retry_policy,
+                start_to_close_timeout=self.default_start_to_close_timeout,
+                heartbeat_timeout=self.default_heartbeat_timeout,
+            )
+
+            # Create activity args for this specific batch
             activity_args = workflow_args.copy()
-            activity_args["sql_query"] = result["sql"]
-            activity_args["start_marker"] = result["start"]
-            activity_args["end_marker"] = result["end"]
+            activity_args["sql_query"] = batch_data["sql"]
+            activity_args["start_marker"] = batch_data["start"]
+            activity_args["end_marker"] = batch_data["end"]
 
             miner_activities.append(
                 workflow.execute_activity(
