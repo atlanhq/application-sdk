@@ -140,7 +140,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "0.1.1rc51"
+version = "0.1.1rc54"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -168,6 +168,9 @@ iam-auth = [
 ]
 iceberg = [
     { name = "pyiceberg" },
+]
+mcp = [
+    { name = "fastmcp" },
 ]
 pandas = [
     { name = "pandas" },
@@ -208,9 +211,6 @@ examples = [
     { name = "psycopg", extra = ["binary"] },
     { name = "snowflake-sqlalchemy" },
 ]
-mcp = [
-    { name = "fastmcp" },
-]
 test = [
     { name = "coverage" },
     { name = "hypothesis" },
@@ -229,6 +229,7 @@ requires-dist = [
     { name = "duckdb-engine", specifier = ">=0.17.0" },
     { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=37.1.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },
+    { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.12.3" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "numpy", marker = "extra == 'scale-data-generator'", specifier = ">=1.23.5,<3.0.0" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.27.0" },
@@ -250,7 +251,7 @@ requires-dist = [
     { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.7.1" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
 ]
-provides-extras = ["workflows", "pandas", "daft", "iceberg", "sqlalchemy", "iam-auth", "tests", "scale-data-generator", "distributed-lock"]
+provides-extras = ["workflows", "pandas", "daft", "iceberg", "sqlalchemy", "iam-auth", "tests", "scale-data-generator", "distributed-lock", "mcp"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -267,7 +268,6 @@ examples = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.7" },
     { name = "snowflake-sqlalchemy", specifier = ">=1.7.0" },
 ]
-mcp = [{ name = "fastmcp", specifier = ">=2.12.3" }]
 test = [
     { name = "coverage", specifier = ">=7.6.1" },
     { name = "hypothesis", specifier = ">=6.114.0" },
