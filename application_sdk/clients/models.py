@@ -31,7 +31,11 @@ class DatabaseConfig(BaseModel):
     )
     parameters: Optional[List[str]] = Field(
         default=None,
-        description="List of additional connection parameter names that can be dynamically added from credentials",
+        description="List of additional connection parameter names that can be dynamically added from credentials to the connection string. ex: ['ssl_mode'] will be added to the connection string as ?ssl_mode=require",
+    )
+    connect_args: Optional[Dict[str, Any]] = Field(
+        default={},
+        description="Additional connection arguments to be passed to SQLAlchemy. ex: {'sslmode': 'require'}",
     )
 
     class Config:

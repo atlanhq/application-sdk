@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import AsyncBaseSQLClient
 from application_sdk.handlers.sql import BaseSQLHandler
 
@@ -10,6 +11,11 @@ from application_sdk.handlers.sql import BaseSQLHandler
 @pytest.fixture
 def async_sql_client():
     client = AsyncBaseSQLClient()
+    client.DB_CONFIG = DatabaseConfig(
+        template="test://{username}:{password}@{host}:{port}/{database}",
+        required=["username", "password", "host", "port", "database"],
+        connect_args={},
+    )
     client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return client
 
@@ -75,9 +81,10 @@ async def test_load(
     await async_sql_client.load(credentials)
 
     # Assertions to verify behavior
+    assert async_sql_client.DB_CONFIG is not None
     create_async_engine.assert_called_once_with(
         async_sql_client.get_sqlalchemy_connection_string(),
-        connect_args=async_sql_client.sql_alchemy_connect_args,
+        connect_args=async_sql_client.DB_CONFIG.connect_args,
         pool_pre_ping=True,
     )
     assert async_sql_client.engine == mock_engine
