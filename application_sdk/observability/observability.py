@@ -383,7 +383,6 @@ class AtlanObservability(Generic[T], ABC):
 
         This method:
         - Groups records by partition (year/month/day)
-        - Merges with existing data if available
         - Uses ParquetOutput abstraction for efficient writing
         - Automatically handles chunking, compression, and dual upload
         - Provides robust error handling per partition
