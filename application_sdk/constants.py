@@ -75,7 +75,7 @@ STATE_STORE_PATH_TEMPLATE = (
 
 # Observability Constants
 #: Directory for storing observability data
-OBSERVABILITY_DIR = "artifacts/apps/{application_name}/observability"
+OBSERVABILITY_DIR = "artifacts/apps/{deployment_name}/observability"
 
 # Workflow Client Constants
 #: Host address for the Temporal server
