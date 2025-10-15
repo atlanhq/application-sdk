@@ -289,12 +289,15 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         # Update format string to use the bound logger_name
         atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
         self.logger.add(
-            sys.stderr, format=atlan_format_str, level=LOG_LEVEL, colorize=True
+            sys.stderr,
+            format=atlan_format_str,
+            level=SEVERITY_MAPPING[LOG_LEVEL],
+            colorize=True,
         )
 
         # Add sink for parquet logging only if Dapr sink is enabled
         if ENABLE_OBSERVABILITY_DAPR_SINK:
-            self.logger.add(self.parquet_sink, level=LOG_LEVEL)
+            self.logger.add(self.parquet_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
             # Start flush task only if Dapr sink is enabled
             if not AtlanLoggerAdapter._flush_task_started:
                 try:
@@ -353,7 +356,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 self.logger_provider.add_log_record_processor(batch_processor)
 
                 # Add OTLP sink
-                self.logger.add(self.otlp_sink, level=LOG_LEVEL)
+                self.logger.add(self.otlp_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
 
             except Exception as e:
                 logging.error(f"Failed to setup OTLP logging: {str(e)}")
