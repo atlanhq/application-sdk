@@ -108,12 +108,7 @@ class AtlanObservability(Generic[T], ABC):
 
         # Initialize ParquetOutput for efficient parquet writing with dual upload support
         self._parquet_output = ParquetOutput(
-            output_path=data_dir,
-            output_suffix="",
-            chunk_size=100000,  # 100k records per chunk for optimal performance
-            buffer_size=5000,   # 5k records in buffer for memory efficiency
-            use_consolidation=True,  # Use advanced chunking and consolidation
-            retain_local_copy=False,  # Don't keep local files after upload
+                use_consolidation=True
         )
 
         # Register this instance
@@ -429,28 +424,21 @@ class AtlanObservability(Generic[T], ABC):
                 df = new_df
 
                 # Use ParquetOutput abstraction for efficient writing and uploading
-                # Use the class-level instance with partition-specific output path
+                # Set the output path for this partition
                 try:
-                    # Temporarily update the output path for this partition
-                    original_output_path = self._parquet_output.output_path
                     self._parquet_output.output_path = partition_path
 
                     # Write using the abstraction - handles chunking, compression, and dual upload automatically
                     await self._parquet_output.write_daft_dataframe(
-                        dataframe=df,
+                        dataframe=df,  
                         write_mode="append",  # Let Daft handle merging with existing data
                         morsel_size=10000,  # Optimal morsel size for Daft processing
                     )
-                    
-                    # Restore original output path
-                    self._parquet_output.output_path = original_output_path
                     
                     logging.debug(f"Successfully processed {len(df)} records for partition: {partition_path}")
                     
                 except Exception as partition_error:
                     logging.error(f"Error processing partition {partition_path}: {str(partition_error)}")
-                    # Continue processing other partitions even if one fails
-                    continue
 
             # Clean up old records if enabled
             if self._cleanup_enabled:
