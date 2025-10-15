@@ -394,12 +394,7 @@ class ParquetOutput(BaseOutput):
         """Set the output path and ensure the directory exists."""
         self._output_path = value
         if value:
-            try:
-                os.makedirs(value, exist_ok=True)
-                logger.debug(f"Created directory: {value}")
-            except Exception as e:
-                logger.error(f"Failed to create directory {value}: {e}")
-                raise
+            os.makedirs(value, exist_ok=True)
 
     # Consolidation helper methods
 
@@ -570,47 +565,22 @@ class ParquetOutput(BaseOutput):
             dataframe (pd.DataFrame): The DataFrame to write.
         """
         try:
-            logger.debug(f"write_dataframe called with DataFrame of length: {len(dataframe)}")
-            logger.debug(f"DataFrame columns: {list(dataframe.columns) if hasattr(dataframe, 'columns') else 'No columns'}")
-            logger.debug(f"DataFrame dtypes: {dataframe.dtypes.to_dict() if hasattr(dataframe, 'dtypes') else 'No dtypes'}")
-            
             if len(dataframe) == 0:
-                logger.debug("DataFrame is empty, returning early")
                 return
 
             # Ensure the output directory exists
             if self.output_path:
                 os.makedirs(self.output_path, exist_ok=True)
-                logger.debug(f"Ensured directory exists: {self.output_path}")
-            else:
-                logger.error("output_path is None or empty")
-                raise ValueError("output_path is None or empty")
 
             # Create a simple parquet file in the output directory
             parquet_file_path = os.path.join(self.output_path, "data.parquet")
-            logger.debug(f"Creating parquet file: {parquet_file_path}")
-            
-            # Write the parquet file with proper error handling
-            try:
-                dataframe.to_parquet(parquet_file_path, index=False, compression="snappy")
-                logger.debug(f"Parquet file creation completed: {parquet_file_path}")
-            except Exception as e:
-                logger.error(f"Failed to create parquet file {parquet_file_path}: {e}")
-                logger.error(f"DataFrame info: {dataframe.info() if hasattr(dataframe, 'info') else 'No info method'}")
-                raise
-            
-            # Verify the file was created
-            if not os.path.exists(parquet_file_path):
-                raise FileNotFoundError(f"Parquet file was not created: {parquet_file_path}")
-            
-            logger.debug(f"Successfully created parquet file: {parquet_file_path}")
+            dataframe.to_parquet(parquet_file_path, index=False, compression="snappy")
 
             # Upload to object store
             from application_sdk.services.objectstore import ObjectStore
             
             # Upload to upstream object store if enabled
             if ENABLE_ATLAN_UPLOAD:
-                logger.debug(f"Uploading to upstream object store: {parquet_file_path}")
                 await ObjectStore.upload_file(
                     source=parquet_file_path,
                     store_name=UPSTREAM_OBJECT_STORE_NAME,
@@ -619,7 +589,6 @@ class ParquetOutput(BaseOutput):
                 )
             
             # Upload to primary object store
-            logger.debug(f"Uploading to primary object store: {parquet_file_path}")
             await ObjectStore.upload_file(
                 source=parquet_file_path,
                 destination=get_object_store_prefix(parquet_file_path),
@@ -634,8 +603,6 @@ class ParquetOutput(BaseOutput):
                 labels={"type": "pandas", "mode": "append"},
                 description="Number of records written to Parquet files from pandas DataFrame",
             )
-
-            logger.debug(f"Successfully wrote {len(dataframe)} records to {parquet_file_path}")
 
         except Exception as e:
             # Record metrics for failed write

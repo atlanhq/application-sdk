@@ -410,11 +410,8 @@ class AtlanObservability(Generic[T], ABC):
 
             # Write records to each partition using ParquetOutput abstraction
             for partition_path, partition_data in partition_records.items():
-                logging.debug(f"Processing partition: {partition_path} with {len(partition_data)} records")
-                
                 # Create new dataframe from current records
                 new_df = pd.DataFrame(partition_data)
-                logging.debug(f"Created DataFrame with shape: {new_df.shape}")
 
                 # Extract partition values from path and add to dataframe
                 # Split the partition path to get individual partition directories
@@ -429,32 +426,24 @@ class AtlanObservability(Generic[T], ABC):
 
                 # Use new data directly - let ParquetOutput handle consolidation and merging
                 df = new_df
-                logging.debug(f"Final DataFrame shape: {df.shape}, columns: {list(df.columns)}")
 
                 # Skip if DataFrame is empty
                 if len(df) == 0:
-                    logging.debug(f"Skipping empty DataFrame for partition: {partition_path}")
                     continue
 
                 # Use ParquetOutput abstraction for efficient writing and uploading
                 # Set the output path for this partition
                 try:
-                    logging.debug(f"Processing partition: {partition_path}")
                     parquet_output = self._get_parquet_output()
                     parquet_output.output_path = partition_path
-                    logging.debug(f"Set output_path to: {parquet_output.output_path}")
 
                     # Write using the abstraction - handles chunking, compression, and dual upload automatically
                     await parquet_output.write_dataframe(
                         dataframe=df
                     )
                     
-                    logging.debug(f"Successfully processed {len(df)} records for partition: {partition_path}")
-                    
                 except Exception as partition_error:
                     logging.error(f"Error processing partition {partition_path}: {str(partition_error)}")
-                    import traceback
-                    logging.error(f"Full traceback: {traceback.format_exc()}")
 
             # Clean up old records if enabled
             if self._cleanup_enabled:
