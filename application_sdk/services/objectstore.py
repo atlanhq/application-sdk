@@ -12,9 +12,7 @@ from temporalio import activity
 from application_sdk.constants import (
     DAPR_MAX_GRPC_MESSAGE_LENGTH,
     DEPLOYMENT_OBJECT_STORE_NAME,
-    ENABLE_ATLAN_UPLOAD,
     TEMPORARY_PATH,
-    UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -257,26 +255,15 @@ class ObjectStore:
     ) -> None:
         """Upload a single file to the object store.
 
-        This method performs a primary upload to the specified store. If ENABLE_ATLAN_UPLOAD
-        is enabled and the primary store is not the upstream store, it will also perform
-        a secondary upload to the upstream store.
-
         Args:
             source (str): Local path to the file to upload.
             destination (str): Object store key where the file will be stored.
             store_name (str, optional): Name of the Dapr object store binding to use.
                 Defaults to DEPLOYMENT_OBJECT_STORE_NAME.
-            retain_local_copy (bool, optional): Whether to keep the local file after upload.
-                Defaults to False.
 
         Raises:
             IOError: If the source file cannot be read.
-            Exception: If there's an error uploading to the primary object store.
-
-        Note:
-            - If ENABLE_ATLAN_UPLOAD is True, files are also uploaded to UPSTREAM_OBJECT_STORE_NAME
-            - Upstream upload failures are logged as warnings but don't fail the operation
-            - The local file is cleaned up after successful primary upload (unless retain_local_copy=True)
+            Exception: If there's an error uploading to the object store.
 
         Example:
             >>> await ObjectStore.upload_file(
@@ -292,31 +279,13 @@ class ObjectStore:
             raise e
 
         try:
-            # Primary upload to the specified store
             await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_CREATE_OPERATION,
                 data=file_content,
                 metadata=cls._create_file_metadata(destination),
                 store_name=store_name,
             )
-            logger.debug(f"Successfully uploaded file to {store_name}: {destination}")
-            
-            # Secondary upload to upstream store if enabled
-            if ENABLE_ATLAN_UPLOAD and store_name != UPSTREAM_OBJECT_STORE_NAME:
-                try:
-                    await cls._invoke_dapr_binding(
-                        operation=cls.OBJECT_CREATE_OPERATION,
-                        data=file_content,
-                        metadata=cls._create_file_metadata(destination),
-                        store_name=UPSTREAM_OBJECT_STORE_NAME,
-                    )
-                    logger.debug(f"Successfully uploaded file to upstream store {UPSTREAM_OBJECT_STORE_NAME}: {destination}")
-                except Exception as upstream_error:
-                    # Log upstream upload error but don't fail the entire operation
-                    logger.warning(
-                        f"Failed to upload file to upstream store {UPSTREAM_OBJECT_STORE_NAME}: {str(upstream_error)}"
-                    )
-                    
+            logger.debug(f"Successfully uploaded file: {destination}")
         except Exception as e:
             logger.error(
                 f"Error uploading file {destination} to object store: {str(e)}"
@@ -338,9 +307,6 @@ class ObjectStore:
     ) -> None:
         """Upload all files from a directory to the object store.
 
-        This method uploads all files in a directory using upload_file, which means
-        it inherits the dual upload functionality (primary + upstream if enabled).
-
         Args:
             source (str): Local directory path containing files to upload.
             destination (str): Object store prefix where files will be stored.
@@ -348,16 +314,10 @@ class ObjectStore:
                 Defaults to DEPLOYMENT_OBJECT_STORE_NAME.
             recursive (bool, optional): Whether to include subdirectories.
                 Defaults to True.
-            retain_local_copy (bool, optional): Whether to keep local files after upload.
-                Defaults to False.
 
         Raises:
             ValueError: If the source path is not a valid directory.
             Exception: If there's an error during the upload process.
-
-        Note:
-            - Each file is uploaded using upload_file, which supports dual upload
-            - If ENABLE_ATLAN_UPLOAD is True, files are also uploaded to upstream store
 
         Example:
             >>> # Upload all files recursively
