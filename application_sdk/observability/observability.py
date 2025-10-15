@@ -26,7 +26,7 @@ from application_sdk.constants import (
     TRACES_FILE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
-from application_sdk.outputs.parquet import ParquetOutput
+# Import moved to method level to avoid circular import
 
 
 class LogRecord(BaseModel):
@@ -106,10 +106,8 @@ class AtlanObservability(Generic[T], ABC):
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
 
-        # Initialize ParquetOutput for efficient parquet writing with dual upload support
-        self._parquet_output = ParquetOutput(
-                use_consolidation=True
-        )
+        # Initialize ParquetOutput lazily to avoid circular import
+        self._parquet_output = None
 
         # Register this instance
         AtlanObservability._instances.append(self)
@@ -118,6 +116,13 @@ class AtlanObservability(Generic[T], ABC):
         if not hasattr(AtlanObservability, "_handlers_setup"):
             self._setup_error_handlers()
             AtlanObservability._handlers_setup = True
+
+    def _get_parquet_output(self):
+        """Get ParquetOutput instance, initializing it lazily to avoid circular import."""
+        if self._parquet_output is None:
+            from application_sdk.outputs.parquet import ParquetOutput
+            self._parquet_output = ParquetOutput(use_consolidation=True)
+        return self._parquet_output
 
     def _setup_error_handlers(self):
         """Set up signal handlers and exception hook.
@@ -405,14 +410,16 @@ class AtlanObservability(Generic[T], ABC):
 
             # Write records to each partition using ParquetOutput abstraction
             for partition_path, partition_data in partition_records.items():
+                logging.debug(f"Processing partition: {partition_path} with {len(partition_data)} records")
+                
                 # Create new dataframe from current records
                 new_df = pd.DataFrame(partition_data)
+                logging.debug(f"Created DataFrame with shape: {new_df.shape}")
 
                 # Extract partition values from path and add to dataframe
-                partition_parts = os.path.basename(os.path.dirname(partition_path)).split(
-                    os.sep
-                )
-                for part in partition_parts:
+                # Split the partition path to get individual partition directories
+                path_parts = partition_path.split(os.sep)
+                for part in path_parts:
                     if part.startswith("year="):
                         new_df["year"] = int(part.split("=")[1])
                     elif part.startswith("month="):
@@ -422,23 +429,32 @@ class AtlanObservability(Generic[T], ABC):
 
                 # Use new data directly - let ParquetOutput handle consolidation and merging
                 df = new_df
+                logging.debug(f"Final DataFrame shape: {df.shape}, columns: {list(df.columns)}")
+
+                # Skip if DataFrame is empty
+                if len(df) == 0:
+                    logging.debug(f"Skipping empty DataFrame for partition: {partition_path}")
+                    continue
 
                 # Use ParquetOutput abstraction for efficient writing and uploading
                 # Set the output path for this partition
                 try:
-                    self._parquet_output.output_path = partition_path
+                    logging.debug(f"Processing partition: {partition_path}")
+                    parquet_output = self._get_parquet_output()
+                    parquet_output.output_path = partition_path
+                    logging.debug(f"Set output_path to: {parquet_output.output_path}")
 
                     # Write using the abstraction - handles chunking, compression, and dual upload automatically
-                    await self._parquet_output.write_daft_dataframe(
-                        dataframe=df,  
-                        write_mode="append",  # Let Daft handle merging with existing data
-                        morsel_size=10000,  # Optimal morsel size for Daft processing
+                    await parquet_output.write_dataframe(
+                        dataframe=df
                     )
                     
                     logging.debug(f"Successfully processed {len(df)} records for partition: {partition_path}")
                     
                 except Exception as partition_error:
                     logging.error(f"Error processing partition {partition_path}: {str(partition_error)}")
+                    import traceback
+                    logging.error(f"Full traceback: {traceback.format_exc()}")
 
             # Clean up old records if enabled
             if self._cleanup_enabled:

@@ -6,12 +6,11 @@ from typing import TYPE_CHECKING, AsyncGenerator, Generator, List, Optional, Uni
 
 from temporalio import activity
 
-from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
-from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
+from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH, TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
-from application_sdk.outputs import Output
+# Import moved to class level to avoid circular import
 from application_sdk.services.objectstore import ObjectStore
 from application_sdk.constants import ENABLE_ATLAN_UPLOAD, UPSTREAM_OBJECT_STORE_NAME
 
@@ -23,6 +22,51 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
+def get_object_store_prefix(path: str) -> str:
+    """Get the object store prefix for the path.
+
+    This function handles two types of paths:
+    1. Paths under TEMPORARY_PATH - converts them to relative object store paths
+    2. User-provided paths - returns them as-is (already relative object store paths)
+
+    Args:
+        path: The path to convert to object store prefix.
+
+    Returns:
+        The object store prefix for the path.
+
+    Examples:
+        >>> # Temporary path case
+        >>> get_object_store_prefix("./local/tmp/artifacts/apps/appName/workflows/wf-123/run-456")
+        "artifacts/apps/appName/workflows/wf-123/run-456"
+
+        >>> # User-provided path case
+        >>> get_object_store_prefix("datasets/sales/2024/")
+        "datasets/sales/2024"
+    """
+    # Normalize paths for comparison
+    abs_path = os.path.abspath(path)
+    abs_temp_path = os.path.abspath(TEMPORARY_PATH)
+
+    # Check if path is under TEMPORARY_PATH
+    try:
+        # Use os.path.commonpath to properly check if path is under temp directory
+        # This prevents false positives like '/tmp/local123' matching '/tmp/local'
+        common_path = os.path.commonpath([abs_path, abs_temp_path])
+        if common_path == abs_temp_path:
+            # Path is under temp directory, convert to relative object store path
+            relative_path = os.path.relpath(abs_path, abs_temp_path)
+            # Normalize path separators to forward slashes for object store
+            return relative_path.replace(os.path.sep, "/")
+        else:
+            # Path is already a relative object store path, return as-is
+            return path.strip("/")
+    except ValueError:
+        # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
+        # In this case, treat as user-provided path, return as-is
+        return path.strip("/")
+
+
 class WriteMode(Enum):
     """Enumeration of write modes for Parquet output operations."""
 
@@ -31,7 +75,11 @@ class WriteMode(Enum):
     OVERWRITE_PARTITIONS = "overwrite-partitions"
 
 
-class ParquetOutput(Output):
+class BaseOutput:
+    """Base class for output handlers to avoid circular import."""
+    pass
+
+class ParquetOutput(BaseOutput):
     """Output handler for writing data to Parquet files.
 
     This class handles writing DataFrames to Parquet files with support for chunking
@@ -88,7 +136,7 @@ class ParquetOutput(Output):
             use_consolidation (bool, optional): Whether to use consolidation.
                 Defaults to False.
         """
-        self.output_path = output_path
+        self._output_path = output_path
         self.output_suffix = output_suffix
         self.typename = typename
         self.chunk_size = chunk_size
@@ -128,7 +176,6 @@ class ParquetOutput(Output):
         self.output_path = os.path.join(self.output_path, self.output_suffix)
         if self.typename:
             self.output_path = os.path.join(self.output_path, self.typename)
-        os.makedirs(self.output_path, exist_ok=True)
 
     async def write_batched_dataframe(
         self,
@@ -309,6 +356,51 @@ class ParquetOutput(Output):
         """
         return self.output_path
 
+    def path_gen(
+        self,
+        chunk_count: Optional[int] = None,
+        chunk_part: int = 0,
+        start_marker: Optional[str] = None,
+        end_marker: Optional[str] = None,
+    ) -> str:
+        """Generate a file path for a chunk.
+
+        Args:
+            chunk_count (Optional[int]): Total number of chunks.
+            chunk_part (int): Part number of the chunk.
+            start_marker (Optional[str]): Start marker for query extraction.
+            end_marker (Optional[str]): End marker for query extraction.
+
+        Returns:
+            str: Generated file path for the chunk.
+        """
+        # For Query Extraction - use start and end markers without chunk count
+        if start_marker and end_marker:
+            return f"{start_marker}_{end_marker}{self._EXTENSION}"
+
+        # For regular chunking - include chunk count
+        if chunk_count is None:
+            return f"{str(chunk_part)}{self._EXTENSION}"
+        else:
+            return f"chunk-{str(chunk_count)}-part{str(chunk_part)}{self._EXTENSION}"
+
+    @property
+    def output_path(self) -> str:
+        """Get the output path."""
+        return self._output_path
+
+    @output_path.setter
+    def output_path(self, value: str) -> None:
+        """Set the output path and ensure the directory exists."""
+        self._output_path = value
+        if value:
+            try:
+                os.makedirs(value, exist_ok=True)
+                logger.debug(f"Created directory: {value}")
+            except Exception as e:
+                logger.error(f"Failed to create directory {value}: {e}")
+                raise
+
     # Consolidation helper methods
 
     def _get_temp_folder_path(self, folder_index: int) -> str:
@@ -470,6 +562,96 @@ class ParquetOutput(Output):
 
         except Exception as e:
             logger.warning(f"Error cleaning up temp folders: {str(e)}")
+
+    async def write_dataframe(self, dataframe: "pd.DataFrame"):
+        """Write a pandas DataFrame to Parquet files and upload to object store.
+
+        Args:
+            dataframe (pd.DataFrame): The DataFrame to write.
+        """
+        try:
+            logger.debug(f"write_dataframe called with DataFrame of length: {len(dataframe)}")
+            logger.debug(f"DataFrame columns: {list(dataframe.columns) if hasattr(dataframe, 'columns') else 'No columns'}")
+            logger.debug(f"DataFrame dtypes: {dataframe.dtypes.to_dict() if hasattr(dataframe, 'dtypes') else 'No dtypes'}")
+            
+            if len(dataframe) == 0:
+                logger.debug("DataFrame is empty, returning early")
+                return
+
+            # Ensure the output directory exists
+            if self.output_path:
+                os.makedirs(self.output_path, exist_ok=True)
+                logger.debug(f"Ensured directory exists: {self.output_path}")
+            else:
+                logger.error("output_path is None or empty")
+                raise ValueError("output_path is None or empty")
+
+            # Create a simple parquet file in the output directory
+            parquet_file_path = os.path.join(self.output_path, "data.parquet")
+            logger.debug(f"Creating parquet file: {parquet_file_path}")
+            
+            # Write the parquet file with proper error handling
+            try:
+                dataframe.to_parquet(parquet_file_path, index=False, compression="snappy")
+                logger.debug(f"Parquet file creation completed: {parquet_file_path}")
+            except Exception as e:
+                logger.error(f"Failed to create parquet file {parquet_file_path}: {e}")
+                logger.error(f"DataFrame info: {dataframe.info() if hasattr(dataframe, 'info') else 'No info method'}")
+                raise
+            
+            # Verify the file was created
+            if not os.path.exists(parquet_file_path):
+                raise FileNotFoundError(f"Parquet file was not created: {parquet_file_path}")
+            
+            logger.debug(f"Successfully created parquet file: {parquet_file_path}")
+
+            # Upload to object store
+            from application_sdk.services.objectstore import ObjectStore
+            
+            # Upload to upstream object store if enabled
+            if ENABLE_ATLAN_UPLOAD:
+                logger.debug(f"Uploading to upstream object store: {parquet_file_path}")
+                await ObjectStore.upload_file(
+                    source=parquet_file_path,
+                    store_name=UPSTREAM_OBJECT_STORE_NAME,
+                    destination=get_object_store_prefix(parquet_file_path),
+                    retain_local_copy=self.retain_local_copy,
+                )
+            
+            # Upload to primary object store
+            logger.debug(f"Uploading to primary object store: {parquet_file_path}")
+            await ObjectStore.upload_file(
+                source=parquet_file_path,
+                destination=get_object_store_prefix(parquet_file_path),
+                retain_local_copy=self.retain_local_copy,
+            )
+
+            # Record metrics
+            self.metrics.record_metric(
+                name="parquet_write_records",
+                value=len(dataframe),
+                metric_type=MetricType.COUNTER,
+                labels={"type": "pandas", "mode": "append"},
+                description="Number of records written to Parquet files from pandas DataFrame",
+            )
+
+            logger.debug(f"Successfully wrote {len(dataframe)} records to {parquet_file_path}")
+
+        except Exception as e:
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="parquet_write_errors",
+                value=1,
+                metric_type=MetricType.COUNTER,
+                labels={
+                    "type": "pandas",
+                    "mode": "append",
+                    "error": str(e),
+                },
+                description="Number of errors while writing to Parquet files",
+            )
+            logger.error(f"Error writing pandas dataframe to parquet: {str(e)}")
+            raise
 
     async def write_chunk(self, chunk: "pd.DataFrame", file_name: str):
         """Write a chunk to a Parquet file.
