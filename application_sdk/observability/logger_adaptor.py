@@ -221,10 +221,10 @@ SEVERITY_MAPPING = {
     ],  # Using INFO severity for activity level
     "METRIC": logging.getLevelNamesMapping()[
         "DEBUG"
-    ],  # Using INFO severity for metric level
+    ],  # Using DEBUG severity for metric level
     "TRACING": logging.getLevelNamesMapping()[
         "DEBUG"
-    ],  # Using INFO severity for tracing level
+    ],  # Using DEBUG severity for tracing level
 }
 
 
