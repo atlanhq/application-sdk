@@ -258,7 +258,9 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             )
 
             if not result or "error" in result:
-                raise ValueError("Preflight check failed")
+                raise ValueError(
+                    "Preflight check failed: " + str(result.get("error", ""))
+                )
 
             logger.info("Preflight check completed successfully")
             return result
