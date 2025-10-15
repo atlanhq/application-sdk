@@ -211,14 +211,20 @@ for logger_name in DEPENDENCY_LOGGERS:
 
 # Add these constants
 SEVERITY_MAPPING = {
-    "DEBUG": SeverityNumber.DEBUG,
-    "INFO": SeverityNumber.INFO,
-    "WARNING": SeverityNumber.WARN,
-    "ERROR": SeverityNumber.ERROR,
-    "CRITICAL": SeverityNumber.FATAL,
-    "ACTIVITY": SeverityNumber.INFO,  # Using INFO severity for activity level
-    "METRIC": SeverityNumber.INFO,  # Using INFO severity for metric level
-    "TRACING": SeverityNumber.INFO,  # Using INFO severity for tracing level
+    "DEBUG": logging.getLevelNamesMapping()["DEBUG"],
+    "INFO": logging.getLevelNamesMapping()["INFO"],
+    "WARNING": logging.getLevelNamesMapping()["WARNING"],
+    "ERROR": logging.getLevelNamesMapping()["ERROR"],
+    "CRITICAL": logging.getLevelNamesMapping()["CRITICAL"],
+    "ACTIVITY": logging.getLevelNamesMapping()[
+        "INFO"
+    ],  # Using INFO severity for activity level
+    "METRIC": logging.getLevelNamesMapping()[
+        "DEBUG"
+    ],  # Using INFO severity for metric level
+    "TRACING": logging.getLevelNamesMapping()[
+        "DEBUG"
+    ],  # Using INFO severity for tracing level
 }
 
 
@@ -264,15 +270,21 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
         # Register custom log level for activity
         if "ACTIVITY" not in logger._core.levels:
-            logger.level("ACTIVITY", no=20, color="<cyan>", icon="🔵")
+            logger.level(
+                "ACTIVITY", no=SEVERITY_MAPPING["ACTIVITY"], color="<cyan>", icon="🔵"
+            )
 
         # Register custom log level for metrics
         if "METRIC" not in logger._core.levels:
-            logger.level("METRIC", no=20, color="<yellow>", icon="📊")
+            logger.level(
+                "METRIC", no=SEVERITY_MAPPING["METRIC"], color="<yellow>", icon="📊"
+            )
 
         # Register custom log level for tracing
         if "TRACING" not in logger._core.levels:
-            logger.level("TRACING", no=20, color="<magenta>", icon="🔍")
+            logger.level(
+                "TRACING", no=SEVERITY_MAPPING["TRACING"], color="<magenta>", icon="🔍"
+            )
 
         # Update format string to use the bound logger_name
         atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"

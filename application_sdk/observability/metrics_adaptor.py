@@ -14,7 +14,6 @@ from pydantic import BaseModel
 
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
-    LOG_LEVEL,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
     METRICS_FILE_NAME,
@@ -381,14 +380,10 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         - Formats metric information into a readable string
         - Includes name, value, type, labels, description, and unit
         - Uses the metric-specific logger level
-        - Only logs if LOG_LEVEL is DEBUG
 
         Raises:
             Exception: If logging fails, logs error and continues
         """
-        # Only log to console if explicitly enabled
-        if LOG_LEVEL != "DEBUG":
-            return
 
         try:
             log_message = (
