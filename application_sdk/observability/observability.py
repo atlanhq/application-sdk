@@ -26,6 +26,7 @@ from application_sdk.constants import (
     TRACES_FILE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
+# Import moved to method level to avoid circular import
 
 
 class LogRecord(BaseModel):
@@ -105,6 +106,9 @@ class AtlanObservability(Generic[T], ABC):
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
 
+        # Initialize ParquetOutput lazily to avoid circular import
+        self._parquet_output = None
+
         # Register this instance
         AtlanObservability._instances.append(self)
 
@@ -112,6 +116,13 @@ class AtlanObservability(Generic[T], ABC):
         if not hasattr(AtlanObservability, "_handlers_setup"):
             self._setup_error_handlers()
             AtlanObservability._handlers_setup = True
+
+    def _get_parquet_output(self):
+        """Get ParquetOutput instance, initializing it lazily to avoid circular import."""
+        if self._parquet_output is None:
+            from application_sdk.outputs.parquet import ParquetOutput
+            self._parquet_output = ParquetOutput(use_consolidation=True)
+        return self._parquet_output
 
     def _setup_error_handlers(self):
         """Set up signal handlers and exception hook.
@@ -365,16 +376,23 @@ class AtlanObservability(Generic[T], ABC):
             logging.error(f"Error buffering log: {e}")
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
-        """Flush records to parquet file and object store.
+        """Flush records to parquet file and object store using ParquetOutput abstraction.
 
         Args:
             records: List of records to flush
 
         This method:
-        - Groups records by partition
-        - Writes records to each partition
-        - Uploads to object store if enabled
+        - Groups records by partition (year/month/day)
+        - Uses ParquetOutput abstraction for efficient writing
+        - Automatically handles chunking, compression, and dual upload
+        - Provides robust error handling per partition
         - Cleans up old records if enabled
+
+        Features:
+        - Automatic chunking for large datasets
+        - Dual upload support (primary + upstream if enabled)
+        - Advanced consolidation for optimal performance
+        - Fault-tolerant processing (continues on partition errors)
         """
         if not ENABLE_OBSERVABILITY_DAPR_SINK:
             return
@@ -390,31 +408,15 @@ class AtlanObservability(Generic[T], ABC):
                     partition_records[partition_path] = []
                 partition_records[partition_path].append(record)
 
-            # Write records to each partition
+            # Write records to each partition using ParquetOutput abstraction
             for partition_path, partition_data in partition_records.items():
-                os.makedirs(partition_path, exist_ok=True)
-                # Use a consistent file name for each partition
-                parquet_path = os.path.join(partition_path, "data.parquet")
-
-                # Read existing data if any
-                existing_df = None
-                if os.path.exists(parquet_path):
-                    try:
-                        # Read the entire parquet file without excluding any columns
-                        existing_df = pd.read_parquet(parquet_path)
-                    except Exception as e:
-                        logging.error(f"Error reading existing parquet file: {e}")
-                        # If there's an error reading the existing file, we'll overwrite it
-                        existing_df = None
-
                 # Create new dataframe from current records
                 new_df = pd.DataFrame(partition_data)
 
-                # Extract partition values from path
-                partition_parts = os.path.basename(os.path.dirname(parquet_path)).split(
-                    os.sep
-                )
-                for part in partition_parts:
+                # Extract partition values from path and add to dataframe
+                # Split the partition path to get individual partition directories
+                path_parts = partition_path.split(os.sep)
+                for part in path_parts:
                     if part.startswith("year="):
                         new_df["year"] = int(part.split("=")[1])
                     elif part.startswith("month="):
@@ -422,38 +424,26 @@ class AtlanObservability(Generic[T], ABC):
                     elif part.startswith("day="):
                         new_df["day"] = int(part.split("=")[1])
 
-                # Merge with existing data if any
-                if existing_df is not None:
-                    df = pd.concat([existing_df, new_df], ignore_index=True)
-                else:
-                    df = new_df
+                # Use new data directly - let ParquetOutput handle consolidation and merging
+                df = new_df
 
-                # Sort by timestamp to maintain order
-                df = df.sort_values("timestamp")
+                # Skip if DataFrame is empty
+                if len(df) == 0:
+                    continue
 
-                # Write to parquet file
-                df.to_parquet(
-                    parquet_path,
-                    compression="snappy",
-                    index=False,
-                )
+                # Use ParquetOutput abstraction for efficient writing and uploading
+                # Set the output path for this partition
+                try:
+                    parquet_output = self._get_parquet_output()
+                    parquet_output.output_path = partition_path
 
-                # Upload to object store
-                with open(parquet_path, "rb") as f:
-                    file_content = f.read()
-                    relative_path = os.path.relpath(parquet_path, TEMPORARY_PATH)
-                    metadata = {
-                        "key": relative_path,
-                        "blobName": relative_path,
-                        "fileName": relative_path,
-                    }
-                    with DaprClient() as client:
-                        client.invoke_binding(
-                            binding_name=DEPLOYMENT_OBJECT_STORE_NAME,
-                            operation=DAPR_BINDING_OPERATION_CREATE,
-                            data=file_content,
-                            binding_metadata=metadata,
-                        )
+                    # Write using the abstraction - handles chunking, compression, and dual upload automatically
+                    await parquet_output.write_dataframe(
+                        dataframe=df
+                    )
+                    
+                except Exception as partition_error:
+                    logging.error(f"Error processing partition {partition_path}: {str(partition_error)}")
 
             # Clean up old records if enabled
             if self._cleanup_enabled:
