@@ -13,6 +13,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
 from application_sdk.services.objectstore import ObjectStore
+from application_sdk.constants import ENABLE_ATLAN_UPLOAD, UPSTREAM_OBJECT_STORE_NAME
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -269,6 +270,13 @@ class ParquetOutput(Output):
                         f"No files found under prefix {get_object_store_prefix(self.output_path)}: {str(e)}"
                     )
             for path in file_paths:
+                if ENABLE_ATLAN_UPLOAD:
+                    await ObjectStore.upload_file(
+                        source=path,
+                        store_name=UPSTREAM_OBJECT_STORE_NAME,
+                        destination=get_object_store_prefix(path),
+                        retain_local_copy=self.retain_local_copy,
+                    )
                 await ObjectStore.upload_file(
                     source=path,
                     destination=get_object_store_prefix(path),
