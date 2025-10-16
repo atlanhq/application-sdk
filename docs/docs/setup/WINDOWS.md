@@ -72,6 +72,24 @@ dapr init --runtime-version 1.16.0 --slim
 dapr --version
 ```
 
+### 4. Setup Frontend (Optional)
+
+> [!NOTE]
+> This step is only required if you plan to write and implement config maps for workflow setup forms.
+
+Install the frontend playground for your application:
+
+```powershell
+# Create the frontend static directory
+New-Item -ItemType Directory -Force -Path "frontend\static"
+
+# Install the app playground
+npx @atlanhq/app-playground install-to frontend/static
+```
+
+> [!NOTE]
+> `frontend/static` is the default directory. You can change this to a different location, but you'll need to update the path in your workflow definition accordingly.
+
 > [!NOTE]
 > Your development environment is now ready! Head over to our [Getting Started Guide](../guides/getting-started.md) to learn how to:
 > - Install project dependencies
