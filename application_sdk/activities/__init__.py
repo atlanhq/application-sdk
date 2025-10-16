@@ -239,6 +239,11 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
         try:
             state: ActivitiesStateType = await self._get_state(workflow_args)
             handler = state.handler
+            logger.info(f"Handler: {handler}")
+            logger.info(f"Workflow args: {workflow_args}")
+            logger.info(f"State: {state}")
+            logger.info(f"SQL Client: {handler.sql_client}")
+            logger.info(f"SQL Client engine: {handler.sql_client.engine}")
 
             if not handler:
                 raise ValueError("Preflight check handler not found")
