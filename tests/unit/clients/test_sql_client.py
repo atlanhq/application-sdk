@@ -25,6 +25,11 @@ from application_sdk.test_utils.hypothesis.strategies.sql_client import (
 @pytest.fixture
 def sql_client():
     client = BaseSQLClient()
+    client.DB_CONFIG = DatabaseConfig(
+        template="test://{username}:{password}@{host}:{port}/{database}",
+        required=["username", "password", "host", "port", "database"],
+        connect_args={},
+    )
     client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return client
 
@@ -51,9 +56,10 @@ def test_load(mock_create_engine: Any, sql_client: BaseSQLClient):
     asyncio.run(sql_client.load(credentials))
 
     # Assertions to verify behavior
+    assert sql_client.DB_CONFIG is not None
     mock_create_engine.assert_called_once_with(
         sql_client.get_sqlalchemy_connection_string(),
-        connect_args=sql_client.sql_alchemy_connect_args,
+        connect_args=sql_client.DB_CONFIG.connect_args,
         pool_pre_ping=True,
     )
     assert sql_client.engine == mock_engine
@@ -78,8 +84,9 @@ def test_load_property_based(
         mock_create_engine.return_value = mock_engine
         mock_engine.connect.return_value = mock_connection
 
-        # Set the connection arguments
-        sql_client.sql_alchemy_connect_args = connect_args
+        # Set the connection arguments in DB_CONFIG
+        assert sql_client.DB_CONFIG is not None
+        sql_client.DB_CONFIG.connect_args = connect_args
 
         # Run the load function
         asyncio.run(sql_client.load(credentials))
@@ -383,9 +390,10 @@ def test_connection_string_property_based(
         asyncio.run(sql_client.load(credentials))
 
         # Assertions to verify behavior
+        assert sql_client.DB_CONFIG is not None
         mock_create_engine.assert_called_once_with(
             connection_string,
-            connect_args=sql_client.sql_alchemy_connect_args,
+            connect_args=sql_client.DB_CONFIG.connect_args,
             pool_pre_ping=True,
         )
         assert sql_client.engine == mock_engine

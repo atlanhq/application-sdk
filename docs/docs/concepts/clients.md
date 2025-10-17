@@ -36,6 +36,7 @@ Both SQL client classes are typically **subclassed** for specific database types
     *   **`required` (list[str]):** Keys that must be present in `credentials`/`credentials.extra`. `{password}` is resolved via `get_auth_token()` depending on `authType`.
     *   **`parameters` (list[str], optional):** Optional keys appended as URL query parameters when present in `credentials`/`extra`.
     *   **`defaults` (dict[str, Any], optional):** Default URL parameters always appended unless already in the template.
+    *   **`connect_args` (dict[str, Any], optional):** Additional connection arguments to be passed directly to SQLAlchemy's `create_engine` or `create_async_engine`. Useful for driver-specific connection parameters that are not part of the connection URL. Defaults to `{}`.
     *   **Credentials Note:** The `credentials` dictionary can include an `extra` field (JSON or dict). Lookups for `required` and `parameters` first check `credentials`, then `extra`.
 
 2.  **Loading (`load` method):**
@@ -61,6 +62,7 @@ class SnowflakeClient(BaseSQLClient):
         required=["username", "password", "account_id"],
         parameters=["warehouse", "role"],
         defaults={"client_session_keep_alive": "true"},
+        connect_args={"sslmode": "require"},  # Optional: driver-specific connection arguments
     )
 ```
 

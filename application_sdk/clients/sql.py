@@ -52,7 +52,6 @@ class BaseSQLClient(ClientInterface):
     Attributes:
         connection: Database connection instance.
         engine: SQLAlchemy engine instance.
-        sql_alchemy_connect_args (Dict[str, Any]): Additional connection arguments.
         credentials (Dict[str, Any]): Database credentials.
         resolved_credentials (Dict[str, Any]): Resolved credentials after reading from secret manager.
         use_server_side_cursor (bool): Whether to use server-side cursors.
@@ -60,7 +59,6 @@ class BaseSQLClient(ClientInterface):
 
     connection = None
     engine = None
-    sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
     resolved_credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
@@ -70,7 +68,6 @@ class BaseSQLClient(ClientInterface):
         self,
         use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
         credentials: Dict[str, Any] = {},
-        sql_alchemy_connect_args: Dict[str, Any] = {},
         chunk_size: int = 5000,
     ):
         """
@@ -80,12 +77,9 @@ class BaseSQLClient(ClientInterface):
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
                 Defaults to USE_SERVER_SIDE_CURSOR.
             credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
-            sql_alchemy_connect_args (Dict[str, Any], optional): Additional SQLAlchemy
-                connection arguments. Defaults to {}.
         """
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
-        self.sql_alchemy_connect_args = sql_alchemy_connect_args
         self.chunk_size = chunk_size
 
     async def load(self, credentials: Dict[str, Any]) -> None:
@@ -100,6 +94,9 @@ class BaseSQLClient(ClientInterface):
         Raises:
             ClientError: If credentials are invalid or engine creation fails
         """
+        if not self.DB_CONFIG:
+            raise ValueError("DB_CONFIG is not configured for this SQL client.")
+
         self.credentials = credentials  # Update the instance credentials
         try:
             from sqlalchemy import create_engine
@@ -107,7 +104,7 @@ class BaseSQLClient(ClientInterface):
             # Create engine but no persistent connection
             self.engine = create_engine(
                 self.get_sqlalchemy_connection_string(),
-                connect_args=self.sql_alchemy_connect_args,
+                connect_args=self.DB_CONFIG.connect_args,
                 pool_pre_ping=True,
             )
 
@@ -579,7 +576,6 @@ class AsyncBaseSQLClient(BaseSQLClient):
     Attributes:
         connection (AsyncConnection): Async database connection instance.
         engine (AsyncEngine): Async SQLAlchemy engine instance.
-        sql_alchemy_connect_args (Dict[str, Any]): Additional connection arguments.
         credentials (Dict[str, Any]): Database credentials.
         use_server_side_cursor (bool): Whether to use server-side cursors.
     """
@@ -601,13 +597,16 @@ class AsyncBaseSQLClient(BaseSQLClient):
             ValueError: If credentials are invalid or engine creation fails.
         """
         self.credentials = credentials
+        if not self.DB_CONFIG:
+            raise ValueError("DB_CONFIG is not configured for this SQL client.")
+
         try:
             from sqlalchemy.ext.asyncio import create_async_engine
 
             # Create async engine but no persistent connection
             self.engine = create_async_engine(
                 self.get_sqlalchemy_connection_string(),
-                connect_args=self.sql_alchemy_connect_args,
+                connect_args=self.DB_CONFIG.connect_args,
                 pool_pre_ping=True,
             )
             if not self.engine:
