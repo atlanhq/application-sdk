@@ -271,14 +271,14 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         return_dataframe: bool = False,
     ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
         """
-        Executes a SQL query using the provided engine and saves the results to Parquet.
+        Executes a SQL query using the provided client and saves the results to Parquet.
 
-        This method validates the input engine and query, prepares the query using
-        workflow arguments, executes it, writes the resulting Daft DataFrame to
+        This method validates the input client and query, prepares the query using
+        workflow arguments, executes it, writes the resulting DataFrame to
         a Parquet file, and returns statistics about the output.
 
         Args:
-            sql_engine: The SQL engine instance to use for executing the query.
+            sql_client: The SQL client instance to use for executing the query.
             sql_query: The SQL query string to execute. Placeholders can be used which
                    will be replaced using `workflow_args`.
             workflow_args: Dictionary containing arguments for the workflow, used for
@@ -287,15 +287,22 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                            - "output_path": Base directory for the output.
             output_suffix: Suffix to append to the output file name.
             typename: Type name used for generating output statistics.
+            write_to_file: Whether to write results to file. Defaults to True.
+            concatenate: Whether to concatenate results in multidb mode. Defaults to False.
+            return_dataframe: Whether to return a DataFrame instead of statistics. Defaults to False.
 
         Returns:
             Optional[Union[ActivityStatistics, pd.DataFrame]]: Statistics about the generated Parquet file,
             or a DataFrame if return_dataframe=True, or None if the query is empty or execution fails.
 
         Raises:
-            ValueError: If `sql_engine` is not provided.
+            ValueError: If `sql_client` is not provided or if required workflow arguments are missing.
         """
         # Common pre-checks and setup shared by both multidb and single-db paths
+        if not sql_client:
+            logger.error("SQL client is not provided")
+            raise ValueError("SQL client is required for query execution")
+
         if not sql_query:
             logger.warning("Query is empty, skipping execution.")
             return None
