@@ -242,7 +242,7 @@ async def test_check_client_version_sql_query(
     # Set up SQL query for version
     handler.get_client_version_sql = "SELECT version();"
 
-    # Mock SQLQueryInput.get_dataframe to return a DataFrame with version
+    # Mock SQL client's run_query to return a DataFrame with version
     mock_df = Mock()
     mock_df.to_dict.return_value = {
         "records": [{"version": "PostgreSQL 15.4 on x86_64-pc-linux-gnu"}]

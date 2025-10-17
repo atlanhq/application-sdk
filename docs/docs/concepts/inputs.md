@@ -15,7 +15,6 @@ This module provides a standardized way to read data from various sources within
 
 2.  **Concrete Implementations:** The SDK provides several input classes:
 
-    *   **`SQLQueryInput` (`sql_query.py`)**: Reads data from a SQL database by executing a query.
     *   **`ParquetInput` (`parquet.py`)**: Reads data from Parquet files (single file or directory).
     *   **`JsonInput` (`json.py`)**: Reads data from JSON files (specifically JSON Lines format).
     *   **`IcebergInput` (`iceberg.py`)**: Reads data from Apache Iceberg tables.
@@ -23,47 +22,6 @@ This module provides a standardized way to read data from various sources within
 ## Usage Patterns and Examples
 
 Inputs are primarily used within **Activities** to fetch the data required for a specific workflow step.
-
-### `SQLQueryInput`
-
-Used to execute a SQL query and retrieve results as a DataFrame.
-
-*   **Initialization:** `SQLQueryInput(engine, query, chunk_size=...)`
-    *   `engine`: An initialized SQLAlchemy engine, typically obtained from the `SQLClient` stored in the activity state (`state.sql_client.engine`).
-    *   `query`: The SQL query string to execute.
-    *   `chunk_size` (optional): How many rows to fetch per batch when using batched methods.
-*   **Common Usage:** Within SQL-based activities (like `BaseSQLMetadataExtractionActivities`) to fetch databases, schemas, tables, columns, etc.
-
-```python
-# Within an Activity method (e.g., fetch_tables in BaseSQLMetadataExtractionActivities)
-from application_sdk.inputs.sql_query import SQLQueryInput
-# ... other imports ...
-
-async def fetch_tables(self, workflow_args: Dict[str, Any]):
-    # ... get state, prepare query ...
-    state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(workflow_args)
-    prepared_query = prepare_query(self.fetch_table_sql, workflow_args, ...) # Prepare query string
-
-    if not prepared_query or not state.sql_client:
-        logger.warning("Missing SQL client or query for fetching tables.")
-        return None
-
-    # Instantiate SQLQueryInput with the client's engine and the specific query
-    sql_input = SQLQueryInput(
-        engine=state.sql_client.engine, query=prepared_query, chunk_size=None
-    )
-
-    # Get results as a Daft DataFrame
-    try:
-        daft_df = await sql_input.get_daft_dataframe()
-        # Process the daft_df (e.g., write to ParquetOutput)
-        # ...
-        return {"typename": "table", "total_record_count": len(daft_df), ...}
-
-    except Exception as e:
-        logger.error(f"Failed to fetch tables: {e}", exc_info=True)
-        raise
-```
 
 ### `ParquetInput` & `JsonInput`
 
@@ -118,4 +76,4 @@ async def transform_data(self, workflow_args: Dict[str, Any]):
 
 ## Summary
 
-The `inputs` module provides convenient classes for reading data from diverse sources (SQL, Parquet, JSON, Iceberg) within activities. They abstract the underlying read logic and often provide results as Pandas or Daft DataFrames, integrating seamlessly with the SDK's activity patterns and other components like Clients and Outputs.
+The `inputs` module provides convenient classes for reading data from diverse sources (Parquet, JSON, Iceberg) within activities. They abstract the underlying read logic and often provide results as Pandas or Daft DataFrames, integrating seamlessly with the SDK's activity patterns and other components like Clients and Outputs.
