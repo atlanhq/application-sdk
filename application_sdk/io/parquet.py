@@ -338,7 +338,6 @@ class ParquetWriter(Writer):
 
     Attributes:
         output_path (str): Base path where Parquet files will be written.
-        output_suffix (str): Suffix for output files.
         typename (Optional[str]): Type name of the entity e.g database, schema, table.
         chunk_size (int): Maximum number of records per chunk.
         total_record_count (int): Total number of records processed.
@@ -353,7 +352,6 @@ class ParquetWriter(Writer):
     def __init__(
         self,
         output_path: str = "",
-        output_suffix: str = "",
         typename: Optional[str] = None,
         chunk_size: Optional[int] = 100000,
         buffer_size: int = 5000,
@@ -370,7 +368,6 @@ class ParquetWriter(Writer):
 
         Args:
             output_path (str): Base path where Parquet files will be written.
-            output_suffix (str): Suffix for output files.
             typename (Optional[str], optional): Type name of the entity e.g database, schema, table.
             chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
             total_record_count (int, optional): Initial total record count. Defaults to 0.
@@ -389,7 +386,6 @@ class ParquetWriter(Writer):
         """
         self.extension = PARQUET_FILE_EXTENSION
         self.output_path = output_path
-        self.output_suffix = output_suffix
         self.typename = typename
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
@@ -426,7 +422,6 @@ class ParquetWriter(Writer):
             self.chunk_count = self.chunk_start + self.chunk_count
 
         # Create output directory
-        self.output_path = os.path.join(self.output_path, self.output_suffix)
         if self.typename:
             self.output_path = os.path.join(self.output_path, self.typename)
         os.makedirs(self.output_path, exist_ok=True)

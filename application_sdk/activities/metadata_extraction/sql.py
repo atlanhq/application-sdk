@@ -358,9 +358,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             raise ValueError(
                 "Output prefix and path must be specified in workflow_args."
             )
+
         return ParquetWriter(
-            output_path=output_path,
-            output_suffix=output_suffix,
+            output_path=os.path.join(output_path, output_suffix),
             use_consolidation=True,
         )
 

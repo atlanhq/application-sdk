@@ -105,7 +105,6 @@ class TestParquetWriterInit:
 
         # The output path gets modified by adding suffix, so check it ends with the base path
         assert base_output_path in parquet_output.output_path
-        assert parquet_output.output_suffix == ""
         assert parquet_output.typename is None
 
         assert parquet_output.chunk_size == 100000
@@ -119,8 +118,7 @@ class TestParquetWriterInit:
     def test_init_custom_values(self, base_output_path: str):
         """Test ParquetWriter initialization with custom values."""
         parquet_output = ParquetWriter(
-            output_path=base_output_path,
-            output_suffix="test_suffix",
+            output_path=os.path.join(base_output_path, "test_suffix"),
             typename="test_table",
             chunk_size=50000,
             total_record_count=100,
@@ -130,7 +128,6 @@ class TestParquetWriterInit:
             end_marker="end",
         )
 
-        assert parquet_output.output_suffix == "test_suffix"
         assert parquet_output.typename == "test_table"
 
         assert parquet_output.chunk_size == 50000
@@ -146,8 +143,7 @@ class TestParquetWriterInit:
     def test_init_creates_output_directory(self, base_output_path: str):
         """Test that initialization creates the output directory."""
         parquet_output = ParquetWriter(
-            output_path=base_output_path,
-            output_suffix="test_dir",
+            output_path=os.path.join(base_output_path, "test_dir"),
             typename="test_table",
         )
 
@@ -216,8 +212,7 @@ class TestParquetWriterWriteDataframe:
             mock_prefix.return_value = "test/output/path"
 
             parquet_output = ParquetWriter(
-                output_path=base_output_path,
-                output_suffix="test",
+                output_path=os.path.join(base_output_path, "test"),
                 use_consolidation=False,
             )
 
@@ -574,8 +569,7 @@ class TestParquetWriterConsolidation:
     def test_temp_folder_path_generation(self, base_output_path: str):
         """Test temp folder path generation."""
         parquet_output = ParquetWriter(
-            output_path=base_output_path,
-            output_suffix="test_suffix",
+            output_path=os.path.join(base_output_path, "test_suffix"),
             typename="test_type",
         )
 
@@ -593,8 +587,7 @@ class TestParquetWriterConsolidation:
     def test_consolidated_file_path_generation(self, base_output_path: str):
         """Test consolidated file path generation."""
         parquet_output = ParquetWriter(
-            output_path=base_output_path,
-            output_suffix="test_suffix",
+            output_path=os.path.join(base_output_path, "test_suffix"),
             typename="test_type",
         )
 
