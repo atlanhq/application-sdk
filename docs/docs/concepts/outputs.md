@@ -50,11 +50,11 @@ Writes Pandas or Daft DataFrames to one or more JSON Lines files locally, option
 ```python
 # Within an Activity method (e.g., query_executor in SQL extraction/query activities)
 from application_sdk.outputs.json import JsonOutput
-# ... other imports, including SQLQueryInput etc ...
+# ... other imports ...
 
 async def query_executor(
     self,
-    sql_engine: Any,
+    sql_client: Any,
     sql_query: Optional[str],
     workflow_args: Dict[str, Any],
     output_suffix: str, # e.g., workflow_run_id
@@ -62,8 +62,6 @@ async def query_executor(
 ) -> Optional[Dict[str, Any]]:
 
     # ... (validate inputs, prepare query) ...
-
-    sql_input = SQLQueryInput(engine=sql_engine, query=prepared_query)
 
     # Get output path details from workflow_args
     output_prefix = workflow_args.get("output_prefix") # Object store path
@@ -82,12 +80,17 @@ async def query_executor(
     )
 
     try:
-        # Get data using the Input class (e.g., Daft DataFrame)
-        daft_df = await sql_input.get_daft_dataframe()
+        # Get data using the SQL client (e.g., fetch results)
+        results = []
+        async for batch in sql_client.run_query(prepared_query):
+            results.extend(batch)
 
-        # Write the DataFrame using the Output class
+        # Write the data using the Output class
         # This writes locally then uploads to object store path: {output_prefix}/{output_suffix}/{typename}/
-        await json_output.write_daft_dataframe(daft_df)
+        # Convert results to DataFrame first if needed
+        import pandas as pd
+        df = pd.DataFrame(results)
+        await json_output.write_dataframe(df)
 
         # Get statistics (record count, chunk count) after writing
         stats = await json_output.get_statistics(typename=typename)

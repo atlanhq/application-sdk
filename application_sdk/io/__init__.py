@@ -13,8 +13,10 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    AsyncIterator,
     Dict,
     Generator,
+    Iterator,
     List,
     Optional,
     Union,
@@ -27,6 +29,8 @@ from temporalio import activity
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
+from application_sdk.common.types import DataframeType
+from application_sdk.io._utils import estimate_dataframe_record_size, path_gen
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.services.objectstore import ObjectStore
@@ -39,6 +43,45 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
+class Reader(ABC):
+    """
+    Abstract base class for reader data sources.
+    """
+
+    @abstractmethod
+    def read_batches(
+        self,
+    ) -> Union[
+        Iterator["pd.DataFrame"],
+        AsyncIterator["pd.DataFrame"],
+        Iterator["daft.DataFrame"],
+        AsyncIterator["daft.DataFrame"],
+    ]:
+        """
+        Get an iterator of batched pandas DataFrames.
+
+        Returns:
+            Iterator["pd.DataFrame"]: An iterator of batched pandas DataFrames.
+
+        Raises:
+            NotImplementedError: If the method is not implemented.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
+        """
+        Get a single pandas or daft DataFrame.
+
+        Returns:
+            Union["pd.DataFrame", "daft.DataFrame"]: A pandas or daft DataFrame.
+
+        Raises:
+            NotImplementedError: If the method is not implemented.
+        """
+        raise NotImplementedError
+
+
 class WriteMode(Enum):
     """Enumeration of write modes for output operations."""
 
@@ -47,17 +90,22 @@ class WriteMode(Enum):
     OVERWRITE_PARTITIONS = "overwrite-partitions"
 
 
-class Output(ABC):
-    """Abstract base class for output handlers.
+class Writer(ABC):
+    """Abstract base class for writer handlers.
 
-    This class defines the interface for output handlers that can write data
+    This class defines the interface for writer handlers that can write data
     to various destinations in different formats.
 
     Attributes:
-        output_path (str): Path where the output will be written.
+        output_path (str): Path where the writer will be written.
         upload_file_prefix (str): Prefix for files when uploading to object store.
         total_record_count (int): Total number of records processed.
-        chunk_count (int): Number of chunks the output was split into.
+        chunk_count (int): Number of chunks the writer was split into.
+        buffer_size (int): Size of the buffer to write data to.
+        max_file_size_bytes (int): Maximum size of the file to write data to.
+        current_buffer_size (int): Current size of the buffer to write data to.
+        current_buffer_size_bytes (int): Current size of the buffer to write data to.
+        partitions (List[int]): Partitions of the writer.
     """
 
     output_path: str
@@ -69,96 +117,40 @@ class Output(ABC):
     current_buffer_size: int
     current_buffer_size_bytes: int
     partitions: List[int]
+    extension: str
+    df_type: DataframeType
 
-    def estimate_dataframe_record_size(self, dataframe: "pd.DataFrame") -> int:
-        """Estimate File size of a DataFrame by sampling a few records."""
-        if len(dataframe) == 0:
-            return 0
-
-        # Sample up to 10 records to estimate average size
-        sample_size = min(10, len(dataframe))
-        sample = dataframe.head(sample_size)
-        file_type = type(self).__name__.lower().replace("output", "")
-        compression_factor = 1
-        if file_type == "json":
-            sample_file = sample.to_json(orient="records", lines=True)
+    async def write(self, dataframe: Union["pd.DataFrame", "daft.DataFrame"], **kwargs):
+        """
+        Method to write the pandas dataframe to an iceberg table
+        """
+        if self.df_type == DataframeType.pandas:
+            await self._write_dataframe(dataframe, **kwargs)
+        elif self.df_type == DataframeType.daft:
+            await self._write_daft_dataframe(dataframe, **kwargs)
         else:
-            sample_file = sample.to_parquet(index=False, compression="snappy")
-            compression_factor = 0.01
-        if sample_file is not None:
-            avg_record_size = len(sample_file) / sample_size * compression_factor
-            return int(avg_record_size)
+            raise ValueError(f"Unsupported df_type: {self.df_type}")
 
-        return 0
-
-    def path_gen(
+    async def write_batches(
         self,
-        chunk_count: Optional[int] = None,
-        chunk_part: int = 0,
-        start_marker: Optional[str] = None,
-        end_marker: Optional[str] = None,
-    ) -> str:
-        """Generate a file path for a chunk.
-
-        Args:
-            chunk_start (Optional[int]): Starting index of the chunk, or None for single chunk.
-            chunk_count (int): Total number of chunks.
-            start_marker (Optional[str]): Start marker for query extraction.
-            end_marker (Optional[str]): End marker for query extraction.
-
-        Returns:
-            str: Generated file path for the chunk.
+        dataframe: Union[
+            AsyncGenerator["pd.DataFrame", None],
+            Generator["pd.DataFrame", None, None],
+            AsyncGenerator["daft.DataFrame", None],
+            Generator["daft.DataFrame", None, None],
+        ],
+    ):
         """
-        # For Query Extraction - use start and end markers without chunk count
-        if start_marker and end_marker:
-            return f"{start_marker}_{end_marker}{self._EXTENSION}"
-
-        # For regular chunking - include chunk count
-        if chunk_count is None:
-            return f"{str(chunk_part)}{self._EXTENSION}"
+        Method to write the pandas dataframe to an iceberg table
+        """
+        if self.df_type == DataframeType.pandas:
+            await self._write_batched_dataframe(dataframe)
+        elif self.df_type == DataframeType.daft:
+            await self._write_batched_daft_dataframe(dataframe)
         else:
-            return f"chunk-{str(chunk_count)}-part{str(chunk_part)}{self._EXTENSION}"
+            raise ValueError(f"Unsupported df_type: {self.df_type}")
 
-    def process_null_fields(
-        self,
-        obj: Any,
-        preserve_fields: Optional[List[str]] = None,
-        null_to_empty_dict_fields: Optional[List[str]] = None,
-    ) -> Any:
-        """
-        By default the method removes null values from dictionaries and lists.
-        Except for the fields specified in preserve_fields.
-        And fields in null_to_empty_dict_fields are replaced with empty dict if null.
-
-        Args:
-            obj: The object to clean (dict, list, or other value)
-            preserve_fields: Optional list of field names that should be preserved even if they contain null values
-            null_to_empty_dict_fields: Optional list of field names that should be replaced with empty dict if null
-
-        Returns:
-            The cleaned object with null values removed
-        """
-        if isinstance(obj, dict):
-            result = {}
-            for k, v in obj.items():
-                # Handle null fields that should be converted to empty dicts
-                if k in (null_to_empty_dict_fields or []) and v is None:
-                    result[k] = {}
-                    continue
-
-                # Process the value recursively
-                processed_value = self.process_null_fields(
-                    v, preserve_fields, null_to_empty_dict_fields
-                )
-
-                # Keep the field if it's in preserve_fields or has a non-None processed value
-                if k in (preserve_fields or []) or processed_value is not None:
-                    result[k] = processed_value
-
-            return result
-        return obj
-
-    async def write_batched_dataframe(
+    async def _write_batched_dataframe(
         self,
         batched_dataframe: Union[
             AsyncGenerator["pd.DataFrame", None], Generator["pd.DataFrame", None, None]
@@ -179,7 +171,7 @@ class Output(ABC):
             if inspect.isasyncgen(batched_dataframe):
                 async for dataframe in batched_dataframe:
                     if not is_empty_dataframe(dataframe):
-                        await self.write_dataframe(dataframe)
+                        await self._write_dataframe(dataframe)
             else:
                 # Cast to Generator since we've confirmed it's not an AsyncGenerator
                 sync_generator = cast(
@@ -187,16 +179,17 @@ class Output(ABC):
                 )
                 for dataframe in sync_generator:
                     if not is_empty_dataframe(dataframe):
-                        await self.write_dataframe(dataframe)
+                        await self._write_dataframe(dataframe)
         except Exception as e:
             logger.error(f"Error writing batched dataframe: {str(e)}")
             raise
 
-    async def write_dataframe(self, dataframe: "pd.DataFrame"):
+    async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
         """Write a pandas DataFrame to Parquet files and upload to object store.
 
         Args:
             dataframe (pd.DataFrame): The DataFrame to write.
+            **kwargs: Additional parameters (currently unused for pandas DataFrames).
         """
         try:
             if self.chunk_start is None:
@@ -204,7 +197,7 @@ class Output(ABC):
             if len(dataframe) == 0:
                 return
 
-            chunk_size_bytes = self.estimate_dataframe_record_size(dataframe)
+            chunk_size_bytes = estimate_dataframe_record_size(dataframe, self.extension)
 
             for i in range(0, len(dataframe), self.buffer_size):
                 chunk = dataframe[i : i + self.buffer_size]
@@ -213,7 +206,7 @@ class Output(ABC):
                     self.current_buffer_size_bytes + chunk_size_bytes
                     > self.max_file_size_bytes
                 ):
-                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
+                    output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
                     if os.path.exists(output_file_name):
                         await self._upload_file(output_file_name)
                         self.chunk_part += 1
@@ -227,7 +220,7 @@ class Output(ABC):
 
             if self.current_buffer_size_bytes > 0:
                 # Finally upload the final file to the object store
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
+                output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
                 if os.path.exists(output_file_name):
                     await self._upload_file(output_file_name)
                     self.chunk_part += 1
@@ -271,7 +264,7 @@ class Output(ABC):
             logger.error(f"Error writing pandas dataframe to files: {str(e)}")
             raise
 
-    async def write_batched_daft_dataframe(
+    async def _write_batched_daft_dataframe(
         self,
         batched_dataframe: Union[
             AsyncGenerator["daft.DataFrame", None],  # noqa: F821
@@ -293,7 +286,7 @@ class Output(ABC):
             if inspect.isasyncgen(batched_dataframe):
                 async for dataframe in batched_dataframe:
                     if not is_empty_dataframe(dataframe):
-                        await self.write_daft_dataframe(dataframe)
+                        await self._write_daft_dataframe(dataframe)
             else:
                 # Cast to Generator since we've confirmed it's not an AsyncGenerator
                 sync_generator = cast(
@@ -301,16 +294,17 @@ class Output(ABC):
                 )  # noqa: F821
                 for dataframe in sync_generator:
                     if not is_empty_dataframe(dataframe):
-                        await self.write_daft_dataframe(dataframe)
+                        await self._write_daft_dataframe(dataframe)
         except Exception as e:
             logger.error(f"Error writing batched daft dataframe: {str(e)}")
 
     @abstractmethod
-    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+    async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):  # noqa: F821
         """Write a daft DataFrame to the output destination.
 
         Args:
             dataframe (daft.DataFrame): The DataFrame to write.
+            **kwargs: Additional parameters passed through from write().
         """
         pass
 
@@ -361,10 +355,8 @@ class Output(ABC):
         try:
             if not is_empty_dataframe(chunk):
                 self.total_record_count += len(chunk)
-                output_file_name = (
-                    f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
-                )
-                await self.write_chunk(chunk, output_file_name)
+                output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, chunk_part, extension=self.extension)}"
+                await self._write_chunk(chunk, output_file_name)
 
                 self.current_buffer_size = 0
 
