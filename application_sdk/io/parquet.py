@@ -17,7 +17,7 @@ from temporalio import activity
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
-from application_sdk.io import DFType, Reader, WriteMode, Writer
+from application_sdk.io import DataframeType, Reader, WriteMode, Writer
 from application_sdk.io._utils import PARQUET_FILE_EXTENSION, download_files, path_gen
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
@@ -43,7 +43,7 @@ class ParquetReader(Reader):
         chunk_size: int = 100000,
         buffer_size: int = 5000,
         file_names: Optional[List[str]] = None,
-        df_type: DFType = DFType.pandas,
+        df_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the Parquet input class.
 
@@ -78,9 +78,9 @@ class ParquetReader(Reader):
         Method to read the data from the parquet files in the path
         and return as a single combined pandas dataframe
         """
-        if self.df_type == DFType.pandas:
+        if self.df_type == DataframeType.pandas:
             return await self._get_dataframe()
-        elif self.df_type == DFType.daft:
+        elif self.df_type == DataframeType.daft:
             return await self._get_daft_dataframe()
         else:
             raise ValueError(f"Unsupported df_type: {self.df_type}")
@@ -95,9 +95,9 @@ class ParquetReader(Reader):
         Method to read the data from the parquet files in the path
         and return as a batched pandas dataframe
         """
-        if self.df_type == DFType.pandas:
+        if self.df_type == DataframeType.pandas:
             return self._get_batched_dataframe()
-        elif self.df_type == DFType.daft:
+        elif self.df_type == DataframeType.daft:
             return self._get_batched_daft_dataframe()
         else:
             raise ValueError(f"Unsupported df_type: {self.df_type}")
@@ -362,7 +362,7 @@ class ParquetWriter(Writer):
         end_marker: Optional[str] = None,
         retain_local_copy: bool = False,
         use_consolidation: bool = False,
-        df_type: DFType = DFType.pandas,
+        df_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the Parquet output handler.
 
@@ -382,7 +382,7 @@ class ParquetWriter(Writer):
                 Defaults to False.
             use_consolidation (bool, optional): Whether to use consolidation.
                 Defaults to False.
-            df_type (DFType, optional): Type of dataframe to write. Defaults to DFType.pandas.
+            df_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
         self.extension = PARQUET_FILE_EXTENSION
         self.output_path = output_path

@@ -5,7 +5,7 @@ import orjson
 from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.common.types import DFType
+from application_sdk.common.types import DataframeType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.io._utils import (
     JSON_FILE_EXTENSION,
@@ -38,7 +38,7 @@ class JsonReader(Reader):
         path: str,
         file_names: Optional[List[str]] = None,
         chunk_size: int = 100000,
-        df_type: DFType = DFType.pandas,
+        df_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the JsonInput class.
 
@@ -72,9 +72,9 @@ class JsonReader(Reader):
         Method to read the data from the json files in the path
         and return as a single combined pandas dataframe
         """
-        if self.df_type == DFType.pandas:
+        if self.df_type == DataframeType.pandas:
             return await self._get_dataframe()
-        elif self.df_type == DFType.daft:
+        elif self.df_type == DataframeType.daft:
             return await self._get_daft_dataframe()
         else:
             raise ValueError(f"Unsupported df_type: {self.df_type}")
@@ -89,9 +89,9 @@ class JsonReader(Reader):
         Method to read the data from the json files in the path
         and return as a batched pandas dataframe
         """
-        if self.df_type == DFType.pandas:
+        if self.df_type == DataframeType.pandas:
             return self._get_batched_dataframe()
-        elif self.df_type == DFType.daft:
+        elif self.df_type == DataframeType.daft:
             return self._get_batched_daft_dataframe()
         else:
             raise ValueError(f"Unsupported df_type: {self.df_type}")
@@ -228,7 +228,7 @@ class JsonWriter(Writer):
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
         retain_local_copy: bool = False,
-        df_type: DFType = DFType.pandas,
+        df_type: DataframeType = DataframeType.pandas,
         **kwargs: Dict[str, Any],
     ):
         """Initialize the JSON output handler.
@@ -248,7 +248,7 @@ class JsonWriter(Writer):
                 Defaults to 0.
             retain_local_copy (bool, optional): Whether to retain the local copy of the files.
                 Defaults to False.
-            df_type (DFType, optional): Type of dataframe to write. Defaults to DFType.pandas.
+            df_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix

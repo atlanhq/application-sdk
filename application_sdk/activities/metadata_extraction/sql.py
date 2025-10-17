@@ -34,7 +34,7 @@ from application_sdk.common.utils import (
 )
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.io import DFType
+from application_sdk.io import DataframeType
 from application_sdk.io.json import JsonWriter
 from application_sdk.io.parquet import ParquetReader, ParquetWriter
 from application_sdk.observability.logger_adaptor import get_logger
@@ -813,7 +813,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         raw_input = ParquetReader(
             path=os.path.join(output_path, "raw"),
             file_names=workflow_args.get("file_names"),
-            df_type=DFType.daft,
+            df_type=DataframeType.daft,
         )
         raw_input = raw_input.read_batches()
 
@@ -822,7 +822,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             output_suffix="transformed",
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
-            df_type=DFType.daft,
+            df_type=DataframeType.daft,
         )
         if state.transformer:
             workflow_args["connection_name"] = workflow_args.get("connection", {}).get(

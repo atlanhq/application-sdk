@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from application_sdk.common.types import DFType
+from application_sdk.common.types import DataframeType
 from application_sdk.io.parquet import ParquetWriter
 
 
@@ -316,7 +316,7 @@ class TestParquetWriterWriteDaftDataframe:
 
             parquet_output = ParquetWriter(
                 output_path=base_output_path,
-                df_type=DFType.daft,
+                df_type=DataframeType.daft,
             )
 
             await parquet_output.write(mock_df)
@@ -359,7 +359,7 @@ class TestParquetWriterWriteDaftDataframe:
 
             parquet_output = ParquetWriter(
                 output_path=base_output_path,
-                df_type=DFType.daft,
+                df_type=DataframeType.daft,
             )
 
             # Override parameters in method call
@@ -399,7 +399,7 @@ class TestParquetWriterWriteDaftDataframe:
 
             parquet_output = ParquetWriter(
                 output_path=base_output_path,
-                df_type=DFType.daft,
+                df_type=DataframeType.daft,
             )
 
             # Use default parameters
@@ -434,7 +434,7 @@ class TestParquetWriterWriteDaftDataframe:
 
             parquet_output = ParquetWriter(
                 output_path=base_output_path,
-                df_type=DFType.daft,
+                df_type=DataframeType.daft,
             )
 
             await parquet_output.write(mock_df)
@@ -457,7 +457,7 @@ class TestParquetWriterWriteDaftDataframe:
 
         parquet_output = ParquetWriter(
             output_path=base_output_path,
-            df_type=DFType.daft,
+            df_type=DataframeType.daft,
         )
 
         with pytest.raises(Exception, match="Count rows error"):
@@ -519,7 +519,7 @@ class TestParquetWriterMetrics:
 
             parquet_output = ParquetWriter(
                 output_path=base_output_path,
-                df_type=DFType.daft,
+                df_type=DataframeType.daft,
             )
 
             await parquet_output.write(mock_df)

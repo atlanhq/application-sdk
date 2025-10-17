@@ -4,7 +4,7 @@ from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 from temporalio import activity
 
-from application_sdk.io import DFType, Reader, Writer
+from application_sdk.io import DataframeType, Reader, Writer
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 
@@ -28,7 +28,7 @@ class IcebergReader(Reader):
         self,
         table: Table,
         chunk_size: Optional[int] = 100000,
-        df_type: DFType = DFType.pandas,
+        df_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the Iceberg input class.
 
@@ -47,7 +47,7 @@ class IcebergReader(Reader):
         and return as a single combined daft dataframe
         """
         try:
-            if self.df_type == DFType.daft:
+            if self.df_type == DataframeType.daft:
                 import daft
 
                 return daft.read_iceberg(self.table)
@@ -81,7 +81,7 @@ class IcebergWriter(Writer):
         total_record_count: int = 0,
         chunk_count: int = 0,
         retain_local_copy: bool = False,
-        df_type: DFType = DFType.pandas,
+        df_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the Iceberg writer class.
 

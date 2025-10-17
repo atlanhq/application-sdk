@@ -1,7 +1,7 @@
 from enum import Enum
 
 
-class DFType(Enum):
+class DataframeType(Enum):
     """Enumeration of dataframe types."""
 
     pandas = "pandas"

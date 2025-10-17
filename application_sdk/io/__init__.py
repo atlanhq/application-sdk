@@ -29,7 +29,7 @@ from temporalio import activity
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
-from application_sdk.common.types import DFType
+from application_sdk.common.types import DataframeType
 from application_sdk.io._utils import estimate_dataframe_record_size, path_gen
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
@@ -118,15 +118,15 @@ class Writer(ABC):
     current_buffer_size_bytes: int
     partitions: List[int]
     extension: str
-    df_type: DFType
+    df_type: DataframeType
 
     async def write(self, dataframe: Union["pd.DataFrame", "daft.DataFrame"], **kwargs):
         """
         Method to write the pandas dataframe to an iceberg table
         """
-        if self.df_type == DFType.pandas:
+        if self.df_type == DataframeType.pandas:
             await self._write_dataframe(dataframe, **kwargs)
-        elif self.df_type == DFType.daft:
+        elif self.df_type == DataframeType.daft:
             await self._write_daft_dataframe(dataframe, **kwargs)
         else:
             raise ValueError(f"Unsupported df_type: {self.df_type}")
@@ -143,9 +143,9 @@ class Writer(ABC):
         """
         Method to write the pandas dataframe to an iceberg table
         """
-        if self.df_type == DFType.pandas:
+        if self.df_type == DataframeType.pandas:
             await self._write_batched_dataframe(dataframe)
-        elif self.df_type == DFType.daft:
+        elif self.df_type == DataframeType.daft:
             await self._write_batched_daft_dataframe(dataframe)
         else:
             raise ValueError(f"Unsupported df_type: {self.df_type}")

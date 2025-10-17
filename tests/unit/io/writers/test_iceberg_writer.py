@@ -5,7 +5,7 @@ import pytest
 from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 
-from application_sdk.common.types import DFType
+from application_sdk.common.types import DataframeType
 from application_sdk.io.iceberg import IcebergWriter
 
 
@@ -26,7 +26,7 @@ def iceberg_output(mock_catalog: Catalog) -> IcebergWriter:
         iceberg_namespace="test_namespace",
         iceberg_table="test_table",
         mode="append",
-        df_type=DFType.pandas,
+        df_type=DataframeType.pandas,
     )
 
 
