@@ -176,35 +176,3 @@ jobs:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
-
-  # Documentation
-  docs:
-    name: Docs
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: "./.github/actions/setup-deps"
-      - name: Install graphviz
-        run: |
-          sudo apt install graphviz
-      - name: Generate Sphinx Docs and UML Diagrams
-        run: |
-          uv run poe generate-apidocs
-
-      - name: Setup AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          aws-region: ap-south-1
-          # Only usable in atlanhq repositories
-          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
-
-      - name: Upload Docs to Kryptonite Bucket
-        run: |
-          aws s3 sync ./docs/site s3://kryptonite-store/application-sdk/${{ github.head_ref }} --delete
-
-      - name: Comment Kryptonite URL on PR
-        uses: mshick/add-pr-comment@v2
-        with:
-          message-id: "docs"
-          message: |
-            🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}

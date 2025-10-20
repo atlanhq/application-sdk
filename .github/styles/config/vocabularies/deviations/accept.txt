@@ -1,5 +1,0 @@
-Atlan
-Salesforce
-URL
-Apache
-Kafka
