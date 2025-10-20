@@ -28,8 +28,36 @@ The services module provides unified interfaces for interacting with external st
    await ObjectStore.download_prefix(source_prefix, destination_dir=None, store_name=None)
    files = await ObjectStore.list_files(prefix="", store_name=None)
 
-   # Note: delete method exists but is not implemented
-   # await ObjectStore.delete(key, store_name=None)  # raises NotImplementedError
+   # Delete operations
+   await ObjectStore.delete_file(key, store_name=None)
+   await ObjectStore.delete_prefix(prefix, store_name=None)
+   ```
+
+   **Usage Examples:**
+   ```python
+   from application_sdk.services.objectstore import ObjectStore
+
+   # Upload a file
+   await ObjectStore.upload_file(
+       source="/local/path/data.json",
+       destination="workflows/wf123/data.json"
+   )
+
+   # Download a file
+   await ObjectStore.download_file(
+       source="workflows/wf123/data.json",
+       destination="/local/path/downloaded.json"
+   )
+
+   # List files with prefix
+   files = await ObjectStore.list_files(prefix="workflows/wf123/")
+   print(f"Found {len(files)} files")
+
+   # Delete a specific file
+   await ObjectStore.delete_file("workflows/wf123/data.json")
+
+   # Delete all files with a prefix (e.g., cleanup after workflow)
+   await ObjectStore.delete_prefix("workflows/wf123/")
    ```
 
 ### 2. **`StateStore` (`application_sdk.services.statestore`)**

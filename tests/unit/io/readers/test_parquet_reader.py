@@ -26,7 +26,7 @@ def test_init(config: Dict[str, Any]) -> None:
         path=config["path"],
         chunk_size=config["chunk_size"],
         file_names=config["file_names"],
-        df_type=DataframeType.pandas,
+        dataframe_type=DataframeType.pandas,
     )
 
     assert parquet_input.path == config["path"]
@@ -40,7 +40,7 @@ def test_init_single_file_with_file_names_raises_error() -> None:
         ParquetFileReader(
             path="/data/test.parquet",
             file_names=["other.parquet"],
-            df_type=DataframeType.pandas,
+            dataframe_type=DataframeType.pandas,
         )
 
 
@@ -56,7 +56,7 @@ async def test_not_download_file_that_exists() -> None:
         parquet_input = ParquetFileReader(
             path=path,
             chunk_size=100000,  # No file_names
-            df_type=DataframeType.pandas,
+            dataframe_type=DataframeType.pandas,
         )
 
         result = await download_files(
@@ -80,7 +80,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
         return_value="local/test.parquet",
     ):
         parquet_input = ParquetFileReader(
-            path=path, chunk_size=100000, df_type=DataframeType.pandas
+            path=path, chunk_size=100000, dataframe_type=DataframeType.pandas
         )
 
         result = await download_files(
@@ -105,7 +105,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
 async def test_download_files_uses_base_class() -> None:
     """Test that ParquetFileReader uses the base class download_files method."""
     path = "/data/test.parquet"
-    parquet_input = ParquetFileReader(path=path, df_type=DataframeType.pandas)
+    parquet_input = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
 
     with patch("os.path.isfile", return_value=True):
         result = await download_files(
@@ -227,7 +227,7 @@ async def test_read_batches_with_mocked_pandas(monkeypatch) -> None:
     )
 
     parquet_input = ParquetFileReader(
-        path=path, chunk_size=expected_chunksize, df_type=DataframeType.pandas
+        path=path, chunk_size=expected_chunksize, dataframe_type=DataframeType.pandas
     )
 
     batches = parquet_input.read_batches()
@@ -263,7 +263,7 @@ async def test_read_batches_with_chunk_size(monkeypatch) -> None:
     )
 
     parquet_input = ParquetFileReader(
-        path=path, chunk_size=100, df_type=DataframeType.pandas
+        path=path, chunk_size=100, dataframe_type=DataframeType.pandas
     )
 
     batches = parquet_input.read_batches()
@@ -356,7 +356,7 @@ async def test_read(monkeypatch) -> None:
     )
 
     path = "/tmp/data"
-    parquet_input = ParquetFileReader(path=path, df_type=DataframeType.pandas)
+    parquet_input = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
 
     result = await parquet_input.read()
 
@@ -392,7 +392,7 @@ async def test_read_with_file_names(monkeypatch) -> None:
     file_names = ["dir/file1.parquet", "dir/file2.parquet"]
 
     parquet_input = ParquetFileReader(
-        path=path, file_names=file_names, df_type=DataframeType.daft
+        path=path, file_names=file_names, dataframe_type=DataframeType.daft
     )
 
     result = await parquet_input.read()
@@ -422,7 +422,7 @@ async def test_read_with_input_prefix(monkeypatch) -> None:
     )
 
     path = "/tmp/data"
-    parquet_input = ParquetFileReader(path=path, df_type=DataframeType.pandas)
+    parquet_input = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
 
     result = await parquet_input.read()
 
@@ -460,7 +460,10 @@ async def test_read_batches_with_file_names(monkeypatch) -> None:
         "two.parquet",
     ]
     parquet_input = ParquetFileReader(
-        path=path, file_names=file_names, buffer_size=50, df_type=DataframeType.daft
+        path=path,
+        file_names=file_names,
+        buffer_size=50,
+        dataframe_type=DataframeType.daft,
     )
 
     batches = parquet_input.read_batches()
@@ -492,7 +495,7 @@ async def test_read_batches_without_file_names(monkeypatch) -> None:
 
     path = "/data"
     parquet_input = ParquetFileReader(
-        path=path, buffer_size=50, df_type=DataframeType.daft
+        path=path, buffer_size=50, dataframe_type=DataframeType.daft
     )
 
     batches = parquet_input.read_batches()
@@ -525,7 +528,7 @@ async def test_read_batches_no_input_prefix(monkeypatch) -> None:
     path = "/data"
 
     parquet_input = ParquetFileReader(
-        path=path, buffer_size=50, df_type=DataframeType.daft
+        path=path, buffer_size=50, dataframe_type=DataframeType.daft
     )
 
     batches = parquet_input.read_batches()

@@ -28,7 +28,7 @@ class IcebergTableReader(Reader):
         self,
         table: Table,
         chunk_size: Optional[int] = 100000,
-        df_type: DataframeType = DataframeType.pandas,
+        dataframe_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the Iceberg input class.
 
@@ -39,7 +39,7 @@ class IcebergTableReader(Reader):
         """
         self.table = table
         self.chunk_size = chunk_size
-        self.df_type = df_type
+        self.dataframe_type = dataframe_type
 
     async def read(self) -> "daft.DataFrame":
         """
@@ -47,12 +47,12 @@ class IcebergTableReader(Reader):
         and return as a single combined daft dataframe
         """
         try:
-            if self.df_type == DataframeType.daft:
+            if self.dataframe_type == DataframeType.daft:
                 import daft
 
                 return daft.read_iceberg(self.table)
             else:
-                raise ValueError(f"Unsupported df_type: {self.df_type}")
+                raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
         except Exception as e:
             logger.error(f"Error reading data from Iceberg table using daft: {str(e)}")
             raise
@@ -81,7 +81,7 @@ class IcebergTableWriter(Writer):
         total_record_count: int = 0,
         chunk_count: int = 0,
         retain_local_copy: bool = False,
-        df_type: DataframeType = DataframeType.pandas,
+        dataframe_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the Iceberg writer class.
 
@@ -103,7 +103,7 @@ class IcebergTableWriter(Writer):
         self.mode = mode
         self.metrics = get_metrics()
         self.retain_local_copy = retain_local_copy
-        self.df_type = df_type
+        self.dataframe_type = dataframe_type
 
     async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
         """

@@ -38,7 +38,7 @@ class JsonFileReader(Reader):
         path: str,
         file_names: Optional[List[str]] = None,
         chunk_size: int = 100000,
-        df_type: DataframeType = DataframeType.pandas,
+        dataframe_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the JsonInput class.
 
@@ -65,19 +65,19 @@ class JsonFileReader(Reader):
         self.path = path
         self.chunk_size = chunk_size
         self.file_names = file_names
-        self.df_type = df_type
+        self.dataframe_type = dataframe_type
 
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
         """
         Method to read the data from the json files in the path
         and return as a single combined pandas dataframe
         """
-        if self.df_type == DataframeType.pandas:
+        if self.dataframe_type == DataframeType.pandas:
             return await self._get_dataframe()
-        elif self.df_type == DataframeType.daft:
+        elif self.dataframe_type == DataframeType.daft:
             return await self._get_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported df_type: {self.df_type}")
+            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
 
     def read_batches(
         self,
@@ -89,12 +89,12 @@ class JsonFileReader(Reader):
         Method to read the data from the json files in the path
         and return as a batched pandas dataframe
         """
-        if self.df_type == DataframeType.pandas:
+        if self.dataframe_type == DataframeType.pandas:
             return self._get_batched_dataframe()
-        elif self.df_type == DataframeType.daft:
+        elif self.dataframe_type == DataframeType.daft:
             return self._get_batched_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported df_type: {self.df_type}")
+            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
 
     async def _get_batched_dataframe(
         self,
@@ -228,7 +228,7 @@ class JsonFileWriter(Writer):
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
         retain_local_copy: bool = False,
-        df_type: DataframeType = DataframeType.pandas,
+        dataframe_type: DataframeType = DataframeType.pandas,
         **kwargs: Dict[str, Any],
     ):
         """Initialize the JSON output handler.
@@ -248,7 +248,7 @@ class JsonFileWriter(Writer):
                 Defaults to 0.
             retain_local_copy (bool, optional): Whether to retain the local copy of the files.
                 Defaults to False.
-            df_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
+            dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
@@ -271,7 +271,7 @@ class JsonFileWriter(Writer):
         self.metrics = get_metrics()
         self.retain_local_copy = retain_local_copy
         self.extension = JSON_FILE_EXTENSION
-        self.df_type = df_type
+        self.dataframe_type = dataframe_type
 
         if not self.output_path:
             raise ValueError("output_path is required")

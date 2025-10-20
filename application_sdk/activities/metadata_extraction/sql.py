@@ -820,7 +820,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         raw_input = ParquetFileReader(
             path=os.path.join(output_path, "raw"),
             file_names=workflow_args.get("file_names"),
-            df_type=DataframeType.daft,
+            dataframe_type=DataframeType.daft,
         )
         raw_input = raw_input.read_batches()
 
@@ -829,7 +829,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             output_suffix="transformed",
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
-            df_type=DataframeType.daft,
+            dataframe_type=DataframeType.daft,
         )
         if state.transformer:
             workflow_args["connection_name"] = workflow_args.get("connection", {}).get(

@@ -81,7 +81,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
         json_input = JsonFileReader(
-            path=path, file_names=file_names, df_type=DataframeType.daft
+            path=path, file_names=file_names, dataframe_type=DataframeType.daft
         )
 
         result = await download_files(json_input.path, ".json", json_input.file_names)
@@ -119,7 +119,7 @@ async def test_download_file_not_invoked_when_file_present() -> None:
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
         json_input = JsonFileReader(
-            path=path, file_names=file_names, df_type=DataframeType.daft
+            path=path, file_names=file_names, dataframe_type=DataframeType.daft
         )
 
         result = await download_files(json_input.path, ".json", json_input.file_names)
@@ -147,7 +147,7 @@ async def test_download_file_error_propagation() -> None:
         side_effect=Exception("Download failed"),
     ):
         json_input = JsonFileReader(
-            path=path, file_names=file_names, df_type=DataframeType.daft
+            path=path, file_names=file_names, dataframe_type=DataframeType.daft
         )
 
         with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
@@ -207,7 +207,7 @@ async def test_read_batches_with_mocked_pandas(monkeypatch) -> None:
         path=path,
         file_names=file_names,
         chunk_size=expected_chunksize,
-        df_type=DataframeType.pandas,
+        dataframe_type=DataframeType.pandas,
     )
 
     batches = json_input.read_batches()
@@ -241,7 +241,7 @@ async def test_read_batches_empty_file_list(monkeypatch) -> None:
     )
 
     json_input = JsonFileReader(
-        path="/data", file_names=[], df_type=DataframeType.pandas
+        path="/data", file_names=[], dataframe_type=DataframeType.pandas
     )
 
     batches_result = json_input.read_batches()
@@ -297,7 +297,7 @@ async def test_read(monkeypatch) -> None:
     file_names = ["dir/file1.json", "dir/file2.json"]
 
     json_input = JsonFileReader(
-        path=path, file_names=file_names, df_type=DataframeType.daft
+        path=path, file_names=file_names, dataframe_type=DataframeType.daft
     )
 
     result = await json_input.read()
@@ -322,7 +322,9 @@ async def test_read_no_files(monkeypatch) -> None:
         "application_sdk.io.json.download_files", dummy_download, raising=False
     )
 
-    json_input = JsonFileReader(path="/tmp", file_names=[], df_type=DataframeType.daft)
+    json_input = JsonFileReader(
+        path="/tmp", file_names=[], dataframe_type=DataframeType.daft
+    )
 
     result = await json_input.read()
 
@@ -349,7 +351,10 @@ async def test_read_batches(monkeypatch) -> None:
     file_names = ["one.json", "two.json"]
 
     json_input = JsonFileReader(
-        path=path, file_names=file_names, chunk_size=123, df_type=DataframeType.daft
+        path=path,
+        file_names=file_names,
+        chunk_size=123,
+        dataframe_type=DataframeType.daft,
     )
 
     batches = json_input.read_batches()

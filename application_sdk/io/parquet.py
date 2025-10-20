@@ -43,7 +43,7 @@ class ParquetFileReader(Reader):
         chunk_size: int = 100000,
         buffer_size: int = 5000,
         file_names: Optional[List[str]] = None,
-        df_type: DataframeType = DataframeType.pandas,
+        dataframe_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the Parquet input class.
 
@@ -71,19 +71,19 @@ class ParquetFileReader(Reader):
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
         self.file_names = file_names
-        self.df_type = df_type
+        self.dataframe_type = dataframe_type
 
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
         """
         Method to read the data from the parquet files in the path
         and return as a single combined pandas dataframe
         """
-        if self.df_type == DataframeType.pandas:
+        if self.dataframe_type == DataframeType.pandas:
             return await self._get_dataframe()
-        elif self.df_type == DataframeType.daft:
+        elif self.dataframe_type == DataframeType.daft:
             return await self._get_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported df_type: {self.df_type}")
+            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
 
     def read_batches(
         self,
@@ -95,12 +95,12 @@ class ParquetFileReader(Reader):
         Method to read the data from the parquet files in the path
         and return as a batched pandas dataframe
         """
-        if self.df_type == DataframeType.pandas:
+        if self.dataframe_type == DataframeType.pandas:
             return self._get_batched_dataframe()
-        elif self.df_type == DataframeType.daft:
+        elif self.dataframe_type == DataframeType.daft:
             return self._get_batched_daft_dataframe()
         else:
-            raise ValueError(f"Unsupported df_type: {self.df_type}")
+            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
 
     async def _get_dataframe(self) -> "pd.DataFrame":
         """Read data from parquet file(s) and return as pandas DataFrame.
@@ -362,7 +362,7 @@ class ParquetFileWriter(Writer):
         end_marker: Optional[str] = None,
         retain_local_copy: bool = False,
         use_consolidation: bool = False,
-        df_type: DataframeType = DataframeType.pandas,
+        dataframe_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the Parquet output handler.
 
@@ -382,7 +382,7 @@ class ParquetFileWriter(Writer):
                 Defaults to False.
             use_consolidation (bool, optional): Whether to use consolidation.
                 Defaults to False.
-            df_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
+            dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
         self.extension = PARQUET_FILE_EXTENSION
         self.output_path = output_path
@@ -404,7 +404,7 @@ class ParquetFileWriter(Writer):
         self.partitions = []
         self.metrics = get_metrics()
         self.retain_local_copy = retain_local_copy
-        self.df_type = df_type
+        self.dataframe_type = dataframe_type
 
         # Consolidation-specific attributes
         # Use consolidation to efficiently write parquet files in buffered manner

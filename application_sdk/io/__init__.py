@@ -118,18 +118,18 @@ class Writer(ABC):
     current_buffer_size_bytes: int
     partitions: List[int]
     extension: str
-    df_type: DataframeType
+    dataframe_type: DataframeType
 
     async def write(self, dataframe: Union["pd.DataFrame", "daft.DataFrame"], **kwargs):
         """
         Method to write the pandas dataframe to an iceberg table
         """
-        if self.df_type == DataframeType.pandas:
+        if self.dataframe_type == DataframeType.pandas:
             await self._write_dataframe(dataframe, **kwargs)
-        elif self.df_type == DataframeType.daft:
+        elif self.dataframe_type == DataframeType.daft:
             await self._write_daft_dataframe(dataframe, **kwargs)
         else:
-            raise ValueError(f"Unsupported df_type: {self.df_type}")
+            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
 
     async def write_batches(
         self,
@@ -143,12 +143,12 @@ class Writer(ABC):
         """
         Method to write the pandas dataframe to an iceberg table
         """
-        if self.df_type == DataframeType.pandas:
+        if self.dataframe_type == DataframeType.pandas:
             await self._write_batched_dataframe(dataframe)
-        elif self.df_type == DataframeType.daft:
+        elif self.dataframe_type == DataframeType.daft:
             await self._write_batched_daft_dataframe(dataframe)
         else:
-            raise ValueError(f"Unsupported df_type: {self.df_type}")
+            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
 
     async def _write_batched_dataframe(
         self,

@@ -26,7 +26,7 @@ def iceberg_output(mock_catalog: Catalog) -> IcebergTableWriter:
         iceberg_namespace="test_namespace",
         iceberg_table="test_table",
         mode="append",
-        df_type=DataframeType.pandas,
+        dataframe_type=DataframeType.pandas,
     )
 
 

@@ -4,7 +4,7 @@ This module provides a standardized way to write data to various destinations wi
 
 ## Core Concepts
 
-1.  **`Writer` Interface (`application_sdk.io.__init__.py`)**:
+1.  **`Writer` Interface (`application_sdk.io.Writer`)**:
     *   **Purpose:** An abstract base class defining the contract for writing data.
     *   **Key Methods:** Requires subclasses to implement methods for writing Pandas or Daft DataFrames:
         *   `write(dataframe: Union[pd.DataFrame, daft.DataFrame])`: Write a single DataFrame (Pandas or Daft).
@@ -19,6 +19,41 @@ This module provides a standardized way to write data to various destinations wi
     *   **`JsonFileWriter` (`application_sdk.io.json`)**: Writes DataFrames to JSON Lines files (`.json`).
     *   **`ParquetFileWriter` (`application_sdk.io.parquet`)**: Writes DataFrames to Parquet files (`.parquet`).
     *   **`IcebergTableWriter` (`application_sdk.io.iceberg`)**: Writes DataFrames to Apache Iceberg tables.
+
+## Object Store Integration (Automatic Upload)
+
+**All file-based writers automatically handle object store uploads**, making data persistence seamless:
+
+### How It Works
+
+1. **Write Locally**: Writer first writes files to the specified local `output_path`
+2. **Auto-Upload**: After writing completes, automatically uploads files to object store
+3. **Optional Cleanup**: Can optionally retain or delete local copies after upload
+4. **Transparent Persistence**: Your code simply calls `write()` - uploads happen automatically
+
+This means you never need to manually upload files to object storage - the writers handle it for you!
+
+### Complete Data Flow
+```
+Activity calls write() → Writer writes to local path →
+  → Uploads to object store → Optionally cleans up local files →
+  → Returns statistics
+```
+
+## Naming Convention
+
+Writer classes follow a clear naming pattern that indicates what they work with:
+
+- **`*FileWriter`**: Work with file formats stored on disk
+  - Write to Parquet, JSON, or other file formats
+  - Automatically upload to object store after writing
+  - Support chunking and compression
+  - Examples: `ParquetFileWriter`, `JsonFileWriter`
+
+- **`*TableWriter`**: Work with managed table storage systems
+  - Write directly to table engines like Apache Iceberg
+  - Handle table-specific features (schema evolution, partitioning, ACID transactions)
+  - Examples: `IcebergTableWriter`
 
 ## `JsonFileWriter` (`application_sdk.io.json`)
 

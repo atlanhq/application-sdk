@@ -316,7 +316,7 @@ class TestParquetFileWriterWriteDaftDataframe:
 
             parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
-                df_type=DataframeType.daft,
+                dataframe_type=DataframeType.daft,
             )
 
             await parquet_output.write(mock_df)
@@ -359,7 +359,7 @@ class TestParquetFileWriterWriteDaftDataframe:
 
             parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
-                df_type=DataframeType.daft,
+                dataframe_type=DataframeType.daft,
             )
 
             # Override parameters in method call
@@ -399,7 +399,7 @@ class TestParquetFileWriterWriteDaftDataframe:
 
             parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
-                df_type=DataframeType.daft,
+                dataframe_type=DataframeType.daft,
             )
 
             # Use default parameters
@@ -434,7 +434,7 @@ class TestParquetFileWriterWriteDaftDataframe:
 
             parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
-                df_type=DataframeType.daft,
+                dataframe_type=DataframeType.daft,
             )
 
             await parquet_output.write(mock_df)
@@ -457,7 +457,7 @@ class TestParquetFileWriterWriteDaftDataframe:
 
         parquet_output = ParquetFileWriter(
             output_path=base_output_path,
-            df_type=DataframeType.daft,
+            dataframe_type=DataframeType.daft,
         )
 
         with pytest.raises(Exception, match="Count rows error"):
@@ -519,7 +519,7 @@ class TestParquetFileWriterMetrics:
 
             parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
-                df_type=DataframeType.daft,
+                dataframe_type=DataframeType.daft,
             )
 
             await parquet_output.write(mock_df)
