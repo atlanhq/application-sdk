@@ -15,10 +15,14 @@ from typing import (
 from temporalio import activity
 
 from application_sdk.activities.common.utils import get_object_store_prefix
-from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.io import DataframeType, Reader, WriteMode, Writer
-from application_sdk.io._utils import PARQUET_FILE_EXTENSION, download_files, path_gen
+from application_sdk.io._utils import (
+    PARQUET_FILE_EXTENSION,
+    download_files,
+    is_empty_dataframe,
+    path_gen,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.services.objectstore import ObjectStore

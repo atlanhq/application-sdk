@@ -10,7 +10,6 @@ from datetime import datetime
 from dapr import clients
 from temporalio import activity, workflow
 
-from application_sdk.common.dapr_utils import is_component_registered
 from application_sdk.constants import (
     APPLICATION_NAME,
     DAPR_BINDING_OPERATION_CREATE,
@@ -18,6 +17,7 @@ from application_sdk.constants import (
 )
 from application_sdk.events.models import Event, EventMetadata, WorkflowStates
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services._utils import is_component_registered
 
 logger = get_logger(__name__)
 activity.logger = logger

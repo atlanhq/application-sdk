@@ -24,7 +24,6 @@ from application_sdk.activities.common.utils import (
     get_workflow_id,
 )
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.common.utils import (
     get_database_names,
@@ -35,6 +34,7 @@ from application_sdk.common.utils import (
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.io import DataframeType
+from application_sdk.io._utils import is_empty_dataframe
 from application_sdk.io.json import JsonFileWriter
 from application_sdk.io.parquet import ParquetFileReader, ParquetFileWriter
 from application_sdk.observability.logger_adaptor import get_logger
