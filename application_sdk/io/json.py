@@ -287,18 +287,8 @@ class JsonFileWriter(Writer):
     async def _write_daft_dataframe(
         self,
         dataframe: "daft.DataFrame",
-        preserve_fields: Optional[List[str]] = [
-            "identity_cycle",
-            "number_columns_in_part_key",
-            "columns_participating_in_part_key",
-            "engine",
-            "is_insertable_into",
-            "is_typed",
-        ],
-        null_to_empty_dict_fields: Optional[List[str]] = [
-            "attributes",
-            "customAttributes",
-        ],
+        preserve_fields: Optional[List[str]] = None,
+        null_to_empty_dict_fields: Optional[List[str]] = None,
         **kwargs,
     ):  # noqa: F821
         """Write a daft DataFrame to JSON files.
@@ -307,10 +297,31 @@ class JsonFileWriter(Writer):
 
         Args:
             dataframe (daft.DataFrame): The DataFrame to write.
+            preserve_fields (Optional[List[str]]): List of fields to preserve during null processing.
+                Defaults to ["identity_cycle", "number_columns_in_part_key",
+                "columns_participating_in_part_key", "engine", "is_insertable_into", "is_typed"].
+            null_to_empty_dict_fields (Optional[List[str]]): List of fields to convert from null to empty dict.
+                Defaults to ["attributes", "customAttributes"].
 
         Note:
             Daft does not have built-in JSON writing support, so we are using orjson.
         """
+        # Initialize default values for mutable arguments
+        if preserve_fields is None:
+            preserve_fields = [
+                "identity_cycle",
+                "number_columns_in_part_key",
+                "columns_participating_in_part_key",
+                "engine",
+                "is_insertable_into",
+                "is_typed",
+            ]
+        if null_to_empty_dict_fields is None:
+            null_to_empty_dict_fields = [
+                "attributes",
+                "customAttributes",
+            ]
+
         try:
             if self.chunk_start is None:
                 self.chunk_part = 0
