@@ -1,55 +1,55 @@
-# Outputs
+# Outputs (I/O Writers)
 
-This module provides a standardized way to write data to various destinations within the Application SDK framework. It mirrors the `inputs` module by defining a common `Output` interface and offering concrete implementations for common formats like JSON Lines and Parquet.
+This module provides a standardized way to write data to various destinations within the Application SDK framework. It defines a common `Writer` interface and offers concrete implementations for common formats like JSON Lines, Parquet, and Iceberg tables.
 
 ## Core Concepts
 
-1.  **`Output` Interface (`application_sdk.outputs.__init__.py`)**:
+1.  **`Writer` Interface (`application_sdk.io.__init__.py`)**:
     *   **Purpose:** An abstract base class defining the contract for writing data.
     *   **Key Methods:** Requires subclasses to implement methods for writing Pandas or Daft DataFrames:
-        *   `write_dataframe(dataframe: pd.DataFrame)`: Write a single Pandas DataFrame.
-        *   `write_daft_dataframe(dataframe: daft.DataFrame)`: Write a single Daft DataFrame.
-    *   **Helper Methods:** Provides base implementations for writing *batched* DataFrames (`write_batched_dataframe`, `write_batched_daft_dataframe`) which iterate over input generators/async generators and call the corresponding single DataFrame write methods.
+        *   `write(dataframe: Union[pd.DataFrame, daft.DataFrame])`: Write a single DataFrame (Pandas or Daft).
+        *   `write_batches(dataframe: Union[AsyncGenerator, Generator])`: Write batched DataFrames.
+        *   `_write_dataframe(dataframe: pd.DataFrame)`: Internal method for writing Pandas DataFrames.
+        *   `_write_daft_dataframe(dataframe: daft.DataFrame)`: Internal method for writing Daft DataFrames.
     *   **Statistics:** Includes methods (`get_statistics`, `write_statistics`) to track and save metadata about the output (record count, chunk count) to a `statistics.json.ignore` file, typically alongside the data output.
-    *   **Usage:** Activities typically instantiate a specific `Output` subclass and use its write methods to persist data fetched or generated during the activity.
+    *   **Usage:** Activities typically instantiate a specific `Writer` subclass and use its write methods to persist data fetched or generated during the activity.
 
-2.  **Concrete Implementations:** The SDK provides several output classes:
+2.  **Concrete Implementations:** The SDK provides several writer classes:
 
-    *   **`JsonOutput` (`json.py`)**: Writes DataFrames to JSON Lines files (`.json`).
-    *   **`ParquetOutput` (`parquet.py`)**: Writes DataFrames to Parquet files (`.parquet`).
-    *   **`IcebergOutput` (`iceberg.py`)**: Writes DataFrames to Apache Iceberg tables.
+    *   **`JsonFileWriter` (`application_sdk.io.json`)**: Writes DataFrames to JSON Lines files (`.json`).
+    *   **`ParquetFileWriter` (`application_sdk.io.parquet`)**: Writes DataFrames to Parquet files (`.parquet`).
+    *   **`IcebergTableWriter` (`application_sdk.io.iceberg`)**: Writes DataFrames to Apache Iceberg tables.
 
-## `JsonOutput` (`json.py`)
+## `JsonFileWriter` (`application_sdk.io.json`)
 
 Writes Pandas or Daft DataFrames to one or more JSON Lines files locally, optionally uploading them to an object store.
 
 ### Features
 
-*   **DataFrame Support:** Can write both Pandas (`write_dataframe`) and Daft (`write_daft_dataframe`) DataFrames. Daft DataFrames are processed row-by-row using `orjson` for memory efficiency.
+*   **DataFrame Support:** Can write both Pandas and Daft DataFrames. Daft DataFrames are processed row-by-row using `orjson` for memory efficiency.
 *   **Chunking:** Automatically splits large DataFrames into multiple output files based on the `chunk_size` parameter.
 *   **Buffering (Pandas):** For Pandas DataFrames, uses an internal buffer to accumulate data before writing chunks, controlled by `buffer_size`.
 *   **File Naming:** Uses a `path_gen` function to name output files, typically incorporating chunk numbers (e.g., `1.json`, `2-100.json`). Can be customized.
-*   **Object Store Integration:** After writing files locally to the specified `output_path`, it uploads the generated files to the location specified by `output_prefix`.
+*   **Object Store Integration:** After writing files locally to the specified `output_path`, it uploads the generated files to object storage.
 *   **Statistics:** Tracks `total_record_count` and `chunk_count` and saves them via `write_statistics`.
 
 ### Initialization
 
-`JsonOutput(output_suffix, output_path=..., output_prefix=..., typename=..., chunk_start=..., chunk_size=..., ...)`
+`JsonFileWriter(output_suffix, output_path=..., typename=..., chunk_start=..., chunk_size=..., ...)`
 
 *   `output_suffix` (str): A suffix added to the base `output_path`. Often used for specific runs or data types.
 *   `output_path` (str): The base *local* directory where files will be temporarily written (e.g., `/data/workflow_run_123`). The final local path becomes `{output_path}/{output_suffix}/{typename}`.
-*   `output_prefix` (str): The prefix/path in the **object store** where the locally written files will be uploaded.
 *   `typename` (str, optional): A subdirectory name added under `{output_path}/{output_suffix}` (e.g., `tables`, `columns`). Helps organize output.
 *   `chunk_start` (int, optional): Starting index for chunk numbering in filenames.
-*   `chunk_size` (int, optional): Maximum number of records per output file chunk (default: 100,000).
+*   `chunk_size` (int, optional): Maximum number of records per output file chunk (default: 50,000).
 
 ### Common Usage
 
-`JsonOutput` (and similarly `ParquetOutput`) is typically used within activities that fetch data and need to persist it for subsequent steps, like a transformation activity.
+`JsonFileWriter` (and similarly `ParquetFileWriter`) is typically used within activities that fetch data and need to persist it for subsequent steps, like a transformation activity.
 
 ```python
 # Within an Activity method (e.g., query_executor in SQL extraction/query activities)
-from application_sdk.outputs.json import JsonOutput
+from application_sdk.io.json import JsonFileWriter
 # ... other imports ...
 
 async def query_executor(
@@ -64,17 +64,15 @@ async def query_executor(
     # ... (validate inputs, prepare query) ...
 
     # Get output path details from workflow_args
-    output_prefix = workflow_args.get("output_prefix") # Object store path
     output_path = workflow_args.get("output_path")     # Base local path
 
-    if not output_prefix or not output_path:
-        raise ValueError("output_prefix and output_path are required in workflow_args")
+    if not output_path:
+        raise ValueError("output_path is required in workflow_args")
 
-    # Instantiate JsonOutput
-    json_output = JsonOutput(
+    # Instantiate JsonFileWriter
+    json_writer = JsonFileWriter(
         output_suffix=output_suffix,
         output_path=output_path,         # Local base path
-        output_prefix=output_prefix,     # Object store base path
         typename=typename,
         # chunk_size=... (optional)
     )
@@ -85,15 +83,15 @@ async def query_executor(
         async for batch in sql_client.run_query(prepared_query):
             results.extend(batch)
 
-        # Write the data using the Output class
-        # This writes locally then uploads to object store path: {output_prefix}/{output_suffix}/{typename}/
+        # Write the data using the Writer class
+        # This writes locally then uploads to object store
         # Convert results to DataFrame first if needed
         import pandas as pd
         df = pd.DataFrame(results)
-        await json_output.write_dataframe(df)
+        await json_writer.write(df)
 
         # Get statistics (record count, chunk count) after writing
-        stats = await json_output.get_statistics(typename=typename)
+        stats = await json_writer.get_statistics(typename=typename)
         return stats.model_dump()
 
     except Exception as e:
@@ -101,11 +99,11 @@ async def query_executor(
         raise
 ```
 
-## Other Output Handlers
+## Other Writer Handlers
 
-*   **`ParquetOutput`:** Similar to `JsonOutput` but writes DataFrames to Parquet format files. Uses `daft.DataFrame.write_parquet()` or `pandas.DataFrame.to_parquet()`. Also uploads files to object storage after local processing.
-*   **`IcebergOutput`:** Writes DataFrames directly to an Iceberg table using `pyiceberg`.
+*   **`ParquetFileWriter`:** Similar to `JsonFileWriter` but writes DataFrames to Parquet format files. Uses `daft.DataFrame.write_parquet()` or `pandas.DataFrame.to_parquet()`. Also uploads files to object storage after local processing. Supports consolidation mode for efficient writing of large datasets.
+*   **`IcebergTableWriter`:** Writes DataFrames directly to an Iceberg table using `pyiceberg`. Designed for writing to managed table storage rather than files.
 
 ## Summary
 
-The `outputs` module complements the `inputs` module by providing classes to write data processed within activities. `JsonOutput` and `ParquetOutput` are commonly used for saving intermediate DataFrames to local files (and then uploading them to object storage), making the data available for subsequent activities like transformations.
+The I/O module provides both reader and writer classes for data persistence. `JsonFileWriter` and `ParquetFileWriter` are commonly used for saving intermediate DataFrames to local files (and then uploading them to object storage), making the data available for subsequent activities like transformations. The naming convention explicitly indicates the destination format: `*FileWriter` for file-based formats and `*TableWriter` for table-based formats like Iceberg.

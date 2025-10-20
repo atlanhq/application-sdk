@@ -16,9 +16,9 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-class IcebergReader(Reader):
+class IcebergTableReader(Reader):
     """
-    Iceberg Input class to read data from Iceberg tables using daft and pandas
+    Iceberg Table Reader class to read data from Iceberg tables using daft and pandas
     """
 
     table: Table
@@ -67,9 +67,9 @@ class IcebergReader(Reader):
         raise NotImplementedError
 
 
-class IcebergWriter(Writer):
+class IcebergTableWriter(Writer):
     """
-    Iceberg Writer class to write data to Iceberg tables using daft and pandas
+    Iceberg Table Writer class to write data to Iceberg tables using daft and pandas
     """
 
     def __init__(

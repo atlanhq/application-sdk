@@ -6,7 +6,7 @@ from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 
 from application_sdk.common.types import DataframeType
-from application_sdk.io.iceberg import IcebergWriter
+from application_sdk.io.iceberg import IcebergTableWriter
 
 
 @pytest.fixture
@@ -20,8 +20,8 @@ def mock_table() -> Table:
 
 
 @pytest.fixture
-def iceberg_output(mock_catalog: Catalog) -> IcebergWriter:
-    return IcebergWriter(
+def iceberg_output(mock_catalog: Catalog) -> IcebergTableWriter:
+    return IcebergTableWriter(
         iceberg_catalog=mock_catalog,
         iceberg_namespace="test_namespace",
         iceberg_table="test_table",
@@ -31,8 +31,8 @@ def iceberg_output(mock_catalog: Catalog) -> IcebergWriter:
 
 
 def test_iceberg_output_initialization(mock_catalog: Catalog) -> None:
-    """Test IcebergWriter initialization with different parameters"""
-    output = IcebergWriter(
+    """Test IcebergTableWriter initialization with different parameters"""
+    output = IcebergTableWriter(
         iceberg_catalog=mock_catalog,
         iceberg_namespace="test_namespace",
         iceberg_table="test_table",
@@ -48,7 +48,7 @@ def test_iceberg_output_initialization(mock_catalog: Catalog) -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_empty(iceberg_output: IcebergWriter) -> None:
+async def test_write_empty(iceberg_output: IcebergTableWriter) -> None:
     """Test writing empty dataframe"""
     df = pd.DataFrame()
     await iceberg_output.write(df)
@@ -58,7 +58,7 @@ async def test_write_empty(iceberg_output: IcebergWriter) -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_with_data(iceberg_output: IcebergWriter) -> None:
+async def test_write_with_data(iceberg_output: IcebergTableWriter) -> None:
     """Test writing dataframe with data"""
     test_data = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
 
@@ -74,7 +74,7 @@ async def test_write_with_data(iceberg_output: IcebergWriter) -> None:
 
 @pytest.mark.asyncio
 async def test_write_existing_table(
-    iceberg_output: IcebergWriter, mock_table: Table
+    iceberg_output: IcebergTableWriter, mock_table: Table
 ) -> None:
     """Test writing daft dataframe to existing table"""
     df = pd.DataFrame({"col1": [1, 2, 3, 4, 5]})
@@ -95,7 +95,7 @@ async def test_write_existing_table(
 
 @pytest.mark.asyncio
 async def test_write_new_table(
-    iceberg_output: IcebergWriter, mock_table: Table
+    iceberg_output: IcebergTableWriter, mock_table: Table
 ) -> None:
     """Test writing daft dataframe creating new table"""
     df = pd.DataFrame({"col1": [1, 2, 3]})
@@ -120,7 +120,7 @@ async def test_write_new_table(
 
 
 @pytest.mark.asyncio
-async def test_write_error_handling(iceberg_output: IcebergWriter) -> None:
+async def test_write_error_handling(iceberg_output: IcebergTableWriter) -> None:
     """Test error handling in write"""
     df = pd.DataFrame({"col1": [1, 2, 3]})
 

@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from application_sdk.common.types import DataframeType
-from application_sdk.io.parquet import ParquetWriter
+from application_sdk.io.parquet import ParquetFileWriter
 
 
 @pytest.fixture
@@ -96,12 +96,12 @@ def mock_consolidation_files():
     return _create_mock_files
 
 
-class TestParquetWriterInit:
-    """Test ParquetWriter initialization."""
+class TestParquetFileWriterInit:
+    """Test ParquetFileWriter initialization."""
 
     def test_init_default_values(self, base_output_path: str):
-        """Test ParquetWriter initialization with default values."""
-        parquet_output = ParquetWriter(output_path=base_output_path)
+        """Test ParquetFileWriter initialization with default values."""
+        parquet_output = ParquetFileWriter(output_path=base_output_path)
 
         # The output path gets modified by adding suffix, so check it ends with the base path
         assert base_output_path in parquet_output.output_path
@@ -116,8 +116,8 @@ class TestParquetWriterInit:
         # partition_cols was removed from the implementation
 
     def test_init_custom_values(self, base_output_path: str):
-        """Test ParquetWriter initialization with custom values."""
-        parquet_output = ParquetWriter(
+        """Test ParquetFileWriter initialization with custom values."""
+        parquet_output = ParquetFileWriter(
             output_path=os.path.join(base_output_path, "test_suffix"),
             typename="test_table",
             chunk_size=50000,
@@ -142,7 +142,7 @@ class TestParquetWriterInit:
 
     def test_init_creates_output_directory(self, base_output_path: str):
         """Test that initialization creates the output directory."""
-        parquet_output = ParquetWriter(
+        parquet_output = ParquetFileWriter(
             output_path=os.path.join(base_output_path, "test_dir"),
             typename="test_table",
         )
@@ -152,8 +152,8 @@ class TestParquetWriterInit:
         assert parquet_output.output_path == expected_path
 
 
-class TestParquetWriterPathGen:
-    """Test ParquetWriter path generation."""
+class TestParquetFileWriterPathGen:
+    """Test ParquetFileWriter path generation."""
 
     def test_path_gen_with_markers(self, base_output_path: str):
         """Test path generation with start and end markers."""
@@ -182,13 +182,13 @@ class TestParquetWriterPathGen:
         assert path == "chunk-10-part3.parquet"
 
 
-class TestParquetWriterWriteDataframe:
-    """Test ParquetWriter pandas DataFrame writing."""
+class TestParquetFileWriterWriteDataframe:
+    """Test ParquetFileWriter pandas DataFrame writing."""
 
     @pytest.mark.asyncio
     async def test_write_empty_dataframe(self, base_output_path: str):
         """Test writing an empty DataFrame."""
-        parquet_output = ParquetWriter(output_path=base_output_path)
+        parquet_output = ParquetFileWriter(output_path=base_output_path)
         empty_df = pd.DataFrame()
 
         await parquet_output.write(empty_df)
@@ -211,7 +211,7 @@ class TestParquetWriterWriteDataframe:
             mock_upload.return_value = AsyncMock()
             mock_prefix.return_value = "test/output/path"
 
-            parquet_output = ParquetWriter(
+            parquet_output = ParquetFileWriter(
                 output_path=os.path.join(base_output_path, "test"),
                 use_consolidation=False,
             )
@@ -244,7 +244,7 @@ class TestParquetWriterWriteDataframe:
             mock_upload.return_value = AsyncMock()
             mock_prefix.return_value = "test/output/path"
 
-            parquet_output = ParquetWriter(
+            parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
                 start_marker="test_start",
                 end_marker="test_end",
@@ -270,14 +270,14 @@ class TestParquetWriterWriteDataframe:
         with patch("pandas.DataFrame.to_parquet") as mock_to_parquet:
             mock_to_parquet.side_effect = Exception("Test error")
 
-            parquet_output = ParquetWriter(output_path=base_output_path)
+            parquet_output = ParquetFileWriter(output_path=base_output_path)
 
             with pytest.raises(Exception, match="Test error"):
                 await parquet_output.write(sample_dataframe)
 
 
-class TestParquetWriterWriteDaftDataframe:
-    """Test ParquetWriter daft DataFrame writing."""
+class TestParquetFileWriterWriteDaftDataframe:
+    """Test ParquetFileWriter daft DataFrame writing."""
 
     @pytest.mark.asyncio
     async def test_write_empty(self, base_output_path: str):
@@ -287,7 +287,7 @@ class TestParquetWriterWriteDaftDataframe:
             mock_df.count_rows.return_value = 0
             mock_daft.return_value = mock_df
 
-            parquet_output = ParquetWriter(output_path=base_output_path)
+            parquet_output = ParquetFileWriter(output_path=base_output_path)
 
             await parquet_output.write(mock_df)
 
@@ -314,7 +314,7 @@ class TestParquetWriterWriteDaftDataframe:
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetWriter(
+            parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
                 df_type=DataframeType.daft,
             )
@@ -357,7 +357,7 @@ class TestParquetWriterWriteDaftDataframe:
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetWriter(
+            parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
                 df_type=DataframeType.daft,
             )
@@ -397,7 +397,7 @@ class TestParquetWriterWriteDaftDataframe:
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetWriter(
+            parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
                 df_type=DataframeType.daft,
             )
@@ -432,7 +432,7 @@ class TestParquetWriterWriteDaftDataframe:
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetWriter(
+            parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
                 df_type=DataframeType.daft,
             )
@@ -455,7 +455,7 @@ class TestParquetWriterWriteDaftDataframe:
         mock_df = MagicMock()
         mock_df.count_rows.side_effect = Exception("Count rows error")
 
-        parquet_output = ParquetWriter(
+        parquet_output = ParquetFileWriter(
             output_path=base_output_path,
             df_type=DataframeType.daft,
         )
@@ -464,8 +464,8 @@ class TestParquetWriterWriteDaftDataframe:
             await parquet_output.write(mock_df)
 
 
-class TestParquetWriterMetrics:
-    """Test ParquetWriter metrics recording."""
+class TestParquetFileWriterMetrics:
+    """Test ParquetFileWriter metrics recording."""
 
     @pytest.mark.asyncio
     async def test_pandas_write_metrics(
@@ -484,7 +484,7 @@ class TestParquetWriterMetrics:
             mock_metrics = MagicMock()
             mock_get_metrics.return_value = mock_metrics
 
-            parquet_output = ParquetWriter(output_path=base_output_path)
+            parquet_output = ParquetFileWriter(output_path=base_output_path)
 
             await parquet_output.write(sample_dataframe)
 
@@ -517,7 +517,7 @@ class TestParquetWriterMetrics:
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetWriter(
+            parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
                 df_type=DataframeType.daft,
             )
@@ -537,12 +537,12 @@ class TestParquetWriterMetrics:
                 assert labels["type"] == "daft"
 
 
-class TestParquetWriterConsolidation:
-    """Test ParquetWriter consolidation functionality."""
+class TestParquetFileWriterConsolidation:
+    """Test ParquetFileWriter consolidation functionality."""
 
     def test_consolidation_init_attributes(self, base_output_path: str):
         """Test that consolidation attributes are properly initialized."""
-        parquet_output = ParquetWriter(
+        parquet_output = ParquetFileWriter(
             output_path=base_output_path,
             chunk_size=1000,
             buffer_size=200,
@@ -559,7 +559,7 @@ class TestParquetWriterConsolidation:
 
     def test_consolidation_init_with_none_chunk_size(self, base_output_path: str):
         """Test consolidation threshold when chunk_size is None."""
-        parquet_output = ParquetWriter(
+        parquet_output = ParquetFileWriter(
             output_path=base_output_path, chunk_size=None, buffer_size=200
         )
 
@@ -568,7 +568,7 @@ class TestParquetWriterConsolidation:
 
     def test_temp_folder_path_generation(self, base_output_path: str):
         """Test temp folder path generation."""
-        parquet_output = ParquetWriter(
+        parquet_output = ParquetFileWriter(
             output_path=os.path.join(base_output_path, "test_suffix"),
             typename="test_type",
         )
@@ -586,7 +586,7 @@ class TestParquetWriterConsolidation:
 
     def test_consolidated_file_path_generation(self, base_output_path: str):
         """Test consolidated file path generation."""
-        parquet_output = ParquetWriter(
+        parquet_output = ParquetFileWriter(
             output_path=os.path.join(base_output_path, "test_suffix"),
             typename="test_type",
         )
@@ -602,7 +602,7 @@ class TestParquetWriterConsolidation:
 
     def test_start_new_temp_folder(self, base_output_path: str):
         """Test starting a new temp folder."""
-        parquet_output = ParquetWriter(output_path=base_output_path)
+        parquet_output = ParquetFileWriter(output_path=base_output_path)
 
         # Initially no temp folder
         assert parquet_output.current_temp_folder_path is None
@@ -631,7 +631,7 @@ class TestParquetWriterConsolidation:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test writing chunk to temp folder."""
-        parquet_output = ParquetWriter(output_path=base_output_path)
+        parquet_output = ParquetFileWriter(output_path=base_output_path)
 
         # Start temp folder first
         parquet_output._start_new_temp_folder()
@@ -658,7 +658,7 @@ class TestParquetWriterConsolidation:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test writing chunk to temp folder when no path is set."""
-        parquet_output = ParquetWriter(output_path=base_output_path)
+        parquet_output = ParquetFileWriter(output_path=base_output_path)
 
         # Should raise error when no temp folder path is set
         with pytest.raises(ValueError, match="No temp folder path available"):
@@ -686,7 +686,7 @@ class TestParquetWriterConsolidation:
             mock_df = MagicMock()
             mock_read.return_value = mock_df
 
-            parquet_output = ParquetWriter(output_path=base_output_path)
+            parquet_output = ParquetFileWriter(output_path=base_output_path)
             parquet_output._start_new_temp_folder()
             parquet_output.current_folder_records = 500  # Simulate some records
 
@@ -720,7 +720,7 @@ class TestParquetWriterConsolidation:
     @pytest.mark.asyncio
     async def test_consolidate_empty_folder(self, base_output_path: str):
         """Test consolidating when folder is empty."""
-        parquet_output = ParquetWriter(output_path=base_output_path)
+        parquet_output = ParquetFileWriter(output_path=base_output_path)
         parquet_output.current_folder_records = 0
         parquet_output.current_temp_folder_path = None
 
@@ -733,7 +733,7 @@ class TestParquetWriterConsolidation:
     @pytest.mark.asyncio
     async def test_cleanup_temp_folders(self, base_output_path: str):
         """Test cleanup of temp folders."""
-        parquet_output = ParquetWriter(output_path=base_output_path)
+        parquet_output = ParquetFileWriter(output_path=base_output_path)
 
         # Create multiple temp folders
         parquet_output._start_new_temp_folder()
@@ -785,7 +785,7 @@ class TestParquetWriterConsolidation:
             mock_result.to_pydict.return_value = {"path": ["test_file.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
-            parquet_output = ParquetWriter(
+            parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
                 chunk_size=500,  # Small threshold for testing
                 buffer_size=100,  # Small buffer for testing
@@ -825,7 +825,7 @@ class TestParquetWriterConsolidation:
     @pytest.mark.asyncio
     async def test_write_batches_without_consolidation(self, base_output_path: str):
         """Test write_batches with consolidation disabled."""
-        parquet_output = ParquetWriter(output_path=base_output_path)
+        parquet_output = ParquetFileWriter(output_path=base_output_path)
         parquet_output.use_consolidation = False
 
         def create_test_dataframes():
@@ -844,7 +844,7 @@ class TestParquetWriterConsolidation:
     @pytest.mark.asyncio
     async def test_accumulate_dataframe(self, base_output_path: str):
         """Test accumulating DataFrame into temp folders."""
-        parquet_output = ParquetWriter(
+        parquet_output = ParquetFileWriter(
             output_path=base_output_path,
             chunk_size=500,  # This sets consolidation_threshold internally
             buffer_size=100,
@@ -879,7 +879,7 @@ class TestParquetWriterConsolidation:
     @pytest.mark.asyncio
     async def test_consolidation_error_handling(self, base_output_path: str):
         """Test error handling in consolidation with cleanup."""
-        parquet_output = ParquetWriter(
+        parquet_output = ParquetFileWriter(
             output_path=base_output_path, use_consolidation=True
         )
 
@@ -905,7 +905,7 @@ class TestParquetWriterConsolidation:
     @pytest.mark.asyncio
     async def test_async_generator_support(self, base_output_path: str):
         """Test that consolidation works with async generators."""
-        parquet_output = ParquetWriter(
+        parquet_output = ParquetFileWriter(
             output_path=base_output_path, use_consolidation=True
         )
 
@@ -983,8 +983,8 @@ class TestParquetWriterConsolidation:
 
             mock_df.write_parquet.side_effect = mock_write_parquet
 
-            # Create ParquetWriter with very low thresholds to trigger multiple consolidations
-            parquet_output = ParquetWriter(
+            # Create ParquetFileWriter with very low thresholds to trigger multiple consolidations
+            parquet_output = ParquetFileWriter(
                 output_path=base_output_path,
                 chunk_size=100,  # Very small consolidation threshold
                 buffer_size=50,  # Very small buffer size
@@ -1099,7 +1099,7 @@ class TestParquetWriterConsolidation:
 
                 # Extreme settings: buffer_size=10, consolidation_threshold=200
                 # This should create many small chunk files before consolidation
-                parquet_output = ParquetWriter(
+                parquet_output = ParquetFileWriter(
                     output_path=base_output_path,
                     chunk_size=200,  # consolidation_threshold
                     buffer_size=10,  # Very small buffer - each dataframe chunk becomes a file

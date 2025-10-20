@@ -16,7 +16,7 @@ from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.handlers import HandlerInterface
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.io.parquet import ParquetWriter
+from application_sdk.io.parquet import ParquetFileWriter
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
 from application_sdk.services.secretstore import SecretStore
@@ -211,7 +211,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             )
             sql_results = await sql_client.get_results(formatted_query)
 
-            raw_output = ParquetWriter(
+            raw_output = ParquetFileWriter(
                 output_path=os.path.join(workflow_args["output_path"], "raw/query"),
                 chunk_size=workflow_args["miner_args"].get("chunk_size", 100000),
                 start_marker=workflow_args["start_marker"],

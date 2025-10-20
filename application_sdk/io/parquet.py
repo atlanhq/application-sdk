@@ -31,9 +31,9 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-class ParquetReader(Reader):
+class ParquetFileReader(Reader):
     """
-    Parquet Input class to read data from Parquet files using daft and pandas.
+    Parquet File Reader class to read data from Parquet files using daft and pandas.
     Supports reading both single files and directories containing multiple parquet files.
     """
 
@@ -330,7 +330,7 @@ class ParquetReader(Reader):
             raise
 
 
-class ParquetWriter(Writer):
+class ParquetFileWriter(Writer):
     """Output handler for writing data to Parquet files.
 
     This class handles writing DataFrames to Parquet files with support for chunking

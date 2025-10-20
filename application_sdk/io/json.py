@@ -27,9 +27,9 @@ logger = get_logger(__name__)
 activity.logger = logger
 
 
-class JsonReader(Reader):
+class JsonFileReader(Reader):
     """
-    JSON Input class to read data from JSON files using daft and pandas.
+    JSON File Reader class to read data from JSON files using daft and pandas.
     Supports reading both single files and directories containing multiple JSON files.
     """
 
@@ -191,7 +191,7 @@ class JsonReader(Reader):
             raise
 
 
-class JsonWriter(Writer):
+class JsonFileWriter(Writer):
     """Output handler for writing data to JSON files.
 
     This class provides functionality for writing data to JSON files with support

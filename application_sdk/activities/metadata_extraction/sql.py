@@ -35,8 +35,8 @@ from application_sdk.common.utils import (
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.io import DataframeType
-from application_sdk.io.json import JsonWriter
-from application_sdk.io.parquet import ParquetReader, ParquetWriter
+from application_sdk.io.json import JsonFileWriter
+from application_sdk.io.parquet import ParquetFileReader, ParquetFileWriter
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.services.secretstore import SecretStore
@@ -355,7 +355,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_args: Dict[str, Any],
         output_suffix: str,
         write_to_file: bool,
-    ) -> Optional[ParquetWriter]:
+    ) -> Optional[ParquetFileWriter]:
         if not write_to_file:
             return None
         output_prefix = workflow_args.get("output_prefix")
@@ -366,7 +366,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 "Output prefix and path must be specified in workflow_args."
             )
 
-        return ParquetWriter(
+        return ParquetFileWriter(
             output_path=os.path.join(output_path, output_suffix),
             use_consolidation=True,
         )
@@ -429,7 +429,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         write_to_file: bool,
         concatenate: bool,
         return_dataframe: bool,
-        parquet_output: Optional[ParquetWriter],
+        parquet_output: Optional[ParquetFileWriter],
         dataframe_list: List[
             Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]
         ],
@@ -513,7 +513,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         write_to_file: bool,
         concatenate: bool,
         return_dataframe: bool,
-        parquet_output: Optional[ParquetWriter],
+        parquet_output: Optional[ParquetFileWriter],
     ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
         """Execute multi-database flow with proper error handling and result finalization."""
         # Resolve databases to iterate
@@ -588,7 +588,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         self,
         sql_client: BaseSQLClient,
         prepared_query: Optional[str],
-        parquet_output: Optional[ParquetWriter],
+        parquet_output: Optional[ParquetFileWriter],
         write_to_file: bool,
     ) -> Tuple[
         bool, Optional[Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]]
@@ -620,7 +620,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw database data.
-            raw_output: JsonWriter instance for writing raw data.
+            raw_output: JsonFileWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -655,7 +655,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw schema data.
-            raw_output: JsonWriter instance for writing raw data.
+            raw_output: JsonFileWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -690,7 +690,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw table data.
-            raw_output: JsonWriter instance for writing raw data.
+            raw_output: JsonFileWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -727,7 +727,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw column data.
-            raw_output: JsonWriter instance for writing raw data.
+            raw_output: JsonFileWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -764,7 +764,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw column data.
-            raw_output: JsonWriter instance for writing raw data.
+            raw_output: JsonFileWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -800,7 +800,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             raw_input (Any): Input data to transform.
-            transformed_output (JsonWriter): Output handler for transformed data.
+            transformed_output (JsonFileWriter): Output handler for transformed data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -817,14 +817,14 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             self._validate_output_args(workflow_args)
         )
 
-        raw_input = ParquetReader(
+        raw_input = ParquetFileReader(
             path=os.path.join(output_path, "raw"),
             file_names=workflow_args.get("file_names"),
             df_type=DataframeType.daft,
         )
         raw_input = raw_input.read_batches()
 
-        transformed_output = JsonWriter(
+        transformed_output = JsonFileWriter(
             output_path=output_path,
             output_suffix="transformed",
             typename=typename,

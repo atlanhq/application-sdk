@@ -13,7 +13,7 @@ from application_sdk.activities.metadata_extraction.sql import (
 )
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.io.parquet import ParquetWriter
+from application_sdk.io.parquet import ParquetFileWriter
 from application_sdk.transformers import TransformerInterface
 
 
@@ -139,7 +139,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
         new_callable=AsyncMock,
     )
     @patch(
@@ -180,7 +180,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
         new_callable=AsyncMock,
     )
     @patch(
@@ -310,11 +310,13 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.io.json.JsonWriter.get_statistics", new_callable=AsyncMock)
-    @patch("application_sdk.io.parquet.ParquetReader.read")
+    @patch(
+        "application_sdk.io.json.JsonFileWriter.get_statistics", new_callable=AsyncMock
+    )
+    @patch("application_sdk.io.parquet.ParquetFileReader.read")
     @patch(
         "application_sdk.io.parquet.download_files",
         new_callable=AsyncMock,
@@ -326,7 +328,7 @@ class TestBaseSQLMetadataExtractionActivities:
     )
     @patch.object(MockTransformer, "transform_metadata")
     @patch(
-        "application_sdk.io.json.JsonWriter.write",
+        "application_sdk.io.json.JsonFileWriter.write",
         new_callable=AsyncMock,
     )
     async def test_transform_data_success(
@@ -381,14 +383,14 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
         new_callable=AsyncMock,
     )
     @patch(
         "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.io.parquet.ParquetWriter.write_batches")
+    @patch("application_sdk.io.parquet.ParquetFileWriter.write_batches")
     async def test_query_executor_single_db_success(
         self,
         mock_write_batched_dataframe,
@@ -432,7 +434,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
         new_callable=AsyncMock,
     )
     @patch(
@@ -566,9 +568,8 @@ class TestBaseSQLMetadataExtractionActivities:
         output_suffix = "test_suffix"
         typename = "DATABASE"
 
-        # The method doesn't validate sql_client, so it will proceed and fail later
-        # when trying to access sql_client methods
-        with pytest.raises(AttributeError):
+        # The method validates sql_client and raises ValueError if not provided
+        with pytest.raises(ValueError, match="SQL client is required"):
             await mock_activities.query_executor(
                 sql_client, sql_query, sample_workflow_args, output_suffix, typename
             )
@@ -577,14 +578,14 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
         new_callable=AsyncMock,
     )
     @patch(
         "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.io.parquet.ParquetWriter.write_batches")
+    @patch("application_sdk.io.parquet.ParquetFileWriter.write_batches")
     @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
     @patch("application_sdk.activities.metadata_extraction.sql.prepare_query")
     @patch("application_sdk.activities.metadata_extraction.sql.parse_credentials_extra")
@@ -695,7 +696,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.path.exists", return_value=True)
     @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
     @patch(
-        "application_sdk.io.parquet.ParquetWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
         new_callable=AsyncMock,
     )
     async def test_query_executor_multidb_no_sql_client(
@@ -751,7 +752,7 @@ class TestBaseSQLMetadataExtractionActivities:
         )
 
         assert result is not None
-        assert isinstance(result, ParquetWriter)
+        assert isinstance(result, ParquetFileWriter)
 
     def test_setup_parquet_output_no_write_to_file(
         self, mock_activities, sample_workflow_args
@@ -782,7 +783,7 @@ class TestBaseSQLMetadataExtractionActivities:
         new_callable=AsyncMock,
     )
     @patch(
-        "application_sdk.io.parquet.ParquetWriter.write_batches",
+        "application_sdk.io.parquet.ParquetFileWriter.write_batches",
         new_callable=AsyncMock,
     )
     async def test_execute_single_db_success_with_write(
@@ -897,7 +898,7 @@ class TestBaseSQLMetadataExtractionActivities:
         new_callable=AsyncMock,
     )
     @patch(
-        "application_sdk.io.parquet.ParquetWriter.write_batches",
+        "application_sdk.io.parquet.ParquetFileWriter.write_batches",
         new_callable=AsyncMock,
     )
     async def test_execute_single_db_async_iterator(
@@ -939,16 +940,16 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
         new_callable=AsyncMock,
     )
     @patch(
         "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.io.parquet.ParquetWriter.write_batches")
+    @patch("application_sdk.io.parquet.ParquetFileWriter.write_batches")
     @patch(
-        "application_sdk.io.parquet.ParquetWriter.write",
+        "application_sdk.io.parquet.ParquetFileWriter.write",
         new_callable=AsyncMock,
     )
     @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
