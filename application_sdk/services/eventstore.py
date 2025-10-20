@@ -15,7 +15,7 @@ from application_sdk.constants import (
     DAPR_BINDING_OPERATION_CREATE,
     EVENT_STORE_NAME,
 )
-from application_sdk.events.models import Event, EventMetadata, WorkflowStates
+from application_sdk.interceptors.models import Event, EventMetadata, WorkflowStates
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services._utils import is_component_registered
 
@@ -47,7 +47,7 @@ class EventStore:
             a Temporal workflow or activity context.
 
         Examples:
-            >>> from application_sdk.events.models import Event
+            >>> from application_sdk.interceptors.models import Event
 
             >>> # Create basic event
             >>> event = Event(event_type="data.processed", data={"count": 100})
@@ -109,7 +109,7 @@ class EventStore:
             Exception: If there's an error during event publishing (logged but not re-raised).
 
         Examples:
-            >>> from application_sdk.events.models import Event
+            >>> from application_sdk.interceptors.models import Event
 
             >>> # Publish workflow status event
             >>> status_event = Event(

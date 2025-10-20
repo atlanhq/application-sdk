@@ -371,7 +371,7 @@ print(f"Applied config: {applied_config}")
 
 ```python
 from application_sdk.services.eventstore import EventStore
-from application_sdk.events.models import Event
+from application_sdk.interceptors.models import Event
 
 # =============== Basic Event Publishing ===============
 
