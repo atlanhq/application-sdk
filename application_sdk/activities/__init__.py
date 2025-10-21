@@ -238,7 +238,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
 
         try:
             state: ActivitiesStateType = await self._get_state(workflow_args)
+            logger.info(f"State: str({state})")
             handler = state.handler
+            logger.info(f"Handler: str({handler})")
+            logger.info(f"SQL client: str({handler.sql_client})")
 
             if not handler:
                 raise ValueError("Preflight check handler not found")
@@ -251,6 +254,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                         "Preflight check failed: SQL client engine not initialized. "
                         "This may indicate credentials were not loaded properly."
                     )
+                logger.info(f"SQL client engine: str({handler.sql_client.engine})")
                 logger.info("SQL client engine verified as initialized")
 
             result = await handler.preflight_check(
