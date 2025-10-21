@@ -27,7 +27,7 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     IS_LOCKING_DISABLED,
     LOCK_METADATA_KEY,
-    LOCK_RETRY_INTERVAL,
+    LOCK_RETRY_INTERVAL_SECONDS,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -119,7 +119,9 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
                 args=[lock_name, max_locks, ttl_seconds, owner_id],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(
-                    initial_interval=timedelta(seconds=int(LOCK_RETRY_INTERVAL)),
+                    initial_interval=timedelta(
+                        seconds=int(LOCK_RETRY_INTERVAL_SECONDS)
+                    ),
                     backoff_coefficient=1.0,
                 ),
                 schedule_to_close_timeout=schedule_to_close_timeout,
