@@ -2,6 +2,11 @@
 
 Manages distributed locks for activities decorated with @needs_lock using
 separate lock acquisition and release activities to avoid workflow deadlocks.
+
+IMPORTANT: Uses regular activities (not local activities) for lock operations to prevent
+workflow task blocking and deadlocks. Local activities would block the workflow task during
+lock acquisition retries, preventing lock releases from executing and causing infinite deadlock
+when all lock slots are taken.
 """
 
 from datetime import timedelta
@@ -109,7 +114,7 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
         try:
             # Step 1: Acquire lock via dedicated activity with Temporal retry policy
             schedule_to_close_timeout = workflow.info().execution_timeout
-            lock_result = await workflow.execute_local_activity(
+            lock_result = await workflow.execute_activity(
                 "acquire_distributed_lock",
                 args=[lock_name, max_locks, ttl_seconds, owner_id],
                 start_to_close_timeout=timedelta(seconds=30),
@@ -129,7 +134,7 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
             # Step 3: Release lock (fire-and-forget with short timeout)
             if lock_result is not None:
                 try:
-                    await workflow.execute_local_activity(
+                    await workflow.execute_activity(
                         "release_distributed_lock",
                         args=[lock_result["resource_id"], lock_result["owner_id"]],
                         start_to_close_timeout=timedelta(seconds=5),
