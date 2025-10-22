@@ -26,7 +26,6 @@ from application_sdk.constants import (
     TRACES_FILE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
-from application_sdk.outputs.parquet import ParquetOutput
 
 
 class LogRecord(BaseModel):
@@ -106,10 +105,7 @@ class AtlanObservability(Generic[T], ABC):
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
 
-        # Initialize ParquetOutput for efficient parquet writing with dual upload support
-        self._parquet_output = ParquetOutput(
-                use_consolidation=True
-        )
+        # ParquetOutput will be created lazily when needed in _flush_records
 
         # Register this instance
         AtlanObservability._instances.append(self)
@@ -426,16 +422,21 @@ class AtlanObservability(Generic[T], ABC):
                 # Use ParquetOutput abstraction for efficient writing and uploading
                 # Set the output path for this partition
                 try:
-                    self._parquet_output.output_path = partition_path
+                    # Lazy import and instantiation of ParquetOutput
+                    from application_sdk.outputs.parquet import ParquetOutput
+                    parquet_output = ParquetOutput(
+                        output_path=partition_path,  # Set output path during initialization
+                        use_consolidation=True,
+                        retain_local_copy=True  # Keep local files since we're doing multiple operations
+                    )
+                    logging.debug(f"Successfully instantiated ParquetOutput for partition: {partition_path}")
 
-                    # Write using the abstraction - handles chunking, compression, and dual upload automatically
-                    await self._parquet_output.write_daft_dataframe(
-                        dataframe=df,  
-                        write_mode="append",  # Let Daft handle merging with existing data
-                        morsel_size=10000,  # Optimal morsel size for Daft processing
+                    # Just use write_dataframe with the DataFrame we have
+                    await parquet_output.write_dataframe(
+                        dataframe=df
                     )
                     
-                    logging.debug(f"Successfully processed {len(df)} records for partition: {partition_path}")
+                    logging.debug(f"Successfully processed amazing parquet output with {len(df)} records for partition: {partition_path}")
                     
                 except Exception as partition_error:
                     logging.error(f"Error processing partition {partition_path}: {str(partition_error)}")
