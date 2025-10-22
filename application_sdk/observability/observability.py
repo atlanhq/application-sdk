@@ -11,6 +11,8 @@ from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
 import duckdb
+import daft
+from daft import DataFrame
 import pandas as pd
 from dapr.clients import DaprClient
 from pydantic import BaseModel
@@ -431,9 +433,12 @@ class AtlanObservability(Generic[T], ABC):
                     )
                     logging.debug(f"Successfully instantiated ParquetOutput for partition: {partition_path}")
 
-                    # Just use write_dataframe with the DataFrame we have
-                    await parquet_output.write_dataframe(
-                        dataframe=df
+                    # Use write_daft_dataframe with the DataFrame we have
+                    from application_sdk.outputs.parquet import WriteMode
+                    daft_df = daft.from_pandas(df)
+                    await parquet_output.write_daft_dataframe(
+                        dataframe=daft_df,
+                        write_mode=WriteMode.APPEND  # Append mode to merge with existing data
                     )
                     
                     logging.debug(f"Successfully processed amazing parquet output with {len(df)} records for partition: {partition_path}")
