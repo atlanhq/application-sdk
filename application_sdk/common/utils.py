@@ -17,7 +17,7 @@ from typing import (
     Union,
 )
 
-from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.activities.common.observability_get_object_store_prefix import get_object_store_prefix
 from application_sdk.common.error_codes import CommonError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.inputs.sql_query import SQLQueryInput

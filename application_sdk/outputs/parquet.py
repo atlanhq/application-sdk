@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, AsyncGenerator, Generator, List, Optional, Uni
 
 from temporalio import activity
 
-from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.activities.common.observability_get_object_store_prefix import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger

@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Union
 
 from application_sdk.activities.common.utils import (
     find_local_files_by_extension,
-    get_object_store_prefix,
 )
+from application_sdk.activities.common.observability_get_object_store_prefix import get_object_store_prefix
 from application_sdk.common.error_codes import IOError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger

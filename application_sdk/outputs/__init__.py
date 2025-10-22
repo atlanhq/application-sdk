@@ -25,7 +25,7 @@ import orjson
 from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.activities.common.observability_get_object_store_prefix import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType

@@ -21,9 +21,9 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import (
     auto_heartbeater,
-    get_object_store_prefix,
     get_workflow_id,
 )
+from application_sdk.activities.common.observability_get_object_store_prefix import get_object_store_prefix
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.common.error_codes import ActivityError

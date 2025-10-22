@@ -9,9 +9,9 @@ from temporalio import activity
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import (
     auto_heartbeater,
-    get_object_store_prefix,
     get_workflow_id,
 )
+from application_sdk.activities.common.observability_get_object_store_prefix import get_object_store_prefix
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.handlers import HandlerInterface

@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 from temporalio import activity
 
-from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.activities.common.observability_get_object_store_prefix import get_object_store_prefix
 from application_sdk.constants import (
     APPLICATION_NAME,
     STATE_STORE_PATH_TEMPLATE,

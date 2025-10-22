@@ -8,10 +8,10 @@ import pytest
 
 from application_sdk.activities.common.utils import (
     auto_heartbeater,
-    get_object_store_prefix,
     get_workflow_id,
     send_periodic_heartbeat,
 )
+from application_sdk.activities.common.observability_get_object_store_prefix import get_object_store_prefix
 
 
 class TestGetWorkflowId:
