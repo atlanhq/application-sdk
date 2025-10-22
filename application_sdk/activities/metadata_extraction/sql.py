@@ -159,24 +159,36 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             workflow_args (Dict[str, Any]): Arguments passed to the workflow.
         """
         workflow_id = get_workflow_id()
+        logger.info("Inside BaseSQLMetadataExtractionActivities _set_state")
+        logger.info(f"workflow_id: {workflow_id}")
+        logger.info(f"self._state: {self._state}")
         if not self._state.get(workflow_id):
+            logger.info("Creating new state for workflow_id")
             self._state[workflow_id] = BaseSQLMetadataExtractionActivitiesState()
 
         await super()._set_state(workflow_args)
 
+        logger.info("Setting up SQL client")
         sql_client = self.sql_client_class()
+        logger.info(f"sql_client_class: {self.sql_client_class}")
+        logger.info(f"sql_client: {sql_client}")
 
         # Load credentials BEFORE creating handler to avoid race condition
+        logger.info(f"workflow_args: {workflow_args}")
         if "credential_guid" in workflow_args:
+            logger.info("Getting credentials from SecretStore")
             credentials = await SecretStore.get_credentials(
                 workflow_args["credential_guid"]
             )
+            logger.info(f"credentials : {credentials}")
             await sql_client.load(credentials)
+            logger.info("sql_client.load() called successfully")
 
         # Assign sql_client and handler to state AFTER credentials are loaded
         self._state[workflow_id].sql_client = sql_client
         handler = self.handler_class(sql_client)
         self._state[workflow_id].handler = handler
+        logger.info(f"state : {self._state}")
 
         # Create transformer with required parameters from ApplicationConstants
         transformer_params = {
@@ -194,6 +206,8 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         This method ensures proper cleanup of resources, particularly closing
         the SQL client connection.
         """
+        logger.info("Inside BaseSQLMetadataExtractionActivities _clean_state")
+        logger.info(f"self._state: {self._state}")
         try:
             workflow_id = get_workflow_id()
             state = self._state.get(workflow_id)
