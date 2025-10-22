@@ -140,8 +140,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
         """
         try:
             workflow_id = get_workflow_id()
-            if workflow_id not in self._state:
-                await self._set_state(workflow_args)
+            await self._set_state(workflow_args)
             return self._state[workflow_id]
         except OrchestratorError as e:
             logger.error(
