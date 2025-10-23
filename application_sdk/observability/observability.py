@@ -12,19 +12,16 @@ from typing import Any, Dict, Generic, List, TypeVar
 
 import duckdb
 import daft
-from daft import DataFrame
 import pandas as pd
 from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
-    DAPR_BINDING_OPERATION_CREATE,
     DEPLOYMENT_OBJECT_STORE_NAME,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
     STATE_STORE_NAME,
-    TEMPORARY_PATH,
     TRACES_FILE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
