@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -68,6 +69,7 @@ class BaseSQLMetadataExtractionActivitiesState(ActivitiesState):
     sql_client: Optional[BaseSQLClient] = None
     handler: Optional[BaseSQLHandler] = None
     transformer: Optional[TransformerInterface] = None
+    last_updated_timestamp: Optional[datetime] = None
 
 
 class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
@@ -177,6 +179,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         self._state[workflow_id].sql_client = sql_client
         handler = self.handler_class(sql_client)
         self._state[workflow_id].handler = handler
+        self._state[workflow_id].last_updated_timestamp = datetime.now()
 
         # Create transformer with required parameters from ApplicationConstants
         transformer_params = {

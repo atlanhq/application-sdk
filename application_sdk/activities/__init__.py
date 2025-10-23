@@ -15,6 +15,7 @@ Example:
 
 import os
 from abc import ABC
+from datetime import datetime, timedelta
 from typing import Any, Dict, Generic, Optional, TypeVar
 
 from pydantic import BaseModel
@@ -62,6 +63,7 @@ class ActivitiesState(BaseModel, Generic[HandlerType]):
     model_config = {"arbitrary_types_allowed": True}
     handler: Optional[HandlerType] = None
     workflow_args: Optional[Dict[str, Any]] = None
+    last_updated_timestamp: Optional[datetime] = None
 
 
 ActivitiesStateType = TypeVar("ActivitiesStateType", bound=ActivitiesState)
@@ -140,8 +142,17 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
         """
         try:
             workflow_id = get_workflow_id()
-            await self._clean_state()
-            await self._set_state(workflow_args)
+            if "worflow_id" not in self._state:
+                await self._set_state(workflow_args)
+
+            if "workflow_id" in self._state:
+                current_timestamp = datetime.now()
+                # if difference of current_timestamp and last_updated_timestamp is greater than 15 minutes, then again _set_state
+                last_updated = self._state[workflow_id].last_updated_timestamp
+                if last_updated and current_timestamp - last_updated > timedelta(
+                    minutes=15
+                ):
+                    await self._set_state(workflow_args)
             return self._state[workflow_id]
         except OrchestratorError as e:
             logger.error(
