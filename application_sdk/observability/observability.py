@@ -427,11 +427,9 @@ class AtlanObservability(Generic[T], ABC):
                     # Lazy import and instantiation of ParquetOutput
                     from application_sdk.outputs.parquet import ParquetOutput
                     parquet_output = ParquetOutput(
-                        output_path=partition_path,  # Set output path during initialization
-                        use_consolidation=True,
-                        retain_local_copy=True  # Keep local files since we're doing multiple operations
+                        output_path=partition_path
                     )
-                    logging.debug(f"Successfully instantiated ParquetOutput for partition: {partition_path}")
+                    logging.info(f"Successfully instantiated ParquetOutput for partition: {partition_path}")
 
                     # Use write_daft_dataframe with the DataFrame we have
                     from application_sdk.outputs.parquet import WriteMode
@@ -441,7 +439,7 @@ class AtlanObservability(Generic[T], ABC):
                         write_mode=WriteMode.APPEND  # Append mode to merge with existing data
                     )
                     
-                    logging.debug(f"Successfully processed amazing parquet output with {len(df)} records for partition: {partition_path}")
+                    logging.info(f"Successfully wrote {len(df)} records to partition: {partition_path}")
                     
                 except Exception as partition_error:
                     logging.error(f"Error processing partition {partition_path}: {str(partition_error)}")
