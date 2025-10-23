@@ -10,8 +10,8 @@ from pathlib import Path
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
-import duckdb
 import daft
+import duckdb
 import pandas as pd
 from dapr.clients import DaprClient
 from pydantic import BaseModel
@@ -404,9 +404,9 @@ class AtlanObservability(Generic[T], ABC):
                 new_df = pd.DataFrame(partition_data)
 
                 # Extract partition values from path and add to dataframe
-                partition_parts = os.path.basename(os.path.dirname(partition_path)).split(
-                    os.sep
-                )
+                partition_parts = os.path.basename(
+                    os.path.dirname(partition_path)
+                ).split(os.sep)
                 for part in partition_parts:
                     if part.startswith("year="):
                         new_df["year"] = int(part.split("=")[1])
@@ -423,23 +423,29 @@ class AtlanObservability(Generic[T], ABC):
                 try:
                     # Lazy import and instantiation of ParquetOutput
                     from application_sdk.outputs.parquet import ParquetOutput
-                    parquet_output = ParquetOutput(
-                        output_path=partition_path
+
+                    parquet_output = ParquetOutput(output_path=partition_path)
+                    logging.info(
+                        f"Successfully instantiated ParquetOutput for partition: {partition_path}"
                     )
-                    logging.info(f"Successfully instantiated ParquetOutput for partition: {partition_path}")
 
                     # Use write_daft_dataframe with the DataFrame we have
                     from application_sdk.outputs.parquet import WriteMode
+
                     daft_df = daft.from_pandas(df)
                     await parquet_output.write_daft_dataframe(
                         dataframe=daft_df,
-                        write_mode=WriteMode.APPEND  # Append mode to merge with existing data
+                        write_mode=WriteMode.APPEND,  # Append mode to merge with existing data
                     )
-                    
-                    logging.info(f"Successfully wrote {len(df)} records to partition: {partition_path}")
-                    
+
+                    logging.info(
+                        f"Successfully wrote {len(df)} records to partition: {partition_path}"
+                    )
+
                 except Exception as partition_error:
-                    logging.error(f"Error processing partition {partition_path}: {str(partition_error)}")
+                    logging.error(
+                        f"Error processing partition {partition_path}: {str(partition_error)}"
+                    )
 
             # Clean up old records if enabled
             if self._cleanup_enabled:

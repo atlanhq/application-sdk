@@ -3,11 +3,7 @@ import os
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 
-from application_sdk.constants import (
-    DEPLOYMENT_NAME,
-    OBSERVABILITY_DIR,
-    TEMPORARY_PATH,
-)
+from application_sdk.constants import DEPLOYMENT_NAME, OBSERVABILITY_DIR, TEMPORARY_PATH
 
 
 class WorkflowContext(BaseModel):
