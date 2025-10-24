@@ -278,7 +278,7 @@ class ParquetOutput(Output):
                         source=path,
                         store_name=UPSTREAM_OBJECT_STORE_NAME,
                         destination=get_object_store_prefix(path),
-                        retain_local_copy=self.retain_local_copy,
+                        retain_local_copy=True,
                     )
                 await ObjectStore.upload_file(
                     source=path,
