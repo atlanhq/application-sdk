@@ -88,6 +88,7 @@ WORKFLOW_NAMESPACE = os.getenv("ATLAN_WORKFLOW_NAMESPACE", "default")
 WORKFLOW_UI_HOST = os.getenv("ATLAN_WORKFLOW_UI_HOST", "localhost")
 #: Port number for the Temporal UI
 WORKFLOW_UI_PORT = os.getenv("ATLAN_WORKFLOW_UI_PORT", "8233")
+
 #: Maximum timeout duration for workflows
 WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
     hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1"))

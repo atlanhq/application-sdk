@@ -104,8 +104,6 @@ class AtlanObservability(Generic[T], ABC):
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
 
-        # ParquetOutput will be created lazily when needed in _flush_records
-
         # Register this instance
         AtlanObservability._instances.append(self)
 
