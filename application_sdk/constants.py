@@ -257,7 +257,7 @@ REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
 #: Whether to enable strict locking
 IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"
 #: Retry interval for lock acquisition
-LOCK_RETRY_INTERVAL = int(os.getenv("LOCK_RETRY_INTERVAL", "5"))
+LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60"))
 
 # MCP Configuration
 #: Flag to indicate if MCP should be enabled or not. Turning this to true will setup an MCP server along

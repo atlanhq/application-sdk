@@ -384,6 +384,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Raises:
             Exception: If logging fails, logs error and continues
         """
+
         try:
             log_message = (
                 f"{metric_record.name} = {metric_record.value} "

@@ -13,7 +13,6 @@ from temporalio.exceptions import ApplicationError
 
 from application_sdk.clients.redis import RedisClientAsync
 from application_sdk.common.error_codes import ActivityError
-from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -50,7 +49,7 @@ async def acquire_distributed_lock(
             non_retryable=True,
         )
     slot = random.randint(0, max_locks - 1)
-    resource_id = f"{APPLICATION_NAME}:{lock_name}:{slot}"
+    resource_id = f"{lock_name}:{slot}"
 
     try:
         async with RedisClientAsync() as redis_client:
