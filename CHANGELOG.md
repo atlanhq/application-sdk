@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.1rc59 (October 25, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc58...v0.1.1rc59
+
+### Features
+
+- Adding support to push logs decoupled for workflow (#786) (by @Garavitey in [2b291ff](https://github.com/atlanhq/application-sdk/commit/2b291ff))
+
+
 ## v0.1.1rc58 (October 22, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc57...v0.1.1rc58
