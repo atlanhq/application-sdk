@@ -8,7 +8,11 @@ from temporalio import activity
 
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
-from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
+from application_sdk.constants import (
+    DAPR_MAX_GRPC_MESSAGE_LENGTH,
+    ENABLE_ATLAN_UPLOAD,
+    UPSTREAM_OBJECT_STORE_NAME,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
@@ -269,6 +273,13 @@ class ParquetOutput(Output):
                         f"No files found under prefix {get_object_store_prefix(self.output_path)}: {str(e)}"
                     )
             for path in file_paths:
+                if ENABLE_ATLAN_UPLOAD:
+                    await ObjectStore.upload_file(
+                        source=path,
+                        store_name=UPSTREAM_OBJECT_STORE_NAME,
+                        destination=get_object_store_prefix(path),
+                        retain_local_copy=True,
+                    )
                 await ObjectStore.upload_file(
                     source=path,
                     destination=get_object_store_prefix(path),

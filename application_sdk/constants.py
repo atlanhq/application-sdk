@@ -75,7 +75,7 @@ STATE_STORE_PATH_TEMPLATE = (
 
 # Observability Constants
 #: Directory for storing observability data
-OBSERVABILITY_DIR = "artifacts/apps/{application_name}/observability"
+OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observability"
 
 # Workflow Client Constants
 #: Host address for the Temporal server
@@ -88,6 +88,7 @@ WORKFLOW_NAMESPACE = os.getenv("ATLAN_WORKFLOW_NAMESPACE", "default")
 WORKFLOW_UI_HOST = os.getenv("ATLAN_WORKFLOW_UI_HOST", "localhost")
 #: Port number for the Temporal UI
 WORKFLOW_UI_PORT = os.getenv("ATLAN_WORKFLOW_UI_PORT", "8233")
+
 #: Maximum timeout duration for workflows
 WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
     hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1"))
