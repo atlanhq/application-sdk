@@ -426,7 +426,6 @@ class AtlanObservability(Generic[T], ABC):
                         f"Successfully instantiated ParquetOutput for partition: {partition_path}"
                     )
 
-                    # Try to use daft for enhanced performance, fallback to pandas if not available
                     try:
                         import daft
 
@@ -435,7 +434,7 @@ class AtlanObservability(Generic[T], ABC):
                         daft_df = daft.from_pandas(df)
                         await parquet_output.write_daft_dataframe(
                             dataframe=daft_df,
-                            write_mode=WriteMode.APPEND,  # Append mode to merge with existing data
+                            write_mode=WriteMode.APPEND,
                         )
                         logging.info(
                             f"Successfully wrote {len(df)} records using daft to partition: {partition_path}"
