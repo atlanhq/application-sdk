@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.1rc60 (October 29, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc59...v0.1.1rc60
+
+### Features
+
+- Fixing the daft import issue (#803) (by @Garavitey in [0f27353](https://github.com/atlanhq/application-sdk/commit/0f27353))
+
+### Bug Fixes
+
+- bump Dapr cli to v1.16.2, helm security patch (#804) (by @inishchith in [d36a4e7](https://github.com/atlanhq/application-sdk/commit/d36a4e7))
+
+
 ## v0.1.1rc59 (October 25, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc58...v0.1.1rc59
