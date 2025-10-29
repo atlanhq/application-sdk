@@ -15,7 +15,11 @@ from typing import (
 from temporalio import activity
 
 from application_sdk.activities.common.utils import get_object_store_prefix
-from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
+from application_sdk.constants import (
+    DAPR_MAX_GRPC_MESSAGE_LENGTH,
+    ENABLE_ATLAN_UPLOAD,
+    UPSTREAM_OBJECT_STORE_NAME,
+)
 from application_sdk.io import DataframeType, Reader, WriteMode, Writer
 from application_sdk.io._utils import (
     PARQUET_FILE_EXTENSION,
