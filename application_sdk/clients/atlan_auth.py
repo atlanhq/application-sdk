@@ -8,12 +8,20 @@ import aiohttp
 from application_sdk.common.error_codes import ClientError
 from application_sdk.constants import (
     APPLICATION_NAME,
+    DEPLOYMENT_NAME,
     WORKFLOW_AUTH_CLIENT_ID_KEY,
     WORKFLOW_AUTH_CLIENT_SECRET_KEY,
     WORKFLOW_AUTH_ENABLED,
     WORKFLOW_AUTH_URL_KEY,
 )
+from application_sdk.events.models import (
+    ApplicationEventNames,
+    Event,
+    EventTypes,
+    TokenRefreshEventData,
+)
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.eventstore import EventStore
 from application_sdk.services.secretstore import SecretStore
 
 logger = get_logger(__name__)
@@ -128,6 +136,30 @@ class AtlanAuthClient:
                     raise ClientError(
                         f"{ClientError.AUTH_TOKEN_REFRESH_ERROR}: Received null access token from server"
                     )
+
+                # Publish token refresh event
+                try:
+                    token_refresh_data = TokenRefreshEventData(
+                        application_name=self.application_name,
+                        deployment_name=DEPLOYMENT_NAME,
+                        force_refresh=force_refresh,
+                        token_expiry_time=self._token_expiry,
+                        time_until_expiry=self.get_time_until_expiry() or 0,
+                        refresh_timestamp=current_time,
+                    )
+
+                    token_refresh_event = Event(
+                        event_type=EventTypes.APPLICATION_EVENT.value,
+                        event_name=ApplicationEventNames.TOKEN_REFRESH.value,
+                        data=token_refresh_data.model_dump(),
+                    )
+
+                    await EventStore.publish_event(token_refresh_event)
+                    logger.info("Published token refresh event")
+                except Exception as e:
+                    logger.warning(f"Failed to publish token refresh event: {e}")
+                    # Don't fail token refresh if event publishing fails
+
                 return self._access_token
 
     async def get_authenticated_headers(self) -> Dict[str, str]:
