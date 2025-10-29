@@ -5,6 +5,7 @@ from temporalio import activity, workflow
 
 from application_sdk.constants import (
     APPLICATION_NAME,
+    DEPLOYMENT_NAME,
     OBSERVABILITY_DIR,
     TEMPORARY_PATH,
 )
@@ -26,16 +27,16 @@ class WorkflowContext(BaseModel):
 
 
 def get_observability_dir() -> str:
-    """Build the observability path.
-
-    Args:
-        path: The path to build the observability path from.
+    """Build the observability path using deployment name.
 
     Returns:
-        str: The built observability path.
+        str: The built observability path using deployment name.
     """
     return os.path.join(
-        TEMPORARY_PATH, OBSERVABILITY_DIR.format(application_name=APPLICATION_NAME)
+        TEMPORARY_PATH,
+        OBSERVABILITY_DIR.format(
+            application_name=APPLICATION_NAME, deployment_name=DEPLOYMENT_NAME
+        ),
     )
 
 

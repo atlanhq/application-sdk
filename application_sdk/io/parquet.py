@@ -571,6 +571,13 @@ class ParquetFileWriter(Writer):
                         f"No files found under prefix {get_object_store_prefix(self.output_path)}: {str(e)}"
                     )
             for path in file_paths:
+                if ENABLE_ATLAN_UPLOAD:
+                    await ObjectStore.upload_file(
+                        source=path,
+                        store_name=UPSTREAM_OBJECT_STORE_NAME,
+                        destination=get_object_store_prefix(path),
+                        retain_local_copy=True,
+                    )
                 await ObjectStore.upload_file(
                     source=path,
                     destination=get_object_store_prefix(path),

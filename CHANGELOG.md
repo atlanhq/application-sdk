@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.1.1rc59 (October 25, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc58...v0.1.1rc59
+
+### Features
+
+- Adding support to push logs decoupled for workflow (#786) (by @Garavitey in [2b291ff](https://github.com/atlanhq/application-sdk/commit/2b291ff))
+
+
+## v0.1.1rc58 (October 22, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc57...v0.1.1rc58
+
+### Bug Fixes
+
+- Updated lockname to not use APPLICATION_NAME (#797) (by @SanilK2108 in [151b811](https://github.com/atlanhq/application-sdk/commit/151b811))
+
+
+## v0.1.1rc57 (October 22, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc56...v0.1.1rc57
+
+### Bug Fixes
+
+- remove long running local activities (#792) (by @inishchith in [e046c90](https://github.com/atlanhq/application-sdk/commit/e046c90))
+
+
 ## v0.1.1rc56 (October 15, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc55...v0.1.1rc56
