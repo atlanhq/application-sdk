@@ -10,7 +10,6 @@ from pathlib import Path
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
-import daft
 import duckdb
 import pandas as pd
 from dapr.clients import DaprClient
@@ -427,18 +426,26 @@ class AtlanObservability(Generic[T], ABC):
                         f"Successfully instantiated ParquetOutput for partition: {partition_path}"
                     )
 
-                    # Use write_daft_dataframe with the DataFrame we have
-                    from application_sdk.outputs.parquet import WriteMode
+                    # Try to use daft for enhanced performance, fallback to pandas if not available
+                    try:
+                        import daft
 
-                    daft_df = daft.from_pandas(df)
-                    await parquet_output.write_daft_dataframe(
-                        dataframe=daft_df,
-                        write_mode=WriteMode.APPEND,  # Append mode to merge with existing data
-                    )
+                        from application_sdk.outputs.parquet import WriteMode
 
-                    logging.info(
-                        f"Successfully wrote {len(df)} records to partition: {partition_path}"
-                    )
+                        daft_df = daft.from_pandas(df)
+                        await parquet_output.write_daft_dataframe(
+                            dataframe=daft_df,
+                            write_mode=WriteMode.APPEND,  # Append mode to merge with existing data
+                        )
+                        logging.info(
+                            f"Successfully wrote {len(df)} records using daft to partition: {partition_path}"
+                        )
+                    except ImportError:
+                        # Fallback to pandas-based writing when daft is not available
+                        logging.warning(
+                            "Daft not available."
+                            "Install daft for enhanced performance."
+                        )
 
                 except Exception as partition_error:
                     logging.error(
