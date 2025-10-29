@@ -147,7 +147,7 @@ class AtlanAuthClient:
                         time_until_expiry=self.get_time_until_expiry() or 0,
                         refresh_timestamp=current_time,
                     )
-
+                    logger.info("Token refresh data")
                     token_refresh_event = Event(
                         event_type=EventTypes.APPLICATION_EVENT.value,
                         event_name=ApplicationEventNames.TOKEN_REFRESH.value,
