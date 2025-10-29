@@ -186,19 +186,25 @@ for query in queries:
 #### **JSON Serialization Optimization**
 - **Rule**: Use efficient serialization libraries and avoid unnecessary conversions
 - **Anti-pattern**: Using default json module for large datasets
-- **Correct pattern**: Use orjson, ujson, or custom serializers
+- **Correct pattern**: Use orjson (already used throughout this codebase)
 
-**✅ DO: Efficient JSON serialization**
+**✅ DO: Efficient JSON serialization (from objectstore.py)**
 ```python
 import orjson  # Much faster than json
 
-# Use orjson for better performance
-data = orjson.dumps(large_dict, option=orjson.OPT_APPEND_NEWLINE)
+# Fast JSON parsing from object store response
+file_list = orjson.loads(response_data.decode("utf-8"))
 
-# Use streaming for large datasets
-def serialize_large_dataset(data_iterator):
-    for item in data_iterator:
-        yield orjson.dumps(item) + b'\n'
+# Efficient JSON encoding
+data = json.dumps({"prefix": prefix}).encode("utf-8") if prefix else ""
+```
+
+**✅ DO: orjson in I/O operations (from io/json.py)**
+```python
+# Fast DataFrame to JSON conversion
+for chunk in df.to_pandas(batch_size=chunk_size):
+    for record in chunk.to_dict(orient="records"):
+        json_line = orjson.dumps(record).decode("utf-8")
 ```
 
 **❌ DON'T: Inefficient serialization**
@@ -206,9 +212,6 @@ def serialize_large_dataset(data_iterator):
 # REJECT: Using default json for large datasets
 import json
 data = json.dumps(large_dict)  # Slower than orjson
-
-# REJECT: Converting to string unnecessarily
-data = str(orjson.dumps(large_dict))  # Unnecessary conversion
 ```
 
 

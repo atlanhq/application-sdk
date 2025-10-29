@@ -24,7 +24,6 @@ from application_sdk.activities.common.utils import (
     get_workflow_id,
 )
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.common.utils import (
     get_database_names,
@@ -34,11 +33,11 @@ from application_sdk.common.utils import (
 )
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.inputs.parquet import ParquetInput
-from application_sdk.inputs.sql_query import SQLQueryInput
+from application_sdk.io import DataframeType
+from application_sdk.io._utils import is_empty_dataframe
+from application_sdk.io.json import JsonFileWriter
+from application_sdk.io.parquet import ParquetFileReader, ParquetFileWriter
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.json import JsonOutput
-from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.services.secretstore import SecretStore
 from application_sdk.transformers import TransformerInterface
@@ -237,7 +236,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
     @overload
     async def query_executor(
         self,
-        sql_engine: Any,
+        sql_client: BaseSQLClient,
         sql_query: Optional[str],
         workflow_args: Dict[str, Any],
         output_suffix: str,
@@ -245,13 +244,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         write_to_file: bool = True,
         concatenate: bool = False,
         return_dataframe: bool = False,
-        sql_client: Optional[BaseSQLClient] = None,
     ) -> Optional[ActivityStatistics]: ...
 
     @overload
     async def query_executor(
         self,
-        sql_engine: Any,
+        sql_client: BaseSQLClient,
         sql_query: Optional[str],
         workflow_args: Dict[str, Any],
         output_suffix: str,
@@ -259,12 +257,11 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         write_to_file: bool = True,
         concatenate: bool = False,
         return_dataframe: bool = True,
-        sql_client: Optional[BaseSQLClient] = None,
     ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]: ...
 
     async def query_executor(
         self,
-        sql_engine: Any,
+        sql_client: BaseSQLClient,
         sql_query: Optional[str],
         workflow_args: Dict[str, Any],
         output_suffix: str,
@@ -272,17 +269,16 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         write_to_file: bool = True,
         concatenate: bool = False,
         return_dataframe: bool = False,
-        sql_client: Optional[BaseSQLClient] = None,
     ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
         """
-        Executes a SQL query using the provided engine and saves the results to Parquet.
+        Executes a SQL query using the provided client and saves the results to Parquet.
 
-        This method validates the input engine and query, prepares the query using
-        workflow arguments, executes it, writes the resulting Daft DataFrame to
+        This method validates the input client and query, prepares the query using
+        workflow arguments, executes it, writes the resulting DataFrame to
         a Parquet file, and returns statistics about the output.
 
         Args:
-            sql_engine: The SQL engine instance to use for executing the query.
+            sql_client: The SQL client instance to use for executing the query.
             sql_query: The SQL query string to execute. Placeholders can be used which
                    will be replaced using `workflow_args`.
             workflow_args: Dictionary containing arguments for the workflow, used for
@@ -291,22 +287,25 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                            - "output_path": Base directory for the output.
             output_suffix: Suffix to append to the output file name.
             typename: Type name used for generating output statistics.
+            write_to_file: Whether to write results to file. Defaults to True.
+            concatenate: Whether to concatenate results in multidb mode. Defaults to False.
+            return_dataframe: Whether to return a DataFrame instead of statistics. Defaults to False.
 
         Returns:
             Optional[Union[ActivityStatistics, pd.DataFrame]]: Statistics about the generated Parquet file,
             or a DataFrame if return_dataframe=True, or None if the query is empty or execution fails.
 
         Raises:
-            ValueError: If `sql_engine` is not provided.
+            ValueError: If `sql_client` is not provided or if required workflow arguments are missing.
         """
         # Common pre-checks and setup shared by both multidb and single-db paths
+        if not sql_client:
+            logger.error("SQL client is not provided")
+            raise ValueError("SQL client is required for query execution")
+
         if not sql_query:
             logger.warning("Query is empty, skipping execution.")
             return None
-
-        if not sql_engine:
-            logger.error("SQL engine is not set.")
-            raise ValueError("SQL engine must be provided.")
 
         # Setup parquet output using helper method
         parquet_output = self._setup_parquet_output(
@@ -335,7 +334,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         # Execute using helper method
         success, _ = await self._execute_single_db(
-            sql_engine, prepared_query, parquet_output, write_to_file
+            sql_client, prepared_query, parquet_output, write_to_file
         )
 
         if not success:
@@ -356,7 +355,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_args: Dict[str, Any],
         output_suffix: str,
         write_to_file: bool,
-    ) -> Optional[ParquetOutput]:
+    ) -> Optional[ParquetFileWriter]:
         if not write_to_file:
             return None
         output_prefix = workflow_args.get("output_prefix")
@@ -366,9 +365,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             raise ValueError(
                 "Output prefix and path must be specified in workflow_args."
             )
-        return ParquetOutput(
-            output_path=output_path,
-            output_suffix=output_suffix,
+
+        return ParquetFileWriter(
+            output_path=os.path.join(output_path, output_suffix),
             use_consolidation=True,
         )
 
@@ -430,7 +429,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         write_to_file: bool,
         concatenate: bool,
         return_dataframe: bool,
-        parquet_output: Optional[ParquetOutput],
+        parquet_output: Optional[ParquetFileWriter],
         dataframe_list: List[
             Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]
         ],
@@ -450,12 +449,27 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 for df_generator in dataframe_list:
                     if df_generator is None:
                         continue
-                    for dataframe in df_generator:  # type: ignore[assignment]
-                        if dataframe is None:
-                            continue
-                        if hasattr(dataframe, "empty") and getattr(dataframe, "empty"):
-                            continue
-                        valid_dataframes.append(dataframe)
+                    # Handle both async and sync iterators
+                    if hasattr(df_generator, "__aiter__"):
+                        # Async iterator
+                        async for dataframe in df_generator:  # type: ignore[assignment]
+                            if dataframe is None:
+                                continue
+                            if hasattr(dataframe, "empty") and getattr(
+                                dataframe, "empty"
+                            ):
+                                continue
+                            valid_dataframes.append(dataframe)
+                    else:
+                        # Sync iterator
+                        for dataframe in df_generator:  # type: ignore[assignment]
+                            if dataframe is None:
+                                continue
+                            if hasattr(dataframe, "empty") and getattr(
+                                dataframe, "empty"
+                            ):
+                                continue
+                            valid_dataframes.append(dataframe)
 
                 if not valid_dataframes:
                     logger.warning(
@@ -473,7 +487,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                     workflow_args, output_suffix, True
                 )
                 if concatenated_parquet_output:
-                    await concatenated_parquet_output.write_dataframe(concatenated)  # type: ignore[arg-type]
+                    await concatenated_parquet_output.write(concatenated)  # type: ignore[arg-type]
                     return await concatenated_parquet_output.get_statistics(
                         typename=typename
                     )
@@ -491,7 +505,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     async def _execute_multidb_flow(
         self,
-        sql_client: Optional[BaseSQLClient],
+        sql_client: BaseSQLClient,
         sql_query: str,
         workflow_args: Dict[str, Any],
         output_suffix: str,
@@ -499,34 +513,16 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         write_to_file: bool,
         concatenate: bool,
         return_dataframe: bool,
-        parquet_output: Optional[ParquetOutput],
+        parquet_output: Optional[ParquetFileWriter],
     ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
         """Execute multi-database flow with proper error handling and result finalization."""
-        # Get effective SQL client
-        effective_sql_client = sql_client
-        if effective_sql_client is None:
-            state = cast(
-                BaseSQLMetadataExtractionActivitiesState,
-                await self._get_state(workflow_args),
-            )
-            effective_sql_client = state.sql_client
-
-        if not effective_sql_client:
-            logger.error("SQL client not initialized for multidb execution")
-            raise ValueError("SQL client not initialized")
-
         # Resolve databases to iterate
         database_names = await get_database_names(
-            effective_sql_client, workflow_args, self.fetch_database_sql
+            sql_client, workflow_args, self.fetch_database_sql
         )
         if not database_names:
             logger.warning("No databases found to process")
             return None
-
-        # Validate client
-        if not effective_sql_client.engine:
-            logger.error("SQL client engine not initialized")
-            raise ValueError("SQL client engine not initialized")
 
         successful_databases: List[str] = []
         dataframe_list: List[
@@ -537,9 +533,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         for database_name in database_names or []:
             try:
                 # Setup connection for this database
-                await self._setup_database_connection(
-                    effective_sql_client, database_name
-                )
+                await self._setup_database_connection(sql_client, database_name)
 
                 # Prepare query for this database
                 prepared_query = self._prepare_database_query(
@@ -552,7 +546,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
                 # Execute using helper method
                 success, batched_iterator = await self._execute_single_db(
-                    effective_sql_client.engine,
+                    sql_client,
                     prepared_query,
                     parquet_output,
                     write_to_file,
@@ -592,9 +586,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     async def _execute_single_db(
         self,
-        sql_engine: Any,
+        sql_client: BaseSQLClient,
         prepared_query: Optional[str],
-        parquet_output: Optional[ParquetOutput],
+        parquet_output: Optional[ParquetFileWriter],
         write_to_file: bool,
     ) -> Tuple[
         bool, Optional[Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]]
@@ -604,11 +598,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             return False, None
 
         try:
-            sql_input = SQLQueryInput(engine=sql_engine, query=prepared_query)
-            batched_iterator = await sql_input.get_batched_dataframe()
+            batched_iterator = await sql_client.get_batched_results(prepared_query)
 
             if write_to_file and parquet_output:
-                await parquet_output.write_batched_dataframe(batched_iterator)  # type: ignore
+                await parquet_output.write_batches(batched_iterator)  # type: ignore
                 return True, None
 
             return True, batched_iterator
@@ -627,7 +620,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw database data.
-            raw_output: JsonOutput instance for writing raw data.
+            raw_output: JsonFileWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -637,15 +630,15 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             BaseSQLMetadataExtractionActivitiesState,
             await self._get_state(workflow_args),
         )
-        if not state.sql_client or not state.sql_client.engine:
-            logger.error("SQL client or engine not initialized")
-            raise ValueError("SQL client or engine not initialized")
+        if not state.sql_client:
+            logger.error("SQL client not initialized")
+            raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
             query=self.fetch_database_sql, workflow_args=workflow_args
         )
         statistics = await self.query_executor(
-            sql_engine=state.sql_client.engine,
+            sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
             output_suffix="raw/database",
@@ -662,7 +655,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw schema data.
-            raw_output: JsonOutput instance for writing raw data.
+            raw_output: JsonFileWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -672,15 +665,15 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             BaseSQLMetadataExtractionActivitiesState,
             await self._get_state(workflow_args),
         )
-        if not state.sql_client or not state.sql_client.engine:
-            logger.error("SQL client or engine not initialized")
-            raise ValueError("SQL client or engine not initialized")
+        if not state.sql_client:
+            logger.error("SQL client not initialized")
+            raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
             query=self.fetch_schema_sql, workflow_args=workflow_args
         )
         statistics = await self.query_executor(
-            sql_engine=state.sql_client.engine,
+            sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
             output_suffix="raw/schema",
@@ -697,7 +690,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw table data.
-            raw_output: JsonOutput instance for writing raw data.
+            raw_output: JsonFileWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -707,9 +700,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             BaseSQLMetadataExtractionActivitiesState,
             await self._get_state(workflow_args),
         )
-        if not state.sql_client or not state.sql_client.engine:
-            logger.error("SQL client or engine not initialized")
-            raise ValueError("SQL client or engine not initialized")
+        if not state.sql_client:
+            logger.error("SQL client not initialized")
+            raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
             query=self.fetch_table_sql,
@@ -717,7 +710,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             temp_table_regex_sql=self.extract_temp_table_regex_table_sql,
         )
         statistics = await self.query_executor(
-            sql_engine=state.sql_client.engine,
+            sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
             output_suffix="raw/table",
@@ -734,7 +727,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw column data.
-            raw_output: JsonOutput instance for writing raw data.
+            raw_output: JsonFileWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -744,9 +737,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             BaseSQLMetadataExtractionActivitiesState,
             await self._get_state(workflow_args),
         )
-        if not state.sql_client or not state.sql_client.engine:
-            logger.error("SQL client or engine not initialized")
-            raise ValueError("SQL client or engine not initialized")
+        if not state.sql_client:
+            logger.error("SQL client not initialized")
+            raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
             query=self.fetch_column_sql,
@@ -754,7 +747,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             temp_table_regex_sql=self.extract_temp_table_regex_column_sql,
         )
         statistics = await self.query_executor(
-            sql_engine=state.sql_client.engine,
+            sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
             output_suffix="raw/column",
@@ -771,7 +764,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw column data.
-            raw_output: JsonOutput instance for writing raw data.
+            raw_output: JsonFileWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -781,15 +774,15 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             BaseSQLMetadataExtractionActivitiesState,
             await self._get_state(workflow_args),
         )
-        if not state.sql_client or not state.sql_client.engine:
-            logger.error("SQL client or engine not initialized")
-            raise ValueError("SQL client or engine not initialized")
+        if not state.sql_client:
+            logger.error("SQL client not initialized")
+            raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
             query=self.fetch_procedure_sql, workflow_args=workflow_args
         )
         statistics = await self.query_executor(
-            sql_engine=state.sql_client.engine,
+            sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
             output_suffix="raw/extras-procedure",
@@ -807,7 +800,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             raw_input (Any): Input data to transform.
-            transformed_output (JsonOutput): Output handler for transformed data.
+            transformed_output (JsonFileWriter): Output handler for transformed data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -824,17 +817,19 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             self._validate_output_args(workflow_args)
         )
 
-        raw_input = ParquetInput(
+        raw_input = ParquetFileReader(
             path=os.path.join(output_path, "raw"),
             file_names=workflow_args.get("file_names"),
+            dataframe_type=DataframeType.daft,
         )
-        raw_input = raw_input.get_batched_daft_dataframe()
+        raw_input = raw_input.read_batches()
 
-        transformed_output = JsonOutput(
+        transformed_output = JsonFileWriter(
             output_path=output_path,
             output_suffix="transformed",
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
+            dataframe_type=DataframeType.daft,
         )
         if state.transformer:
             workflow_args["connection_name"] = workflow_args.get("connection", {}).get(
@@ -849,7 +844,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                     transform_metadata = state.transformer.transform_metadata(
                         dataframe=dataframe, **workflow_args
                     )
-                await transformed_output.write_daft_dataframe(transform_metadata)
+                await transformed_output.write(transform_metadata)
         return await transformed_output.get_statistics()
 
     @activity.defn
