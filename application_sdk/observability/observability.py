@@ -421,34 +421,14 @@ class AtlanObservability(Generic[T], ABC):
                     # Lazy import and instantiation of ParquetOutput
                     from application_sdk.outputs.parquet import ParquetOutput
 
-                    parquet_output = ParquetOutput(output_path=partition_path)
-                    logging.info(
-                        f"Successfully instantiated ParquetOutput for partition: {partition_path}"
+                    parquet_output = ParquetOutput(
+                        output_path=partition_path,
+                        chunk_start=0,
+                        chunk_part=int(time()),
                     )
-
-                    try:
-                        import daft
-
-                        from application_sdk.outputs.parquet import WriteMode
-
-                        daft_df = daft.from_pandas(df)
-                        await parquet_output.write_daft_dataframe(
-                            dataframe=daft_df,
-                            write_mode=WriteMode.APPEND,
-                        )
-                        logging.info(
-                            f"Successfully wrote {len(df)} records using daft to partition: {partition_path}"
-                        )
-                    except ImportError:
-                        logging.warning(
-                            "Daft not available."
-                            "Install daft for enhanced performance."
-                        )
-
-                except Exception as partition_error:
-                    logging.error(
-                        f"Error processing partition {partition_path}: {str(partition_error)}"
-                    )
+                    await parquet_output.write_dataframe(dataframe=df)
+                except Exception as e:
+                    print(f"Error writing records to partition: {str(e)}")
 
             # Clean up old records if enabled
             if self._cleanup_enabled:
