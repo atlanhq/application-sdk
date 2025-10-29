@@ -441,7 +441,6 @@ class AtlanObservability(Generic[T], ABC):
                             f"Successfully wrote {len(df)} records using daft to partition: {partition_path}"
                         )
                     except ImportError:
-                        # Fallback to pandas-based writing when daft is not available
                         logging.warning(
                             "Daft not available."
                             "Install daft for enhanced performance."
