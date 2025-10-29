@@ -64,6 +64,7 @@ class Output(ABC):
     output_prefix: str
     total_record_count: int
     chunk_count: int
+    chunk_part: int
     buffer_size: int
     max_file_size_bytes: int
     current_buffer_size: int
