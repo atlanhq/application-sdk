@@ -29,7 +29,6 @@ from application_sdk.constants import (
 )
 from application_sdk.events.models import (
     ApplicationEventNames,
-    Event,
     EventTypes,
     TokenRefreshEventData,
 )
@@ -182,13 +181,12 @@ class TemporalWorkflowClient(WorkflowClient):
                         or 0,
                         refresh_timestamp=current_time,
                     )
-                    token_refresh_event = Event(
-                        event_type=EventTypes.APPLICATION_EVENT.value,
-                        event_name=ApplicationEventNames.TOKEN_REFRESH.value,
-                        data=token_refresh_data.model_dump(),
-                    )
 
-                    await EventStore.publish_event(token_refresh_event)
+                    await EventStore.publish_event_from_model(
+                        EventTypes.APPLICATION_EVENT.value,
+                        ApplicationEventNames.TOKEN_REFRESH.value,
+                        token_refresh_data,
+                    )
                     logger.info("Published token refresh event")
                 except Exception as e:
                     logger.warning(f"Failed to publish token refresh event: {e}")
