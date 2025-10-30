@@ -128,7 +128,6 @@ class AtlanAuthClient:
                     raise ClientError(
                         f"{ClientError.AUTH_TOKEN_REFRESH_ERROR}: Received null access token from server"
                     )
-
                 return self._access_token
 
     async def get_authenticated_headers(self) -> Dict[str, str]:
