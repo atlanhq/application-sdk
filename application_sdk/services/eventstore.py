@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 
 from dapr import clients
+from pydantic import BaseModel
 from temporalio import activity, workflow
 
 from application_sdk.common.dapr_utils import is_component_registered
@@ -88,6 +89,27 @@ class EventStore:
             logger.debug("Not in activity context, cannot set activity metadata")
 
         return event
+
+    @staticmethod
+    async def publish_event_from_model(
+        event_type: str, event_name: str, data_model: BaseModel
+    ):
+        """Publish an event from a Pydantic model.
+
+        This is a convenience method that creates an Event from a Pydantic model
+        and publishes it. This reduces boilerplate code when publishing events.
+
+        Args:
+            event_type: The type of the event (e.g., "application_events")
+            event_name: The name of the event (e.g., "token_refresh")
+            data_model: A Pydantic model instance containing the event data
+        """
+        event = Event(
+            event_type=event_type,
+            event_name=event_name,
+            data=data_model.model_dump(),
+        )
+        await EventStore.publish_event(event)
 
     @classmethod
     async def publish_event(cls, event: Event):

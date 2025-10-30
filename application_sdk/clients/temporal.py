@@ -1,4 +1,5 @@
 import asyncio
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional, Sequence, Type
@@ -26,10 +27,16 @@ from application_sdk.constants import (
     WORKFLOW_PORT,
     WORKFLOW_TLS_ENABLED_KEY,
 )
+from application_sdk.events.models import (
+    ApplicationEventNames,
+    EventTypes,
+    WorkerTokenRefreshEventData,
+)
 from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
 from application_sdk.interceptors.events import EventInterceptor, publish_event
 from application_sdk.interceptors.lock import RedisLockInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.eventstore import EventStore
 from application_sdk.services.secretstore import SecretStore
 from application_sdk.services.statestore import StateStore, StateType
 from application_sdk.workflows import WorkflowInterface
@@ -161,6 +168,29 @@ class TemporalWorkflowClient(WorkflowClient):
                 self._token_refresh_interval = (
                     self.auth_manager.calculate_refresh_interval()
                 )
+                # Publish token refresh event
+                try:
+                    current_time = time.time()
+                    worker_token_refresh_data = WorkerTokenRefreshEventData(
+                        application_name=self.application_name,
+                        deployment_name=DEPLOYMENT_NAME,
+                        force_refresh=True,
+                        token_expiry_time=self.auth_manager.get_token_expiry_time()
+                        or 0,
+                        time_until_expiry=self.auth_manager.get_time_until_expiry()
+                        or 0,
+                        refresh_timestamp=current_time,
+                    )
+
+                    await EventStore.publish_event_from_model(
+                        EventTypes.APPLICATION_EVENT.value,
+                        ApplicationEventNames.TOKEN_REFRESH.value,
+                        worker_token_refresh_data,
+                    )
+                    logger.info("Published token refresh event")
+                except Exception as e:
+                    logger.warning(f"Failed to publish token refresh event: {e}")
+
             except asyncio.CancelledError:
                 logger.info("Token refresh loop cancelled")
                 break
