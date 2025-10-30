@@ -177,7 +177,7 @@ class WorkerStartEventData(BaseModel):
     activity_count: int
 
 
-class WorkflowTokenRefreshEventData(BaseModel):
+class WorkerTokenRefreshEventData(BaseModel):
     """Model for token refresh event data.
 
     This model represents the data structure used when publishing token refresh events.

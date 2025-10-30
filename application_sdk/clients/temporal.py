@@ -30,7 +30,7 @@ from application_sdk.constants import (
 from application_sdk.events.models import (
     ApplicationEventNames,
     EventTypes,
-    WorkflowTokenRefreshEventData,
+    WorkerTokenRefreshEventData,
 )
 from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
 from application_sdk.interceptors.events import EventInterceptor, publish_event
@@ -171,7 +171,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 # Publish token refresh event
                 try:
                     current_time = time.time()
-                    token_refresh_data = WorkflowTokenRefreshEventData(
+                    worker_token_refresh_data = WorkerTokenRefreshEventData(
                         application_name=self.application_name,
                         deployment_name=DEPLOYMENT_NAME,
                         force_refresh=True,
@@ -185,7 +185,7 @@ class TemporalWorkflowClient(WorkflowClient):
                     await EventStore.publish_event_from_model(
                         EventTypes.APPLICATION_EVENT.value,
                         ApplicationEventNames.TOKEN_REFRESH.value,
-                        token_refresh_data,
+                        worker_token_refresh_data,
                     )
                     logger.info("Published token refresh event")
                 except Exception as e:
