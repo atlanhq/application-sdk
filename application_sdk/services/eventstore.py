@@ -149,12 +149,10 @@ class EventStore:
             binding_metadata = {"content-type": "application/json"}
 
             # Add auth token - HTTP bindings will use it, others will ignore it
-            # Skip auth for token refresh events to prevent recursion
-            if event.event_name != "token_refresh":
-                from application_sdk.clients.atlan_auth import AtlanAuthClient
+            from application_sdk.clients.atlan_auth import AtlanAuthClient
 
-                auth_client = AtlanAuthClient()
-                binding_metadata.update(await auth_client.get_authenticated_headers())
+            auth_client = AtlanAuthClient()
+            binding_metadata.update(await auth_client.get_authenticated_headers())
 
             with clients.DaprClient() as client:
                 client.invoke_binding(
