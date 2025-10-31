@@ -142,10 +142,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
         """
         try:
             workflow_id = get_workflow_id()
-            if "worflow_id" not in self._state:
+            if workflow_id not in self._state:
                 await self._set_state(workflow_args)
 
-            if "workflow_id" in self._state:
+            if workflow_id in self._state:
                 current_timestamp = datetime.now()
                 # if difference of current_timestamp and last_updated_timestamp is greater than 15 minutes, then again _set_state
                 last_updated = self._state[workflow_id].last_updated_timestamp
