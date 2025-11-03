@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from application_sdk.outputs import WorkflowPhase
 from application_sdk.outputs.parquet import ParquetOutput
 
 
@@ -46,7 +45,7 @@ class TestParquetOutputInit:
 
     def test_init_default_values(self, base_output_path: str):
         """Test ParquetOutput initialization with default values."""
-        parquet_output = ParquetOutput(phase=WorkflowPhase.EXTRACT, output_path=base_output_path)
+        parquet_output = ParquetOutput(output_path=base_output_path)
 
         # The output path gets modified by adding suffix, so check it ends with the base path
         assert base_output_path in parquet_output.output_path
@@ -65,7 +64,6 @@ class TestParquetOutputInit:
     def test_init_custom_values(self, base_output_path: str):
         """Test ParquetOutput initialization with custom values."""
         parquet_output = ParquetOutput(
-            phase=WorkflowPhase.EXTRACT,
             output_path=base_output_path,
             output_suffix="test_suffix",
             output_prefix="test_prefix",
@@ -93,7 +91,6 @@ class TestParquetOutputInit:
     def test_init_creates_output_directory(self, base_output_path: str):
         """Test that initialization creates the output directory."""
         parquet_output = ParquetOutput(
-            phase=WorkflowPhase.EXTRACT,
             output_path=base_output_path,
             output_suffix="test_dir",
             typename="test_table",
@@ -109,7 +106,7 @@ class TestParquetOutputPathGen:
 
     def test_path_gen_with_markers(self, base_output_path: str):
         """Test path generation with start and end markers."""
-        parquet_output = ParquetOutput(phase=WorkflowPhase.EXTRACT, output_path=base_output_path)
+        parquet_output = ParquetOutput(output_path=base_output_path)
 
         path = parquet_output.path_gen(start_marker="start_123", end_marker="end_456")
 
@@ -117,7 +114,7 @@ class TestParquetOutputPathGen:
 
     def test_path_gen_without_chunk_start(self, base_output_path: str):
         """Test path generation without chunk start."""
-        parquet_output = ParquetOutput(phase=WorkflowPhase.EXTRACT, output_path=base_output_path)
+        parquet_output = ParquetOutput(output_path=base_output_path)
 
         path = parquet_output.path_gen(chunk_count=5)
 
@@ -125,7 +122,7 @@ class TestParquetOutputPathGen:
 
     def test_path_gen_with_chunk_start(self, base_output_path: str):
         """Test path generation with chunk start."""
-        parquet_output = ParquetOutput(phase=WorkflowPhase.EXTRACT, output_path=base_output_path)
+        parquet_output = ParquetOutput(output_path=base_output_path)
 
         path = parquet_output.path_gen(chunk_start=10, chunk_count=3)
 
@@ -138,7 +135,7 @@ class TestParquetOutputWriteDataframe:
     @pytest.mark.asyncio
     async def test_write_empty_dataframe(self, base_output_path: str):
         """Test writing an empty DataFrame."""
-        parquet_output = ParquetOutput(phase=WorkflowPhase.EXTRACT, output_path=base_output_path)
+        parquet_output = ParquetOutput(output_path=base_output_path)
         empty_df = pd.DataFrame()
 
         await parquet_output.write_dataframe(empty_df)
@@ -162,7 +159,6 @@ class TestParquetOutputWriteDataframe:
             mock_prefix.return_value = "test/output/path"
 
             parquet_output = ParquetOutput(
-                phase=WorkflowPhase.EXTRACT,
                 output_path=base_output_path, output_suffix="test"
             )
 
@@ -192,7 +188,6 @@ class TestParquetOutputWriteDataframe:
             mock_prefix.return_value = "test/output/path"
 
             parquet_output = ParquetOutput(
-                phase=WorkflowPhase.EXTRACT,
                 output_path=base_output_path,
                 start_marker="test_start",
                 end_marker="test_end",
@@ -218,7 +213,7 @@ class TestParquetOutputWriteDataframe:
         with patch("pandas.DataFrame.to_parquet") as mock_to_parquet:
             mock_to_parquet.side_effect = Exception("Test error")
 
-            parquet_output = ParquetOutput(phase=WorkflowPhase.EXTRACT, output_path=base_output_path)
+            parquet_output = ParquetOutput(output_path=base_output_path)
 
             with pytest.raises(Exception, match="Test error"):
                 await parquet_output.write_dataframe(sample_dataframe)
@@ -235,7 +230,7 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df.count_rows.return_value = 0
             mock_daft.return_value = mock_df
 
-            parquet_output = ParquetOutput(phase=WorkflowPhase.EXTRACT, output_path=base_output_path)
+            parquet_output = ParquetOutput(output_path=base_output_path)
 
             await parquet_output.write_daft_dataframe(mock_df)
 
@@ -261,7 +256,6 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df.write_parquet = MagicMock()
 
             parquet_output = ParquetOutput(
-                phase=WorkflowPhase.EXTRACT,
                 output_path=base_output_path,
             )
 
@@ -301,7 +295,6 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df.write_parquet = MagicMock()
 
             parquet_output = ParquetOutput(
-                phase=WorkflowPhase.EXTRACT,
                 output_path=base_output_path,
             )
 
@@ -338,7 +331,7 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df.write_parquet = MagicMock()
 
             parquet_output = ParquetOutput(
-                phase=WorkflowPhase.EXTRACT,
+                
                 output_path=base_output_path,
             )
 
@@ -372,7 +365,7 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df.count_rows.return_value = 1000
             mock_df.write_parquet = MagicMock()
 
-            parquet_output = ParquetOutput(phase=WorkflowPhase.EXTRACT, output_path=base_output_path)
+            parquet_output = ParquetOutput(output_path=base_output_path)
 
             await parquet_output.write_daft_dataframe(mock_df)
 
@@ -392,7 +385,7 @@ class TestParquetOutputWriteDaftDataframe:
         mock_df = MagicMock()
         mock_df.count_rows.side_effect = Exception("Count rows error")
 
-        parquet_output = ParquetOutput(phase=WorkflowPhase.EXTRACT, output_path=base_output_path)
+        parquet_output = ParquetOutput(output_path=base_output_path)
 
         with pytest.raises(Exception, match="Count rows error"):
             await parquet_output.write_daft_dataframe(mock_df)
@@ -404,7 +397,7 @@ class TestParquetOutputUtilityMethods:
     def test_get_full_path(self, base_output_path: str):
         """Test get_full_path method."""
         parquet_output = ParquetOutput(
-            phase=WorkflowPhase.EXTRACT,
+            
             output_path=base_output_path,
             output_suffix="test_suffix",
             typename="test_table",
@@ -434,7 +427,7 @@ class TestParquetOutputMetrics:
             mock_metrics = MagicMock()
             mock_get_metrics.return_value = mock_metrics
 
-            parquet_output = ParquetOutput(phase=WorkflowPhase.EXTRACT, output_path=base_output_path)
+            parquet_output = ParquetOutput(output_path=base_output_path)
 
             await parquet_output.write_dataframe(sample_dataframe)
 
@@ -465,7 +458,7 @@ class TestParquetOutputMetrics:
             mock_df.count_rows.return_value = 1000
             mock_df.write_parquet = MagicMock()
 
-            parquet_output = ParquetOutput(phase=WorkflowPhase.EXTRACT, output_path=base_output_path)
+            parquet_output = ParquetOutput(output_path=base_output_path)
 
             await parquet_output.write_daft_dataframe(mock_df)
 

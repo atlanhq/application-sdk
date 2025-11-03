@@ -7,7 +7,6 @@ import pandas as pd
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.outputs import WorkflowPhase
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.test_utils.hypothesis.strategies.outputs.json_output import (
     chunk_size_strategy,
@@ -34,7 +33,6 @@ async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
     safe_path = str(Path(base_output_path) / config["output_path"])
     json_output = JsonOutput(  # type: ignore
         output_suffix=config["output_suffix"],
-        phase=WorkflowPhase.EXTRACT,
         output_path=safe_path,
         output_prefix=config["output_prefix"],
         chunk_size=config["chunk_size"],
@@ -50,7 +48,6 @@ async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
 async def test_write_dataframe_empty(base_output_path: str) -> None:
     json_output = JsonOutput(  # type: ignore
         output_suffix="tests/raw",
-        phase=WorkflowPhase.EXTRACT,
         output_path=base_output_path,
         output_prefix="test_prefix",
         chunk_size=100000,
@@ -140,7 +137,6 @@ async def test_write_dataframe_multiple_chunks(
 async def test_write_dataframe_error(base_output_path: str) -> None:
     json_output = JsonOutput(  # type: ignore
         output_suffix="tests/raw",
-        phase=WorkflowPhase.EXTRACT,
         output_path=base_output_path,
         output_prefix="test_prefix",
         chunk_size=100000,

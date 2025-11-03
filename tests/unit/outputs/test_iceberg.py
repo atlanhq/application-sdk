@@ -5,7 +5,6 @@ import pytest
 from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 
-from application_sdk.outputs import WorkflowPhase
 from application_sdk.outputs.iceberg import IcebergOutput
 
 
@@ -25,7 +24,6 @@ def iceberg_output(mock_catalog: Catalog) -> IcebergOutput:
         iceberg_catalog=mock_catalog,
         iceberg_namespace="test_namespace",
         iceberg_table="test_table",
-        phase=WorkflowPhase.EXTRACT,
         mode="append",
     )
 
@@ -36,7 +34,6 @@ def test_iceberg_output_initialization(mock_catalog: Catalog) -> None:
         iceberg_catalog=mock_catalog,
         iceberg_namespace="test_namespace",
         iceberg_table="test_table",
-        phase=WorkflowPhase.EXTRACT,
         mode="append",
     )
 

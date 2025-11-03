@@ -39,14 +39,6 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-class WorkflowPhase(Enum):
-    """Enumeration of workflow phases for data processing."""
-    
-    EXTRACT = "Extract"
-    TRANSFORM = "Transform" 
-    PUBLISH = "Publish"
-
-
 class Output(ABC):
     """Abstract base class for output handlers.
 
@@ -62,10 +54,22 @@ class Output(ABC):
 
     output_path: str
     output_prefix: str
-    phase: WorkflowPhase
     total_record_count: int
     chunk_count: int
     statistics: List[int] = []
+
+    def _infer_phase_from_path(self) -> Optional[str]:
+        """Infer phase from output path by checking for raw/transformed directories.
+
+        Returns:
+            Optional[str]: "Extract" for raw, "Transform" for transformed, else None.
+        """
+        path_parts = str(self.output_path).split("/")
+        if "raw" in path_parts:
+            return "Extract"
+        if "transformed" in path_parts:
+            return "Transform"
+        return None
 
     def estimate_dataframe_file_size(
         self, dataframe: "pd.DataFrame", file_type: Literal["json", "parquet"]
@@ -287,7 +291,12 @@ class Output(ABC):
                                  (used as key in the aggregate map)
             statistics: The statistics dictionary to store
         """
-        logger.info(f"Starting _update_run_aggregate for phase: {self.phase} (value: {self.phase.value})")
+        inferred_phase = self._infer_phase_from_path()
+        if inferred_phase is None:
+            logger.info("Phase could not be inferred from path. Skipping aggregation.")
+            return
+
+        logger.info(f"Starting _update_run_aggregate for phase: {inferred_phase}")
         # Build the workflow run root path directly using utility functions (no path manipulation!)
         # build_output_path() returns: "artifacts/apps/{app}/workflows/{workflow_id}/{run_id}"
         # We need the local path: "./local/tmp/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}"
@@ -297,13 +306,13 @@ class Output(ABC):
 
 
         # Load existing aggregate from object store if present
-        # New structure: {"Extract": [...], "Transform": [...], "Publish": [...]}
-        aggregate_by_phase: Dict[str, List[Dict[str, Any]]] = {
-            "Extract": [],
-            "Transform": [],
-            "Publish": []
+        # Structure: {"Extract": {"typename": {"record_count": N}}, "Transform": {...}, "Publish": {...}}
+        aggregate_by_phase: Dict[str, Dict[str, Dict[str, Any]]] = {
+            "Extract": {},
+            "Transform": {},
+            "Publish": {}
         }
-        
+
         try:
             # Download existing aggregate file if present
             await ObjectStore.download_file(
@@ -321,13 +330,22 @@ class Output(ABC):
                 "No existing aggregate found or failed to read. Initializing a new aggregate structure."
             )
 
-        # Add this entry to the appropriate phase
-        logger.info(f"Adding statistics to phase '{self.phase.value}'")
-        aggregate_by_phase[self.phase.value].append(statistics)
+        # Accumulate statistics by typename within the phase
+        typename = statistics.get("typename", "unknown")
+
+        if typename not in aggregate_by_phase[inferred_phase]:
+            aggregate_by_phase[inferred_phase][typename] = {
+                "record_count": 0
+            }
+
+        logger.info(f"Accumulating statistics for phase '{inferred_phase}', typename '{typename}': +{statistics['total_record_count']} records")
+
+        # Accumulate the record count
+        aggregate_by_phase[inferred_phase][typename]["record_count"] += statistics["total_record_count"]
         
         with open(output_file_name, "w") as f:
             f.write(orjson.dumps(aggregate_by_phase).decode("utf-8"))
-            logger.info(f"Successfully updated aggregate with entries for phase '{self.phase.value}'")
+            logger.info(f"Successfully updated aggregate with accumulated stats for phase '{inferred_phase}'")
         
         # Upload aggregate to object store
         await ObjectStore.upload_file(

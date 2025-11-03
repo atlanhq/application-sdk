@@ -6,7 +6,7 @@ from temporalio import activity
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
-from application_sdk.outputs import Output, WorkflowPhase
+from application_sdk.outputs import Output
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -26,7 +26,6 @@ class IcebergOutput(Output):
         iceberg_catalog: Catalog,
         iceberg_namespace: str,
         iceberg_table: Union[str, Table],
-        phase: WorkflowPhase,
         mode: str = "append",
         total_record_count: int = 0,
         chunk_count: int = 0,
@@ -43,7 +42,6 @@ class IcebergOutput(Output):
         """
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
-        self.phase = phase
         self.iceberg_catalog = iceberg_catalog
         self.iceberg_namespace = iceberg_namespace
         self.iceberg_table = iceberg_table

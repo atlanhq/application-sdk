@@ -7,7 +7,7 @@ from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
-from application_sdk.outputs import Output, WorkflowPhase
+from application_sdk.outputs import Output
 from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
@@ -41,7 +41,6 @@ class ParquetOutput(Output):
 
     def __init__(
         self,
-        phase: WorkflowPhase,
         output_path: str = "",
         output_suffix: str = "",
         output_prefix: str = "",
@@ -76,7 +75,6 @@ class ParquetOutput(Output):
         self.output_path = output_path
         self.output_suffix = output_suffix
         self.output_prefix = output_prefix
-        self.phase = phase
         self.typename = typename
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size

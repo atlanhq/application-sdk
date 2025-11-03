@@ -103,6 +103,53 @@ async def query_executor(
 *   **`ParquetOutput`:** Similar to `JsonOutput` but writes DataFrames to Parquet format files. Uses `daft.DataFrame.write_parquet()` or `pandas.DataFrame.to_parquet()`. Also uploads files to object storage after local processing.
 *   **`IcebergOutput`:** Writes DataFrames directly to an Iceberg table using `pyiceberg`.
 
+## Phase Inference for Aggregation
+
+Outputs automatically participate in workflow-level statistics aggregation based on their `output_path`:
+
+- Paths containing directories starting with `"raw"` (e.g., `"/raw/table"`, `"/raw/database"`) are categorized as **Extract** phase
+- Paths containing `"transformed"` directories are categorized as **Transform** phase
+- Other paths skip aggregation entirely
+
+This replaces the previous explicit `WorkflowPhase` parameter. Aggregation accumulates statistics by phase and typename in object store.
+
+#### Example Structure
+```json
+{
+  "Extract": {
+    "database": {"record_count": 1500},
+    "schema": {"record_count": 8500},
+    "table": {"record_count": 25784},
+    "column": {"record_count": 482476}
+  },
+  "Transform": {
+    "database": {"record_count": 1500},
+    "schema": {"record_count": 8600},
+    "table": {"record_count": 25247},
+    "column": {"record_count": 460084}
+  }
+}
+```
+
+#### Code Example
+```python
+# Extract phase output - auto-categorized and accumulated
+parquet_output = ParquetOutput(
+    output_path="/tmp/artifacts",
+    output_suffix="raw/table"
+)  # Stats accumulated under Extract.table.record_count
+
+# Transform phase output - auto-categorized and accumulated
+json_output = JsonOutput(
+    output_suffix="transformed",
+    output_path="/tmp/artifacts"
+)  # Stats accumulated under Transform.database.record_count
+```
+
+### Removed Features
+- `WorkflowPhase` enum and `phase` constructor parameter have been removed
+- No explicit phase passing required; inference is automatic and safe
+
 ## Summary
 
 The `outputs` module complements the `inputs` module by providing classes to write data processed within activities. `JsonOutput` and `ParquetOutput` are commonly used for saving intermediate DataFrames to local files (and then uploading them to object storage), making the data available for subsequent activities like transformations.
