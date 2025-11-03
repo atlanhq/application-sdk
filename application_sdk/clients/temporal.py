@@ -1,4 +1,5 @@
 import asyncio
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional, Sequence, Type
@@ -26,10 +27,17 @@ from application_sdk.constants import (
     WORKFLOW_PORT,
     WORKFLOW_TLS_ENABLED_KEY,
 )
+from application_sdk.events.models import (
+    ApplicationEventNames,
+    Event,
+    EventTypes,
+    WorkerTokenRefreshEventData,
+)
 from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
 from application_sdk.interceptors.events import EventInterceptor, publish_event
 from application_sdk.interceptors.lock import RedisLockInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.eventstore import EventStore
 from application_sdk.services.secretstore import SecretStore
 from application_sdk.services.statestore import StateStore, StateType
 from application_sdk.workflows import WorkflowInterface
@@ -142,6 +150,39 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         return self.namespace
 
+    async def _publish_token_refresh_event(self) -> None:
+        """Publish a token refresh event to the event store.
+
+        This method creates and publishes an event containing token refresh information,
+        including application name, deployment name, token expiry times, and refresh timestamp.
+        If event publishing fails, it logs a warning but does not raise an exception to avoid
+        disrupting the token refresh loop.
+
+        Note:
+            This method handles exceptions internally and will not propagate errors,
+            ensuring the token refresh loop continues even if event publishing fails.
+        """
+        try:
+            current_time = time.time()
+            worker_token_refresh_data = WorkerTokenRefreshEventData(
+                application_name=self.application_name,
+                deployment_name=DEPLOYMENT_NAME,
+                force_refresh=True,
+                token_expiry_time=self.auth_manager.get_token_expiry_time() or 0,
+                time_until_expiry=self.auth_manager.get_time_until_expiry() or 0,
+                refresh_timestamp=current_time,
+            )
+
+            event = Event(
+                event_type=EventTypes.APPLICATION_EVENT.value,
+                event_name=ApplicationEventNames.TOKEN_REFRESH.value,
+                data=worker_token_refresh_data.model_dump(),
+            )
+            await EventStore.publish_event(event)
+            logger.info("Published token refresh event")
+        except Exception as e:
+            logger.warning(f"Failed to publish token refresh event: {e}")
+
     async def _token_refresh_loop(self) -> None:
         """Background loop that refreshes the authentication token dynamically."""
         while True:
@@ -161,6 +202,9 @@ class TemporalWorkflowClient(WorkflowClient):
                 self._token_refresh_interval = (
                     self.auth_manager.calculate_refresh_interval()
                 )
+                # Publish token refresh event
+                await self._publish_token_refresh_event()
+
             except asyncio.CancelledError:
                 logger.info("Token refresh loop cancelled")
                 break

@@ -29,6 +29,7 @@ class ApplicationEventNames(Enum):
     WORKER_END = "worker_end"
     APPLICATION_START = "application_start"
     APPLICATION_END = "application_end"
+    TOKEN_REFRESH = "token_refresh"
 
 
 class WorkflowStates(Enum):
@@ -174,3 +175,26 @@ class WorkerStartEventData(BaseModel):
     max_concurrent_activities: Optional[int]
     workflow_count: int
     activity_count: int
+
+
+class WorkerTokenRefreshEventData(BaseModel):
+    """Model for token refresh event data.
+
+    This model represents the data structure used when publishing token refresh events.
+    It contains information about the token refresh operation and agent status.
+
+    Attributes:
+        application_name: Name of the application the token belongs to.
+        deployment_name: Name of the deployment (e.g., dev, staging, prod).
+        force_refresh: Whether this was a forced refresh or automatic.
+        token_expiry_time: Unix timestamp when the new token expires.
+        time_until_expiry: Seconds until token expires.
+        refresh_timestamp: Unix timestamp when the refresh occurred.
+    """
+
+    application_name: str
+    deployment_name: str
+    force_refresh: bool
+    token_expiry_time: float
+    time_until_expiry: float
+    refresh_timestamp: float
