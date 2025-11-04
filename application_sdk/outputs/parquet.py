@@ -192,6 +192,7 @@ class ParquetOutput(Output):
         partition_cols: Optional[List] = None,
         write_mode: Union[WriteMode, str] = WriteMode.APPEND,
         morsel_size: int = 100_000,
+        skip_upload: bool = False,
     ):
         """Write a daft DataFrame to Parquet files and upload to object store.
 
@@ -209,6 +210,7 @@ class ParquetOutput(Output):
                 Daft does not use partitions. Instead of using partitioning to control parallelism, the local execution engine performs a streaming-based
                 execution on small "morsels" of data, which provides much more stable memory utilization while improving the user experience with not having
                 to worry about partitioning.
+            skip_upload (bool): If True, skip uploading files to object store. Defaults to False.
 
         Note:
             - Daft automatically handles file chunking based on parquet_target_filesize
@@ -263,29 +265,30 @@ class ParquetOutput(Output):
             )
 
             #  Upload the entire directory (contains multiple parquet files created by Daft)
-            if write_mode == WriteMode.OVERWRITE:
-                # Delete the directory from object store
-                try:
-                    await ObjectStore.delete_prefix(
-                        prefix=get_object_store_prefix(self.output_path)
-                    )
-                except FileNotFoundError as e:
-                    logger.info(
-                        f"No files found under prefix {get_object_store_prefix(self.output_path)}: {str(e)}"
-                    )
-            for path in file_paths:
-                if ENABLE_ATLAN_UPLOAD:
+            if not skip_upload:
+                if write_mode == WriteMode.OVERWRITE:
+                    # Delete the directory from object store
+                    try:
+                        await ObjectStore.delete_prefix(
+                            prefix=get_object_store_prefix(self.output_path)
+                        )
+                    except FileNotFoundError as e:
+                        logger.info(
+                            f"No files found under prefix {get_object_store_prefix(self.output_path)}: {str(e)}"
+                        )
+                for path in file_paths:
+                    if ENABLE_ATLAN_UPLOAD:
+                        await ObjectStore.upload_file(
+                            source=path,
+                            store_name=UPSTREAM_OBJECT_STORE_NAME,
+                            destination=get_object_store_prefix(path),
+                            retain_local_copy=True,
+                        )
                     await ObjectStore.upload_file(
                         source=path,
-                        store_name=UPSTREAM_OBJECT_STORE_NAME,
                         destination=get_object_store_prefix(path),
-                        retain_local_copy=True,
+                        retain_local_copy=self.retain_local_copy,
                     )
-                await ObjectStore.upload_file(
-                    source=path,
-                    destination=get_object_store_prefix(path),
-                    retain_local_copy=self.retain_local_copy,
-                )
 
         except Exception as e:
             # Record metrics for failed write
