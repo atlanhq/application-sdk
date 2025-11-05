@@ -811,4 +811,3 @@ class APIServer(ServerInterface):
             )
         )
         await server.serve()
-

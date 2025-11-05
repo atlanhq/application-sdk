@@ -831,6 +831,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         raw_input = raw_input.get_batched_daft_dataframe()
 
         transformed_output = JsonOutput(
+            output_path=output_path,
             output_suffix="transformed",
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),

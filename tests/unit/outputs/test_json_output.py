@@ -32,8 +32,8 @@ async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
     # Create a safe output path by joining base_output_path with config's output_path
     safe_path = str(Path(base_output_path) / config["output_path"])
     json_output = JsonOutput(  # type: ignore
-        output_suffix=config["output_suffix"],
         output_path=safe_path,
+        output_suffix=config["output_suffix"],
         output_prefix=config["output_prefix"],
         chunk_size=config["chunk_size"],
     )

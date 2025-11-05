@@ -402,7 +402,6 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df.write_parquet.return_value = mock_result
 
             parquet_output = ParquetOutput(
-                
                 output_path=base_output_path,
             )
 
