@@ -29,6 +29,7 @@ class IcebergOutput(Output):
         mode: str = "append",
         total_record_count: int = 0,
         chunk_count: int = 0,
+        retain_local_copy: bool = False,
     ):
         """Initialize the Iceberg output class.
 
@@ -39,6 +40,8 @@ class IcebergOutput(Output):
             mode (str, optional): Write mode for the iceberg table. Defaults to "append".
             total_record_count (int, optional): Total record count written to the iceberg table. Defaults to 0.
             chunk_count (int, optional): Number of chunks written to the iceberg table. Defaults to 0.
+            retain_local_copy (bool, optional): Whether to retain the local copy of the files.
+                Defaults to False.
         """
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
@@ -47,6 +50,7 @@ class IcebergOutput(Output):
         self.iceberg_table = iceberg_table
         self.mode = mode
         self.metrics = get_metrics()
+        self.retain_local_copy = retain_local_copy
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """

@@ -1,9 +1,9 @@
-import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import AsyncBaseSQLClient
 from application_sdk.handlers.sql import BaseSQLHandler
 
@@ -11,6 +11,11 @@ from application_sdk.handlers.sql import BaseSQLHandler
 @pytest.fixture
 def async_sql_client():
     client = AsyncBaseSQLClient()
+    client.DB_CONFIG = DatabaseConfig(
+        template="test://{username}:{password}@{host}:{port}/{database}",
+        required=["username", "password", "host", "port", "database"],
+        connect_args={},
+    )
     client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return client
 
@@ -23,26 +28,68 @@ def handler(async_sql_client: Any) -> BaseSQLHandler:
     return handler
 
 
-@patch("sqlalchemy.ext.asyncio.create_async_engine")
-def test_load(create_async_engine: Any, async_sql_client: AsyncBaseSQLClient):
-    # Mock the engine and connection
+@pytest.fixture
+def mock_async_engine_with_connection():
+    """Common fixture for mocking async engine with proper context manager."""
     mock_engine = AsyncMock()
-    mock_connection = MagicMock()
+    mock_connection = AsyncMock()
+
+    # Create a second connection for execution_options return
+    mock_connection_with_options = AsyncMock()
+    mock_connection_with_options.stream = AsyncMock()
+    mock_connection_with_options.execute = AsyncMock()
+    mock_connection_with_options.execution_options = MagicMock(
+        return_value=mock_connection_with_options
+    )
+
+    # Set up the original connection
+    mock_connection.stream = AsyncMock()
+    mock_connection.execute = AsyncMock()
+    mock_connection.execution_options = MagicMock(
+        return_value=mock_connection_with_options
+    )
+
+    class MockAsyncContextManager:
+        async def __aenter__(self):
+            return mock_connection
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            return None
+
+    # Make connect() return the context manager directly, not a coroutine
+    mock_engine.connect = MagicMock(return_value=MockAsyncContextManager())
+
+    return mock_engine, mock_connection, mock_connection_with_options
+
+
+@patch("sqlalchemy.ext.asyncio.create_async_engine")
+@pytest.mark.asyncio
+async def test_load(
+    create_async_engine: Any,
+    async_sql_client: AsyncBaseSQLClient,
+    mock_async_engine_with_connection,
+):
+    # Use the common fixture
+    mock_engine, mock_connection, mock_connection_with_options = (
+        mock_async_engine_with_connection
+    )
     create_async_engine.return_value = mock_engine
-    mock_engine.connect.return_value = mock_connection
+
     credentials = {"username": "test_user", "password": "test_password"}
 
     # Run the load function
-    asyncio.run(async_sql_client.load(credentials))
+    await async_sql_client.load(credentials)
 
     # Assertions to verify behavior
+    assert async_sql_client.DB_CONFIG is not None
     create_async_engine.assert_called_once_with(
         async_sql_client.get_sqlalchemy_connection_string(),
-        connect_args=async_sql_client.sql_alchemy_connect_args,
+        connect_args=async_sql_client.DB_CONFIG.connect_args,
         pool_pre_ping=True,
     )
     assert async_sql_client.engine == mock_engine
-    assert async_sql_client.connection == mock_connection
+    # AsyncBaseSQLClient doesn't store persistent connection
+    assert async_sql_client.connection is None
 
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
@@ -137,8 +184,16 @@ async def test_fetch_metadata_with_error(
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_client_side_cursor(
-    mock_text: MagicMock, async_sql_client: MagicMock
+    mock_text: MagicMock,
+    async_sql_client: AsyncBaseSQLClient,
+    mock_async_engine_with_connection,
 ):
+    # Use the common fixture
+    mock_engine, mock_connection, mock_connection_with_options = (
+        mock_async_engine_with_connection
+    )
+    async_sql_client.engine = mock_engine
+
     # Mock the query
     query = "SELECT * FROM test_table"
 
@@ -155,9 +210,7 @@ async def test_run_query_client_side_cursor(
         ]
     )
 
-    # Mock the connection and method execution
-    async_sql_client.connection = MagicMock()
-    async_sql_client.connection.execute = AsyncMock(return_value=mock_result)
+    mock_connection.execute = AsyncMock(return_value=mock_result)
 
     # Set the configuration to NOT use server-side cursor
     async_sql_client.use_server_side_cursor = False
@@ -175,7 +228,7 @@ async def test_run_query_client_side_cursor(
 
     # Assertions
     assert results == expected_results
-    async_sql_client.connection.execute.assert_called_once_with(query)
+    mock_connection.execute.assert_called_once_with(query)
     mock_result.cursor.fetchmany.assert_called()
     mock_result.keys.assert_called_once()
 
@@ -186,8 +239,16 @@ async def test_run_query_client_side_cursor(
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_server_side_cursor(
-    mock_text: MagicMock, async_sql_client: MagicMock
+    mock_text: MagicMock,
+    async_sql_client: AsyncBaseSQLClient,
+    mock_async_engine_with_connection,
 ):
+    # Use the common fixture
+    mock_engine, mock_connection, mock_connection_with_options = (
+        mock_async_engine_with_connection
+    )
+    async_sql_client.engine = mock_engine
+
     # Mock the query
     query = "SELECT * FROM test_table"
 
@@ -203,13 +264,7 @@ async def test_run_query_server_side_cursor(
         ]
     )
 
-    async def empty_fn(*args, **kwargs):  # type: ignore # Mock execution options
-        pass
-
-    # Mock the connection and method execution
-    async_sql_client.connection = MagicMock()
-    async_sql_client.connection.stream = AsyncMock(return_value=mock_result)
-    async_sql_client.connection.execution_options.side_effect = empty_fn
+    mock_connection_with_options.stream = AsyncMock(return_value=mock_result)
 
     # Set the configuration to use server-side cursor
     async_sql_client.use_server_side_cursor = True
@@ -227,7 +282,7 @@ async def test_run_query_server_side_cursor(
 
     # Assertions
     assert results == expected_results
-    async_sql_client.connection.stream.assert_called_once_with(query)
+    mock_connection_with_options.stream.assert_called_once_with(query)
     mock_result.fetchmany.assert_awaited()
     mock_result.keys.assert_called_once()
 
@@ -237,7 +292,17 @@ async def test_run_query_server_side_cursor(
     "sqlalchemy.text",
     side_effect=lambda q: q,  # type: ignore
 )
-async def test_run_query_with_error(mock_text: MagicMock, async_sql_client: MagicMock):
+async def test_run_query_with_error(
+    mock_text: MagicMock,
+    async_sql_client: AsyncBaseSQLClient,
+    mock_async_engine_with_connection,
+):
+    # Use the common fixture
+    mock_engine, mock_connection, mock_connection_with_options = (
+        mock_async_engine_with_connection
+    )
+    async_sql_client.engine = mock_engine
+
     # Mock the query
     query = "SELECT * FROM test_table"
 
@@ -248,13 +313,7 @@ async def test_run_query_with_error(mock_text: MagicMock, async_sql_client: Magi
         side_effect=[Exception("Simulated query failure")]
     )
 
-    async def empty_fn(*args, **kwargs):  # type: ignore # Mock execution options
-        pass
-
-    # Mock the connection and method execution
-    async_sql_client.connection = MagicMock()
-    async_sql_client.connection.stream = AsyncMock(return_value=mock_result)
-    async_sql_client.connection.execution_options.side_effect = empty_fn
+    mock_connection_with_options.stream = AsyncMock(return_value=mock_result)
 
     # Set the configuration to use server-side cursor
     async_sql_client.use_server_side_cursor = True

@@ -4,7 +4,9 @@ This module provides base classes and utilities for handling various types of da
 in the application, including file outputs and object store interactions.
 """
 
+import gc
 import inspect
+import os
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import (
@@ -14,7 +16,6 @@ from typing import (
     Dict,
     Generator,
     List,
-    Literal,
     Optional,
     Union,
     cast,
@@ -27,6 +28,7 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import get_object_store_prefix, build_output_path
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.services.objectstore import ObjectStore
 from application_sdk.constants import TEMPORARY_PATH
 
@@ -37,6 +39,14 @@ activity.logger = logger
 if TYPE_CHECKING:
     import daft  # type: ignore
     import pandas as pd
+
+
+class WriteMode(Enum):
+    """Enumeration of write modes for output operations."""
+
+    APPEND = "append"
+    OVERWRITE = "overwrite"
+    OVERWRITE_PARTITIONS = "overwrite-partitions"
 
 
 class Output(ABC):
@@ -56,7 +66,12 @@ class Output(ABC):
     output_prefix: str
     total_record_count: int
     chunk_count: int
-    statistics: List[int] = []
+    chunk_part: int
+    buffer_size: int
+    max_file_size_bytes: int
+    current_buffer_size: int
+    current_buffer_size_bytes: int
+    partitions: List[int]
 
     def _infer_phase_from_path(self) -> Optional[str]:
         """Infer phase from output path by checking for raw/transformed directories.
@@ -71,9 +86,7 @@ class Output(ABC):
             return "Transform"
         return None
 
-    def estimate_dataframe_file_size(
-        self, dataframe: "pd.DataFrame", file_type: Literal["json", "parquet"]
-    ) -> int:
+    def estimate_dataframe_record_size(self, dataframe: "pd.DataFrame") -> int:
         """Estimate File size of a DataFrame by sampling a few records."""
         if len(dataframe) == 0:
             return 0
@@ -81,15 +94,46 @@ class Output(ABC):
         # Sample up to 10 records to estimate average size
         sample_size = min(10, len(dataframe))
         sample = dataframe.head(sample_size)
+        file_type = type(self).__name__.lower().replace("output", "")
+        compression_factor = 1
         if file_type == "json":
             sample_file = sample.to_json(orient="records", lines=True)
         else:
             sample_file = sample.to_parquet(index=False, compression="snappy")
+            compression_factor = 0.01
         if sample_file is not None:
-            avg_record_size = len(sample_file) / sample_size
-            return int(avg_record_size * len(dataframe))
+            avg_record_size = len(sample_file) / sample_size * compression_factor
+            return int(avg_record_size)
 
         return 0
+
+    def path_gen(
+        self,
+        chunk_count: Optional[int] = None,
+        chunk_part: int = 0,
+        start_marker: Optional[str] = None,
+        end_marker: Optional[str] = None,
+    ) -> str:
+        """Generate a file path for a chunk.
+
+        Args:
+            chunk_start (Optional[int]): Starting index of the chunk, or None for single chunk.
+            chunk_count (int): Total number of chunks.
+            start_marker (Optional[str]): Start marker for query extraction.
+            end_marker (Optional[str]): End marker for query extraction.
+
+        Returns:
+            str: Generated file path for the chunk.
+        """
+        # For Query Extraction - use start and end markers without chunk count
+        if start_marker and end_marker:
+            return f"{start_marker}_{end_marker}{self._EXTENSION}"
+
+        # For regular chunking - include chunk count
+        if chunk_count is None:
+            return f"{str(chunk_part)}{self._EXTENSION}"
+        else:
+            return f"chunk-{str(chunk_count)}-part{str(chunk_part)}{self._EXTENSION}"
 
     def process_null_fields(
         self,
@@ -162,15 +206,86 @@ class Output(ABC):
                         await self.write_dataframe(dataframe)
         except Exception as e:
             logger.error(f"Error writing batched dataframe: {str(e)}")
+            raise
 
-    @abstractmethod
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
-        """Write a pandas DataFrame to the output destination.
+        """Write a pandas DataFrame to Parquet files and upload to object store.
 
         Args:
             dataframe (pd.DataFrame): The DataFrame to write.
         """
-        pass
+        try:
+            if self.chunk_start is None:
+                self.chunk_part = 0
+            if len(dataframe) == 0:
+                return
+
+            chunk_size_bytes = self.estimate_dataframe_record_size(dataframe)
+
+            for i in range(0, len(dataframe), self.buffer_size):
+                chunk = dataframe[i : i + self.buffer_size]
+
+                if (
+                    self.current_buffer_size_bytes + chunk_size_bytes
+                    > self.max_file_size_bytes
+                ):
+                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
+                    if os.path.exists(output_file_name):
+                        await self._upload_file(output_file_name)
+                        self.chunk_part += 1
+
+                self.current_buffer_size += len(chunk)
+                self.current_buffer_size_bytes += chunk_size_bytes * len(chunk)
+                await self._flush_buffer(chunk, self.chunk_part)
+
+                del chunk
+                gc.collect()
+
+            if self.current_buffer_size_bytes > 0:
+                # Finally upload the final file to the object store
+                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
+                if os.path.exists(output_file_name):
+                    await self._upload_file(output_file_name)
+                    self.chunk_part += 1
+
+            # Record metrics for successful write
+            self.metrics.record_metric(
+                name="write_records",
+                value=len(dataframe),
+                metric_type=MetricType.COUNTER,
+                labels={"type": "pandas", "mode": WriteMode.APPEND.value},
+                description="Number of records written to files from pandas DataFrame",
+            )
+
+            # Record chunk metrics
+            self.metrics.record_metric(
+                name="chunks_written",
+                value=1,
+                metric_type=MetricType.COUNTER,
+                labels={"type": "pandas", "mode": WriteMode.APPEND.value},
+                description="Number of chunks written to files",
+            )
+
+            # If chunk_start is set we don't want to increment the chunk_count
+            # Since it should only increment the chunk_part in this case
+            if self.chunk_start is None:
+                self.chunk_count += 1
+            self.partitions.append(self.chunk_part)
+        except Exception as e:
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="write_errors",
+                value=1,
+                metric_type=MetricType.COUNTER,
+                labels={
+                    "type": "pandas",
+                    "mode": WriteMode.APPEND.value,
+                    "error": str(e),
+                },
+                description="Number of errors while writing to files",
+            )
+            logger.error(f"Error writing pandas dataframe to files: {str(e)}")
+            raise
 
     async def write_batched_daft_dataframe(
         self,
@@ -241,6 +356,55 @@ class Output(ABC):
             logger.error(f"Error getting statistics: {str(e)}")
             raise
 
+    async def _upload_file(self, file_name: str):
+        """Upload a file to the object store."""
+        await ObjectStore.upload_file(
+            source=file_name,
+            destination=get_object_store_prefix(file_name),
+        )
+
+        self.current_buffer_size_bytes = 0
+
+    async def _flush_buffer(self, chunk: "pd.DataFrame", chunk_part: int):
+        """Flush the current buffer to a JSON file.
+
+        This method combines all DataFrames in the buffer, writes them to a JSON file,
+        and uploads the file to the object store.
+
+        Note:
+            If the buffer is empty or has no records, the method returns without writing.
+        """
+        try:
+            if not is_empty_dataframe(chunk):
+                self.total_record_count += len(chunk)
+                output_file_name = (
+                    f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
+                )
+                await self.write_chunk(chunk, output_file_name)
+
+                self.current_buffer_size = 0
+
+                # Record chunk metrics
+                self.metrics.record_metric(
+                    name="chunks_written",
+                    value=1,
+                    metric_type=MetricType.COUNTER,
+                    labels={"type": "output"},
+                    description="Number of chunks written to files",
+                )
+
+        except Exception as e:
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="write_errors",
+                value=1,
+                metric_type=MetricType.COUNTER,
+                labels={"type": "output", "error": str(e)},
+                description="Number of errors while writing to files",
+            )
+            logger.error(f"Error flushing buffer to files: {str(e)}")
+            raise e
+
     async def write_statistics(self, typename: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Write statistics about the output to a JSON file.
 
@@ -254,8 +418,8 @@ class Output(ABC):
             # prepare the statistics
             statistics = {
                 "total_record_count": self.total_record_count,
-                "chunk_count": self.chunk_count,
-                "partitions": self.statistics,
+                "chunk_count": len(self.partitions),
+                "partitions": self.partitions,
             }
 
             # Write the statistics to a json file

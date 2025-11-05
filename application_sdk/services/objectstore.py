@@ -26,6 +26,31 @@ class ObjectStore:
     OBJECT_CREATE_OPERATION = "create"
     OBJECT_GET_OPERATION = "get"
     OBJECT_LIST_OPERATION = "list"
+    OBJECT_DELETE_OPERATION = "delete"
+
+    @classmethod
+    def _create_file_metadata(cls, key: str) -> dict[str, str]:
+        """Create metadata for file operations (get, delete, create).
+
+        Args:
+            key: The file key/path.
+
+        Returns:
+            Metadata dictionary with key, fileName, and blobName fields.
+        """
+        return {"key": key, "fileName": key, "blobName": key}
+
+    @classmethod
+    def _create_list_metadata(cls, prefix: str) -> dict[str, str]:
+        """Create metadata for list operations.
+
+        Args:
+            prefix: The prefix to list files under.
+
+        Returns:
+            Metadata dictionary with prefix and fileName fields, or empty dict if no prefix.
+        """
+        return {"prefix": prefix, "fileName": prefix} if prefix else {}
 
     @classmethod
     async def list_files(
@@ -44,12 +69,11 @@ class ObjectStore:
             Exception: If there's an error listing files from the object store.
         """
         try:
-            metadata = {"prefix": prefix, "fileName": prefix} if prefix else {}
             data = json.dumps({"prefix": prefix}).encode("utf-8") if prefix else ""
 
             response_data = await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_LIST_OPERATION,
-                metadata=metadata,
+                metadata=cls._create_list_metadata(prefix),
                 data=data,
                 store_name=store_name,
             )
@@ -90,14 +114,17 @@ class ObjectStore:
 
     @classmethod
     async def get_content(
-        cls, key: str, store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
-    ) -> bytes:
+        cls,
+        key: str,
+        store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
+        suppress_error: bool = False,
+    ) -> bytes | None:
         """Get raw file content from the object store.
 
         Args:
             key: The path of the file in the object store.
             store_name: Name of the Dapr object store binding to use.
-
+            suppress_error: Whether to suppress the error and return None if the file does not exist.
         Returns:
             The raw file content as bytes.
 
@@ -105,24 +132,27 @@ class ObjectStore:
             Exception: If there's an error getting the file from the object store.
         """
         try:
-            metadata = {"key": key, "fileName": key, "blobName": key}
             data = json.dumps({"key": key}).encode("utf-8") if key else ""
 
             response_data = await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_GET_OPERATION,
-                metadata=metadata,
+                metadata=cls._create_file_metadata(key),
                 data=data,
                 store_name=store_name,
             )
             if not response_data:
+                if suppress_error:
+                    return None
                 raise Exception(f"No data received for file: {key}")
 
             logger.debug(f"Successfully retrieved file content: {key}")
             return response_data
 
         except Exception as e:
+            if suppress_error:
+                return None
             logger.error(f"Error getting file content for {key}: {str(e)}")
-            raise e
+            raise
 
     @classmethod
     async def exists(
@@ -144,20 +174,76 @@ class ObjectStore:
             return False
 
     @classmethod
-    async def delete(
+    async def delete_file(
         cls, key: str, store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
     ) -> None:
-        """Delete a file or all files under a prefix from the object store.
+        """Delete a single file from the object store.
 
         Args:
-            key: The file path or prefix to delete.
+            key: The file path to delete.
             store_name: Name of the Dapr object store binding to use.
 
-        Note:
-            This method is not implemented as it's not commonly used in the current codebase.
-            Can be implemented when needed based on the underlying object store capabilities.
+        Raises:
+            Exception: If there's an error deleting the file from the object store.
         """
-        raise NotImplementedError("Delete operation not yet implemented")
+        try:
+            data = json.dumps({"key": key}).encode("utf-8")
+
+            await cls._invoke_dapr_binding(
+                operation=cls.OBJECT_DELETE_OPERATION,
+                metadata=cls._create_file_metadata(key),
+                data=data,
+                store_name=store_name,
+            )
+            logger.debug(f"Successfully deleted file: {key}")
+        except Exception as e:
+            logger.error(f"Error deleting file {key}: {str(e)}")
+            raise
+
+    @classmethod
+    async def delete_prefix(
+        cls, prefix: str, store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
+    ) -> None:
+        """Delete all files under a prefix from the object store.
+
+        Args:
+            prefix: The prefix path to delete all files under.
+            store_name: Name of the Dapr object store binding to use.
+
+        Raises:
+            Exception: If there's an error deleting files from the object store.
+        """
+        try:
+            # First, list all files under the prefix
+            try:
+                files_to_delete = await cls.list_files(
+                    prefix=prefix, store_name=store_name
+                )
+            except Exception as e:
+                # If we can't list files for any reason, we can't delete them either
+                # Raise FileNotFoundError to give developers clear feedback
+                logger.info(f"Cannot list files under prefix {prefix}: {str(e)}")
+                raise FileNotFoundError(f"No files found under prefix: {prefix}")
+
+            if not files_to_delete:
+                logger.info(f"No files found under prefix: {prefix}")
+                return
+
+            logger.info(f"Deleting {len(files_to_delete)} files under prefix: {prefix}")
+
+            # Delete each file individually
+            for file_path in files_to_delete:
+                try:
+                    await cls.delete_file(key=file_path, store_name=store_name)
+                except Exception as e:
+                    logger.warning(f"Failed to delete file {file_path}: {str(e)}")
+                    # Continue with other files even if one fails
+
+            logger.info(f"Successfully deleted all files under prefix: {prefix}")
+
+        except Exception as e:
+            logger.error(f"Error deleting files under prefix {prefix}: {str(e)}")
+            raise
 
     @classmethod
     async def upload_file(
@@ -165,6 +251,7 @@ class ObjectStore:
         source: str,
         destination: str,
         store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
+        retain_local_copy: bool = False,
     ) -> None:
         """Upload a single file to the object store.
 
@@ -191,17 +278,11 @@ class ObjectStore:
             logger.error(f"Error reading file {source}: {str(e)}")
             raise e
 
-        metadata = {
-            "key": destination,
-            "blobName": destination,
-            "fileName": destination,
-        }
-
         try:
             await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_CREATE_OPERATION,
                 data=file_content,
-                metadata=metadata,
+                metadata=cls._create_file_metadata(destination),
                 store_name=store_name,
             )
             logger.debug(f"Successfully uploaded file: {destination}")
@@ -212,7 +293,8 @@ class ObjectStore:
             raise e
 
         # Clean up local file after successful upload
-        cls._cleanup_local_path(source)
+        if not retain_local_copy:
+            cls._cleanup_local_path(source)
 
     @classmethod
     async def upload_prefix(
@@ -221,6 +303,7 @@ class ObjectStore:
         destination: str,
         store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
         recursive: bool = True,
+        retain_local_copy: bool = False,
     ) -> None:
         """Upload all files from a directory to the object store.
 
@@ -268,7 +351,9 @@ class ObjectStore:
                     store_key = os.path.join(destination, relative_path).replace(
                         os.sep, "/"
                     )
-                    await cls.upload_file(file_path, store_key, store_name)
+                    await cls.upload_file(
+                        file_path, store_key, store_name, retain_local_copy
+                    )
 
             logger.info(f"Completed uploading directory {source} to object store")
         except Exception as e:
@@ -385,8 +470,7 @@ class ObjectStore:
                     binding_metadata=metadata,
                 )
                 return response.data
-        except Exception as e:
-            logger.error(f"Error in Dapr binding operation '{operation}': {str(e)}")
+        except Exception:
             raise
 
     @classmethod

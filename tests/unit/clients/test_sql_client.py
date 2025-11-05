@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from hypothesis import HealthCheck, given, settings
 
+from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.error_codes import CommonError
 from application_sdk.handlers.sql import BaseSQLHandler
@@ -24,6 +25,11 @@ from application_sdk.test_utils.hypothesis.strategies.sql_client import (
 @pytest.fixture
 def sql_client():
     client = BaseSQLClient()
+    client.DB_CONFIG = DatabaseConfig(
+        template="test://{username}:{password}@{host}:{port}/{database}",
+        required=["username", "password", "host", "port", "database"],
+        connect_args={},
+    )
     client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return client
 
@@ -50,13 +56,15 @@ def test_load(mock_create_engine: Any, sql_client: BaseSQLClient):
     asyncio.run(sql_client.load(credentials))
 
     # Assertions to verify behavior
+    assert sql_client.DB_CONFIG is not None
     mock_create_engine.assert_called_once_with(
         sql_client.get_sqlalchemy_connection_string(),
-        connect_args=sql_client.sql_alchemy_connect_args,
+        connect_args=sql_client.DB_CONFIG.connect_args,
         pool_pre_ping=True,
     )
     assert sql_client.engine == mock_engine
-    assert sql_client.connection == mock_connection
+    # BaseSQLClient doesn't store persistent connection
+    assert sql_client.connection is None
 
 
 @given(
@@ -76,8 +84,9 @@ def test_load_property_based(
         mock_create_engine.return_value = mock_engine
         mock_engine.connect.return_value = mock_connection
 
-        # Set the connection arguments
-        sql_client.sql_alchemy_connect_args = connect_args
+        # Set the connection arguments in DB_CONFIG
+        assert sql_client.DB_CONFIG is not None
+        sql_client.DB_CONFIG.connect_args = connect_args
 
         # Run the load function
         asyncio.run(sql_client.load(credentials))
@@ -89,7 +98,8 @@ def test_load_property_based(
             pool_pre_ping=True,
         )
         assert sql_client.engine == mock_engine
-        assert sql_client.connection == mock_connection
+        # BaseSQLClient doesn't store persistent connection
+        assert sql_client.connection is None
 
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
@@ -238,6 +248,11 @@ async def test_run_query(
     mock_get_running_loop: MagicMock, mock_text: Any, sql_client: BaseSQLClient
 ):
     """Test basic query execution with fixed data"""
+    # Mock the engine to avoid "Engine is not initialized" error
+    mock_engine = MagicMock()
+    mock_connection = MagicMock()
+    sql_client.engine = mock_engine
+
     # Mock the query text
     query = "SELECT * FROM test_table"
     mock_text.return_value = query
@@ -278,8 +293,9 @@ async def test_run_query(
         ]
     )
 
-    sql_client.connection = MagicMock()
-    sql_client.connection.execute.return_value = mock_cursor
+    # Mock engine.connect() to return the connection
+    mock_engine.connect.return_value = mock_connection
+    mock_connection.execute.return_value = mock_cursor
 
     # Mock run_in_executor to return cursor and then batches
     mock_get_running_loop.return_value.run_in_executor = AsyncMock(
@@ -315,6 +331,11 @@ async def test_run_query_with_error(
     mock_get_running_loop: MagicMock, mock_text: Any, sql_client: BaseSQLClient
 ):
     """Test error handling in query execution"""
+    # Mock the engine to avoid "Engine is not initialized" error
+    mock_engine = MagicMock()
+    mock_connection = MagicMock()
+    sql_client.engine = mock_engine
+
     # Mock the query text
     query = "SELECT * FROM test_table"
     mock_text.return_value = query
@@ -330,8 +351,9 @@ async def test_run_query_with_error(
 
     mock_cursor.cursor.description = [col1, col2]
 
-    sql_client.connection = MagicMock()
-    sql_client.connection.execute.return_value = mock_cursor
+    # Mock engine.connect() to return the connection
+    mock_engine.connect.return_value = mock_connection
+    mock_connection.execute.return_value = mock_cursor
 
     # Mock run_in_executor to return cursor and then batches
     mock_get_running_loop.return_value.run_in_executor = AsyncMock(
@@ -371,13 +393,15 @@ def test_connection_string_property_based(
         asyncio.run(sql_client.load(credentials))
 
         # Assertions to verify behavior
+        assert sql_client.DB_CONFIG is not None
         mock_create_engine.assert_called_once_with(
             connection_string,
-            connect_args=sql_client.sql_alchemy_connect_args,
+            connect_args=sql_client.DB_CONFIG.connect_args,
             pool_pre_ping=True,
         )
         assert sql_client.engine == mock_engine
-        assert sql_client.connection == mock_connection
+        # BaseSQLClient doesn't store persistent connection
+        assert sql_client.connection is None
 
 
 @given(query_result=mock_sql_query_result_strategy)
@@ -439,6 +463,11 @@ async def test_run_query_error_property_based(
         "application_sdk.clients.sql.asyncio.get_running_loop",
         new_callable=MagicMock,
     ) as mock_get_running_loop:
+        # Mock the engine to avoid "Engine is not initialized" error
+        mock_engine = MagicMock()
+        mock_connection = MagicMock()
+        sql_client.engine = mock_engine
+
         # Mock the query text
         query = "SELECT * FROM test_table"
         mock_text.return_value = query
@@ -447,9 +476,9 @@ async def test_run_query_error_property_based(
         mock_cursor = MagicMock()
         mock_cursor.cursor.description = [MagicMock(name="col1")]
 
-        # Set up the connection
-        sql_client.connection = MagicMock()
-        sql_client.connection.execute.return_value = mock_cursor
+        # Mock engine.connect() to return the connection
+        mock_engine.connect.return_value = mock_connection
+        mock_connection.execute.return_value = mock_cursor
 
         # Mock run_in_executor to return cursor and then raise an error
         mock_get_running_loop.return_value.run_in_executor = AsyncMock(
@@ -465,12 +494,12 @@ async def test_run_query_error_property_based(
 @pytest.fixture
 def sql_client_with_db_config():
     client = BaseSQLClient()
-    client.DB_CONFIG = {
-        "template": "postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
-        "required": ["username", "password", "host", "port", "database"],
-        "defaults": {"connect_timeout": 5},
-        "parameters": ["ssl_mode"],
-    }
+    client.DB_CONFIG = DatabaseConfig(
+        template="postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
+        required=["username", "password", "host", "port", "database"],
+        defaults={"connect_timeout": 5},
+        parameters=["ssl_mode"],
+    )
     return client
 
 

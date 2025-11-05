@@ -1,0 +1,12 @@
+# This configuration is used to enable hot reload for the application
+# Note:
+# - components have ignoreErrors: true, in case of any errors, the application will continue to run with
+#   a warning and the component will be ignored.
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: configuration
+spec:
+  features:
+    - name: HotReload
+      enabled: true

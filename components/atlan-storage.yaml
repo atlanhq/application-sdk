@@ -3,8 +3,9 @@ kind: Component
 metadata:
   name: atlan-storage
 spec:
-  type: bindings.aws.s3
   version: v1
+  type: bindings.aws.s3
+  ignoreErrors: true
   metadata:
     - name: accessKey
       value: "{{clientId}}"

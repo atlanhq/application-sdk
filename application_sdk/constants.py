@@ -51,7 +51,9 @@ SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
 
 # Output Path Constants
-#: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
+#: Output path format for workflows.
+#:
+#: Example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id}
 WORKFLOW_OUTPUT_PATH_TEMPLATE = (
     "artifacts/apps/{application_name}/workflows/{workflow_id}/{run_id}"
 )
@@ -59,15 +61,25 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
+# Cleanup Paths (custom paths for cleanup operations, supports multiple paths separated by comma)
+# If empty, cleanup activities will default to workflow-specific paths at runtime
+CLEANUP_BASE_PATHS = [
+    path.strip()
+    for path in os.getenv("ATLAN_CLEANUP_BASE_PATHS", "").split(",")
+    if path.strip()
+]
+
 # State Store Constants
-#: Path template for state store files (example: objectstore://bucket/persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json)
+#: Path template for state store files.
+#:
+#: Example: objectstore://bucket/persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json
 STATE_STORE_PATH_TEMPLATE = (
     "persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json"
 )
 
 # Observability Constants
 #: Directory for storing observability data
-OBSERVABILITY_DIR = "artifacts/apps/{application_name}/observability"
+OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observability"
 
 # Workflow Client Constants
 #: Host address for the Temporal server
@@ -80,6 +92,7 @@ WORKFLOW_NAMESPACE = os.getenv("ATLAN_WORKFLOW_NAMESPACE", "default")
 WORKFLOW_UI_HOST = os.getenv("ATLAN_WORKFLOW_UI_HOST", "localhost")
 #: Port number for the Temporal UI
 WORKFLOW_UI_PORT = os.getenv("ATLAN_WORKFLOW_UI_PORT", "8233")
+
 #: Maximum timeout duration for workflows
 WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
     hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1"))
@@ -106,11 +119,13 @@ DEPLOYMENT_NAME_KEY = "deployment_name"
 # Workflow Constants
 #: Timeout duration for activity heartbeats
 HEARTBEAT_TIMEOUT = timedelta(
-    seconds=int(os.getenv("ATLAN_HEARTBEAT_TIMEOUT", 300))  # 5 minutes
+    seconds=int(os.getenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 300))  # 5 minutes
 )
 #: Maximum duration an activity can run before timing out
 START_TO_CLOSE_TIMEOUT = timedelta(
-    seconds=int(os.getenv("ATLAN_START_TO_CLOSE_TIMEOUT", 2 * 60 * 60))  # 2 hours
+    seconds=int(
+        os.getenv("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 2 * 60 * 60)
+    )  # 2 hours
 )
 
 # SQL Client Constants
@@ -136,7 +151,9 @@ WORKER_START_EVENT_VERSION = "v1"
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 # Dapr Client Configuration
-#: Maximum gRPC message length in bytes for Dapr client (default: 100MB)
+#: Maximum gRPC message length in bytes for Dapr client.
+#:
+#: Default: 100MB
 DAPR_MAX_GRPC_MESSAGE_LENGTH = int(
     os.getenv("DAPR_MAX_GRPC_MESSAGE_LENGTH", "104857600")
 )
@@ -239,11 +256,17 @@ REDIS_HOST = os.getenv("REDIS_HOST", "")
 REDIS_PORT = os.getenv("REDIS_PORT", "")
 #: Redis password (required for authenticated Redis instances)
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-#: Redis Sentinel service name (default: mymaster)
+#: Redis Sentinel service name. Default: mymaster
 REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
-#: Redis Sentinel hosts (comma-separated host:port pairs)
+#: Redis Sentinel hosts as comma-separated host:port pairs
 REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
 #: Whether to enable strict locking
 IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"
 #: Retry interval for lock acquisition
-LOCK_RETRY_INTERVAL = int(os.getenv("LOCK_RETRY_INTERVAL", "5"))
+LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60"))
+
+# MCP Configuration
+#: Flag to indicate if MCP should be enabled or not. Turning this to true will setup an MCP server along
+#: with the application.
+ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
+MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
