@@ -131,25 +131,6 @@ This replaces the previous explicit `WorkflowPhase` parameter. Aggregation accum
 }
 ```
 
-#### Code Example
-```python
-# Extract phase output - auto-categorized and accumulated
-parquet_output = ParquetOutput(
-    output_path="/tmp/artifacts",
-    output_suffix="raw/table"
-)  # Stats accumulated under Extract.table.record_count
-
-# Transform phase output - auto-categorized and accumulated
-json_output = JsonOutput(
-    output_suffix="transformed",
-    output_path="/tmp/artifacts"
-)  # Stats accumulated under Transform.database.record_count
-```
-
-### Removed Features
-- `WorkflowPhase` enum and `phase` constructor parameter have been removed
-- No explicit phase passing required; inference is automatic and safe
-
 ## Summary
 
 The `outputs` module complements the `inputs` module by providing classes to write data processed within activities. `JsonOutput` and `ParquetOutput` are commonly used for saving intermediate DataFrames to local files (and then uploading them to object storage), making the data available for subsequent activities like transformations.
