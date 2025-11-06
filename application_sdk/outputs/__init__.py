@@ -445,6 +445,7 @@ class Output(ABC):
         except Exception as e:
             logger.error(f"Error writing statistics: {str(e)}")
 
+    #TODO Do we need locking here ?
     async def _update_run_aggregate(
         self, per_path_destination: str, statistics: Dict[str, Any]
     ) -> None:
@@ -461,13 +462,9 @@ class Output(ABC):
             return
 
         logger.info(f"Starting _update_run_aggregate for phase: {inferred_phase}")
-        # Build the workflow run root path directly using utility functions (no path manipulation!)
-        # build_output_path() returns: "artifacts/apps/{app}/workflows/{workflow_id}/{run_id}"
-        # We need the local path: "./local/tmp/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}"
         workflow_run_root_relative = build_output_path()
         output_file_name = f"{TEMPORARY_PATH}{workflow_run_root_relative}/statistics.json.ignore"
         destination_file_path = get_object_store_prefix(output_file_name)
-
 
         # Load existing aggregate from object store if present
         # Structure: {"Extract": {"typename": {"record_count": N}}, "Transform": {...}, "Publish": {...}}
