@@ -1,14 +1,14 @@
 """Unified secret store service for the application.
 
 Logic summary:
-1. Fetch credential config from state store.
-2. Determine mode:
-     - Multi-key if (credentialSource == 'direct' OR secret-path is defined)
-     - Single-key otherwise.
-3. Fetch secrets accordingly:
-     - Multi-key: use secret_path or credential_guid
-     - Single-key: fetch each field individually
-4. Merge & resolve secrets.
+
+    1. Fetch credential config from state store.
+
+    2. Determine mode: Multi-key if (credentialSource == 'direct' OR secret-path is defined), Single-key otherwise.
+
+    3. Fetch secrets accordingly: Multi-key uses secret_path if credentialSource == "agent" else credential_guid, Single-key fetches each field individually.
+
+    4. Merge & resolve secrets.
 """
 
 import collections.abc
@@ -41,10 +41,9 @@ class SecretStore:
     async def get_credentials(cls, credential_guid: str) -> Dict[str, Any]:
         """Resolve credentials from state store and secret store.
 
-        Supports:
-        - Multi-key mode (direct / has secret-path)
-        - Single-key mode (no secret-path, non-direct)
+        Supports Multi-key mode (direct / has secret-path) and Single-key mode (no secret-path, non-direct).
         """
+
         async def _get_credentials_async(credential_guid: str) -> Dict[str, Any]:
             credential_config = await StateStore.get_state(
                 credential_guid, StateType.CREDENTIALS
@@ -67,19 +66,27 @@ class SecretStore:
             # 1️⃣ Multi-key secret fetch (direct or has secret-path)
             # ---------------------------------------------------------------------
             if mode == "multi-key":
-                key_to_fetch = secret_path or credential_guid
+                key_to_fetch = (
+                    secret_path if credential_source == "agent" else credential_guid
+                )
                 try:
-                    logger.debug(f"[SecretStore] Fetching multi-key secret from '{key_to_fetch}'")
+                    logger.debug(
+                        f"[SecretStore] Fetching multi-key secret from '{key_to_fetch}'"
+                    )
                     secret_data = cls.get_secret(secret_key=key_to_fetch)
                 except Exception as e:
-                    logger.warning(f"Failed to fetch secret bundle '{key_to_fetch}': {e}")
+                    logger.warning(
+                        f"Failed to fetch secret bundle '{key_to_fetch}': {e}"
+                    )
                     secret_data = {}
 
             # ---------------------------------------------------------------------
             # 2️⃣ Single-key mode → per-field secret lookup
             # ---------------------------------------------------------------------
             else:
-                logger.debug(f"[SecretStore] Single-key mode for credential {credential_guid}")
+                logger.debug(
+                    f"[SecretStore] Single-key mode for credential {credential_guid}"
+                )
                 collected = {}
                 for field, value in credential_config.items():
                     if not isinstance(value, str):
@@ -88,6 +95,8 @@ class SecretStore:
                         single_secret = cls.get_secret(value)
                         if single_secret:
                             for k, v in single_secret.items():
+                                if v is None or v == "":
+                                    continue
                                 collected[k] = v
                     except Exception as e:
                         logger.debug(f"Skipping '{field}' → '{value}' ({e})")
