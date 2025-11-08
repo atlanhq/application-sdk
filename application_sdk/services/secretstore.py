@@ -62,10 +62,10 @@ class SecretStore:
         Supports Multi-key mode (direct / has secret-path) and Single-key mode (no secret-path, non-direct).
 
         Args:
-            credential_guid: The unique GUID of the credential configuration to resolve.
+            credential_guid (str): The unique GUID of the credential configuration to resolve.
 
         Returns:
-            Complete credential data with secrets resolved.
+            Dict[str, Any]: Complete credential data with secrets resolved.
 
         Raises:
             CommonError: If credential resolution fails due to missing configuration,
@@ -84,6 +84,7 @@ class SecretStore:
         """
 
         async def _get_credentials_async(credential_guid: str) -> Dict[str, Any]:
+            """Async helper function to perform async I/O operations."""
             credential_config = await StateStore.get_state(
                 credential_guid, StateType.CREDENTIALS
             )
@@ -179,11 +180,11 @@ class SecretStore:
         values with corresponding secrets from the secret data.
 
         Args:
-            credential_config: Base credential configuration with potential references.
-            secret_data: Secret data containing actual secret values.
+            credential_config (Dict[str, Any]): Base credential configuration with potential references.
+            secret_data (Dict[str, Any]): Secret data containing actual secret values.
 
         Returns:
-            Credential configuration with all secret references resolved.
+            Dict[str, Any]: Credential configuration with all secret references resolved.
 
         Examples:
             >>> # Basic secret resolution
@@ -228,7 +229,7 @@ class SecretStore:
         is commonly used to retrieve environment-specific configuration.
 
         Returns:
-            Deployment configuration data, or empty dict if
+            Dict[str, Any]: Deployment configuration data, or empty dict if
             component is unavailable or fetch fails.
 
         Examples:
@@ -246,7 +247,7 @@ class SecretStore:
         """
         if not is_component_registered(DEPLOYMENT_SECRET_STORE_NAME):
             logger.warning(
-                f"Deployment secret store '{DEPLOYMENT_SECRET_STORE_NAME}' not registered."
+                f"Deployment secret store component '{DEPLOYMENT_SECRET_STORE_NAME}' not registered."
             )
             return {}
 
@@ -266,12 +267,12 @@ class SecretStore:
         it into a standardized dictionary format.
 
         Args:
-            secret_key: Key of the secret to fetch from the secret store.
-            component_name: Name of the Dapr component to fetch from.
+            secret_key (str): Key of the secret to fetch from the secret store.
+            component_name (str): Name of the Dapr component to fetch from.
                 Defaults to SECRET_STORE_NAME.
 
         Returns:
-            Processed secret data as a dictionary.
+            Dict[str, Any]: Processed secret data as a dictionary.
 
         Raises:
             Exception: If the secret cannot be retrieved from the component.
@@ -313,7 +314,7 @@ class SecretStore:
             secret_data: Raw secret data from various sources.
 
         Returns:
-            Processed secret data as a dictionary.
+            Dict[str, Any]: Processed secret data as a dictionary.
         """
         # Convert ScalarMapContainer to dict if needed
         if isinstance(secret_data, collections.abc.Mapping):
@@ -360,11 +361,11 @@ class SecretStore:
         nested structures and preserves the original data structure.
 
         Args:
-            source_data: Original data with potential references to secrets.
-            secret_data: Secret data containing actual secret values.
+            source_data (Dict[str, Any]): Original data with potential references to secrets.
+            secret_data (Dict[str, Any]): Secret data containing actual secret values.
 
         Returns:
-            Deep copy of source data with secret references resolved.
+            Dict[str, Any]: Deep copy of source data with secret references resolved.
 
         Examples:
             >>> # Simple secret substitution
@@ -387,10 +388,12 @@ class SecretStore:
         """
         result_data = copy.deepcopy(source_data)
 
+        # Replace values with secret values
         for key, value in list(result_data.items()):
             if isinstance(value, str) and value in secret_data:
                 result_data[key] = secret_data[value]
 
+        # Apply the same substitution to the 'extra' dictionary if it exists
         if "extra" in result_data and isinstance(result_data["extra"], dict):
             for key, value in list(result_data["extra"].items()):
                 if isinstance(value, str) and value in secret_data:
@@ -407,10 +410,10 @@ class SecretStore:
         secret management systems.
 
         Args:
-            config: The credential configuration to store.
+            config (Dict[str, Any]): The credential configuration to store.
 
         Returns:
-            The generated credential GUID that can be used to retrieve the credentials.
+            str: The generated credential GUID that can be used to retrieve the credentials.
 
         Raises:
             ValueError: If called in production environment (non-local deployment).
