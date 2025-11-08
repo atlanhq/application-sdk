@@ -276,6 +276,27 @@ class TestCredentialUtils:
         assert "null" not in result
 
     @patch("application_sdk.services.secretstore.SecretStore.get_secret")
+    def test_fetch_single_key_secrets_preserves_falsy_values(self, mock_get_secret):
+        """Test that valid falsy values (False, 0) are preserved and not filtered out."""
+        credential_config = {
+            "enabled": "enabled_secret_key",
+            "port": "port_secret_key",
+            "count": "count_secret_key",
+        }
+
+        mock_get_secret.side_effect = [
+            {"enabled_secret_key": False},  # Boolean False should be preserved
+            {"port_secret_key": 0},  # Integer 0 should be preserved
+            {"count_secret_key": 0.0},  # Float 0.0 should be preserved
+        ]
+
+        result = SecretStore._fetch_single_key_secrets(credential_config)
+
+        assert result["enabled_secret_key"] is False
+        assert result["port_secret_key"] == 0
+        assert result["count_secret_key"] == 0.0
+
+    @patch("application_sdk.services.secretstore.SecretStore.get_secret")
     def test_fetch_single_key_secrets_with_exceptions(self, mock_get_secret):
         """Test fetching secrets in single-key mode when some lookups fail."""
         credential_config = {

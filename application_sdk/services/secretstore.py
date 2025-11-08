@@ -163,7 +163,10 @@ class SecretStore:
                 single_secret = cls.get_secret(value)
                 if single_secret:
                     for k, v in single_secret.items():
-                        if not v:
+                        # Only filter out None and empty strings, not all falsy values.
+                        # This preserves valid secret values like False, 0, 0.0 which are
+                        # legitimate secret values that should not be excluded.
+                        if v is None or v == "":
                             continue
                         collected[k] = v
             except Exception as e:
