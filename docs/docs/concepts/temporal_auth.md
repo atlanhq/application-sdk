@@ -58,8 +58,8 @@ The authentication system uses a Dapr secret store component that can be configu
 **Environment Variables:**
 ```bash
 # Authentication settings
-ATLAN_WORKFLOW_AUTH_ENABLED=true
-ATLAN_WORKFLOW_AUTH_URL=https://your-oauth-provider.com/oauth/token
+ATLAN_AUTH_ENABLED=true
+ATLAN_AUTH_URL=https://your-oauth-provider.com/oauth/token
 
 # Secret store component configuration
 ATLAN_DEPLOYMENT_SECRET_COMPONENT=deployment-secret-store
@@ -507,7 +507,7 @@ spec:
 **Environment Variables:**
 ```bash
 # Authentication settings
-ATLAN_WORKFLOW_AUTH_ENABLED=true
+ATLAN_AUTH_ENABLED=true
 ATLAN_WORKFLOW_AUTH_URL=https://your-oauth-server.com/oauth/token
 
 # Secret store configuration

@@ -1,17 +1,17 @@
 """OAuth2 token manager with automatic secret store discovery."""
 
 import time
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 import aiohttp
 
 from application_sdk.common.error_codes import ClientError
 from application_sdk.constants import (
     APPLICATION_NAME,
+    AUTH_ENABLED,
+    AUTH_URL,
     WORKFLOW_AUTH_CLIENT_ID_KEY,
     WORKFLOW_AUTH_CLIENT_SECRET_KEY,
-    WORKFLOW_AUTH_ENABLED,
-    WORKFLOW_AUTH_URL_KEY,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.secretstore import SecretStore
@@ -39,9 +39,8 @@ class AtlanAuthClient:
         (environment variables, AWS Secrets Manager, Azure Key Vault, etc.)
         """
         self.application_name = APPLICATION_NAME
-        self.auth_config: Dict[str, Any] = SecretStore.get_deployment_secret()
-        self.auth_enabled: bool = WORKFLOW_AUTH_ENABLED
-        self.auth_url: Optional[str] = None
+        self.auth_enabled: bool = AUTH_ENABLED
+        self.auth_url: Optional[str] = AUTH_URL
 
         # Secret store credentials (cached after first fetch)
         self.credentials: Optional[Dict[str, str]] = None
@@ -175,17 +174,16 @@ class AtlanAuthClient:
 
     async def _extract_auth_credentials(self) -> Optional[Dict[str, str]]:
         """Fetch app credentials from secret store - auth-specific logic"""
-        if (
-            WORKFLOW_AUTH_CLIENT_ID_KEY in self.auth_config
-            and WORKFLOW_AUTH_CLIENT_SECRET_KEY in self.auth_config
-        ):
-            credentials = {
-                "client_id": self.auth_config[WORKFLOW_AUTH_CLIENT_ID_KEY],
-                "client_secret": self.auth_config[WORKFLOW_AUTH_CLIENT_SECRET_KEY],
-            }
+        client_id = SecretStore.get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
+        client_secret = SecretStore.get_deployment_secret(
+            WORKFLOW_AUTH_CLIENT_SECRET_KEY
+        )
 
-            if WORKFLOW_AUTH_URL_KEY in self.auth_config:
-                self.auth_url = self.auth_config[WORKFLOW_AUTH_URL_KEY]
+        if client_id and client_secret:
+            credentials = {
+                "client_id": client_id,
+                "client_secret": client_secret,
+            }
 
             return credentials
         return None
@@ -202,7 +200,6 @@ class AtlanAuthClient:
         self.auth_url = None
         self._access_token = None
         self._token_expiry = 0
-        self.auth_config = {}
 
     def calculate_refresh_interval(self) -> int:
         """Calculate the optimal token refresh interval based on token expiry.

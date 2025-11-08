@@ -105,16 +105,21 @@ MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"
 DEPLOYMENT_SECRET_PATH = os.getenv(
     "ATLAN_DEPLOYMENT_SECRET_PATH", "ATLAN_DEPLOYMENT_SECRETS"
 )
-WORKFLOW_AUTH_ENABLED = (
-    os.getenv("ATLAN_WORKFLOW_AUTH_ENABLED", "false").lower() == "true"
+AUTH_ENABLED = os.getenv("ATLAN_AUTH_ENABLED", "false").lower() == "true"
+#: OAuth2 authentication URL for workflow services
+AUTH_URL = os.getenv("ATLAN_AUTH_URL")
+#: Whether to enable TLS for Temporal workflow connections
+WORKFLOW_TLS_ENABLED = (
+    os.getenv("ATLAN_WORKFLOW_TLS_ENABLED", "false").lower() == "true"
 )
 
 # Deployment Secret Store Key Names
-WORKFLOW_AUTH_CLIENT_ID_KEY = f"{APPLICATION_NAME}_app_client_id"
-WORKFLOW_AUTH_CLIENT_SECRET_KEY = f"{APPLICATION_NAME}_app_client_secret"
-WORKFLOW_AUTH_URL_KEY = "atlan_auth_url"
-WORKFLOW_TLS_ENABLED_KEY = "workflow_tls_enabled"
-DEPLOYMENT_NAME_KEY = "deployment_name"
+#: Key name for OAuth2 client ID in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_ID_KEY)
+WORKFLOW_AUTH_CLIENT_ID_KEY = os.getenv("ATLAN_AUTH_CLIENT_ID_KEY", "client_id")
+#: Key name for OAuth2 client secret in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_SECRET_KEY)
+WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
+    "ATLAN_AUTH_CLIENT_SECRET_KEY", "client_secret"
+)
 
 # Workflow Constants
 #: Timeout duration for activity heartbeats
