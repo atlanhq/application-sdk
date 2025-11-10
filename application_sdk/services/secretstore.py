@@ -89,7 +89,9 @@ class SecretStore:
                 credential_guid, StateType.CREDENTIALS
             )
 
-            credential_source_str = credential_config.get("credentialSource", "direct")
+            credential_source_str = credential_config.get(
+                "credentialSource", CredentialSource.DIRECT.value
+            )
             try:
                 credential_source = CredentialSource(credential_source_str)
             except ValueError:
@@ -157,20 +159,34 @@ class SecretStore:
         logger.debug("Single-key mode: fetching secrets per field")
         collected = {}
         for field, value in credential_config.items():
-            if not isinstance(value, str):
-                continue
-            try:
-                single_secret = cls.get_secret(value)
-                if single_secret:
-                    for k, v in single_secret.items():
-                        # Only filter out None and empty strings, not all falsy values.
-                        # This preserves valid secret values like False, 0, 0.0 which are
-                        # legitimate secret values that should not be excluded.
-                        if v is None or v == "":
-                            continue
-                        collected[k] = v
-            except Exception as e:
-                logger.debug(f"Skipping '{field}' → '{value}' ({e})")
+            if isinstance(value, str):
+                try:
+                    single_secret = cls.get_secret(value)
+                    if single_secret:
+                        for k, v in single_secret.items():
+                            # Only filter out None and empty strings, not all falsy values.
+                            # This preserves valid secret values like False, 0, 0.0 which are
+                            # legitimate secret values that should not be excluded.
+                            if v is None or v == "":
+                                continue
+                            collected[k] = v
+                except Exception as e:
+                    logger.debug(f"Skipping '{field}' → '{value}' ({e})")
+            elif field == "extra" and isinstance(value, dict):
+                # Recursively process string values in the extra dictionary
+                for extra_key, extra_value in value.items():
+                    if isinstance(extra_value, str):
+                        try:
+                            single_secret = cls.get_secret(extra_value)
+                            if single_secret:
+                                for k, v in single_secret.items():
+                                    if v is None or v == "":
+                                        continue
+                                    collected[k] = v
+                        except Exception as e:
+                            logger.debug(
+                                f"Skipping 'extra.{extra_key}' → '{extra_value}' ({e})"
+                            )
         return collected
 
     @classmethod
@@ -213,15 +229,10 @@ class SecretStore:
         # Apply the same substitution to the 'extra' dictionary if it exists
         if "extra" in credentials and isinstance(credentials["extra"], dict):
             for key, value in list(credentials["extra"].items()):
-                if isinstance(value, str):
-                    if value in secret_data:
-                        credentials["extra"][key] = secret_data[value]
-                    elif value in secret_data.get("extra", {}):
-                        credentials["extra"][key] = secret_data["extra"][value]
+                if isinstance(value, str) and value in secret_data:
+                    credentials["extra"][key] = secret_data[value]
 
         return credentials
-
-    # Dapr secret interactions
 
     @classmethod
     def get_deployment_secret(cls, key: str) -> Any:
@@ -368,7 +379,6 @@ class SecretStore:
                     return parsed
             except Exception:
                 pass
-            return {key: value}
         return {key: value}
 
     @classmethod
