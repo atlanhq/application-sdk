@@ -89,7 +89,9 @@ class SecretStore:
                 credential_guid, StateType.CREDENTIALS
             )
 
-            credential_source_str = credential_config.get("credentialSource", "direct")
+            credential_source_str = credential_config.get(
+                "credentialSource", CredentialSource.DIRECT.value
+            )
             try:
                 credential_source = CredentialSource(credential_source_str)
             except ValueError:
