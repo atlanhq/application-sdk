@@ -221,8 +221,6 @@ class SecretStore:
 
         return credentials
 
-    # Dapr secret interactions
-
     @classmethod
     def get_deployment_secret(cls) -> Dict[str, Any]:
         """Get deployment configuration from the deployment secret store.
@@ -350,7 +348,6 @@ class SecretStore:
                     return parsed
             except Exception:
                 pass
-            return {key: value}
         return {key: value}
 
     @classmethod
