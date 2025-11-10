@@ -197,7 +197,6 @@ class AtlanAuthClient:
         """
         # we are doing this to force a fetch of the credentials from secret store
         self.credentials = None
-        self.auth_url = None
         self._access_token = None
         self._token_expiry = 0
 

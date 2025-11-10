@@ -252,7 +252,7 @@ class SecretStore:
 
         Examples:
             >>> # Get a specific deployment configuration value
-            >>> auth_url = SecretStore.get_deployment_secret("atlan_auth_url")
+            >>> auth_url = SecretStore.get_deployment_secret("ATLAN_AUTH_CLIENT_ID")
             >>> if auth_url:
             ...     print(f"Auth URL: {auth_url}")
             >>> # Get deployment name

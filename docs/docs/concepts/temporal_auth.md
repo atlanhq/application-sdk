@@ -59,7 +59,7 @@ The authentication system uses a Dapr secret store component that can be configu
 ```bash
 # Authentication settings
 ATLAN_AUTH_ENABLED=true
-ATLAN_AUTH_URL=https://your-oauth-provider.com/oauth/token
+ATLAN_AUTH_URL=https://tenant.atlan.com/auth/realms/default/protocol/openid-connect/token
 
 # Secret store component configuration
 ATLAN_DEPLOYMENT_SECRET_COMPONENT=deployment-secret-store
@@ -329,7 +329,7 @@ dapr invoke --app-id your-app --method get-secret --data '{"key": "atlan-deploym
 **Symptom**: Token refresh failures
 ```bash
 # Verify auth URL accessibility
-curl -X POST $ATLAN_WORKFLOW_AUTH_URL \
+curl -X POST $ATLAN_AUTH_URL \
   -d "grant_type=client_credentials&client_id=...&client_secret=..."
 
 # Check credential validity in secret store
@@ -508,7 +508,7 @@ spec:
 ```bash
 # Authentication settings
 ATLAN_AUTH_ENABLED=true
-ATLAN_WORKFLOW_AUTH_URL=https://your-oauth-server.com/oauth/token
+ATLAN_AUTH_URL=https://tenant.atlan.com/auth/realms/default/protocol/openid-connect/token
 
 # Secret store configuration
 ATLAN_DEPLOYMENT_SECRET_COMPONENT=deployment-secret-store

@@ -115,10 +115,12 @@ WORKFLOW_TLS_ENABLED = (
 
 # Deployment Secret Store Key Names
 #: Key name for OAuth2 client ID in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_ID_KEY)
-WORKFLOW_AUTH_CLIENT_ID_KEY = os.getenv("ATLAN_AUTH_CLIENT_ID_KEY", "client_id")
+WORKFLOW_AUTH_CLIENT_ID_KEY = os.getenv(
+    "ATLAN_AUTH_CLIENT_ID_KEY", "ATLAN_AUTH_CLIENT_ID"
+)
 #: Key name for OAuth2 client secret in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_SECRET_KEY)
 WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
-    "ATLAN_AUTH_CLIENT_SECRET_KEY", "client_secret"
+    "ATLAN_AUTH_CLIENT_SECRET_KEY", "ATLAN_AUTH_CLIENT_SECRET"
 )
 
 # Workflow Constants

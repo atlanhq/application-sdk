@@ -14,12 +14,12 @@ spec:
       value: https://{{tenant}}.atlan.com/api/blobstorage
     - name: accessKey
       secretKeyRef:
-        name: client_id
-        key:  client_id
+        name: ATLAN_AUTH_CLIENT_ID
+        key:  ATLAN_AUTH_CLIENT_ID
     - name: secretKey
       secretKeyRef:
-        name: client_secret
-        key:  client_secret
+        name: ATLAN_AUTH_CLIENT_SECRET
+        key:  ATLAN_AUTH_CLIENT_SECRET
     - name: forcePathStyle
       value: "true"
 auth:
