@@ -288,13 +288,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
         # Update format string to use the bound logger_name
         atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
-        
+
         # Colorize the logs only if the log level is DEBUG
         if LOG_LEVEL == "DEBUG":
             colorize = True
         else:
             colorize = False
-            
+
         self.logger.add(
             sys.stderr,
             format=atlan_format_str,
