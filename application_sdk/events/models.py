@@ -155,6 +155,7 @@ class WorkerStartEventData(BaseModel):
 
     Attributes:
         application_name: Name of the application the worker belongs to.
+        deployment_name: Name of the deployment the worker belongs to.
         task_queue: Task queue name for the worker.
         namespace: Temporal namespace for the worker.
         host: Host address of the Temporal server.
@@ -167,6 +168,7 @@ class WorkerStartEventData(BaseModel):
 
     version: str = WORKER_START_EVENT_VERSION
     application_name: str
+    deployment_name: str
     task_queue: str
     namespace: str
     host: str
