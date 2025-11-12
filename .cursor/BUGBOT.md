@@ -585,6 +585,13 @@ def good_validation(max_value: int) -> int:
 - Transaction boundaries must be explicit
 - Database migrations must be reversible
 
+Infrastructure and Configuration Rules
+
+Dapr components: Allow ignoreErrors in development
+For files matching components/**/*.yaml:
+If a changed file contains the string pattern /ignoreErrors:\s*true/, then:
+- Do not raise any issue. This is an accepted pattern for local development environments to allow the application to start even if some components are not fully configured.
+
 ### Zone 4: Team and Process Specific Rules
 
 **Code review process:**
