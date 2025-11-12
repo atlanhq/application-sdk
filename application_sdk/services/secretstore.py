@@ -235,41 +235,59 @@ class SecretStore:
         return credentials
 
     @classmethod
-    def get_deployment_secret(cls) -> Dict[str, Any]:
-        """Get deployment configuration from the deployment secret store.
+    def get_deployment_secret(cls, key: str) -> Any:
+        """Get a specific key from deployment configuration in the deployment secret store.
 
         Validates that the deployment secret store component is registered
         before attempting to fetch secrets to prevent errors. This method
-        is commonly used to retrieve environment-specific configuration.
+        fetches only the specified key from the deployment secret, rather than
+        the entire secret dictionary.
+
+        Args:
+            key (str): The key to fetch from the deployment secret.
 
         Returns:
-            Dict[str, Any]: Deployment configuration data, or empty dict if
-            component is unavailable or fetch fails.
+            Any: The value for the specified key, or None if the key is not found
+            or the component is unavailable.
 
         Examples:
-            >>> # Get deployment configuration
-            >>> config = SecretStore.get_deployment_secret()
-            >>> if config:
-            ...     print(f"Environment: {config.get('environment')}")
-            ...     print(f"Region: {config.get('region')}")
-            >>> else:
-            ...     print("No deployment configuration available")
-            >>> # Use in application initialization
-            >>> deployment_config = SecretStore.get_deployment_secret()
-            >>> if deployment_config.get('debug_mode'):
-            ...     logging.getLogger().setLevel(logging.DEBUG)
+            >>> # Get a specific deployment configuration value
+            >>> auth_url = SecretStore.get_deployment_secret("ATLAN_AUTH_CLIENT_ID")
+            >>> if auth_url:
+            ...     print(f"Auth URL: {auth_url}")
+            >>> # Get deployment name
+            >>> deployment_name = SecretStore.get_deployment_secret("deployment_name")
+            >>> if deployment_name:
+            ...     print(f"Deployment: {deployment_name}")
         """
         if not is_component_registered(DEPLOYMENT_SECRET_STORE_NAME):
             logger.warning(
                 f"Deployment secret store component '{DEPLOYMENT_SECRET_STORE_NAME}' not registered."
             )
-            return {}
+            return None
 
         try:
-            return cls.get_secret(DEPLOYMENT_SECRET_PATH, DEPLOYMENT_SECRET_STORE_NAME)
+            secret_data = cls.get_secret(
+                DEPLOYMENT_SECRET_PATH, DEPLOYMENT_SECRET_STORE_NAME
+            )
+            if isinstance(secret_data, dict) and key in secret_data:
+                return secret_data[key]
+
+            logger.debug(f"Multi-key not found, checking single-key secret for '{key}'")
+            single_secret_data = cls.get_secret(key, DEPLOYMENT_SECRET_STORE_NAME)
+            if isinstance(single_secret_data, dict):
+                # Handle both {key:value} and {"value": "..."} cases
+                if key in single_secret_data:
+                    return single_secret_data[key]
+                elif len(single_secret_data) == 1:
+                    # extract single value
+                    return list(single_secret_data.values())[0]
+
+            return None
+
         except Exception as e:
-            logger.error(f"Failed to fetch deployment config: {e}")
-            return {}
+            logger.error(f"Failed to fetch deployment config key '{key}': {e}")
+            return None
 
     @classmethod
     def get_secret(
