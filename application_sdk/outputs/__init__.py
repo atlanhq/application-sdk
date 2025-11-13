@@ -31,6 +31,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.services.objectstore import ObjectStore
 from application_sdk.constants import TEMPORARY_PATH
+from application_sdk.decorators.method_lock import lock_per_run
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -446,6 +447,7 @@ class Output(ABC):
             logger.error(f"Error writing statistics: {str(e)}")
 
     #TODO Do we need locking here ?
+    @lock_per_run()
     async def _update_run_aggregate(
         self, per_path_destination: str, statistics: Dict[str, Any]
     ) -> None:
