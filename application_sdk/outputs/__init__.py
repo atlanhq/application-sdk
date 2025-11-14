@@ -438,6 +438,10 @@ class Output(ABC):
                 # If accessing chunk_start fails, fallback to default filename
                 pass
 
+            # Write the statistics dictionary to the JSON file
+            with open(output_file_name, "wb") as f:
+                f.write(orjson.dumps(statistics))
+
             destination_file_path = get_object_store_prefix(output_file_name)
             # Push the file to the object store
             await ObjectStore.upload_file(
@@ -448,4 +452,5 @@ class Output(ABC):
             return statistics
         except Exception as e:
             logger.error(f"Error writing statistics: {str(e)}")
+            raise
 
