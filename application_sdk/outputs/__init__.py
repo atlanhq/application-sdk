@@ -30,8 +30,6 @@ from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.services.objectstore import ObjectStore
-from application_sdk.constants import TEMPORARY_PATH
-from application_sdk.decorators.method_lock import lock_per_run
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -423,10 +421,22 @@ class Output(ABC):
                 "partitions": self.partitions,
             }
 
-            # Write the statistics to a json file
-            output_file_name = f"{self.output_path}/statistics.json.ignore"
-            with open(output_file_name, "w") as f:
-                f.write(orjson.dumps(statistics).decode("utf-8"))
+            # Ensure typename is included in the statistics payload (if provided)
+            if typename:
+                statistics["typename"] = typename
+
+            # Write the statistics to a json file inside a dedicated statistics/ folder
+            statistics_dir = os.path.join(self.output_path, "statistics")
+            os.makedirs(statistics_dir, exist_ok=True)
+            output_file_name = f"{statistics_dir}/statistics.json.ignore"
+            # If chunk_start is provided, include it in the statistics filename
+            try:
+                cs = getattr(self, "chunk_start", None)
+                if cs is not None:
+                    output_file_name = f"{statistics_dir}/statistics-chunk-{cs}.json.ignore"
+            except Exception:
+                # If accessing chunk_start fails, fallback to default filename
+                pass
 
             destination_file_path = get_object_store_prefix(output_file_name)
             # Push the file to the object store
@@ -435,83 +445,7 @@ class Output(ABC):
                 destination=destination_file_path,
             )
 
-            if typename:
-                statistics["typename"] = typename
-            # Update aggregated statistics at run root in object store
-            try:
-                await self._update_run_aggregate(destination_file_path, statistics)
-            except Exception as e:
-                logger.warning(f"Failed to update aggregated statistics: {str(e)}")
             return statistics
         except Exception as e:
             logger.error(f"Error writing statistics: {str(e)}")
 
-    #TODO Do we need locking here ?
-    @lock_per_run()
-    async def _update_run_aggregate(
-        self, per_path_destination: str, statistics: Dict[str, Any]
-    ) -> None:
-        """Aggregate stats into a single file at the workflow run root.
-
-        Args:
-            per_path_destination: Object store destination path for this stats file
-                                 (used as key in the aggregate map)
-            statistics: The statistics dictionary to store
-        """
-        inferred_phase = self._infer_phase_from_path()
-        if inferred_phase is None:
-            logger.info("Phase could not be inferred from path. Skipping aggregation.")
-            return
-
-        logger.info(f"Starting _update_run_aggregate for phase: {inferred_phase}")
-        workflow_run_root_relative = build_output_path()
-        output_file_name = f"{TEMPORARY_PATH}{workflow_run_root_relative}/statistics.json.ignore"
-        destination_file_path = get_object_store_prefix(output_file_name)
-
-        # Load existing aggregate from object store if present
-        # Structure: {"Extract": {"typename": {"record_count": N}}, "Transform": {...}, "Publish": {...}}
-        aggregate_by_phase: Dict[str, Dict[str, Dict[str, Any]]] = {
-            "Extract": {},
-            "Transform": {},
-            "Publish": {}
-        }
-
-        try:
-            # Download existing aggregate file if present
-            await ObjectStore.download_file(
-                source=destination_file_path,
-                destination=output_file_name,
-            )
-            # Load existing JSON structure
-            with open(output_file_name, "r") as f:
-                existing_aggregate = orjson.loads(f.read())
-                # Phase-based structure
-                aggregate_by_phase.update(existing_aggregate)
-                logger.info(f"Successfully loaded existing aggregates")
-        except Exception:
-            logger.info(
-                "No existing aggregate found or failed to read. Initializing a new aggregate structure."
-            )
-
-        # Accumulate statistics by typename within the phase
-        typename = statistics.get("typename", "unknown")
-
-        if typename not in aggregate_by_phase[inferred_phase]:
-            aggregate_by_phase[inferred_phase][typename] = {
-                "record_count": 0
-            }
-
-        logger.info(f"Accumulating statistics for phase '{inferred_phase}', typename '{typename}': +{statistics['total_record_count']} records")
-
-        # Accumulate the record count
-        aggregate_by_phase[inferred_phase][typename]["record_count"] += statistics["total_record_count"]
-        
-        with open(output_file_name, "w") as f:
-            f.write(orjson.dumps(aggregate_by_phase).decode("utf-8"))
-            logger.info(f"Successfully updated aggregate with accumulated stats for phase '{inferred_phase}'")
-        
-        # Upload aggregate to object store
-        await ObjectStore.upload_file(
-            source=output_file_name,
-            destination=destination_file_path,
-        )
