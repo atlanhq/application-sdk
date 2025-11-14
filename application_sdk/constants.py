@@ -270,3 +270,9 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 #: with the application.
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
+
+
+# Disable Analytics Configuration for DAFT
+os.environ["DO_NOT_TRACK"] = "true"
+os.environ["SCARF_NO_ANALYTICS"] = "true"
+os.environ["DAFT_ANALYTICS_ENABLED"] = "0"
