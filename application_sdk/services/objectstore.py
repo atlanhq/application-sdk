@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+from pathlib import Path
 from typing import List, Union
 
 import orjson
@@ -422,6 +423,9 @@ class ObjectStore:
             store_name: Name of the Dapr object store binding to use.
         """
         try:
+            # Convert destination to Path object for cross-platform compatibility
+            dest_path = Path(destination)
+
             # List all files under the prefix
             file_list = await cls.list_files(source, store_name)
 
@@ -429,7 +433,8 @@ class ObjectStore:
 
             # Download each file
             for file_path in file_list:
-                local_file_path = os.path.join(destination, file_path)
+                # Use Path for proper OS-independent path joining
+                local_file_path = str(dest_path / file_path)
                 await cls.download_file(file_path, local_file_path, store_name)
 
             logger.info(f"Successfully downloaded all files from: {source}")
