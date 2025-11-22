@@ -116,11 +116,11 @@ def get_object_store_prefix(path: str) -> str:
             return relative_path.replace(os.path.sep, "/")
         else:
             # Path is already a relative object store path, return as-is
-            return path.strip("/")
+            return path.lstrip("/")
     except ValueError:
         # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
         # In this case, treat as user-provided path, return as-is
-        return path.strip("/")
+        return path.lstrip("/")
 
 
 def auto_heartbeater(fn: F) -> F:
