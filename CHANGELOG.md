@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.0 (November 21, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc63...v1.0.0
+
+### Features
+
+- GA release
+
+
 ## v0.1.1rc64 (November 14, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc63...v0.1.1rc64
