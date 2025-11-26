@@ -25,7 +25,7 @@ import orjson
 from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.activities.common.utils import get_object_store_prefix, build_output_path
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
@@ -391,7 +391,9 @@ class Output(ABC):
             logger.error(f"Error flushing buffer to files: {str(e)}")
             raise e
 
-    async def write_statistics(self, typename: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def write_statistics(
+        self, typename: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """Write statistics about the output to a JSON file.
 
         This method writes statistics including total record count and chunk count

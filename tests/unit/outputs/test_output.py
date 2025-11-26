@@ -141,7 +141,9 @@ class TestOutput:
             }
             expected_stats_dir = os.path.join("/test/path", "statistics")
             mock_makedirs.assert_called_once_with(expected_stats_dir, exist_ok=True)
-            expected_file_path = os.path.join(expected_stats_dir, "statistics.json.ignore")
+            expected_file_path = os.path.join(
+                expected_stats_dir, "statistics.json.ignore"
+            )
             mock_file.assert_called_once_with(expected_file_path, "wb")
             mock_orjson.assert_called_once_with(
                 {
@@ -154,7 +156,9 @@ class TestOutput:
             mock_push.assert_awaited_once()
             upload_kwargs = mock_push.await_args.kwargs  # type: ignore[attr-defined]
             assert upload_kwargs["source"] == expected_file_path
-            assert upload_kwargs["destination"] == "path/statistics/statistics.json.ignore"
+            assert (
+                upload_kwargs["destination"] == "path/statistics/statistics.json.ignore"
+            )
 
     @pytest.mark.asyncio
     async def test_write_statistics_error(self):
