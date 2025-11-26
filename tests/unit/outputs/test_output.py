@@ -1,7 +1,6 @@
 """Unit tests for output interface."""
 
 from typing import Any
-import json
 from unittest.mock import AsyncMock, mock_open, patch
 
 import pandas as pd
@@ -162,4 +161,3 @@ class TestOutput:
                 assert result is None
                 mock_logger.assert_called_once()
                 assert "Error writing statistics" in mock_logger.call_args[0][0]
-
