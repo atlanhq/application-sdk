@@ -72,19 +72,6 @@ class Output(ABC):
     current_buffer_size_bytes: int
     partitions: List[int]
 
-    def _infer_phase_from_path(self) -> Optional[str]:
-        """Infer phase from output path by checking for raw/transformed directories.
-
-        Returns:
-            Optional[str]: "Extract" for raw, "Transform" for transformed, else None.
-        """
-        path_parts = str(self.output_path).split("/")
-        if "raw" in path_parts:
-            return "Extract"
-        if "transformed" in path_parts:
-            return "Transform"
-        return None
-
     def estimate_dataframe_record_size(self, dataframe: "pd.DataFrame") -> int:
         """Estimate File size of a DataFrame by sampling a few records."""
         if len(dataframe) == 0:
@@ -452,5 +439,3 @@ class Output(ABC):
             return statistics
         except Exception as e:
             logger.error(f"Error writing statistics: {str(e)}")
-            raise
-
