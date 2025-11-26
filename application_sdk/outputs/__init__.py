@@ -415,12 +415,14 @@ class Output(ABC):
             # Write the statistics to a json file inside a dedicated statistics/ folder
             statistics_dir = os.path.join(self.output_path, "statistics")
             os.makedirs(statistics_dir, exist_ok=True)
-            output_file_name = f"{statistics_dir}/statistics.json.ignore"
+            output_file_name = os.path.join(statistics_dir, "statistics.json.ignore")
             # If chunk_start is provided, include it in the statistics filename
             try:
                 cs = getattr(self, "chunk_start", None)
                 if cs is not None:
-                    output_file_name = f"{statistics_dir}/statistics-chunk-{cs}.json.ignore"
+                    output_file_name = os.path.join(
+                        statistics_dir, f"statistics-chunk-{cs}.json.ignore"
+                    )
             except Exception:
                 # If accessing chunk_start fails, fallback to default filename
                 pass
