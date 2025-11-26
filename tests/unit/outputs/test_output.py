@@ -1,5 +1,6 @@
 """Unit tests for output interface."""
 
+import os
 from typing import Any
 from unittest.mock import AsyncMock, mock_open, patch
 
@@ -138,8 +139,10 @@ class TestOutput:
                 "chunk_count": 5,  # This is len(self.partitions) which is 5
                 "partitions": [1, 2, 1, 2, 1],
             }
-            mock_makedirs.assert_called_once_with("/test/path/statistics", exist_ok=True)
-            mock_file.assert_called_once_with("/test/path/statistics/statistics.json.ignore", "wb")
+            expected_stats_dir = os.path.join("/test/path", "statistics")
+            mock_makedirs.assert_called_once_with(expected_stats_dir, exist_ok=True)
+            expected_file_path = os.path.join(expected_stats_dir, "statistics.json.ignore")
+            mock_file.assert_called_once_with(expected_file_path, "wb")
             mock_orjson.assert_called_once_with(
                 {
                     "total_record_count": 100,
@@ -150,7 +153,7 @@ class TestOutput:
             # Verify the upload call
             mock_push.assert_awaited_once()
             upload_kwargs = mock_push.await_args.kwargs  # type: ignore[attr-defined]
-            assert upload_kwargs["source"] == "/test/path/statistics/statistics.json.ignore"
+            assert upload_kwargs["source"] == expected_file_path
             assert upload_kwargs["destination"] == "path/statistics/statistics.json.ignore"
 
     @pytest.mark.asyncio
