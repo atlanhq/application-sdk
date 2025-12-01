@@ -163,6 +163,7 @@ class BaseApplication:
             await asyncio.to_thread(
                 flush_activity_registrations,
                 app_name=self.application_name,
+                workflow_task_queue=self.workflow_client.worker_task_queue,
                 activity_specs=ACTIVITY_SPECS,
             )
 

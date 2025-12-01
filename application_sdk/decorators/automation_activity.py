@@ -133,6 +133,7 @@ def automation_activity(
 
 def flush_activity_registrations(
     app_name: str,
+    workflow_task_queue: str,
     activity_specs: List[dict[str, Any]],
 ) -> None:
     """Flush all collected registrations by calling the activities create API via HTTP."""
@@ -181,6 +182,7 @@ def flush_activity_registrations(
     payload = {
         "app_qualified_name": app_qualified_name,
         "app_name": app_name,
+        "task_queue": workflow_task_queue,
         "tools": tools,
     }
 
