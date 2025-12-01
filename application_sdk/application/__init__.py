@@ -1,3 +1,4 @@
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Type
 
@@ -5,6 +6,7 @@ from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.base import BaseClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import ENABLE_MCP
+from application_sdk.decorators.automation_activity import ACTIVITY_SPECS, flush_activity_registrations
 from application_sdk.events.models import EventRegistration
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.observability.logger_adaptor import get_logger
@@ -151,6 +153,20 @@ class BaseApplication:
             await self.mcp_server.register_tools(  # type: ignore
                 workflow_and_activities_classes=workflow_and_activities_classes
             )
+
+        # Register activities via HTTP API for automation engine (non-blocking)
+        # The 5 second delay allows the automation engine's server to come up
+        async def _register_activities_with_delay():
+            """Register activities after a 5 second delay to allow automation
+            engine server to start."""
+            await asyncio.sleep(1)
+            await asyncio.to_thread(
+                flush_activity_registrations,
+                app_name=self.application_name,
+                activity_specs=ACTIVITY_SPECS,
+            )
+
+        asyncio.create_task(_register_activities_with_delay())
 
     async def start_workflow(self, workflow_args, workflow_class) -> Any:
         """

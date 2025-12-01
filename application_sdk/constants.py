@@ -49,6 +49,14 @@ APP_DASHBOARD_PORT = int(os.getenv("ATLAN_APP_DASHBOARD_PORT", "8000"))
 SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
 #: Path to the SQL queries directory
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
+#: Host address for the automation engine API server
+AUTOMATION_ENGINE_API_HOST = os.getenv("AUTOMATION_ENGINE_API_HOST", "localhost")
+#: Port number for the automation engine API server
+AUTOMATION_ENGINE_API_PORT = os.getenv("AUTOMATION_ENGINE_API_PORT", "8080")
+#: Base URL for automation engine API server (constructed from host and port)
+AUTOMATION_ENGINE_API_URL = (
+    f"http://{AUTOMATION_ENGINE_API_HOST}:{AUTOMATION_ENGINE_API_PORT}"
+)
 
 # Output Path Constants
 #: Output path format for workflows.
