@@ -278,6 +278,11 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
+# SSL Configuration
+#: Custom SSL certificate directory path.
+#: When set, httpx and aiohttp clients will use certificates from this directory.
+SSL_CERT_DIR = os.getenv("SSL_CERT_DIR", "")
+
 
 # Disable Analytics Configuration for DAFT
 os.environ["DO_NOT_TRACK"] = "true"
