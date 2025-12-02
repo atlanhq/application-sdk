@@ -333,6 +333,11 @@ MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 #: Windows extended-length path prefix
 WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
 
+# SSL Configuration
+#: Custom SSL certificate directory path.
+#: When set, httpx and aiohttp clients will use certificates from this directory.
+SSL_CERT_DIR = os.getenv("SSL_CERT_DIR", "")
+
 
 class ApplicationMode(str, Enum):
     """Application execution mode.
