@@ -18,7 +18,7 @@ runs:
 
 
     - name: Trivy Vulnerability Scan (SARIF)
-      uses: aquasecurity/trivy-action@0.28.0
+      uses: aquasecurity/trivy-action@0.33.1
       with:
         scan-type: 'fs'
         format: 'sarif'
@@ -31,7 +31,7 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Trivy Vulnerability Scan (JSON)
-      uses: aquasecurity/trivy-action@0.28.0
+      uses: aquasecurity/trivy-action@0.33.1
       with:
         scan-type: 'fs'
         format: 'json'
@@ -44,7 +44,7 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Trivy Secret Scan (SARIF)
-      uses: aquasecurity/trivy-action@0.28.0
+      uses: aquasecurity/trivy-action@0.33.1
       with:
         scan-type: 'fs'
         format: 'sarif'
@@ -57,7 +57,7 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Trivy Secret Scan (JSON)
-      uses: aquasecurity/trivy-action@0.28.0
+      uses: aquasecurity/trivy-action@0.33.1
       with:
         scan-type: 'fs'
         format: 'json'
@@ -121,7 +121,7 @@ runs:
 
     - name: Fail on High/Critical Vulnerabilities
       if: inputs.add-report-comment-to-pr == 'true'
-      uses: aquasecurity/trivy-action@0.28.0
+      uses: aquasecurity/trivy-action@0.33.1
       with:
         scan-type: 'fs'
         format: 'table'
@@ -134,7 +134,7 @@ runs:
 
     - name: Fail on Any Secrets Found
       if: inputs.add-report-comment-to-pr == 'true'
-      uses: aquasecurity/trivy-action@0.28.0
+      uses: aquasecurity/trivy-action@0.33.1
       with:
         scan-type: 'fs'
         format: 'table'
