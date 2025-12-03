@@ -66,7 +66,22 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         Returns:
             Any: The result of the activity execution.
         """
-        # Extract activity information for tracking
+        # Set Argo workflow context from activity args for logging
+        try:
+            from application_sdk.observability.logger_adaptor import argo_workflow_context
+
+            if input.args and len(input.args) > 0:
+                args = input.args[0]
+                if isinstance(args, dict):
+                    argo_metadata = {
+                        "argo_workflow_run_id": args.get("argo_workflow_run_id", ""),
+                        "argo_workflow_run_uuid": args.get(
+                            "argo_workflow_run_uuid", ""
+                        ),
+                    }
+                    argo_workflow_context.set(argo_metadata)
+        except Exception:
+            pass
 
         start_event = Event(
             event_type=EventTypes.APPLICATION_EVENT.value,

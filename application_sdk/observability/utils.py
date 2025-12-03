@@ -24,6 +24,8 @@ class WorkflowContext(BaseModel):
     activity_id: str = Field(init=False, default="")
     activity_type: str = Field(init=False, default="")
     workflow_run_id: str = Field(init=False, default="")
+    argo_workflow_run_id: str = Field(init=False, default="")
+    argo_workflow_run_uuid: str = Field(init=False, default="")
 
 
 def get_observability_dir() -> str:
@@ -72,6 +74,16 @@ def get_workflow_context() -> WorkflowContext:
             context.activity_type = activity_info.activity_type or ""
             context.task_queue = activity_info.task_queue or ""
             context.attempt = str(activity_info.attempt or 0)
+    except Exception:
+        pass
+
+    # Get Argo workflow metadata from context variable
+    try:
+        from application_sdk.observability.logger_adaptor import argo_workflow_context
+        argo_ctx = argo_workflow_context.get()
+        if argo_ctx:
+            context.argo_workflow_run_id = argo_ctx.get("argo_workflow_run_id", "")
+            context.argo_workflow_run_uuid = argo_ctx.get("argo_workflow_run_uuid", "")
     except Exception:
         pass
 

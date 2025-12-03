@@ -125,6 +125,9 @@ class LogRecordModel(BaseModel):
     file: str
     line: int
     function: str
+    # Argo context
+    argo_workflow_run_id: Optional[str] = None
+    argo_workflow_run_uuid: Optional[str] = None
     extra: LogExtraModel = Field(default_factory=LogExtraModel)
 
     @classmethod
@@ -143,6 +146,10 @@ class LogRecordModel(BaseModel):
             if k != "logger_name" and hasattr(extra, k):
                 setattr(extra, k, v)
 
+        # Extract Argo fields from extra dict
+        argo_workflow_run_id = message.record["extra"].get("argo_workflow_run_id")
+        argo_workflow_run_uuid = message.record["extra"].get("argo_workflow_run_uuid")
+
         return cls(
             timestamp=message.record["time"].timestamp(),
             level=message.record["level"].name,
@@ -151,6 +158,8 @@ class LogRecordModel(BaseModel):
             file=str(message.record["file"].path),
             line=message.record["line"],
             function=message.record["function"],
+            argo_workflow_run_id=argo_workflow_run_id,
+            argo_workflow_run_uuid=argo_workflow_run_uuid,
             extra=extra,
         )
 
@@ -162,6 +171,9 @@ class LogRecordModel(BaseModel):
 
 # Create a context variable for request_id
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
+
+# Create a context variable for Argo workflow metadata
+argo_workflow_context: ContextVar[Dict[str, Any]] = ContextVar("argo_workflow_context", default={})
 
 
 # Add a Loguru handler for the Python logging system
@@ -190,8 +202,8 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
-        # Add logger_name to extra to prevent KeyError
-        logger_extras = {"logger_name": record.name}
+        # Add logger_name and argo_workflow_run_id to extra to prevent KeyError
+        logger_extras = {"logger_name": record.name, "argo_workflow_run_id": None}
 
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
             level, record.getMessage()
@@ -286,8 +298,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 "TRACING", no=SEVERITY_MAPPING["TRACING"], color="<magenta>", icon="🔍"
             )
 
-        # Update format string to use the bound logger_name
-        atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
+        # Format string with Argo workflow ID (shows value or None if not present)
+        atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> <magenta>argo_workflow_id={extra[argo_workflow_run_id]}</magenta> - <level>{message}</level>"
+
         self.logger.add(
             sys.stderr,
             format=atlan_format_str,
@@ -557,6 +570,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 kwargs.update(workflow_context.model_dump())
         except Exception:
             pass
+
+        # Ensure argo_workflow_run_id always exists in kwargs (None if not present)
+        if "argo_workflow_run_id" not in kwargs:
+            kwargs["argo_workflow_run_id"] = None
 
         return msg, kwargs
 

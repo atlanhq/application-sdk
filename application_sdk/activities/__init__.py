@@ -202,6 +202,12 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             )
             workflow_args["workflow_id"] = workflow_id
             workflow_args["workflow_run_id"] = get_workflow_run_id()
+
+            # Copy Argo workflow metadata from workflow_config to workflow_args
+            # so it's available in all subsequent activities via the interceptor
+            workflow_args["argo_workflow_run_id"] = workflow_config.get("argo_workflow_run_id", "")
+            workflow_args["argo_workflow_run_uuid"] = workflow_config.get("argo_workflow_run_uuid", "")
+
             return workflow_args
 
         except Exception as e:

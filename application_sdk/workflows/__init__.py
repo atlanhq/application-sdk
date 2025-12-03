@@ -73,6 +73,17 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
                 workflow_id is used to extract the workflow configuration from the
                 state store.
         """
+        # Set Argo workflow metadata in context variable early so all logs have access
+        try:
+            from application_sdk.observability.logger_adaptor import argo_workflow_context
+            argo_metadata = {
+                "argo_workflow_run_id": workflow_config.get("argo_workflow_run_id", ""),
+                "argo_workflow_run_uuid": workflow_config.get("argo_workflow_run_uuid", "")
+            }
+            argo_workflow_context.set(argo_metadata)
+        except Exception:
+            pass
+        
         # Get the workflow configuration from the state store
         workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
             self.activities_cls.get_workflow_args,
