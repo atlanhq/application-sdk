@@ -18,13 +18,14 @@ from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
+    DEPLOYMENT_NAME_KEY,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
     WORKFLOW_PORT,
-    WORKFLOW_TLS_ENABLED,
+    WORKFLOW_TLS_ENABLED_KEY,
 )
 from application_sdk.events.models import (
     ApplicationEventNames,
@@ -96,6 +97,7 @@ class TemporalWorkflowClient(WorkflowClient):
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
+        self.deployment_config: Dict[str, Any] = SecretStore.get_deployment_secret()
         self.worker_task_queue = self.get_worker_task_queue()
         self.auth_manager = AtlanAuthClient()
 
@@ -116,8 +118,12 @@ class TemporalWorkflowClient(WorkflowClient):
         Returns:
             str: The task queue name in format "app_name-deployment_name".
         """
-        if DEPLOYMENT_NAME:
-            return f"atlan-{self.application_name}-{DEPLOYMENT_NAME}"
+        deployment_name = self.deployment_config.get(
+            DEPLOYMENT_NAME_KEY, DEPLOYMENT_NAME
+        )
+
+        if deployment_name:
+            return f"atlan-{self.application_name}-{deployment_name}"
         else:
             return self.application_name
 
@@ -222,9 +228,12 @@ class TemporalWorkflowClient(WorkflowClient):
         connection_options: Dict[str, Any] = {
             "target_host": self.get_connection_string(),
             "namespace": self.namespace,
-            "tls": WORKFLOW_TLS_ENABLED,
+            "tls": False,
         }
 
+        connection_options["tls"] = self.deployment_config.get(
+            WORKFLOW_TLS_ENABLED_KEY, False
+        )
         self.worker_task_queue = self.get_worker_task_queue()
 
         if self.auth_manager.auth_enabled:

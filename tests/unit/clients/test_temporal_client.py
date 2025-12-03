@@ -17,14 +17,9 @@ class MockWorkflow(WorkflowInterface):
 @pytest.fixture
 def temporal_client() -> TemporalWorkflowClient:
     """Create a TemporalWorkflowClient instance for testing."""
-
-    def mock_get_deployment_secret(key: str):
-        # Return None for all keys by default (tests can override if needed)
-        return None
-
     with patch(
         "application_sdk.clients.temporal.SecretStore.get_deployment_secret",
-        side_effect=mock_get_deployment_secret,
+        return_value={},
     ):
         return TemporalWorkflowClient(
             host="localhost",
@@ -62,8 +57,8 @@ async def test_load(
     temporal_client: TemporalWorkflowClient,
 ):
     """Test loading the temporal client."""
-    # Mock the deployment config to return None for all keys (auth disabled)
-    mock_get_config.return_value = None
+    # Mock the deployment config to return empty dict (auth disabled)
+    mock_get_config.return_value = {}
 
     # Mock the client connection
     mock_client = AsyncMock()

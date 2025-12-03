@@ -30,7 +30,7 @@ The Application SDK uses environment variables for configuration. These can be s
 | `ATLAN_MAX_CONCURRENT_ACTIVITIES` | Maximum number of activities that can run concurrently | `5` | Controls resource usage and prevents overwhelming target systems |
 | `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` | Timeout duration for activity heartbeats (in seconds) | `300` | Detects stuck activities and enables recovery |
 | `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | Maximum duration an activity can run before timing out (in seconds) | `7200` | Prevents activities from running indefinitely |
-| `ATLAN_AUTH_ENABLED` | Whether to enable authentication for Temporal workflows | `false` | Used in production deployments with secure Temporal clusters |
+| `ATLAN_WORKFLOW_AUTH_ENABLED` | Whether to enable authentication for Temporal workflows | `false` | Used in production deployments with secure Temporal clusters |
 | `ATLAN_DEPLOYMENT_SECRET_PATH` | Path to deployment secrets in secret store | `ATLAN_DEPLOYMENT_SECRETS` | Contains authentication credentials for production |
 
 ## SQL Client Configuration
@@ -129,7 +129,7 @@ For local development, most defaults work out of the box. Key configurations to 
 
 ### Production Deployment
 For production deployments, consider these essential configurations:
-- `ATLAN_AUTH_ENABLED=true`: Enable authentication for Temporal
+- `ATLAN_WORKFLOW_AUTH_ENABLED=true`: Enable authentication for Temporal
 - `ENABLE_ATLAN_UPLOAD=true`: Enable data upload to Atlan platform
 - `ATLAN_DEPLOYMENT_SECRETS`: Configure authentication secrets
 - `ATLAN_WORKFLOW_HOST` and `ATLAN_WORKFLOW_PORT`: Point to production Temporal cluster

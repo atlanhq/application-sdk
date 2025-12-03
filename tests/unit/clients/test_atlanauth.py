@@ -11,18 +11,16 @@ from application_sdk.clients.atlan_auth import AtlanAuthClient
 @pytest.fixture
 async def auth_client() -> AtlanAuthClient:
     """Create an AtlanAuthClient instance for testing."""
-
-    def mock_get_deployment_secret(key: str):
-        mock_config = {
-            "test_app_client_id": "test-client",
-            "test_app_client_secret": "test-secret",
-            "workflow_auth_url": "http://auth.test/token",
-        }
-        return mock_config.get(key)
+    mock_config = {
+        "test_app_client_id": "test-client",
+        "test_app_client_secret": "test-secret",
+        "workflow_auth_enabled": True,
+        "workflow_auth_url": "http://auth.test/token",
+    }
 
     with patch(
         "application_sdk.clients.atlan_auth.SecretStore.get_deployment_secret",
-        side_effect=mock_get_deployment_secret,
+        return_value=mock_config,
     ):
         client = AtlanAuthClient()
         return client
@@ -42,7 +40,7 @@ async def test_credential_discovery_failure(auth_client: AtlanAuthClient) -> Non
     # Create an auth client with empty config
     with patch(
         "application_sdk.clients.atlan_auth.SecretStore.get_deployment_secret",
-        return_value=None,  # Empty config means no credentials
+        return_value={},  # Empty config means no credentials
     ):
         auth_client_no_fallback = AtlanAuthClient()
 

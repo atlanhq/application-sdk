@@ -8,14 +8,9 @@ import pytest
 @pytest.fixture(autouse=True)
 def mock_secret_store():
     """Automatically mock SecretStore.get_deployment_secret for all tests."""
-
-    def mock_get_deployment_secret(key: str):
-        """Default mock that returns None for all keys."""
-        return None
-
     with patch(
         "application_sdk.services.secretstore.SecretStore.get_deployment_secret",
-        side_effect=mock_get_deployment_secret,
+        return_value={},
     ):
         yield
 
