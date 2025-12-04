@@ -115,12 +115,15 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
         Note:
             The workflow ID is automatically retrieved from the current activity context.
             If no state exists for the current workflow, a new one will be created.
+            This method also updates the last_updated_timestamp to enable time-based
+            state refresh functionality.
         """
         workflow_id = get_workflow_id()
         if not self._state.get(workflow_id):
             self._state[workflow_id] = ActivitiesState()
 
         self._state[workflow_id].workflow_args = workflow_args
+        self._state[workflow_id].last_updated_timestamp = datetime.now()
 
     async def _get_state(self, workflow_args: Dict[str, Any]) -> ActivitiesStateType:
         """Retrieve the state for the current workflow.
@@ -145,7 +148,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             if workflow_id not in self._state:
                 await self._set_state(workflow_args)
 
-            if workflow_id in self._state:
+            else:
                 current_timestamp = datetime.now()
                 # if difference of current_timestamp and last_updated_timestamp is greater than 15 minutes, then again _set_state
                 last_updated = self._state[workflow_id].last_updated_timestamp

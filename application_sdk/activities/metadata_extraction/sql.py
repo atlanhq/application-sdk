@@ -166,6 +166,22 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         await super()._set_state(workflow_args)
 
+        # Close existing sql_client if it exists to prevent connection leaks
+        # This can happen when state is refreshed after becoming stale (15-minute timeout)
+        existing_state = self._state.get(workflow_id)
+        if existing_state and existing_state.sql_client is not None:
+            try:
+                await existing_state.sql_client.close()
+                logger.debug(
+                    f"Closed existing SQL client for workflow {workflow_id} during state refresh"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to close existing SQL client for workflow {workflow_id}: {e}",
+                    exc_info=True,
+                )
+                # Continue with new client creation even if close fails
+
         sql_client = self.sql_client_class()
 
         # Load credentials BEFORE creating handler to avoid race condition
