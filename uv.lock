@@ -277,7 +277,7 @@ requires-dist = [
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.12.3" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "numpy", marker = "extra == 'scale-data-generator'", specifier = ">=1.23.5,<3.0.0" },
-    { name = "opentelemetry-exporter-otlp", specifier = ">=1.27.0" },
+    { name = "opentelemetry-exporter-otlp", specifier = "==1.38.0" },
     { name = "orjson", marker = "extra == 'workflows'", specifier = ">=3.10.18" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3" },
     { name = "pandas", marker = "extra == 'scale-data-generator'", specifier = ">=2.2.3" },
