@@ -7,10 +7,9 @@ from time import time_ns
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
-from opentelemetry._logs import SeverityNumber
+from opentelemetry._logs import LogRecord, SeverityNumber
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs._internal import LogRecord
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace.span import TraceFlags
@@ -496,7 +495,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             severity_text=record["level"],
             severity_number=severity_number,
             body=record["message"],
-            resource=self.logger_provider.resource,
             attributes=attributes,
         )
 
