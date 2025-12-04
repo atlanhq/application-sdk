@@ -21,7 +21,7 @@ classifiers = [
 keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
     "aiohttp>=3.10.0",
-    "opentelemetry-exporter-otlp>=1.27.0",
+    "opentelemetry-exporter-otlp==1.38.0",
     "psutil>=7.0.0",
     "fastapi[standard]==0.120.2",
     "pyatlan>=8.0.2",
