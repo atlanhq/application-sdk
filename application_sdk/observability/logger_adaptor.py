@@ -292,13 +292,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             "{time:YYYY-MM-DD HH:mm:ss} [{level}] {extra[logger_name]} - {message}"
         )
 
+        colorize = False
+        format_str = atlan_format_str_plain
+
         # Colorize the logs only if the log level is DEBUG
         if LOG_LEVEL == "DEBUG":
             colorize = True
             format_str = atlan_format_str_color
-        else:
-            colorize = False
-            format_str = atlan_format_str_plain
 
         self.logger.add(
             sys.stderr,
