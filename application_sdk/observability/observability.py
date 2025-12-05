@@ -10,6 +10,7 @@ from pathlib import Path
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
+import daft  # type: ignore
 import duckdb
 import pandas as pd
 from dapr.clients import DaprClient
