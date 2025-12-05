@@ -7,9 +7,9 @@ from time import time_ns
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
-from opentelemetry._logs import SeverityNumber
+from opentelemetry._logs import LogRecord, SeverityNumber
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-from opentelemetry.sdk._logs import LoggerProvider, LogRecord
+from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace.span import TraceFlags
@@ -287,12 +287,24 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             )
 
         # Update format string to use the bound logger_name
-        atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
+        atlan_format_str_color = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
+        atlan_format_str_plain = (
+            "{time:YYYY-MM-DD HH:mm:ss} [{level}] {extra[logger_name]} - {message}"
+        )
+
+        colorize = False
+        format_str = atlan_format_str_plain
+
+        # Colorize the logs only if the log level is DEBUG
+        if LOG_LEVEL == "DEBUG":
+            colorize = True
+            format_str = atlan_format_str_color
+
         self.logger.add(
             sys.stderr,
-            format=atlan_format_str,
+            format=format_str,
             level=SEVERITY_MAPPING[LOG_LEVEL],
-            colorize=True,
+            colorize=colorize,
         )
 
         # Add sink for parquet logging only if Dapr sink is enabled
@@ -495,7 +507,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             severity_text=record["level"],
             severity_number=severity_number,
             body=record["message"],
-            resource=self.logger_provider.resource,
             attributes=attributes,
         )
 

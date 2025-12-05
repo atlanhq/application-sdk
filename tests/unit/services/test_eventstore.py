@@ -209,6 +209,7 @@ class TestApplicationEventNames:
             "worker_end",
             "application_start",
             "application_end",
+            "token_refresh",
         ]
         actual_names = [name.value for name in ApplicationEventNames]
         assert actual_names == expected_names

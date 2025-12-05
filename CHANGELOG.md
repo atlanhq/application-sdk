@@ -1,5 +1,73 @@
 # Changelog
 
+## v1.0.1 (December 05, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.0...v1.0.1
+
+### Features
+
+- Expose accumulated metrics (#813) (by @saig214 in [095a386](https://github.com/atlanhq/application-sdk/commit/095a386))
+
+### Bug Fixes
+
+- breaking changes induced in opentelemetry 1.39.0 release (#834) (by @abhishekagrawal-atlan in [bc6359b](https://github.com/atlanhq/application-sdk/commit/bc6359b))
+
+
+## v1.0.0 (November 21, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc63...v1.0.0
+
+### Features
+
+- GA release
+
+
+## v0.1.1rc64 (November 14, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc63...v0.1.1rc64
+
+### Bug Fixes
+
+- Disable analytics tracking for DAFT (#820) (by @TechyMT in [c421233](https://github.com/atlanhq/application-sdk/commit/c421233))
+
+
+## v0.1.1rc63 (November 12, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc62...v0.1.1rc63
+
+### Features
+
+- handle single key secret stores (#812) (by @nishantmunjal7 in [abf5f6d](https://github.com/atlanhq/application-sdk/commit/abf5f6d))
+- deployment secret single-key (#816) (by @nishantmunjal7 in [c5efd9a](https://github.com/atlanhq/application-sdk/commit/c5efd9a))
+
+
+## v0.1.1rc62 (November 03, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc61...v0.1.1rc62
+
+### Features
+
+- Adding a new event whenever Token refreshes (#802) (by @Garavitey in [2e32ab4](https://github.com/atlanhq/application-sdk/commit/2e32ab4))
+
+
+## v0.1.1rc61 (October 30, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc60...v0.1.1rc61
+
+
+## v0.1.1rc60 (October 29, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc59...v0.1.1rc60
+
+### Features
+
+- Fixing the daft import issue (#803) (by @Garavitey in [0f27353](https://github.com/atlanhq/application-sdk/commit/0f27353))
+
+### Bug Fixes
+
+- bump Dapr cli to v1.16.2, helm security patch (#804) (by @inishchith in [d36a4e7](https://github.com/atlanhq/application-sdk/commit/d36a4e7))
+
+
 ## v0.1.1rc59 (October 25, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc58...v0.1.1rc59

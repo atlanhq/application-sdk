@@ -365,6 +365,7 @@ class ParquetFileWriter(Writer):
         buffer_size: int = 5000,
         total_record_count: int = 0,
         chunk_count: int = 0,
+        chunk_part: int = 0,
         chunk_start: Optional[int] = None,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
@@ -406,7 +407,7 @@ class ParquetFileWriter(Writer):
             DAPR_MAX_GRPC_MESSAGE_LENGTH * 0.75
         )  # 75% of DAPR limit as safety buffer
         self.chunk_start = chunk_start
-        self.chunk_part = 0
+        self.chunk_part = chunk_part
         self.start_marker = start_marker
         self.end_marker = end_marker
         self.partitions = []

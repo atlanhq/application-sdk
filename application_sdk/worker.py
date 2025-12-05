@@ -122,6 +122,7 @@ class Worker:
         if self.workflow_client:
             self._worker_creation_event_data = WorkerStartEventData(
                 application_name=self.workflow_client.application_name,
+                deployment_name=DEPLOYMENT_NAME,
                 task_queue=self.workflow_client.worker_task_queue,
                 namespace=self.workflow_client.namespace,
                 host=self.workflow_client.host,
