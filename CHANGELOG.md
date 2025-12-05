@@ -1,8 +1,8 @@
 # Changelog
 
-## v1.0.0rc1 (December 05, 2025)
+## v1.0.1 (December 05, 2025)
 
-Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.0...v1.0.0rc1
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.0...v1.0.1
 
 ### Features
 
