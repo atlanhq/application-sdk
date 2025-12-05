@@ -1,12 +1,12 @@
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, AsyncIterator, Optional, Union
 
 from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 from temporalio import activity
 
+from application_sdk.io import DataframeType, Reader, Writer
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
-from application_sdk.outputs import Output
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -16,9 +16,84 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-class IcebergOutput(Output):
+class IcebergTableReader(Reader):
     """
-    Iceberg Output class to write data to Iceberg tables using daft and pandas
+    Iceberg Table Reader class to read data from Iceberg tables using daft and pandas
+    """
+
+    table: Table
+    chunk_size: Optional[int]
+
+    def __init__(
+        self,
+        table: Table,
+        chunk_size: Optional[int] = 100000,
+        dataframe_type: DataframeType = DataframeType.pandas,
+    ):
+        """Initialize the Iceberg input class.
+
+        Args:
+            table (Table): Iceberg table object.
+            chunk_size (Optional[int], optional): Number of rows per batch.
+                Defaults to 100000.
+        """
+        self.table = table
+        self.chunk_size = chunk_size
+        self.dataframe_type = dataframe_type
+
+    async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
+        """
+        Method to read the data from the iceberg table
+        and return as a single combined dataframe (pandas or daft).
+        """
+        if self.dataframe_type == DataframeType.pandas:
+            return await self._get_dataframe()
+        elif self.dataframe_type == DataframeType.daft:
+            return await self._get_daft_dataframe()
+        else:
+            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+
+    async def _get_dataframe(self) -> "pd.DataFrame":
+        """
+        Method to read the data from the iceberg table
+        and return as a single combined pandas dataframe.
+        """
+        try:
+            import daft
+
+            # Iceberg reading is done via daft, then convert to pandas
+            daft_dataframe = daft.read_iceberg(self.table)
+            return daft_dataframe.to_pandas()
+        except Exception as e:
+            logger.error(f"Error reading data from Iceberg table: {str(e)}")
+            raise
+
+    async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
+        """
+        Method to read the data from the iceberg table
+        and return as a single combined daft dataframe.
+        """
+        try:
+            import daft
+
+            return daft.read_iceberg(self.table)
+        except Exception as e:
+            logger.error(f"Error reading data from Iceberg table using daft: {str(e)}")
+            raise
+
+    def read_batches(
+        self,
+    ) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
+        # We are not implementing this method as we have to partition the daft dataframe
+        # using dataframe.into_partitions() method. This method does all the partitions in memory
+        # and using that can cause out of memory issues.
+        # ref: https://www.getdaft.io/projects/docs/en/stable/user_guide/poweruser/partitioning.html
+        raise NotImplementedError
+
+
+class IcebergTableWriter(Writer):
+    """
+    Iceberg Table Writer class to write data to Iceberg tables using daft and pandas
     """
 
     def __init__(
@@ -30,8 +105,9 @@ class IcebergOutput(Output):
         total_record_count: int = 0,
         chunk_count: int = 0,
         retain_local_copy: bool = False,
+        dataframe_type: DataframeType = DataframeType.pandas,
     ):
-        """Initialize the Iceberg output class.
+        """Initialize the Iceberg writer class.
 
         Args:
             iceberg_catalog (Catalog): Iceberg catalog object.
@@ -51,8 +127,9 @@ class IcebergOutput(Output):
         self.mode = mode
         self.metrics = get_metrics()
         self.retain_local_copy = retain_local_copy
+        self.dataframe_type = dataframe_type
 
-    async def write_dataframe(self, dataframe: "pd.DataFrame"):
+    async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
         """
         Method to write the pandas dataframe to an iceberg table
         """
@@ -63,7 +140,7 @@ class IcebergOutput(Output):
                 return
             # convert the pandas dataframe to a daft dataframe
             daft_dataframe = daft.from_pandas(dataframe)
-            await self.write_daft_dataframe(daft_dataframe)
+            await self._write_daft_dataframe(daft_dataframe)
 
             # Record metrics for successful write
             self.metrics.record_metric(
@@ -83,9 +160,9 @@ class IcebergOutput(Output):
                 description="Number of errors while writing to Iceberg table",
             )
             logger.error(f"Error writing pandas dataframe to iceberg table: {str(e)}")
-            raise e
+            raise
 
-    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+    async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):  # noqa: F821
         """
         Method to write the daft dataframe to an iceberg table
         """
@@ -136,4 +213,4 @@ class IcebergOutput(Output):
                 description="Number of errors while writing to Iceberg table",
             )
             logger.error(f"Error writing daft dataframe to iceberg table: {str(e)}")
-            raise e
+            raise
