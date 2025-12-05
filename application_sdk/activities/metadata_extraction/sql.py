@@ -844,8 +844,8 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                     transform_metadata = state.transformer.transform_metadata(
                         dataframe=dataframe, **workflow_args
                     )
-                await transformed_output.write(transform_metadata)
-        return await transformed_output.get_statistics()
+                    await transformed_output.write(transform_metadata)
+        return await transformed_output.get_statistics(typename=typename)
 
     @activity.defn
     @auto_heartbeater

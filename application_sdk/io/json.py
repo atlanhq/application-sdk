@@ -378,6 +378,7 @@ class JsonFileWriter(Writer):
                 description="Number of errors while writing to JSON files",
             )
             logger.error(f"Error writing daft dataframe to json: {str(e)}")
+            raise
 
     async def _flush_daft_buffer(self, buffer: List[str], chunk_part: int):
         """Flush the current buffer to a JSON file.

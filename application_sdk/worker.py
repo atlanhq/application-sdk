@@ -14,7 +14,7 @@ from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
+from application_sdk.constants import DEPLOYMENT_NAME, MAX_CONCURRENT_ACTIVITIES
 from application_sdk.interceptors.models import (
     ApplicationEventNames,
     Event,

@@ -302,6 +302,7 @@ class Writer(ABC):
                         await self._write_daft_dataframe(dataframe)
         except Exception as e:
             logger.error(f"Error writing batched daft dataframe: {str(e)}")
+            raise
 
     @abstractmethod
     async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):  # noqa: F821
@@ -438,3 +439,4 @@ class Writer(ABC):
             return statistics
         except Exception as e:
             logger.error(f"Error writing statistics: {str(e)}")
+            raise

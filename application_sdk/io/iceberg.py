@@ -41,18 +41,42 @@ class IcebergTableReader(Reader):
         self.chunk_size = chunk_size
         self.dataframe_type = dataframe_type
 
-    async def read(self) -> "daft.DataFrame":
+    async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
         """
         Method to read the data from the iceberg table
-        and return as a single combined daft dataframe
+        and return as a single combined dataframe (pandas or daft).
+        """
+        if self.dataframe_type == DataframeType.pandas:
+            return await self._get_dataframe()
+        elif self.dataframe_type == DataframeType.daft:
+            return await self._get_daft_dataframe()
+        else:
+            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+
+    async def _get_dataframe(self) -> "pd.DataFrame":
+        """
+        Method to read the data from the iceberg table
+        and return as a single combined pandas dataframe.
         """
         try:
-            if self.dataframe_type == DataframeType.daft:
-                import daft
+            import daft
 
-                return daft.read_iceberg(self.table)
-            else:
-                raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            # Iceberg reading is done via daft, then convert to pandas
+            daft_dataframe = daft.read_iceberg(self.table)
+            return daft_dataframe.to_pandas()
+        except Exception as e:
+            logger.error(f"Error reading data from Iceberg table: {str(e)}")
+            raise
+
+    async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
+        """
+        Method to read the data from the iceberg table
+        and return as a single combined daft dataframe.
+        """
+        try:
+            import daft
+
+            return daft.read_iceberg(self.table)
         except Exception as e:
             logger.error(f"Error reading data from Iceberg table using daft: {str(e)}")
             raise
@@ -136,7 +160,7 @@ class IcebergTableWriter(Writer):
                 description="Number of errors while writing to Iceberg table",
             )
             logger.error(f"Error writing pandas dataframe to iceberg table: {str(e)}")
-            raise e
+            raise
 
     async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):  # noqa: F821
         """
@@ -189,4 +213,4 @@ class IcebergTableWriter(Writer):
                 description="Number of errors while writing to Iceberg table",
             )
             logger.error(f"Error writing daft dataframe to iceberg table: {str(e)}")
-            raise e
+            raise
