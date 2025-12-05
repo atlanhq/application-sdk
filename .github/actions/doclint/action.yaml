@@ -1,0 +1,36 @@
+name: 'Vale Doc Linter'
+description: 'Lint markdown documentation files against style guide using Vale'
+
+inputs:
+  github_token:
+    description: 'GitHub token for authentication'
+    required: true
+  files:
+    description: 'Files or directories to lint'
+    default: 'docs'
+    required: false
+  filter_mode:
+    description: 'Vale filter mode'
+    default: 'diff_context'
+    required: false
+  fail_on_error:
+    description: 'Whether to fail on Vale errors'
+    default: 'true'
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+
+    - name: Run Vale Linter
+      uses: errata-ai/vale-action@v2.1.1
+      with:
+        files: ${{ inputs.files }}
+        filter_mode: ${{ inputs.filter_mode }}
+        fail_on_error: ${{ inputs.fail_on_error }}
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}

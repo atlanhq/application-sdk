@@ -1,0 +1,102 @@
+site_name: application-sdk
+site_url: https://k.atlan.dev/application-sdk
+repo_url: https://github.com/atlanhq/application-sdk
+repo_name: application-sdk
+site_description: Docs for application-sdk
+site_author: App Framework Team
+copyright: App Framework Team © 2025
+
+theme:
+  name: material
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    primary: indigo
+  logo: static/assets/logo.svg
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.tracking
+    - navigation.path
+
+extra:
+  homepage: https://k.atlan.dev/application-sdk
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/atlanhq/application-sdk
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - footnotes
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.critic
+  - pymdownx.caret
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_css:
+  - static/stylesheets/extra.css
+
+extra_javascript:
+  - static/javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Setup:
+      - Mac: setup/MAC.md
+      - Linux: setup/LINUX.md
+      - Windows: setup/WINDOWS.md
+  - Guides:
+      # Core concepts
+      - Getting Started: guides/getting-started.md
+      - Architecture: guides/architecture.md
+
+      # Development guides
+      - Creating an SQL Application: guides/sql-application-guide.md
+      - Custom Frontends with Atlantis: guides/atlantis.md
+      - Secret Stores: guides/secretstores.md
+
+      # Best practices & testing
+      - Best Practices: guides/best-practices.md
+      - Test Framework: guides/test-framework.md
+  - Concepts:
+      - Activities: concepts/activities.md
+      - Workflows: concepts/workflows.md
+      - Server: concepts/server.md
+      - Application: concepts/application.md
+      - Clients: concepts/clients.md
+      - Services: concepts/services.md
+      - Common: concepts/common.md
+      - Handlers: concepts/handlers.md
+      - Inputs: concepts/inputs.md
+      - Outputs: concepts/outputs.md
+      - Worker: concepts/worker.md
+      - Example: concepts/application_sql.md
+
+  - Configuration Reference: configuration.md
+  - API Reference: /application-sdk/main/api

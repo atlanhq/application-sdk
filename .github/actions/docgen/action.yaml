@@ -1,0 +1,55 @@
+name: Automated Docs Generation for Atlan Apps
+description: |
+  Automatically generates comprehensive documentation from atlan docs manigest using the Atlan Apps SDK.
+  This action scans the specified source directory for markdown files, docstrings, type hints, and other documentation markers,
+  then compiles them into structured documentation.
+
+inputs:
+  github-token:
+    required: true
+    description: The GitHub token to use for the action.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        version: "0.7.3"
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        uv sync --all-extras --all-groups
+        uv add mkdocs mkdocs-material
+
+    - name: Verify and Generate Docs
+      shell: bash
+      run: |
+        # Create Python script inline
+        cat << 'EOF' > docs.py
+        from application_sdk.docgen import AtlanDocsGenerator
+
+        def main():
+          docs_generator = AtlanDocsGenerator(
+              docs_directory_path="docs",
+              export_path="dist",
+          )
+          docs_generator.verify()
+          docs_generator.export()
+
+        if __name__ == "__main__":
+          main()
+
+        EOF
+
+        uv run python docs.py
