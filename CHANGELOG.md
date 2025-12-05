@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.1 (December 05, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.0...v1.0.1
+
+### Features
+
+- Expose accumulated metrics (#813) (by @saig214 in [095a386](https://github.com/atlanhq/application-sdk/commit/095a386))
+
+### Bug Fixes
+
+- breaking changes induced in opentelemetry 1.39.0 release (#834) (by @abhishekagrawal-atlan in [bc6359b](https://github.com/atlanhq/application-sdk/commit/bc6359b))
+
+
 ## v1.0.0 (November 21, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc63...v1.0.0
