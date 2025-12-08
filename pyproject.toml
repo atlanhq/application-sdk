@@ -89,7 +89,7 @@ dev = [
     "boto3-stubs==1.38.6",
     "mkdocs==1.6.1",
     "mkdocs-material==9.6.4",
-    "pydoctor==24.11.2",
+    "pydoctor==25.10.1",
     "mike==2.1.3",
     "poethepoet==0.34.0",
 ]
