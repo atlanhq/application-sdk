@@ -22,28 +22,9 @@ async def test_write_single_dict(temp_output_path):
         await writer.write(data)
 
         assert writer.total_record_count == 1
-        # Chunk count increments when chunk is full/flushed at end.
-        # Writer implementation increments chunk_count when flushing buffer or getting statistics.
-        # Let's check get_statistics behavior
+
         stats = await writer.get_statistics()
         assert stats.total_record_count == 1
-
-        # Verify file content
-        # path_gen uses chunk_count and chunk_part.
-        # If chunk_count starts at 0, file is 0.json? No path_gen uses chunk_part if chunk_count is None passed to it?
-        # JsonFileWriter calls path_gen(self.chunk_count, self.chunk_part, ...)
-        # self.chunk_count starts at 0.
-        # The file name is usually 1.json (chunk_part + 1?)
-        # Let's check path_gen in _utils.py:
-        # if chunk_count is None: return f"{chunk_part}{extension}"
-        # else: return f"chunk-{chunk_count}-part{chunk_part}{extension}"
-
-        # JsonFileWriter calls: path_gen(self.chunk_count, self.chunk_part...)
-        # self.chunk_count is 0.
-        # So "chunk-0-part0.json" ?
-        # Wait, JsonFileWriter usually produces "1.json".
-        # Let's check JsonFileWriter logic.
-        pass
 
 
 @pytest.mark.asyncio

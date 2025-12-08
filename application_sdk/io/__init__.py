@@ -163,8 +163,6 @@ class Writer(ABC):
         elif self.dataframe_type == DataframeType.daft:
             await self._write_batched_daft_dataframe(dataframe)
         else:
-            # For dictionaries, we can default to pandas processing since conversion is likely needed
-            # or handle them directly if we assume they are generators of dicts
             await self._write_batched_dictionary(dataframe)
 
     async def _write_batched_dictionary(
@@ -204,7 +202,6 @@ class Writer(ABC):
         import pandas as pd
 
         # Default implementation: convert to pandas DataFrame and write
-        # Subclasses like JsonFileWriter can override this for better performance
         if isinstance(data, dict):
             df = pd.DataFrame([data])
         else:
