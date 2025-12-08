@@ -101,7 +101,7 @@ test = [
     "hypothesis==6.114.0",
 ]
 examples = [
-    "snowflake-sqlalchemy==1.7.0",
+    "snowflake-sqlalchemy==1.8.0",
     "psycopg[binary]==3.2.7",
 ]
 
