@@ -98,7 +98,7 @@ test = [
     "pytest==8.3.3",
     "coverage==7.6.1",
     "pytest-asyncio>=1.1.0,<1.2.0",
-    "hypothesis==6.114.0",
+    "hypothesis==6.148.7",
 ]
 examples = [
     "snowflake-sqlalchemy==1.7.0",
