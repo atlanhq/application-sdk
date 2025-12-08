@@ -42,7 +42,7 @@ Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 [project.optional-dependencies]
 workflows = [
     "dapr==1.16.0",
-    "temporalio==1.7.1",
+    "temporalio==1.20.0",
     "orjson==3.10.18",
 ]
 pandas = [
