@@ -52,7 +52,7 @@ daft = [
     "daft>=0.6.14",
 ]
 iceberg = [
-    "pyiceberg==0.8.1",
+    "pyiceberg==0.10.0",
 ]
 sqlalchemy = [
     "sqlalchemy[asyncio]==2.0.36",
