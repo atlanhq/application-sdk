@@ -102,7 +102,7 @@ test = [
 ]
 examples = [
     "snowflake-sqlalchemy==1.7.0",
-    "psycopg[binary]==3.2.7",
+    "psycopg[binary]==3.3.2",
 ]
 
 [tool.poe.tasks]
