@@ -17,6 +17,7 @@ from typing import (
     List,
     Optional,
     Union,
+    cast,
 )
 from urllib.parse import quote_plus
 
@@ -477,6 +478,35 @@ class BaseSQLClient(ClientInterface):
         with self.engine.connect() as conn:
             return self._execute_pandas_query(conn, query, chunksize)
 
+    async def _execute_async_read_operation(
+        self, query: str, chunksize: Optional[int]
+    ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
+        """Helper to execute async read operation with either async session or thread executor."""
+        if isinstance(self.engine, str):
+            raise ValueError("Engine should be an SQLAlchemy engine object")
+
+        from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+
+        async_session = None
+        if self.engine and isinstance(self.engine, AsyncEngine):
+            from sqlalchemy.orm import sessionmaker
+
+            async_session = sessionmaker(
+                self.engine, expire_on_commit=False, class_=AsyncSession
+            )
+
+        if async_session:
+            async with async_session() as session:
+                return await session.run_sync(
+                    self._read_sql_query, query, chunksize=chunksize
+                )
+        else:
+            # Run the blocking operation in a thread pool
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                return await asyncio.get_event_loop().run_in_executor(
+                    executor, self._execute_query, query, chunksize
+                )
+
     async def get_batched_results(
         self,
         query: str,
@@ -491,30 +521,9 @@ class BaseSQLClient(ClientInterface):
             Exception: If there's an error executing the query.
         """
         try:
-            if isinstance(self.engine, str):
-                raise ValueError("Engine should be an SQLAlchemy engine object")
-
-            from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-
-            async_session = None
-            if self.engine and isinstance(self.engine, AsyncEngine):
-                from sqlalchemy.orm import sessionmaker
-
-                async_session = sessionmaker(
-                    self.engine, expire_on_commit=False, class_=AsyncSession
-                )
-
-            if async_session:
-                async with async_session() as session:
-                    return await session.run_sync(
-                        self._read_sql_query, query, chunksize=self.chunk_size
-                    )
-            else:
-                # Run the blocking operation in a thread pool
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    return await asyncio.get_event_loop().run_in_executor(  # type: ignore
-                        executor, self._execute_query, query, self.chunk_size
-                    )
+            # We cast to Iterator because passing chunk_size guarantees an Iterator return
+            result = await self._execute_async_read_operation(query, self.chunk_size)
+            return cast(Iterator["pd.DataFrame"], result)
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
 
@@ -529,37 +538,12 @@ class BaseSQLClient(ClientInterface):
             Exception: If there's an error executing the query.
         """
         try:
-            if isinstance(self.engine, str):
-                raise ValueError("Engine should be an SQLAlchemy engine object")
+            result = await self._execute_async_read_operation(query, None)
+            import pandas as pd
 
-            from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-
-            async_session = None
-            if self.engine and isinstance(self.engine, AsyncEngine):
-                from sqlalchemy.orm import sessionmaker
-
-                async_session = sessionmaker(
-                    self.engine, expire_on_commit=False, class_=AsyncSession
-                )
-
-            if async_session:
-                async with async_session() as session:
-                    return await session.run_sync(
-                        self._read_sql_query, query, chunksize=None
-                    )
-            else:
-                # Run the blocking operation in a thread pool
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    result = await asyncio.get_event_loop().run_in_executor(
-                        executor, self._execute_query, query, None
-                    )
-                    import pandas as pd
-
-                    if isinstance(result, pd.DataFrame):
-                        return result
-                    raise Exception(
-                        "Unable to get pandas dataframe from SQL query results"
-                    )
+            if isinstance(result, pd.DataFrame):
+                return result
+            raise Exception("Unable to get pandas dataframe from SQL query results")
 
         except Exception as e:
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")

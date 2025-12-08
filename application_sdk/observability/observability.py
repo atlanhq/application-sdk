@@ -10,7 +10,6 @@ from pathlib import Path
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
-import daft  # type: ignore
 import duckdb
 import pandas as pd
 from dapr.clients import DaprClient
@@ -420,24 +419,18 @@ class AtlanObservability(Generic[T], ABC):
                 # Set the output path for this partition
                 try:
                     # Lazy import and instantiation of ParquetFileWriter
-                    from application_sdk.io import DataframeType, WriteMode
                     from application_sdk.io.parquet import ParquetFileWriter
 
                     parquet_writer = ParquetFileWriter(
                         output_path=partition_path,
-                        dataframe_type=DataframeType.daft,
-                        use_consolidation=True,
+                        chunk_start=0,
+                        chunk_part=int(time()),
                     )
                     logging.info(
                         f"Successfully instantiated ParquetFileWriter for partition: {partition_path}"
                     )
 
-                    # Use _write_daft_dataframe with the DataFrame we have
-                    daft_df = daft.from_pandas(df)
-                    await parquet_writer._write_daft_dataframe(
-                        dataframe=daft_df,
-                        write_mode=WriteMode.APPEND,  # Append mode to merge with existing data
-                    )
+                    await parquet_writer._write_dataframe(dataframe=df)
 
                     logging.info(
                         f"Successfully wrote {len(df)} records to partition: {partition_path}"

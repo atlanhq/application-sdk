@@ -2,10 +2,7 @@ import os
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
     Dict,
-    Iterator,
-    List,
     Optional,
     Tuple,
     Type,
@@ -17,6 +14,7 @@ from typing import (
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
+from application_sdk.activities.common import sql_utils
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import (
     auto_heartbeater,
@@ -25,12 +23,7 @@ from application_sdk.activities.common.utils import (
 )
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.error_codes import ActivityError
-from application_sdk.common.utils import (
-    get_database_names,
-    parse_credentials_extra,
-    prepare_query,
-    read_sql_files,
-)
+from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.io import DataframeType
@@ -314,26 +307,32 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         # If multidb mode is enabled, run per-database flow
         if getattr(self, "multidb", False):
-            return await self._execute_multidb_flow(
-                sql_client,
-                sql_query,
-                workflow_args,
-                output_suffix,
-                typename,
-                write_to_file,
-                concatenate,
-                return_dataframe,
-                parquet_output,
+            return await sql_utils.execute_multidb_flow(
+                sql_client=sql_client,
+                sql_query=sql_query,
+                workflow_args=workflow_args,
+                fetch_database_sql=self.fetch_database_sql,
+                output_suffix=output_suffix,
+                typename=typename,
+                write_to_file=write_to_file,
+                concatenate=concatenate,
+                return_dataframe=return_dataframe,
+                parquet_output=parquet_output,
+                temp_table_regex_sql=self._get_temp_table_regex_sql(typename),
+                setup_parquet_output_func=self._setup_parquet_output,
             )
 
         # Single-db execution path
         # Prepare query for single-db execution
-        prepared_query = self._prepare_database_query(
-            sql_query, None, workflow_args, typename
+        prepared_query = sql_utils.prepare_database_query(
+            sql_query,
+            None,
+            workflow_args,
+            self._get_temp_table_regex_sql(typename),
         )
 
         # Execute using helper method
-        success, _ = await self._execute_single_db(
+        success, _ = await sql_utils.execute_single_db(
             sql_client, prepared_query, parquet_output, write_to_file
         )
 
@@ -379,237 +378,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             return self.extract_temp_table_regex_table_sql or ""
         else:
             return ""
-
-    def _prepare_database_query(
-        self,
-        sql_query: str,
-        database_name: Optional[str],
-        workflow_args: Dict[str, Any],
-        typename: str,
-        use_posix_regex: bool = False,
-    ) -> Optional[str]:
-        """Prepare query for database execution with proper substitutions."""
-        # Replace database name placeholder if provided
-        fetch_sql = sql_query
-        if database_name:
-            fetch_sql = fetch_sql.replace("{database_name}", database_name)
-
-        # Get temp table regex SQL
-        temp_table_regex_sql = self._get_temp_table_regex_sql(typename)
-
-        # Prepare the query
-        prepared_query = prepare_query(
-            query=fetch_sql,
-            workflow_args=workflow_args,
-            temp_table_regex_sql=temp_table_regex_sql,
-            use_posix_regex=use_posix_regex,
-        )
-
-        if prepared_query is None:
-            db_context = f" for database {database_name}" if database_name else ""
-            raise ValueError(f"Failed to prepare query{db_context}")
-
-        return prepared_query
-
-    async def _setup_database_connection(
-        self,
-        sql_client: BaseSQLClient,
-        database_name: str,
-    ) -> None:
-        """Setup connection for a specific database."""
-        extra = parse_credentials_extra(sql_client.credentials)
-        extra["database"] = database_name
-        sql_client.credentials["extra"] = extra
-        await sql_client.load(sql_client.credentials)
-
-    # NOTE: Consolidated: per-database processing is now inlined in the multi-DB loop
-
-    async def _finalize_multidb_results(
-        self,
-        write_to_file: bool,
-        concatenate: bool,
-        return_dataframe: bool,
-        parquet_output: Optional[ParquetFileWriter],
-        dataframe_list: List[
-            Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]
-        ],
-        workflow_args: Dict[str, Any],
-        output_suffix: str,
-        typename: str,
-    ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
-        """Finalize results for multi-database execution."""
-        if write_to_file and parquet_output:
-            return await parquet_output.get_statistics(typename=typename)
-
-        if not write_to_file and concatenate:
-            try:
-                import pandas as pd  # type: ignore
-
-                valid_dataframes: List[pd.DataFrame] = []
-                for df_generator in dataframe_list:
-                    if df_generator is None:
-                        continue
-                    # Handle both async and sync iterators
-                    if hasattr(df_generator, "__aiter__"):
-                        # Async iterator
-                        async for dataframe in df_generator:  # type: ignore[assignment]
-                            if dataframe is None:
-                                continue
-                            if hasattr(dataframe, "empty") and getattr(
-                                dataframe, "empty"
-                            ):
-                                continue
-                            valid_dataframes.append(dataframe)
-                    else:
-                        # Sync iterator
-                        for dataframe in df_generator:  # type: ignore[assignment]
-                            if dataframe is None:
-                                continue
-                            if hasattr(dataframe, "empty") and getattr(
-                                dataframe, "empty"
-                            ):
-                                continue
-                            valid_dataframes.append(dataframe)
-
-                if not valid_dataframes:
-                    logger.warning(
-                        "No valid dataframes collected across databases for concatenation"
-                    )
-                    return None
-
-                concatenated = pd.concat(valid_dataframes, ignore_index=True)
-
-                if return_dataframe:
-                    return concatenated  # type: ignore[return-value]
-
-                # Create new parquet output for concatenated data
-                concatenated_parquet_output = self._setup_parquet_output(
-                    workflow_args, output_suffix, True
-                )
-                if concatenated_parquet_output:
-                    await concatenated_parquet_output.write(concatenated)  # type: ignore[arg-type]
-                    return await concatenated_parquet_output.get_statistics(
-                        typename=typename
-                    )
-            except Exception as e:  # noqa: BLE001
-                logger.error(
-                    f"Error concatenating multi-DB dataframes: {str(e)}",
-                    exc_info=True,
-                )
-                raise
-
-        logger.warning(
-            "multidb execution returned no output to write (write_to_file=False, concatenate=False)"
-        )
-        return None
-
-    async def _execute_multidb_flow(
-        self,
-        sql_client: BaseSQLClient,
-        sql_query: str,
-        workflow_args: Dict[str, Any],
-        output_suffix: str,
-        typename: str,
-        write_to_file: bool,
-        concatenate: bool,
-        return_dataframe: bool,
-        parquet_output: Optional[ParquetFileWriter],
-    ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
-        """Execute multi-database flow with proper error handling and result finalization."""
-        # Resolve databases to iterate
-        database_names = await get_database_names(
-            sql_client, workflow_args, self.fetch_database_sql
-        )
-        if not database_names:
-            logger.warning("No databases found to process")
-            return None
-
-        successful_databases: List[str] = []
-        dataframe_list: List[
-            Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]
-        ] = []
-
-        # Iterate databases and execute (consolidated single-db processing)
-        for database_name in database_names or []:
-            try:
-                # Setup connection for this database
-                await self._setup_database_connection(sql_client, database_name)
-
-                # Prepare query for this database
-                prepared_query = self._prepare_database_query(
-                    sql_query,
-                    database_name,
-                    workflow_args,
-                    typename,
-                    use_posix_regex=True,
-                )
-
-                # Execute using helper method
-                success, batched_iterator = await self._execute_single_db(
-                    sql_client,
-                    prepared_query,
-                    parquet_output,
-                    write_to_file,
-                )
-
-                if success:
-                    logger.info(f"Successfully processed database: {database_name}")
-
-            except Exception as e:  # noqa: BLE001
-                logger.error(
-                    f"Failed to process database '{database_name}': {str(e)}. Failing the workflow.",
-                    exc_info=True,
-                )
-                raise
-
-            if success:
-                successful_databases.append(database_name)
-                if not write_to_file and batched_iterator:
-                    dataframe_list.append(batched_iterator)
-
-        # Log results
-        logger.info(
-            f"Successfully processed {len(successful_databases)} databases: {successful_databases}"
-        )
-
-        # Finalize results
-        return await self._finalize_multidb_results(
-            write_to_file,
-            concatenate,
-            return_dataframe,
-            parquet_output,
-            dataframe_list,
-            workflow_args,
-            output_suffix,
-            typename,
-        )
-
-    async def _execute_single_db(
-        self,
-        sql_client: BaseSQLClient,
-        prepared_query: Optional[str],
-        parquet_output: Optional[ParquetFileWriter],
-        write_to_file: bool,
-    ) -> Tuple[
-        bool, Optional[Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]]
-    ]:  # type: ignore
-        if not prepared_query:
-            logger.error("Prepared query is None, cannot execute")
-            return False, None
-
-        try:
-            batched_iterator = await sql_client.get_batched_results(prepared_query)
-
-            if write_to_file and parquet_output:
-                await parquet_output.write_batches(batched_iterator)  # type: ignore
-                return True, None
-
-            return True, batched_iterator
-        except Exception as e:
-            logger.error(
-                f"Error during query execution or output writing: {e}", exc_info=True
-            )
-            raise
 
     @activity.defn
     @auto_heartbeater

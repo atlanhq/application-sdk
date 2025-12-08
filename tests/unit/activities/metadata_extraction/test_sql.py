@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from application_sdk.activities.common import sql_utils
 from application_sdk.activities.metadata_extraction.sql import (
     ActivityStatistics,
     BaseSQLMetadataExtractionActivities,
@@ -586,9 +587,9 @@ class TestBaseSQLMetadataExtractionActivities:
         new_callable=AsyncMock,
     )
     @patch("application_sdk.io.parquet.ParquetFileWriter.write_batches")
-    @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
-    @patch("application_sdk.activities.metadata_extraction.sql.prepare_query")
-    @patch("application_sdk.activities.metadata_extraction.sql.parse_credentials_extra")
+    @patch("application_sdk.activities.common.sql_utils.get_database_names")
+    @patch("application_sdk.activities.common.sql_utils.prepare_query")
+    @patch("application_sdk.activities.common.sql_utils.parse_credentials_extra")
     async def test_query_executor_multidb_success(
         self,
         mock_parse_credentials_extra,
@@ -650,7 +651,7 @@ class TestBaseSQLMetadataExtractionActivities:
 
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
-    @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
+    @patch("application_sdk.activities.common.sql_utils.get_database_names")
     async def test_query_executor_multidb_no_databases(
         self,
         mock_get_database_names,
@@ -694,7 +695,7 @@ class TestBaseSQLMetadataExtractionActivities:
 
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
-    @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
+    @patch("application_sdk.activities.common.sql_utils.get_database_names")
     @patch(
         "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
         new_callable=AsyncMock,
@@ -792,7 +793,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe,
         mock_activities,
     ):
-        """Test _execute_single_db with write_to_file=True."""
+        """Test execute_single_db with write_to_file=True."""
         # Create a proper mock SQL client with dict-like credentials
         sql_client = Mock()
         sql_client.credentials = {"extra": "{}"}
@@ -808,7 +809,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe.return_value = [mock_dataframe]
         mock_write_batched_dataframe.return_value = None
 
-        success, result = await mock_activities._execute_single_db(
+        success, result = await sql_utils.execute_single_db(
             sql_client, prepared_query, parquet_output, write_to_file=True
         )
 
@@ -826,7 +827,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe,
         mock_activities,
     ):
-        """Test _execute_single_db with write_to_file=False."""
+        """Test execute_single_db with write_to_file=False."""
         # Create a proper mock SQL client with dict-like credentials
         sql_client = Mock()
         sql_client.credentials = {"extra": "{}"}
@@ -841,7 +842,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_batched_iter = [mock_dataframe]
         mock_get_batched_dataframe.return_value = mock_batched_iter
 
-        success, result = await mock_activities._execute_single_db(
+        success, result = await sql_utils.execute_single_db(
             sql_client, prepared_query, parquet_output, write_to_file=False
         )
 
@@ -850,7 +851,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe.assert_called_once()
 
     async def test_execute_single_db_no_prepared_query(self, mock_activities):
-        """Test _execute_single_db with no prepared query."""
+        """Test execute_single_db with no prepared query."""
         # Create a proper mock SQL client with dict-like credentials
         sql_client = Mock()
         sql_client.credentials = {"extra": "{}"}
@@ -859,7 +860,7 @@ class TestBaseSQLMetadataExtractionActivities:
         prepared_query = None
         parquet_output = Mock()
 
-        success, result = await mock_activities._execute_single_db(
+        success, result = await sql_utils.execute_single_db(
             sql_client, prepared_query, parquet_output, write_to_file=True
         )
 
@@ -875,7 +876,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe,
         mock_activities,
     ):
-        """Test _execute_single_db with exception during execution."""
+        """Test execute_single_db with exception during execution."""
         # Create a proper mock SQL client with dict-like credentials
         sql_client = Mock()
         sql_client.credentials = {"extra": "{}"}
@@ -889,7 +890,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe.side_effect = Exception("Database error")
 
         with pytest.raises(Exception, match="Database error"):
-            await mock_activities._execute_single_db(
+            await sql_utils.execute_single_db(
                 sql_client, prepared_query, parquet_output, write_to_file=True
             )
 
@@ -907,7 +908,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe,
         mock_activities,
     ):
-        """Test _execute_single_db with async iterator."""
+        """Test execute_single_db with async iterator."""
         # Create a proper mock SQL client with dict-like credentials
         sql_client = Mock()
         sql_client.credentials = {"extra": "{}"}
@@ -928,7 +929,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe.return_value = mock_async_iter()
         mock_write_batched_dataframe.return_value = None
 
-        success, result = await mock_activities._execute_single_db(
+        success, result = await sql_utils.execute_single_db(
             sql_client, prepared_query, parquet_output, write_to_file=True
         )
 
@@ -952,9 +953,9 @@ class TestBaseSQLMetadataExtractionActivities:
         "application_sdk.io.parquet.ParquetFileWriter.write",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
-    @patch("application_sdk.activities.metadata_extraction.sql.prepare_query")
-    @patch("application_sdk.activities.metadata_extraction.sql.parse_credentials_extra")
+    @patch("application_sdk.activities.common.sql_utils.get_database_names")
+    @patch("application_sdk.activities.common.sql_utils.prepare_query")
+    @patch("application_sdk.activities.common.sql_utils.parse_credentials_extra")
     async def test_query_executor_multidb_concatenate_success(
         self,
         mock_parse_credentials_extra,
@@ -1032,9 +1033,9 @@ class TestBaseSQLMetadataExtractionActivities:
         "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
-    @patch("application_sdk.activities.metadata_extraction.sql.prepare_query")
-    @patch("application_sdk.activities.metadata_extraction.sql.parse_credentials_extra")
+    @patch("application_sdk.activities.common.sql_utils.get_database_names")
+    @patch("application_sdk.activities.common.sql_utils.prepare_query")
+    @patch("application_sdk.activities.common.sql_utils.parse_credentials_extra")
     async def test_query_executor_multidb_concatenate_return_dataframe(
         self,
         mock_parse_credentials_extra,
