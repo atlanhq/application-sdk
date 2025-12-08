@@ -69,7 +69,7 @@ scale_data_generator = [
     "pyyaml==6.0.2",
     "pandas==2.3.3",
     "pyarrow==20.0.0",
-    "faker==37.1.0",
+    "faker==38.2.0",
     "numpy>=1.23.5,<3.0.0",
 ]
 
