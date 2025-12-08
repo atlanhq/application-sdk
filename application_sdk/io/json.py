@@ -257,7 +257,7 @@ class JsonFileWriter(Writer):
         self.chunk_count = chunk_count
         self.buffer_size = buffer_size
         self.chunk_size = chunk_size or 50000  # to limit the memory usage on upload
-        self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
+        self.buffer: List[Union["pd.DataFrame", "daft.DataFrame", str]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.current_buffer_size_bytes = 0  # Track estimated buffer size in bytes
         self.max_file_size_bytes = int(
@@ -376,6 +376,97 @@ class JsonFileWriter(Writer):
                 description="Number of errors while writing to JSON files",
             )
             logger.error(f"Error writing daft dataframe to json: {str(e)}")
+            raise
+
+    async def _write_dictionary(
+        self,
+        data: Union[Dict[str, Any], List[Dict[str, Any]]],
+        preserve_fields: Optional[List[str]] = None,
+        null_to_empty_dict_fields: Optional[List[str]] = None,
+        **kwargs,
+    ):
+        """Write a dictionary or list of dictionaries to JSON files.
+
+        Args:
+            data: The dictionary or list of dictionaries to write.
+            preserve_fields: Optional list of fields to preserve during null processing.
+            null_to_empty_dict_fields: Optional list of fields to convert from null to empty dict.
+        """
+        # Initialize default values for mutable arguments
+        if preserve_fields is None:
+            preserve_fields = [
+                "identity_cycle",
+                "number_columns_in_part_key",
+                "columns_participating_in_part_key",
+                "engine",
+                "is_insertable_into",
+                "is_typed",
+            ]
+        if null_to_empty_dict_fields is None:
+            null_to_empty_dict_fields = [
+                "attributes",
+                "customAttributes",
+            ]
+
+        if isinstance(data, dict):
+            data = [data]
+
+        try:
+            if self.chunk_start is None:
+                self.chunk_part = 0
+
+            buffer = []
+            for row in data:
+                self.total_record_count += 1
+                # Convert datetime fields to epoch timestamps before serialization
+                row = convert_datetime_to_epoch(row)
+                # Remove null attributes from the row recursively, preserving specified fields
+                cleaned_row = process_null_fields(
+                    row, preserve_fields, null_to_empty_dict_fields
+                )
+                # Serialize the row and add it to the buffer
+                serialized_row = orjson.dumps(
+                    cleaned_row, option=orjson.OPT_APPEND_NEWLINE
+                )
+                buffer.append(serialized_row)
+                self.current_buffer_size += 1
+                self.current_buffer_size_bytes += len(serialized_row)
+
+                # If the buffer size is reached append to the file and clear the buffer
+                if self.current_buffer_size >= self.buffer_size:
+                    await self._flush_daft_buffer(buffer, self.chunk_part)
+
+                if self.current_buffer_size_bytes > self.max_file_size_bytes or (
+                    self.total_record_count > 0
+                    and self.total_record_count % self.chunk_size == 0
+                ):
+                    output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
+                    if os.path.exists(output_file_name):
+                        await self._upload_file(output_file_name)
+                        self.chunk_part += 1
+
+            # Write any remaining rows in the buffer
+            if self.current_buffer_size > 0:
+                await self._flush_daft_buffer(buffer, self.chunk_part)
+
+            # Record metrics for successful write
+            self.metrics.record_metric(
+                name="json_write_records",
+                value=len(data),
+                metric_type=MetricType.COUNTER,
+                labels={"type": "dict"},
+                description="Number of records written to JSON files from dictionary",
+            )
+        except Exception as e:
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="json_write_errors",
+                value=1,
+                metric_type=MetricType.COUNTER,
+                labels={"type": "dict", "error": str(e)},
+                description="Number of errors while writing to JSON files",
+            )
+            logger.error(f"Error writing dictionary to json: {str(e)}")
             raise
 
     async def _flush_daft_buffer(self, buffer: List[str], chunk_part: int):

@@ -6,11 +6,12 @@ This module provides a standardized way to write data to various destinations wi
 
 1.  **`Writer` Interface (`application_sdk.io.Writer`)**:
     *   **Purpose:** An abstract base class defining the contract for writing data.
-    *   **Key Methods:** Requires subclasses to implement methods for writing Pandas or Daft DataFrames:
-        *   `write(dataframe: Union[pd.DataFrame, daft.DataFrame])`: Write a single DataFrame (Pandas or Daft).
-        *   `write_batches(dataframe: Union[AsyncGenerator, Generator])`: Write batched DataFrames.
+    *   **Key Methods:** Requires subclasses to implement methods for writing Pandas or Daft DataFrames, or standard Dictionaries:
+        *   `write(dataframe: Union[pd.DataFrame, daft.DataFrame, Dict, List[Dict]])`: Write a single DataFrame or Dictionary (Pandas, Daft, or Dict).
+        *   `write_batches(dataframe: Union[AsyncGenerator, Generator])`: Write batched DataFrames or Dictionaries.
         *   `_write_dataframe(dataframe: pd.DataFrame)`: Internal method for writing Pandas DataFrames.
         *   `_write_daft_dataframe(dataframe: daft.DataFrame)`: Internal method for writing Daft DataFrames.
+        *   `_write_dictionary(data: Union[Dict, List[Dict]])`: Internal method for writing Dictionaries.
     *   **Statistics:** Includes methods (`get_statistics`, `write_statistics`) to track and save metadata about the output (record count, chunk count) to a `statistics.json.ignore` file, typically alongside the data output.
     *   **Usage:** Activities typically instantiate a specific `Writer` subclass and use its write methods to persist data fetched or generated during the activity.
 

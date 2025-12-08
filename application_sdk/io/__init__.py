@@ -125,11 +125,19 @@ class Writer(ABC):
     extension: str
     dataframe_type: DataframeType
 
-    async def write(self, dataframe: Union["pd.DataFrame", "daft.DataFrame"], **kwargs):
+    async def write(
+        self,
+        dataframe: Union[
+            "pd.DataFrame", "daft.DataFrame", Dict[str, Any], List[Dict[str, Any]]
+        ],
+        **kwargs,
+    ):
         """
         Method to write the pandas dataframe to an iceberg table
         """
-        if self.dataframe_type == DataframeType.pandas:
+        if isinstance(dataframe, (dict, list)):
+            await self._write_dictionary(dataframe, **kwargs)
+        elif self.dataframe_type == DataframeType.pandas:
             await self._write_dataframe(dataframe, **kwargs)
         elif self.dataframe_type == DataframeType.daft:
             await self._write_daft_dataframe(dataframe, **kwargs)
@@ -143,6 +151,8 @@ class Writer(ABC):
             Generator["pd.DataFrame", None, None],
             AsyncGenerator["daft.DataFrame", None],
             Generator["daft.DataFrame", None, None],
+            Generator[Dict[str, Any], None, None],
+            Generator[List[Dict[str, Any]], None, None],
         ],
     ):
         """
@@ -153,7 +163,54 @@ class Writer(ABC):
         elif self.dataframe_type == DataframeType.daft:
             await self._write_batched_daft_dataframe(dataframe)
         else:
-            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+            # For dictionaries, we can default to pandas processing since conversion is likely needed
+            # or handle them directly if we assume they are generators of dicts
+            await self._write_batched_dictionary(dataframe)
+
+    async def _write_batched_dictionary(
+        self,
+        batched_data: Union[
+            Generator[Dict[str, Any], None, None],
+            Generator[List[Dict[str, Any]], None, None],
+        ],
+    ):
+        """Write a batched dictionary to Output.
+
+        Args:
+            batched_data: Generator of dictionaries to write.
+        """
+        try:
+            if inspect.isasyncgen(batched_data):
+                async for data in batched_data:
+                    if not is_empty_dataframe(data):
+                        await self._write_dictionary(data)
+            else:
+                for data in batched_data:
+                    if not is_empty_dataframe(data):
+                        await self._write_dictionary(data)
+        except Exception as e:
+            logger.error(f"Error writing batched dictionary: {str(e)}")
+            raise
+
+    async def _write_dictionary(
+        self, data: Union[Dict[str, Any], List[Dict[str, Any]]], **kwargs
+    ):
+        """Write a dictionary or list of dictionaries to the output.
+
+        Args:
+            data: The dictionary or list of dictionaries to write.
+            **kwargs: Additional parameters.
+        """
+        import pandas as pd
+
+        # Default implementation: convert to pandas DataFrame and write
+        # Subclasses like JsonFileWriter can override this for better performance
+        if isinstance(data, dict):
+            df = pd.DataFrame([data])
+        else:
+            df = pd.DataFrame(data)
+
+        await self._write_dataframe(df, **kwargs)
 
     async def _write_batched_dataframe(
         self,
@@ -175,6 +232,9 @@ class Writer(ABC):
         try:
             if inspect.isasyncgen(batched_dataframe):
                 async for dataframe in batched_dataframe:
+                    if isinstance(dataframe, (dict, list)):
+                        await self._write_dictionary(dataframe)
+                        continue
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)
             else:
@@ -183,6 +243,9 @@ class Writer(ABC):
                     Generator["pd.DataFrame", None, None], batched_dataframe
                 )
                 for dataframe in sync_generator:
+                    if isinstance(dataframe, (dict, list)):
+                        await self._write_dictionary(dataframe)
+                        continue
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)
         except Exception as e:
