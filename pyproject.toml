@@ -74,7 +74,7 @@ scale_data_generator = [
 ]
 
 distributed_lock = [
-    "redis[hiredis]==5.2.0",
+    "redis[hiredis]==7.1.0",
 ]
 
 mcp = [
