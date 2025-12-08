@@ -1,4 +1,3 @@
-import logging
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -132,7 +131,9 @@ async def finalize_multidb_results(
     dataframe_list: List[
         Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]
     ],
-    setup_parquet_output_func: Callable[[Dict[str, Any], str, bool], Optional[ParquetFileWriter]],
+    setup_parquet_output_func: Callable[
+        [Dict[str, Any], str, bool], Optional[ParquetFileWriter]
+    ],
     workflow_args: Dict[str, Any],
     output_suffix: str,
     typename: str,
@@ -197,7 +198,9 @@ async def finalize_multidb_results(
             )
             if concatenated_parquet_output:
                 await concatenated_parquet_output.write(concatenated)  # type: ignore
-                return await concatenated_parquet_output.get_statistics(typename=typename)
+                return await concatenated_parquet_output.get_statistics(
+                    typename=typename
+                )
         except Exception as e:
             logger.error(
                 f"Error concatenating multi-DB dataframes: {str(e)}",
@@ -223,7 +226,9 @@ async def execute_multidb_flow(
     return_dataframe: bool,
     parquet_output: Optional[ParquetFileWriter],
     temp_table_regex_sql: str,
-    setup_parquet_output_func: Callable[[Dict[str, Any], str, bool], Optional[ParquetFileWriter]],
+    setup_parquet_output_func: Callable[
+        [Dict[str, Any], str, bool], Optional[ParquetFileWriter]
+    ],
 ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
     """Execute multi-database flow with proper error handling and result finalization.
 
@@ -312,4 +317,3 @@ async def execute_multidb_flow(
         output_suffix,
         typename,
     )
-
