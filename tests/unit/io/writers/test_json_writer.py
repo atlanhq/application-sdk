@@ -32,12 +32,11 @@ async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
     # Create a safe output path by joining base_output_path with config's output_path
     safe_path = str(Path(base_output_path) / config["output_path"])
     json_output = JsonFileWriter(  # type: ignore
-        output_suffix=config["output_suffix"],
         output_path=safe_path,
         chunk_size=config["chunk_size"],
     )
 
-    assert json_output.output_path.endswith(config["output_suffix"])
+    assert json_output.output_path == safe_path
     assert json_output.chunk_size == config["chunk_size"]
     assert os.path.exists(json_output.output_path)
 
@@ -45,8 +44,7 @@ async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
 @pytest.mark.asyncio
 async def test_write_empty(base_output_path: str) -> None:
     json_output = JsonFileWriter(  # type: ignore
-        output_suffix="tests/raw",
-        output_path=base_output_path,
+        output_path=os.path.join(base_output_path, "tests", "raw"),
         chunk_size=100000,
         typename=None,
         chunk_count=0,
@@ -70,8 +68,7 @@ async def test_write_single_chunk(base_output_path: str, df: pd.DataFrame) -> No
         "application_sdk.services.objectstore.ObjectStore.upload_file"
     ) as mock_push:
         json_output = JsonFileWriter(  # type: ignore
-            output_suffix="tests/raw",
-            output_path=base_output_path,
+            output_path=os.path.join(base_output_path, "tests", "raw"),
             chunk_size=len(df)
             + 1,  # Ensure single chunk by making chunk size larger than df
             typename=None,
@@ -103,8 +100,7 @@ async def test_write_multiple_chunks(
         "application_sdk.services.objectstore.ObjectStore.upload_file"
     ) as mock_push:
         json_output = JsonFileWriter(  # type: ignore
-            output_suffix="tests/raw",
-            output_path=base_output_path,
+            output_path=os.path.join(base_output_path, "tests", "raw"),
             chunk_size=chunk_size,
             typename=None,
             chunk_count=0,
@@ -129,8 +125,7 @@ async def test_write_multiple_chunks(
 @pytest.mark.asyncio
 async def test_write_error(base_output_path: str) -> None:
     json_output = JsonFileWriter(  # type: ignore
-        output_suffix="tests/raw",
-        output_path=base_output_path,
+        output_path=os.path.join(base_output_path, "tests", "raw"),
         chunk_size=100000,
         typename=None,
         chunk_count=0,

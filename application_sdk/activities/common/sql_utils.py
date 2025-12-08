@@ -131,11 +131,8 @@ async def finalize_multidb_results(
     dataframe_list: List[
         Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]
     ],
-    setup_parquet_output_func: Callable[
-        [Dict[str, Any], str, bool], Optional[ParquetFileWriter]
-    ],
-    workflow_args: Dict[str, Any],
-    output_suffix: str,
+    setup_parquet_output_func: Callable[[str, bool], Optional[ParquetFileWriter]],
+    output_path: str,
     typename: str,
 ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
     """Finalize results for multi-database execution.
@@ -147,8 +144,7 @@ async def finalize_multidb_results(
         parquet_output: The parquet writer used (if any).
         dataframe_list: List of dataframe iterators from each DB.
         setup_parquet_output_func: Callback to create new parquet output.
-        workflow_args: Workflow arguments.
-        output_suffix: Suffix for output files.
+        output_path: Full path for output files.
         typename: Type name for statistics.
 
     Returns:
@@ -193,9 +189,7 @@ async def finalize_multidb_results(
                 return concatenated
 
             # Create new parquet output for concatenated data
-            concatenated_parquet_output = setup_parquet_output_func(
-                workflow_args, output_suffix, True
-            )
+            concatenated_parquet_output = setup_parquet_output_func(output_path, True)
             if concatenated_parquet_output:
                 await concatenated_parquet_output.write(concatenated)  # type: ignore
                 return await concatenated_parquet_output.get_statistics(
@@ -219,16 +213,14 @@ async def execute_multidb_flow(
     sql_query: str,
     workflow_args: Dict[str, Any],
     fetch_database_sql: Optional[str],
-    output_suffix: str,
+    output_path: str,
     typename: str,
     write_to_file: bool,
     concatenate: bool,
     return_dataframe: bool,
     parquet_output: Optional[ParquetFileWriter],
     temp_table_regex_sql: str,
-    setup_parquet_output_func: Callable[
-        [Dict[str, Any], str, bool], Optional[ParquetFileWriter]
-    ],
+    setup_parquet_output_func: Callable[[str, bool], Optional[ParquetFileWriter]],
 ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
     """Execute multi-database flow with proper error handling and result finalization.
 
@@ -237,7 +229,7 @@ async def execute_multidb_flow(
         sql_query: The SQL query to execute on each database.
         workflow_args: Workflow arguments.
         fetch_database_sql: SQL to fetch list of databases.
-        output_suffix: Suffix for output files.
+        output_path: Full path for output files.
         typename: Type name for statistics.
         write_to_file: Whether to write results to file.
         concatenate: Whether to concatenate in-memory results.
@@ -313,7 +305,6 @@ async def execute_multidb_flow(
         parquet_output,
         dataframe_list,
         setup_parquet_output_func,
-        workflow_args,
-        output_suffix,
+        output_path,
         typename,
     )

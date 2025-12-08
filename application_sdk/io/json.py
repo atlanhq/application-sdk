@@ -203,8 +203,7 @@ class JsonFileWriter(Writer):
     includes chunk numbers for split files.
 
     Attributes:
-        output_path (Optional[str]): Base path where JSON files will be written.
-        output_suffix (str): Suffix added to file paths when uploading to object store.
+        output_path (str): Full path where JSON files will be written.
         typename (Optional[str]): Type identifier for the data being written.
         chunk_start (Optional[int]): Starting index for chunk numbering.
         buffer_size (int): Size of the write buffer in bytes.
@@ -217,8 +216,7 @@ class JsonFileWriter(Writer):
 
     def __init__(
         self,
-        output_suffix: str,
-        output_path: Optional[str] = None,
+        output_path: str = "",
         typename: Optional[str] = None,
         chunk_start: Optional[int] = None,
         buffer_size: int = 5000,
@@ -234,8 +232,10 @@ class JsonFileWriter(Writer):
         """Initialize the JSON output handler.
 
         Args:
-            output_path (str): Path where JSON files will be written.
-            output_suffix (str): Prefix for files when uploading to object store.
+            output_path (str): Full path where JSON files will be written.
+            typename (Optional[str], optional): Type identifier for the data being written.
+                If provided, a subdirectory with this name will be created under output_path.
+                Defaults to None.
             chunk_start (Optional[int], optional): Starting index for chunk numbering.
                 Defaults to None.
             buffer_size (int, optional): Size of the buffer in bytes.
@@ -251,7 +251,6 @@ class JsonFileWriter(Writer):
             dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
         self.output_path = output_path
-        self.output_suffix = output_suffix
         self.typename = typename
         self.chunk_start = chunk_start
         self.total_record_count = total_record_count
@@ -276,7 +275,6 @@ class JsonFileWriter(Writer):
         if not self.output_path:
             raise ValueError("output_path is required")
 
-        self.output_path = os.path.join(self.output_path, output_suffix)
         if typename:
             self.output_path = os.path.join(self.output_path, typename)
         os.makedirs(self.output_path, exist_ok=True)

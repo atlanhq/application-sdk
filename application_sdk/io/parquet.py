@@ -430,6 +430,8 @@ class ParquetFileWriter(Writer):
         if self.chunk_start:
             self.chunk_count = self.chunk_start + self.chunk_count
 
+        if not self.output_path:
+            raise ValueError("output_path is required")
         # Create output directory
         if self.typename:
             self.output_path = os.path.join(self.output_path, self.typename)

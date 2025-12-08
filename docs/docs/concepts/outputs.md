@@ -70,11 +70,10 @@ Writes Pandas or Daft DataFrames to one or more JSON Lines files locally, option
 
 ### Initialization
 
-`JsonFileWriter(output_suffix, output_path=..., typename=..., chunk_start=..., chunk_size=..., ...)`
+`JsonFileWriter(output_path, typename=..., chunk_start=..., chunk_size=..., ...)`
 
-*   `output_suffix` (str): A suffix added to the base `output_path`. Often used for specific runs or data types.
-*   `output_path` (str): The base *local* directory where files will be temporarily written (e.g., `/data/workflow_run_123`). The final local path becomes `{output_path}/{output_suffix}/{typename}`.
-*   `typename` (str, optional): A subdirectory name added under `{output_path}/{output_suffix}` (e.g., `tables`, `columns`). Helps organize output.
+*   `output_path` (str): The full path where files will be written (e.g., `/data/workflow_run_123/transformed`). The caller should construct this path explicitly.
+*   `typename` (str, optional): A subdirectory name added under `output_path` (e.g., `tables`, `columns`). Helps organize output.
 *   `chunk_start` (int, optional): Starting index for chunk numbering in filenames.
 *   `chunk_size` (int, optional): Maximum number of records per output file chunk (default: 50,000).
 
@@ -84,6 +83,7 @@ Writes Pandas or Daft DataFrames to one or more JSON Lines files locally, option
 
 ```python
 # Within an Activity method (e.g., query_executor in SQL extraction/query activities)
+import os
 from application_sdk.io.json import JsonFileWriter
 # ... other imports ...
 
@@ -92,22 +92,15 @@ async def query_executor(
     sql_client: Any,
     sql_query: Optional[str],
     workflow_args: Dict[str, Any],
-    output_suffix: str, # e.g., workflow_run_id
+    output_path: str,   # Full path, e.g., "/data/workflow_run_123/raw/table"
     typename: str,      # e.g., "table", "column"
 ) -> Optional[Dict[str, Any]]:
 
     # ... (validate inputs, prepare query) ...
 
-    # Get output path details from workflow_args
-    output_path = workflow_args.get("output_path")     # Base local path
-
-    if not output_path:
-        raise ValueError("output_path is required in workflow_args")
-
-    # Instantiate JsonFileWriter
+    # Instantiate JsonFileWriter with the full output path
     json_writer = JsonFileWriter(
-        output_suffix=output_suffix,
-        output_path=output_path,         # Local base path
+        output_path=output_path,  # Full path provided by caller
         typename=typename,
         # chunk_size=... (optional)
     )
@@ -132,6 +125,11 @@ async def query_executor(
     except Exception as e:
         logger.error(f"Error executing query and writing output for {typename}: {e}", exc_info=True)
         raise
+
+# Example: Constructing the output path in the caller
+base_output_path = workflow_args.get("output_path", "")
+full_output_path = os.path.join(base_output_path, "raw", "table")
+await query_executor(sql_client, sql_query, workflow_args, full_output_path, "table")
 ```
 
 ## Other Writer Handlers

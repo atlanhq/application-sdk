@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -326,11 +327,12 @@ class BaseSQLHandler(HandlerInterface):
                 # Use the base query executor in multidb mode to get concatenated df
                 activities = BaseSQLMetadataExtractionActivities()
                 activities.multidb = True
+                base_output_path = payload.get("output_path", "")
                 concatenated_df = await activities.query_executor(
                     sql_client=self.sql_client,
                     sql_query=self.tables_check_sql,
                     workflow_args=payload,
-                    output_suffix="raw/table",
+                    output_path=os.path.join(base_output_path, "raw", "table"),
                     typename="table",
                     write_to_file=False,
                     concatenate=True,

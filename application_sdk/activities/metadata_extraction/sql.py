@@ -232,7 +232,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         sql_client: BaseSQLClient,
         sql_query: Optional[str],
         workflow_args: Dict[str, Any],
-        output_suffix: str,
+        output_path: str,
         typename: str,
         write_to_file: bool = True,
         concatenate: bool = False,
@@ -245,7 +245,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         sql_client: BaseSQLClient,
         sql_query: Optional[str],
         workflow_args: Dict[str, Any],
-        output_suffix: str,
+        output_path: str,
         typename: str,
         write_to_file: bool = True,
         concatenate: bool = False,
@@ -257,7 +257,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         sql_client: BaseSQLClient,
         sql_query: Optional[str],
         workflow_args: Dict[str, Any],
-        output_suffix: str,
+        output_path: str,
         typename: str,
         write_to_file: bool = True,
         concatenate: bool = False,
@@ -274,11 +274,8 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             sql_client: The SQL client instance to use for executing the query.
             sql_query: The SQL query string to execute. Placeholders can be used which
                    will be replaced using `workflow_args`.
-            workflow_args: Dictionary containing arguments for the workflow, used for
-                           preparing the query and defining output paths. Expected keys:
-                           - "output_prefix": Prefix for the output path.
-                           - "output_path": Base directory for the output.
-            output_suffix: Suffix to append to the output file name.
+            workflow_args: Dictionary containing arguments for the workflow.
+            output_path: Full path where the output files will be written.
             typename: Type name used for generating output statistics.
             write_to_file: Whether to write results to file. Defaults to True.
             concatenate: Whether to concatenate results in multidb mode. Defaults to False.
@@ -289,7 +286,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             or a DataFrame if return_dataframe=True, or None if the query is empty or execution fails.
 
         Raises:
-            ValueError: If `sql_client` is not provided or if required workflow arguments are missing.
+            ValueError: If `sql_client` is not provided.
         """
         # Common pre-checks and setup shared by both multidb and single-db paths
         if not sql_client:
@@ -301,9 +298,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             return None
 
         # Setup parquet output using helper method
-        parquet_output = self._setup_parquet_output(
-            workflow_args, output_suffix, write_to_file
-        )
+        parquet_output = self._setup_parquet_output(output_path, write_to_file)
 
         # If multidb mode is enabled, run per-database flow
         if getattr(self, "multidb", False):
@@ -312,7 +307,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 sql_query=sql_query,
                 workflow_args=workflow_args,
                 fetch_database_sql=self.fetch_database_sql,
-                output_suffix=output_suffix,
+                output_path=output_path,
                 typename=typename,
                 write_to_file=write_to_file,
                 concatenate=concatenate,
@@ -351,22 +346,23 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     def _setup_parquet_output(
         self,
-        workflow_args: Dict[str, Any],
-        output_suffix: str,
+        output_path: str,
         write_to_file: bool,
     ) -> Optional[ParquetFileWriter]:
+        """Create a ParquetFileWriter for the given output path.
+
+        Args:
+            output_path: Full path where the output files will be written.
+            write_to_file: Whether to write results to file.
+
+        Returns:
+            Optional[ParquetFileWriter]: A ParquetFileWriter instance, or None if write_to_file is False.
+        """
         if not write_to_file:
             return None
-        output_prefix = workflow_args.get("output_prefix")
-        output_path = workflow_args.get("output_path")
-        if not output_prefix or not output_path:
-            logger.error("Output prefix or path not provided in workflow_args.")
-            raise ValueError(
-                "Output prefix and path must be specified in workflow_args."
-            )
 
         return ParquetFileWriter(
-            output_path=os.path.join(output_path, output_suffix),
+            output_path=output_path,
             use_consolidation=True,
         )
 
@@ -387,12 +383,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         """Fetch databases from the source database.
 
         Args:
-            batch_input: DataFrame containing the raw database data.
-            raw_output: JsonFileWriter instance for writing raw data.
-            **kwargs: Additional keyword arguments.
+            workflow_args: Dictionary containing arguments for the workflow.
 
         Returns:
-            Dict containing chunk count, typename, and total record count.
+            Optional[ActivityStatistics]: Statistics about the extracted databases.
         """
         state = cast(
             BaseSQLMetadataExtractionActivitiesState,
@@ -405,11 +399,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         prepared_query = prepare_query(
             query=self.fetch_database_sql, workflow_args=workflow_args
         )
+        base_output_path = workflow_args.get("output_path", "")
         statistics = await self.query_executor(
             sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
-            output_suffix="raw/database",
+            output_path=os.path.join(base_output_path, "raw", "database"),
             typename="database",
         )
         return statistics
@@ -422,12 +417,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         """Fetch schemas from the source database.
 
         Args:
-            batch_input: DataFrame containing the raw schema data.
-            raw_output: JsonFileWriter instance for writing raw data.
-            **kwargs: Additional keyword arguments.
+            workflow_args: Dictionary containing arguments for the workflow.
 
         Returns:
-            Dict containing chunk count, typename, and total record count.
+            Optional[ActivityStatistics]: Statistics about the extracted schemas.
         """
         state = cast(
             BaseSQLMetadataExtractionActivitiesState,
@@ -440,11 +433,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         prepared_query = prepare_query(
             query=self.fetch_schema_sql, workflow_args=workflow_args
         )
+        base_output_path = workflow_args.get("output_path", "")
         statistics = await self.query_executor(
             sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
-            output_suffix="raw/schema",
+            output_path=os.path.join(base_output_path, "raw", "schema"),
             typename="schema",
         )
         return statistics
@@ -457,9 +451,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         """Fetch tables from the source database.
 
         Args:
-            batch_input: DataFrame containing the raw table data.
-            raw_output: JsonFileWriter instance for writing raw data.
-            **kwargs: Additional keyword arguments.
+            workflow_args: Dictionary containing arguments for the workflow.
 
         Returns:
             Optional[ActivityStatistics]: Statistics about the extracted tables, or None if extraction failed.
@@ -477,11 +469,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             workflow_args=workflow_args,
             temp_table_regex_sql=self.extract_temp_table_regex_table_sql,
         )
+        base_output_path = workflow_args.get("output_path", "")
         statistics = await self.query_executor(
             sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
-            output_suffix="raw/table",
+            output_path=os.path.join(base_output_path, "raw", "table"),
             typename="table",
         )
         return statistics
@@ -494,9 +487,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         """Fetch columns from the source database.
 
         Args:
-            batch_input: DataFrame containing the raw column data.
-            raw_output: JsonFileWriter instance for writing raw data.
-            **kwargs: Additional keyword arguments.
+            workflow_args: Dictionary containing arguments for the workflow.
 
         Returns:
             Optional[ActivityStatistics]: Statistics about the extracted columns, or None if extraction failed.
@@ -514,11 +505,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             workflow_args=workflow_args,
             temp_table_regex_sql=self.extract_temp_table_regex_column_sql,
         )
+        base_output_path = workflow_args.get("output_path", "")
         statistics = await self.query_executor(
             sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
-            output_suffix="raw/column",
+            output_path=os.path.join(base_output_path, "raw", "column"),
             typename="column",
         )
         return statistics
@@ -531,9 +523,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         """Fetch procedures from the source database.
 
         Args:
-            batch_input: DataFrame containing the raw column data.
-            raw_output: JsonFileWriter instance for writing raw data.
-            **kwargs: Additional keyword arguments.
+            workflow_args: Dictionary containing arguments for the workflow.
 
         Returns:
             Optional[ActivityStatistics]: Statistics about the extracted procedures, or None if extraction failed.
@@ -549,11 +539,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         prepared_query = prepare_query(
             query=self.fetch_procedure_sql, workflow_args=workflow_args
         )
+        base_output_path = workflow_args.get("output_path", "")
         statistics = await self.query_executor(
             sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
-            output_suffix="raw/extras-procedure",
+            output_path=os.path.join(base_output_path, "raw", "extras-procedure"),
             typename="extras-procedure",
         )
         return statistics
@@ -593,8 +584,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         raw_input = raw_input.read_batches()
 
         transformed_output = JsonFileWriter(
-            output_path=output_path,
-            output_suffix="transformed",
+            output_path=os.path.join(output_path, "transformed"),
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
             dataframe_type=DataframeType.daft,

@@ -169,10 +169,12 @@ class TestBaseSQLMetadataExtractionActivities:
         )
 
         sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
         result = await mock_activities.query_executor(
-            sql_client, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
         assert result is not None
         assert isinstance(result, ActivityStatistics)
@@ -210,10 +212,12 @@ class TestBaseSQLMetadataExtractionActivities:
             mock_get_batched_dataframe  # Assign the patched mock here
         )
         sql_query = "SELECT * FROM empty_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
         result = await mock_activities.query_executor(
-            sql_client, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
         assert isinstance(result, ActivityStatistics)
         assert result.total_record_count == 0
@@ -419,11 +423,13 @@ class TestBaseSQLMetadataExtractionActivities:
         sql_client.load = AsyncMock()
         sql_client.get_batched_results = mock_get_batched_dataframe
         sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_client, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
 
         assert result is not None
@@ -469,11 +475,13 @@ class TestBaseSQLMetadataExtractionActivities:
         sql_client.load = AsyncMock()
         sql_client.get_batched_results = AsyncMock()
         sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_client, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
 
         assert result is not None
@@ -507,14 +515,16 @@ class TestBaseSQLMetadataExtractionActivities:
         sql_client.load = AsyncMock()
         sql_client.get_batched_results = AsyncMock()
         sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
             sql_client,
             sql_query,
             sample_workflow_args,
-            output_suffix,
+            output_path,
             typename,
             write_to_file=False,
         )
@@ -531,33 +541,16 @@ class TestBaseSQLMetadataExtractionActivities:
         sql_client.load = AsyncMock()
         sql_client.get_batched_results = AsyncMock()
         sql_query = ""
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_client, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
 
         assert result is None
-
-    async def test_query_executor_missing_output_args(self, mock_activities):
-        """Test query_executor with missing output arguments."""
-        # Create a proper mock SQL client with dict-like credentials
-        sql_client = Mock()
-        sql_client.credentials = {"extra": "{}"}
-        sql_client.load = AsyncMock()
-        sql_client.get_batched_results = AsyncMock()
-        sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
-        typename = "DATABASE"
-        workflow_args = {"workflow_id": "test"}  # Missing output_prefix and output_path
-
-        with pytest.raises(
-            ValueError, match="Output prefix and path must be specified"
-        ):
-            await mock_activities.query_executor(
-                sql_client, sql_query, workflow_args, output_suffix, typename
-            )
 
     @patch("os.makedirs")
     async def test_query_executor_no_sql_client(
@@ -566,13 +559,15 @@ class TestBaseSQLMetadataExtractionActivities:
         """Test query_executor with no SQL client."""
         sql_client = None
         sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         # The method validates sql_client and raises ValueError if not provided
         with pytest.raises(ValueError, match="SQL client is required"):
             await mock_activities.query_executor(
-                sql_client, sql_query, sample_workflow_args, output_suffix, typename
+                sql_client, sql_query, sample_workflow_args, output_path, typename
             )
 
     # Tests for multidb mode
@@ -636,11 +631,13 @@ class TestBaseSQLMetadataExtractionActivities:
         sql_client.load = AsyncMock()
         sql_client.get_batched_results = AsyncMock()
         sql_query = "SELECT * FROM {database_name}.test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_client, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
 
         assert result is not None
@@ -684,11 +681,13 @@ class TestBaseSQLMetadataExtractionActivities:
         sql_client.load = AsyncMock()
         sql_client.get_batched_results = AsyncMock()
         sql_query = "SELECT * FROM {database_name}.test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_client, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
 
         assert result is None
@@ -727,13 +726,15 @@ class TestBaseSQLMetadataExtractionActivities:
         sql_client.load = AsyncMock()
         sql_client.get_batched_results = AsyncMock()
         sql_query = "SELECT * FROM {database_name}.test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         # The method doesn't validate state.sql_client, it uses the passed sql_client
         # So this test should actually succeed, not raise an exception
         result = await mock_activities.query_executor(
-            sql_client, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
 
         # Should return ActivityStatistics even with state.sql_client = None
@@ -746,11 +747,11 @@ class TestBaseSQLMetadataExtractionActivities:
         self, mock_makedirs, mock_activities, sample_workflow_args
     ):
         """Test _setup_parquet_output with valid arguments."""
-        output_suffix = "test_suffix"
-
-        result = mock_activities._setup_parquet_output(
-            sample_workflow_args, output_suffix, write_to_file=True
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
         )
+
+        result = mock_activities._setup_parquet_output(output_path, write_to_file=True)
 
         assert result is not None
         assert isinstance(result, ParquetFileWriter)
@@ -759,25 +760,13 @@ class TestBaseSQLMetadataExtractionActivities:
         self, mock_activities, sample_workflow_args
     ):
         """Test _setup_parquet_output with write_to_file=False."""
-        output_suffix = "test_suffix"
-
-        result = mock_activities._setup_parquet_output(
-            sample_workflow_args, output_suffix, write_to_file=False
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
         )
 
+        result = mock_activities._setup_parquet_output(output_path, write_to_file=False)
+
         assert result is None
-
-    def test_setup_parquet_output_missing_args(self, mock_activities):
-        """Test _setup_parquet_output with missing workflow arguments."""
-        workflow_args = {"workflow_id": "test"}  # Missing output_prefix and output_path
-        output_suffix = "test_suffix"
-
-        with pytest.raises(
-            ValueError, match="Output prefix and path must be specified"
-        ):
-            mock_activities._setup_parquet_output(
-                workflow_args, output_suffix, write_to_file=True
-            )
 
     @patch(
         "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
@@ -1010,14 +999,16 @@ class TestBaseSQLMetadataExtractionActivities:
             return_value=async_dataframe_iterator()
         )
         sql_query = "SELECT * FROM {database_name}.test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
             sql_client,
             sql_query,
             sample_workflow_args,
-            output_suffix,
+            output_path,
             typename,
             write_to_file=False,
             concatenate=True,
@@ -1086,14 +1077,16 @@ class TestBaseSQLMetadataExtractionActivities:
             return_value=async_dataframe_iterator()
         )
         sql_query = "SELECT * FROM {database_name}.test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
             sql_client,
             sql_query,
             sample_workflow_args,
-            output_suffix,
+            output_path,
             typename,
             write_to_file=False,
             concatenate=True,
