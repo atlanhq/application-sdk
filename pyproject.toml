@@ -43,7 +43,7 @@ Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 workflows = [
     "dapr==1.16.0",
     "temporalio==1.7.1",
-    "orjson==3.10.18",
+    "orjson==3.11.5",
 ]
 pandas = [
     "pandas==2.3.3"
