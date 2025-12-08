@@ -55,7 +55,7 @@ iceberg = [
     "pyiceberg==0.8.1",
 ]
 sqlalchemy = [
-    "sqlalchemy[asyncio]==2.0.36",
+    "sqlalchemy[asyncio]==2.0.44",
 ]
 iam_auth = [
     "boto3==1.38.6",
