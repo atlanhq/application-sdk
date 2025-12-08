@@ -175,6 +175,7 @@ class TestServer:
         """Setup method that runs before each test method"""
         self.mock_handler = Mock(spec=HandlerInterface)
         self.mock_handler.preflight_check = AsyncMock()
+        self.mock_handler.upload_file = AsyncMock()
         self.app = APIServer(handler=self.mock_handler)
 
     @pytest.mark.asyncio
@@ -337,6 +338,253 @@ class TestServer:
 
         # Assert
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_upload_file_success(self):
+        """Test successful file upload endpoint."""
+        # Arrange
+        file_content = b"test file content"
+        expected_metadata = {
+            "id": "977f156b-9c78-4bfc-bd74-f603f18c078a",
+            "version": "weathered-firefly-9025",
+            "isActive": True,
+            "createdAt": 1764265919324,
+            "updatedAt": 1764265919324,
+            "fileName": "28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            "rawName": "ddls_export.csv",
+            "key": "28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            "extension": ".csv",
+            "contentType": "text/csv",
+            "fileSize": 39144,
+            "isEncrypted": False,
+            "redirectUrl": "",
+            "isUploaded": True,
+            "uploadedAt": "2024-01-01T00:00:00Z",
+            "isArchived": False,
+        }
+        self.mock_handler.upload_file.return_value = expected_metadata
+
+        # Act
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.csv", file_content, "text/csv")}
+            data = {
+                "prefix": "workflow_file_upload",
+                "force": "false",
+                # excludePrefix and isJsonFile are still accepted by endpoint for backward compatibility
+                # but not passed to handler (heracles processing decisions)
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["id"] == expected_metadata["id"]
+        assert response_data["key"] == expected_metadata["key"]
+        assert response_data["fileName"] == expected_metadata["fileName"]
+        self.mock_handler.upload_file.assert_called_once()
+        call_kwargs = self.mock_handler.upload_file.call_args[1]
+        assert call_kwargs["file_content"] == file_content
+        assert call_kwargs["filename"] == "test.csv"
+        assert call_kwargs["content_type"] == "text/csv"
+        assert call_kwargs["size"] == len(
+            file_content
+        )  # Model uses 'size', not 'file_size'
+        assert call_kwargs["prefix"] == "workflow_file_upload"
+        # force is not used by handler (always false from widget), so not checked
+
+    @pytest.mark.asyncio
+    async def test_upload_file_with_json_file(self):
+        """Test file upload with jsonFile field."""
+        # Arrange
+        file_content = b'{"test": "json"}'
+        expected_metadata = {
+            "id": "test-id",
+            "version": "test-version",
+            "isActive": True,
+            "createdAt": 1764265919324,
+            "updatedAt": 1764265919324,
+            "fileName": "test-id.json",
+            "rawName": "test.json",
+            "key": "test-id.json",
+            "extension": ".json",
+            "contentType": "application/json",
+            "fileSize": len(file_content),
+            "isEncrypted": False,
+            "redirectUrl": "",
+            "isUploaded": True,
+            "uploadedAt": "2024-01-01T00:00:00Z",
+            "isArchived": False,
+        }
+        self.mock_handler.upload_file.return_value = expected_metadata
+
+        # Act
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"jsonFile": ("test.json", file_content, "application/json")}
+            data = {
+                "prefix": "workflow_file_upload",
+                "force": "false",
+                # excludePrefix and isJsonFile are still accepted by endpoint for backward compatibility
+                # but not passed to handler (heracles processing decisions)
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        self.mock_handler.upload_file.assert_called_once()
+        call_kwargs = self.mock_handler.upload_file.call_args[1]
+        assert call_kwargs["file_content"] == file_content
+        assert call_kwargs["filename"] == "test.json"
+        assert call_kwargs["prefix"] == "workflow_file_upload"
+        # force is not used by handler (always false from widget), so not checked
+
+    @pytest.mark.asyncio
+    async def test_upload_file_no_handler(self):
+        """Test file upload when handler is not initialized."""
+        # Arrange
+        app_no_handler = APIServer(handler=None)
+
+        # Act
+        transport = ASGITransport(app=app_no_handler.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.csv", b"test content", "text/csv")}
+            data = {
+                "prefix": "workflow_file_upload",
+                "force": "false",
+                "excludePrefix": "false",
+                "isJsonFile": "false",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 500
+        assert "Handler not initialized" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_upload_file_missing_file(self):
+        """Test file upload when file field is missing."""
+        # Arrange
+        # Act
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            data = {
+                "prefix": "workflow_file_upload",
+                "force": "false",
+                "excludePrefix": "false",
+                "isJsonFile": "false",
+            }
+            response = await ac.post("/workflows/v1/file", data=data)
+
+        # Assert
+        assert response.status_code == 422  # FastAPI validation error
+
+    @pytest.mark.asyncio
+    async def test_upload_file_handler_error(self):
+        """Test file upload when handler raises an error."""
+        # Arrange
+        self.mock_handler.upload_file.side_effect = Exception("Upload failed")
+
+        # Act
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.csv", b"test content", "text/csv")}
+            data = {
+                "prefix": "workflow_file_upload",
+                "force": "false",
+                "excludePrefix": "false",
+                "isJsonFile": "false",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 500
+        assert "File upload failed" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_upload_file_default_prefix(self):
+        """Test file upload with default prefix when prefix is not provided."""
+        # Arrange
+        file_content = b"test file content"
+        expected_metadata = {
+            "id": "977f156b-9c78-4bfc-bd74-f603f18c078a",
+            "version": "weathered-firefly-9025",
+            "isActive": True,
+            "createdAt": 1764265919324,
+            "updatedAt": 1764265919324,
+            "fileName": "28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            "rawName": "ddls_export.csv",
+            "key": "28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            "extension": ".csv",
+            "contentType": "text/csv",
+            "fileSize": 39144,
+            "isEncrypted": False,
+            "redirectUrl": "",
+            "isUploaded": True,
+            "uploadedAt": "2024-01-01T00:00:00Z",
+            "isArchived": False,
+        }
+        self.mock_handler.upload_file.return_value = expected_metadata
+
+        # Act - no prefix provided, should default to "workflow_file_upload"
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.csv", file_content, "text/csv")}
+            data = {
+                "force": "false",
+                "isJsonFile": "false",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        self.mock_handler.upload_file.assert_called_once()
+        call_kwargs = self.mock_handler.upload_file.call_args[1]
+        assert call_kwargs["prefix"] == "workflow_file_upload"
+
+    @pytest.mark.asyncio
+    async def test_upload_file_with_custom_prefix(self):
+        """Test file upload with custom prefix."""
+        # Arrange
+        file_content = b"test file content"
+        expected_metadata = {
+            "id": "977f156b-9c78-4bfc-bd74-f603f18c078a",
+            "version": "weathered-firefly-9025",
+            "isActive": True,
+            "createdAt": 1764265919324,
+            "updatedAt": 1764265919324,
+            "fileName": "28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            "rawName": "ddls_export.csv",
+            "key": "28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            "extension": ".csv",
+            "contentType": "text/csv",
+            "fileSize": 39144,
+            "isEncrypted": False,
+            "redirectUrl": "",
+            "isUploaded": True,
+            "uploadedAt": "2024-01-01T00:00:00Z",
+            "isArchived": False,
+        }
+        self.mock_handler.upload_file.return_value = expected_metadata
+
+        # Act - include custom prefix
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.csv", file_content, "text/csv")}
+            data = {
+                "prefix": "custom_prefix",
+                "force": "false",
+                "isJsonFile": "false",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        self.mock_handler.upload_file.assert_called_once()
+        call_kwargs = self.mock_handler.upload_file.call_args[1]
+        # Only fields used by handler are checked
+        assert call_kwargs["prefix"] == "custom_prefix"
+        # name and force are not used by handler (force always false from widget)
 
 
 class TestMessagingRouterRegistration:

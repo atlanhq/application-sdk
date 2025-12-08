@@ -301,3 +301,75 @@ class Subscription(BaseModel):
     ]  # Required callback function (sync or async)
     bulk_config: Optional[BulkConfig] = None
     dead_letter_topic: Optional[str] = None
+
+
+class FileUploadRequest(BaseModel):
+    filename: str = Field(..., description="Original filename from upload")
+    prefix: Optional[str] = Field(
+        None,
+        description="Prefix for file organization (defaults to 'workflow_file_upload')",
+    )
+    content_type: str = Field(
+        ..., alias="contentType", description="Content type of the file"
+    )
+    size: int = Field(..., description="File size in bytes")
+    file_content: bytes = Field(
+        ..., alias="fileContent", description="File content as bytes"
+    )
+
+    class Config:
+        populate_by_name = True  # Allow both alias and field name
+        json_schema_extra = {
+            "example": {
+                "filename": "test.csv",
+                "prefix": "workflow_file_upload",
+                "contentType": "text/csv",
+                "size": 100,
+                "fileContent": b"file content bytes",
+            }
+        }
+
+
+class FileUploadResponse(BaseModel):
+    """Response model for file upload endpoint matching heracles format."""
+
+    id: str = Field(..., description="UUID of the file")
+    version: str = Field(..., description="Human-readable version string")
+    isActive: bool = Field(..., description="Whether the file is active")
+    createdAt: int = Field(..., description="Unix timestamp in milliseconds")
+    updatedAt: int = Field(..., description="Unix timestamp in milliseconds")
+    fileName: str = Field(..., description="UUID + extension")
+    rawName: str = Field(..., description="Original filename")
+    key: str = Field(..., description="Object store key (uuid+extension)")
+    extension: str = Field(..., description="File extension (e.g., '.csv')")
+    contentType: str = Field(..., description="Content type of the file")
+    fileSize: int = Field(..., description="File size in bytes")
+    isEncrypted: bool = Field(..., description="Whether the file is encrypted")
+    redirectUrl: str = Field(..., description="Redirect URL (empty for now)")
+    isUploaded: bool = Field(..., description="Whether the file is uploaded")
+    uploadedAt: str = Field(
+        ..., description="ISO timestamp or '0001-01-01T00:00:00Z' default"
+    )
+    isArchived: bool = Field(..., description="Whether the file is archived")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "id": "977f156b-9c78-4bfc-bd74-f603f18c078a",
+                "version": "weathered-firefly-9025",
+                "isActive": True,
+                "createdAt": 1764265919324,
+                "updatedAt": 1764265919324,
+                "fileName": "28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+                "rawName": "ddls_export.csv",
+                "key": "28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+                "extension": ".csv",
+                "contentType": "text/csv",
+                "fileSize": 39144,
+                "isEncrypted": False,
+                "redirectUrl": "",
+                "isUploaded": True,
+                "uploadedAt": "2024-01-01T00:00:00Z",
+                "isArchived": False,
+            }
+        }

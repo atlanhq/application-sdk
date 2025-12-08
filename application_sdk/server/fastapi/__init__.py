@@ -3,7 +3,7 @@ import time
 from typing import Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
-from fastapi import status
+from fastapi import HTTPException, status
 from fastapi.applications import FastAPI
 from fastapi.requests import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -39,6 +39,8 @@ from application_sdk.server.fastapi.models import (
     EventWorkflowTrigger,
     FetchMetadataRequest,
     FetchMetadataResponse,
+    FileUploadRequest,
+    FileUploadResponse,
     HttpWorkflowTrigger,
     PreflightCheckRequest,
     PreflightCheckResponse,
@@ -416,6 +418,13 @@ class APIServer(ServerInterface):
             response_model=ConfigMapResponse,
         )
 
+        self.workflow_router.add_api_route(
+            "/file",
+            self.upload_file,
+            methods=["POST"],
+            response_model=FileUploadResponse,
+        )
+
         self.dapr_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
@@ -642,6 +651,62 @@ class APIServer(ServerInterface):
                 description="Total number of preflight checks",
             )
             raise e
+
+    async def upload_file(
+        self,
+        body: FileUploadRequest,
+    ) -> FileUploadResponse:
+        """Upload a file to the object store."""
+
+        start_time = time.time()
+        metrics = get_metrics()
+
+        try:
+            if not self.handler:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Handler not initialized",
+                )
+
+            # Pass exact request body to handler - handler handles all parsing and validation
+            metadata = await self.handler.upload_file(**body.model_dump())
+
+            # Record successful upload
+            metrics.record_metric(
+                name="file_uploads_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "success"},
+                description="Total number of file upload requests",
+            )
+
+            # Record upload duration
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="file_upload_duration_seconds",
+                value=duration,
+                metric_type=MetricType.HISTOGRAM,
+                labels={},
+                description="File upload duration in seconds",
+            )
+
+            return FileUploadResponse(**metadata)
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Record failed upload
+            metrics.record_metric(
+                name="file_uploads_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "error"},
+                description="Total number of file upload requests",
+            )
+            logger.error(f"File upload failed: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"File upload failed: {str(e)}",
+            )
 
     async def get_configmap(self, config_map_id: str) -> ConfigMapResponse:
         """Get a configuration map by its ID.

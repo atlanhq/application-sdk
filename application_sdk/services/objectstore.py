@@ -329,6 +329,43 @@ class ObjectStore:
             cls._cleanup_local_path(source)
 
     @classmethod
+    async def upload_file_from_bytes(
+        cls,
+        file_content: bytes,
+        destination: str,
+        store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
+    ) -> None:
+        """Upload file content directly from bytes to object store.
+
+        Args:
+            file_content: File content as bytes
+            destination: Object store key where the file will be stored
+            store_name: Name of the Dapr object store binding to use
+
+        Raises:
+            Exception: If there's an error uploading to the object store.
+
+        Example:
+            >>> await ObjectStore.upload_file_from_bytes(
+            ...     file_content=b"file content",
+            ...     destination="reports/2024/january/report.pdf"
+            ... )
+        """
+        try:
+            await cls._invoke_dapr_binding(
+                operation=cls.OBJECT_CREATE_OPERATION,
+                data=file_content,
+                metadata=cls._create_file_metadata(destination),
+                store_name=store_name,
+            )
+            logger.debug(f"Successfully uploaded file from bytes: {destination}")
+        except Exception as e:
+            logger.error(
+                f"Error uploading file from bytes {destination} to object store: {str(e)}"
+            )
+            raise e
+
+    @classmethod
     async def upload_prefix(
         cls,
         source: str,
