@@ -85,7 +85,15 @@ class ObjectStore:
 
             # Extract paths based on response type
             if isinstance(file_list, list):
-                paths = file_list
+                # Handle list format: strings OR Azure Blob/GCP dicts with "Name" field
+                paths = []
+                for item in file_list:
+                    if isinstance(item, str):
+                        paths.append(item)
+                    elif isinstance(item, dict) and isinstance(item.get("Name"), str):
+                        paths.append(item["Name"])
+                    else:
+                        logger.warning(f"Skipping invalid path entry: {item}")
             elif isinstance(file_list, dict) and "Contents" in file_list:
                 paths = [item["Key"] for item in file_list["Contents"] if "Key" in item]
             elif isinstance(file_list, dict):
@@ -95,22 +103,9 @@ class ObjectStore:
 
             valid_list = []
             for path in paths:
-                # Early exit for non-dict, non-string types
-                if not isinstance(path, (str, dict)):
-                    logger.warning(f"Skipping non-string/dict path: {path}")
+                if not isinstance(path, str):
+                    logger.warning(f"Skipping non-string path: {path}")
                     continue
-
-                # Azure Blob / GCP responses contain file path in "Name" field
-                if isinstance(path, dict):
-                    extracted_path = path.get("Name")
-
-                    if not isinstance(extracted_path, str):
-                        logger.warning(
-                            f"Skipping invalid dict entry (missing or non-string 'Name'): {path}"
-                        )
-                        continue
-
-                    path = extracted_path
 
                 valid_list.append(
                     path[path.find(prefix) :]
