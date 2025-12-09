@@ -24,7 +24,7 @@ dependencies = [
     "opentelemetry-exporter-otlp==1.39.0",
     "psutil>=7.0.0,<7.2.0",
     "fastapi[standard]==0.120.2",
-    "pyatlan>=8.0.2",
+    "pyatlan>=8.0.2,<8.5.0",
     "pydantic>=2.10.6,<2.13.0",
     "loguru>=0.7.3,<0.8.0",
     "uvloop>=0.21.0,<0.23.0; sys_platform != 'win32'",
