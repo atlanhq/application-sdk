@@ -58,7 +58,7 @@ sqlalchemy = [
     "sqlalchemy[asyncio]==2.0.44",
 ]
 iam_auth = [
-    "boto3==1.42.4",
+    "boto3==1.42.5",
 ]
 tests = [
     "pytest-order==1.3.0",
