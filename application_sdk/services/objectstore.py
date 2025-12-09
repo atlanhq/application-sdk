@@ -99,13 +99,16 @@ class ObjectStore:
                 if not isinstance(path, (str, dict)):
                     logger.warning(f"Skipping non-string/dict path: {path}")
                     continue
-                
+
                 # Azure Blob / GCP responses contain file path in "Name" field
                 if isinstance(path, dict):
-                    if "Name" not in path:
-                        logger.warning(f"Skipping dict path missing 'Name' key: {path}")
+                    extracted_path = path.get("Name")
+                    
+                    if not isinstance(extracted_path, str):
+                        logger.warning(f"Skipping invalid dict entry (missing or non-string 'Name'): {path}")
                         continue
-                    path = path["Name"]
+                        
+                    path = extracted_path
 
                 valid_list.append(
                     path[path.find(prefix) :]

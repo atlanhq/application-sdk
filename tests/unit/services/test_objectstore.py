@@ -329,7 +329,7 @@ class TestObjectStore:
                 [
                     {"Name": "az-blob.txt", "etag": "123"},
                     {"Name": "folder/az-blob2.txt"},
-                    {"Name": "folder/gcs.parquet"}
+                    {"Name": "folder/gcs.parquet"},
                 ],
                 "",
                 ["az-blob.txt", "folder/az-blob2.txt", "folder/gcs.parquet"],
@@ -350,29 +350,41 @@ class TestObjectStore:
                 "",
                 ["valid.txt"],
             ),
-            # 8: S3 Items Missing "Key" (Filtered by list comprehension)
+            # 8: Dict with non-string "Name" value (None, int, nested dict)
+            (
+                [
+                    {"Name": "valid.txt"},
+                    {"Name": None},
+                    {"Name": 123},
+                    {"Name": {"nested": "dict"}},
+                    {},
+                ],
+                "",
+                ["valid.txt"],
+            ),
+            # 9: S3 Items Missing "Key" (Filtered by list comprehension)
             (
                 {"Contents": [{"Key": "good.txt"}, {"Size": 500}]},
                 "",
                 ["good.txt"],
             ),
-            # 9: Unknown Structure (Empty Fallback)
+            # 10: Unknown Structure (Empty Fallback)
             ({"random": "data"}, "", []),
-            # 10: Prefix Slicing (Prefix Exists in Path)
+            # 11: Prefix Slicing (Prefix Exists in Path)
             # Logic: Returns substring starting from prefix
             (
                 ["root/my-folder/image.png"],
                 "my-folder",
                 ["my-folder/image.png"],
             ),
-            # 11: Prefix Fallback (Prefix NOT in Path)
+            # 12: Prefix Fallback (Prefix NOT in Path)
             # Logic: Returns os.path.basename if prefix is provided but not found
             (
                 ["other-location/image.png"],
                 "my-folder/",
                 ["image.png"],
             ),
-            # 12: No Prefix Provided
+            # 13: No Prefix Provided
             # Logic: Returns full original path
             (
                 ["/full/path/to/file.txt"],
@@ -396,6 +408,7 @@ class TestObjectStore:
         """
         # Arrange
         import orjson
+
         mock_invoke.return_value = orjson.dumps(response_json)
 
         # Act
@@ -407,7 +420,7 @@ class TestObjectStore:
 
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
     async def test_list_files_empty_response(self, mock_invoke: AsyncMock) -> None:
-        """13: Test handling of empty/None response from Dapr."""
+        """14: Test handling of empty/None response from Dapr."""
         # Arrange: simulate empty byte response
         mock_invoke.return_value = b""
 
@@ -419,17 +432,17 @@ class TestObjectStore:
 
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
     async def test_list_files_malformed_json(self, mock_invoke: AsyncMock) -> None:
-        """14: Test handling of corrupt JSON response."""
+        """15: Test handling of corrupt JSON response."""
         # Arrange: simulate invalid JSON
         mock_invoke.return_value = b"{invalid-json..."
 
         # Act & Assert
-        with pytest.raises(Exception): # Expecting JSONDecodeError wrapped or raised
-             await ObjectStore.list_files(prefix="test")
+        with pytest.raises(Exception):  # Expecting JSONDecodeError wrapped or raised
+            await ObjectStore.list_files(prefix="test")
 
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
     async def test_list_files_binding_failure(self, mock_invoke: AsyncMock) -> None:
-        """15: Test handling of Dapr binding exception."""
+        """16: Test handling of Dapr binding exception."""
         # Arrange
         mock_invoke.side_effect = Exception("Network Error")
 
