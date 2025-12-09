@@ -57,7 +57,7 @@ Install DAPR using the following commands:
 
 ```bash
 # Install DAPR CLI
-wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.16.0
+wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.16.2
 
 # Initialize DAPR (slim mode)
 dapr init --runtime-version 1.16.0 --slim

@@ -1,5 +1,6 @@
 """Unit tests for output interface."""
 
+import os
 from typing import Any
 from unittest.mock import AsyncMock, mock_open, patch
 
@@ -116,13 +117,15 @@ class TestOutput:
         self.output.chunk_count = 5
         self.output.partitions = [1, 2, 1, 2, 1]
 
-        # Mock the open function, orjson.dumps, and object store upload
+        # Mock the open function, orjson.dumps, os.makedirs, and object store upload
         with patch("builtins.open", mock_open()) as mock_file, patch(
             "orjson.dumps",
             return_value=b'{"total_record_count": 100, "chunk_count": 5, "partitions": [1,2,1,2,1]}',
         ) as mock_orjson, patch(
+            "application_sdk.outputs.os.makedirs",
+        ) as mock_makedirs, patch(
             "application_sdk.outputs.get_object_store_prefix",
-            return_value="path/statistics.json.ignore",
+            return_value="path/statistics/statistics.json.ignore",
         ), patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file",
             new_callable=AsyncMock,
@@ -136,7 +139,12 @@ class TestOutput:
                 "chunk_count": 5,  # This is len(self.partitions) which is 5
                 "partitions": [1, 2, 1, 2, 1],
             }
-            mock_file.assert_called_once_with("/test/path/statistics.json.ignore", "w")
+            expected_stats_dir = os.path.join("/test/path", "statistics")
+            mock_makedirs.assert_called_once_with(expected_stats_dir, exist_ok=True)
+            expected_file_path = os.path.join(
+                expected_stats_dir, "statistics.json.ignore"
+            )
+            mock_file.assert_called_once_with(expected_file_path, "wb")
             mock_orjson.assert_called_once_with(
                 {
                     "total_record_count": 100,
@@ -147,8 +155,10 @@ class TestOutput:
             # Verify the upload call
             mock_push.assert_awaited_once()
             upload_kwargs = mock_push.await_args.kwargs  # type: ignore[attr-defined]
-            assert upload_kwargs["source"] == "/test/path/statistics.json.ignore"
-            assert upload_kwargs["destination"] == "path/statistics.json.ignore"
+            assert upload_kwargs["source"] == expected_file_path
+            assert (
+                upload_kwargs["destination"] == "path/statistics/statistics.json.ignore"
+            )
 
     @pytest.mark.asyncio
     async def test_write_statistics_error(self):

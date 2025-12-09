@@ -17,9 +17,14 @@ class MockWorkflow(WorkflowInterface):
 @pytest.fixture
 def temporal_client() -> TemporalWorkflowClient:
     """Create a TemporalWorkflowClient instance for testing."""
+
+    def mock_get_deployment_secret(key: str):
+        # Return None for all keys by default (tests can override if needed)
+        return None
+
     with patch(
         "application_sdk.clients.temporal.SecretStore.get_deployment_secret",
-        return_value={},
+        side_effect=mock_get_deployment_secret,
     ):
         return TemporalWorkflowClient(
             host="localhost",
@@ -57,8 +62,8 @@ async def test_load(
     temporal_client: TemporalWorkflowClient,
 ):
     """Test loading the temporal client."""
-    # Mock the deployment config to return empty dict (auth disabled)
-    mock_get_config.return_value = {}
+    # Mock the deployment config to return None for all keys (auth disabled)
+    mock_get_config.return_value = None
 
     # Mock the client connection
     mock_client = AsyncMock()
@@ -337,3 +342,110 @@ async def test_get_workflow_run_status_client_not_loaded(
     """Test get_workflow_run_status when client is not loaded."""
     with pytest.raises(ValueError, match="Client is not loaded"):
         await temporal_client.get_workflow_run_status("test_workflow_id", "test_run_id")
+
+
+@patch("application_sdk.clients.temporal.logger")
+@patch("application_sdk.clients.temporal.EventStore.publish_event")
+@patch("application_sdk.clients.temporal.time.time")
+@patch("application_sdk.clients.temporal.DEPLOYMENT_NAME", "test_deployment")
+async def test_publish_token_refresh_event_success(
+    mock_time: Mock,
+    mock_publish_event: AsyncMock,
+    mock_logger: MagicMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test successful token refresh event publishing."""
+    # Arrange
+    mock_time.return_value = 1234567890.0
+    mock_auth_manager = MagicMock()
+    mock_auth_manager.get_token_expiry_time.return_value = 1234567895.0
+    mock_auth_manager.get_time_until_expiry.return_value = 300.0
+    temporal_client.auth_manager = mock_auth_manager
+
+    # Act
+    await temporal_client._publish_token_refresh_event()
+
+    # Assert
+    mock_time.assert_called_once()
+    mock_auth_manager.get_token_expiry_time.assert_called_once()
+    mock_auth_manager.get_time_until_expiry.assert_called_once()
+    mock_publish_event.assert_called_once()
+
+    # Verify the event structure
+    call_args = mock_publish_event.call_args
+    event = call_args[0][0]  # First positional argument
+
+    assert event.event_type == "application_events"
+    assert event.event_name == "token_refresh"
+    assert event.data["application_name"] == "test_app"
+    assert event.data["deployment_name"] == "test_deployment"
+    assert event.data["force_refresh"] is True
+    assert event.data["token_expiry_time"] == 1234567895.0
+    assert event.data["time_until_expiry"] == 300.0
+    assert event.data["refresh_timestamp"] == 1234567890.0
+
+    mock_logger.info.assert_called_once_with("Published token refresh event")
+    mock_logger.warning.assert_not_called()
+
+
+@patch("application_sdk.clients.temporal.logger")
+@patch("application_sdk.clients.temporal.EventStore.publish_event")
+@patch("application_sdk.clients.temporal.time.time")
+@patch("application_sdk.clients.temporal.DEPLOYMENT_NAME", "test_deployment")
+async def test_publish_token_refresh_event_with_none_expiry_times(
+    mock_time: Mock,
+    mock_publish_event: AsyncMock,
+    mock_logger: MagicMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test token refresh event publishing with None expiry times."""
+    # Arrange
+    mock_time.return_value = 1234567890.0
+    mock_auth_manager = MagicMock()
+    mock_auth_manager.get_token_expiry_time.return_value = None
+    mock_auth_manager.get_time_until_expiry.return_value = None
+    temporal_client.auth_manager = mock_auth_manager
+
+    # Act
+    await temporal_client._publish_token_refresh_event()
+
+    # Assert
+    call_args = mock_publish_event.call_args
+    event = call_args[0][0]  # First positional argument
+
+    assert event.data["token_expiry_time"] == 0
+    assert event.data["time_until_expiry"] == 0
+
+    mock_logger.info.assert_called_once_with("Published token refresh event")
+    mock_logger.warning.assert_not_called()
+
+
+@patch("application_sdk.clients.temporal.logger")
+@patch("application_sdk.clients.temporal.EventStore.publish_event")
+@patch("application_sdk.clients.temporal.time.time")
+async def test_publish_token_refresh_event_exception_handling(
+    mock_time: Mock,
+    mock_publish_event: AsyncMock,
+    mock_logger: MagicMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test token refresh event publishing handles exceptions gracefully."""
+    # Arrange
+    mock_time.return_value = 1234567890.0
+    mock_auth_manager = MagicMock()
+    mock_auth_manager.get_token_expiry_time.return_value = 1234567895.0
+    mock_auth_manager.get_time_until_expiry.return_value = 300.0
+    temporal_client.auth_manager = mock_auth_manager
+
+    # Simulate event publishing failure
+    mock_publish_event.side_effect = Exception("Event store connection failed")
+
+    # Act - should not raise exception
+    await temporal_client._publish_token_refresh_event()
+
+    # Assert
+    mock_publish_event.assert_called_once()
+    mock_logger.info.assert_not_called()
+    mock_logger.warning.assert_called_once_with(
+        "Failed to publish token refresh event: Event store connection failed"
+    )
