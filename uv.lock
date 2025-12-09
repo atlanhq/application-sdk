@@ -281,7 +281,7 @@ requires-dist = [
     { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = ">=0.23.1,<=0.27.0" },
     { name = "psutil", specifier = ">=7.0.0,<=7.1.3" },
     { name = "pyarrow", marker = "extra == 'scale-data-generator'", specifier = ">=20.0.0,<=22.0.0" },
-    { name = "pyatlan", specifier = ">=8.0.2,<=8.4.4" },
+    { name = "pyatlan", specifier = ">=8.0.2" },
     { name = "pydantic", specifier = ">=2.10.6,<=2.12.5" },
     { name = "pyiceberg", marker = "extra == 'iceberg'", specifier = ">=0.8.1,<=0.10.0" },
     { name = "pytest-order", marker = "extra == 'tests'", specifier = ">=1.3.0,<=1.3.0" },
