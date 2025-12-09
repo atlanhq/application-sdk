@@ -305,23 +305,38 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 "TRACING", no=SEVERITY_MAPPING["TRACING"], color="<magenta>", icon="🔍"
             )
 
-        # Update format string to use the bound logger_name
-        atlan_format_str_color = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> <magenta>argo_workflow_name={extra[argo_workflow_name]}</magenta> - <level>{message}</level>"
-        atlan_format_str_plain = (
-            "{time:YYYY-MM-DD HH:mm:ss} [{level}] {extra[logger_name]} argo_workflow_name={extra[argo_workflow_name]} - {message}"
-        )
-
-        colorize = False
-        format_str = atlan_format_str_plain
-
         # Colorize the logs only if the log level is DEBUG
-        if LOG_LEVEL == "DEBUG":
-            colorize = True
-            format_str = atlan_format_str_color
+        colorize = LOG_LEVEL == "DEBUG"
+
+        def get_log_format(record: Any) -> str:
+            """Generate log format string with conditional argo workflow name.
+
+            Args:
+                record: Loguru record dictionary containing log information.
+
+            Returns:
+                Format string for the log message.
+            """
+            argo_name = record["extra"].get("argo_workflow_name", "")
+            argo_part = f" argo_workflow_name={argo_name}" if argo_name else ""
+
+            if colorize:
+                return (
+                    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> "
+                    "<blue>[{level}]</blue> "
+                    "<cyan>{extra[logger_name]}</cyan>"
+                    f"<magenta>{argo_part}</magenta>"
+                    " - <level>{message}</level>\n"
+                )
+            return (
+                "{time:YYYY-MM-DD HH:mm:ss} [{level}] {extra[logger_name]}"
+                f"{argo_part}"
+                " - {message}\n"
+            )
 
         self.logger.add(
             sys.stderr,
-            format=format_str,
+            format=get_log_format,
             level=SEVERITY_MAPPING[LOG_LEVEL],
             colorize=colorize,
         )

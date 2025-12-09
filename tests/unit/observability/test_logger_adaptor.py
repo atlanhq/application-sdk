@@ -325,3 +325,159 @@ async def test_parquet_sink_error_handling(mock_parquet_file):
 
         # Verify buffer is empty (error was handled
         assert len(logger_adapter._buffer) == 0
+
+
+class TestArgoWorkflowContext:
+    """Tests for argo workflow context in logging."""
+
+    ARGO_WORKFLOW_NAME = "atlan-redshift-1765299569-h9wsj"
+    ARGO_WORKFLOW_NODE = "atlan-redshift-1765299569-h9wsj(0).run(0).extract-interim"
+    WORKFLOW_ID = "atlan-redshift-1765299569"
+
+    def test_process_with_argo_workflow_context(self):
+        """Test process() when argo workflow context is set."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.argo_workflow_context"
+            ) as mock_argo_context:
+                mock_argo_context.get.return_value = {
+                    "argo_workflow_name": self.ARGO_WORKFLOW_NAME,
+                    "argo_workflow_node": self.ARGO_WORKFLOW_NODE,
+                }
+
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                assert kwargs["logger_name"] == "test_logger"
+                assert msg == "Test message"
+
+    def test_process_without_argo_workflow_context(self):
+        """Test process() when argo workflow context is empty."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.argo_workflow_context"
+            ) as mock_argo_context:
+                mock_argo_context.get.return_value = {}
+
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                assert kwargs["logger_name"] == "test_logger"
+                assert msg == "Test message"
+
+
+class TestLogFormatFunction:
+    """Tests for the conditional log format function."""
+
+    ARGO_WORKFLOW_NAME = "atlan-redshift-1765299569-h9wsj"
+    ARGO_WORKFLOW_NODE = "atlan-redshift-1765299569-h9wsj(0).run(0).extract-interim"
+
+    def test_format_includes_argo_workflow_name_when_present(self):
+        """Format should include argo_workflow_name when it has a value."""
+        record = {
+            "extra": {
+                "logger_name": "test_logger",
+                "argo_workflow_name": self.ARGO_WORKFLOW_NAME,
+            }
+        }
+
+        argo_name = record["extra"].get("argo_workflow_name", "")
+        argo_part = f" argo_workflow_name={argo_name}" if argo_name else ""
+
+        assert argo_part == f" argo_workflow_name={self.ARGO_WORKFLOW_NAME}"
+
+    def test_format_excludes_argo_workflow_name_when_missing(self):
+        """Format should exclude argo_workflow_name when not present."""
+        record = {"extra": {"logger_name": "test_logger"}}
+
+        argo_name = record["extra"].get("argo_workflow_name", "")
+        argo_part = f" argo_workflow_name={argo_name}" if argo_name else ""
+
+        assert argo_part == ""
+
+    def test_format_excludes_argo_workflow_name_when_empty(self):
+        """Format should exclude argo_workflow_name when empty string."""
+        record = {"extra": {"logger_name": "test_logger", "argo_workflow_name": ""}}
+
+        argo_name = record["extra"].get("argo_workflow_name", "")
+        argo_part = f" argo_workflow_name={argo_name}" if argo_name else ""
+
+        assert argo_part == ""
+
+    def test_format_handles_complex_node_name(self):
+        """Format should handle complex node names with special characters."""
+        record = {
+            "extra": {
+                "logger_name": "test_logger",
+                "argo_workflow_name": self.ARGO_WORKFLOW_NAME,
+                "argo_workflow_node": self.ARGO_WORKFLOW_NODE,
+            }
+        }
+
+        argo_name = record["extra"].get("argo_workflow_name", "")
+        argo_part = f" argo_workflow_name={argo_name}" if argo_name else ""
+
+        assert argo_part == f" argo_workflow_name={self.ARGO_WORKFLOW_NAME}"
+        assert record["extra"]["argo_workflow_node"] == self.ARGO_WORKFLOW_NODE
+
+
+class TestArgoWorkflowContextIntegration:
+    """Tests for argo context combined with workflow/activity context."""
+
+    ARGO_WORKFLOW_NAME = "atlan-redshift-1765299569-h9wsj"
+    ARGO_WORKFLOW_NODE = "atlan-redshift-1765299569-h9wsj(0).run(0).extract-interim"
+    WORKFLOW_ID = "atlan-redshift-1765299569"
+
+    def test_argo_context_with_workflow_context(self):
+        """Argo context should work alongside workflow context."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch("temporalio.workflow.info") as mock_workflow_info:
+                with mock.patch(
+                    "application_sdk.observability.logger_adaptor.argo_workflow_context"
+                ) as mock_argo_context:
+                    workflow_info = mock.Mock(
+                        workflow_id=self.WORKFLOW_ID,
+                        run_id="019b04bd-ac10-7989-87d7-06427dc0616c",
+                        workflow_type="RedshiftMetadataExtractionWorkflow",
+                        namespace="default",
+                        task_queue="atlan-redshift-local",
+                        attempt=1,
+                    )
+                    mock_workflow_info.return_value = workflow_info
+                    mock_argo_context.get.return_value = {
+                        "argo_workflow_name": self.ARGO_WORKFLOW_NAME,
+                        "argo_workflow_node": self.ARGO_WORKFLOW_NODE,
+                    }
+
+                    msg, kwargs = logger_adapter.process("Test message", {})
+
+                    assert kwargs["workflow_id"] == self.WORKFLOW_ID
+                    assert kwargs["workflow_run_id"] == "019b04bd-ac10-7989-87d7-06427dc0616c"
+                    assert "argo_workflow_name" in kwargs
+                    assert "argo_workflow_node" in kwargs
+
+    def test_argo_context_with_activity_context(self):
+        """Argo context should work alongside activity context."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch("temporalio.activity.info") as mock_activity_info:
+                with mock.patch(
+                    "application_sdk.observability.logger_adaptor.argo_workflow_context"
+                ) as mock_argo_context:
+                    activity_info = mock.Mock(
+                        workflow_id=self.WORKFLOW_ID,
+                        workflow_run_id="019b04bd-ac10-7989-87d7-06427dc0616c",
+                        activity_id="fetch_databases",
+                        activity_type="fetch_databases",
+                        task_queue="atlan-redshift-local",
+                        attempt=1,
+                    )
+                    mock_activity_info.return_value = activity_info
+                    mock_argo_context.get.return_value = {
+                        "argo_workflow_name": self.ARGO_WORKFLOW_NAME,
+                        "argo_workflow_node": self.ARGO_WORKFLOW_NODE,
+                    }
+
+                    msg, kwargs = logger_adapter.process("Test message", {})
+
+                    assert kwargs["activity_id"] == "fetch_databases"
+                    assert kwargs["workflow_id"] == self.WORKFLOW_ID
+                    assert "argo_workflow_name" in kwargs
+                    assert "argo_workflow_node" in kwargs
