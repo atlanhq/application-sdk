@@ -265,59 +265,59 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = "==3.13.2" },
-    { name = "boto3", marker = "extra == 'iam-auth'", specifier = "==1.42.4" },
-    { name = "daft", marker = "extra == 'daft'", specifier = ">=0.6.14" },
+    { name = "aiohttp", specifier = ">=3.10.0" },
+    { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6" },
+    { name = "daft", marker = "extra == 'daft'", specifier = ">=0.4.12" },
     { name = "dapr", marker = "extra == 'workflows'", specifier = "==1.16.0" },
-    { name = "duckdb", specifier = "==1.4.2" },
-    { name = "duckdb-engine", specifier = "==0.17.0" },
-    { name = "faker", marker = "extra == 'scale-data-generator'", specifier = "==38.2.0" },
-    { name = "fastapi", extras = ["standard"], specifier = "==0.124.0" },
-    { name = "fastmcp", marker = "extra == 'mcp'", specifier = "==2.13.3" },
-    { name = "loguru", specifier = "==0.7.3" },
+    { name = "duckdb", specifier = ">=1.1.3" },
+    { name = "duckdb-engine", specifier = ">=0.17.0" },
+    { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=37.1.0" },
+    { name = "fastapi", extras = ["standard"], specifier = "==0.120.2" },
+    { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.12.3" },
+    { name = "loguru", specifier = ">=0.7.3" },
     { name = "numpy", marker = "extra == 'scale-data-generator'", specifier = ">=1.23.5,<3.0.0" },
     { name = "opentelemetry-exporter-otlp", specifier = "==1.39.0" },
-    { name = "orjson", marker = "extra == 'workflows'", specifier = "==3.11.5" },
-    { name = "pandas", marker = "extra == 'pandas'", specifier = "==2.3.3" },
-    { name = "pandas", marker = "extra == 'scale-data-generator'", specifier = "==2.3.3" },
-    { name = "pandas", marker = "extra == 'tests'", specifier = "==2.3.3" },
-    { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = "==0.27.0" },
-    { name = "psutil", specifier = "==7.1.3" },
-    { name = "pyarrow", marker = "extra == 'scale-data-generator'", specifier = "==22.0.0" },
-    { name = "pyatlan", specifier = "==8.4.4" },
-    { name = "pydantic", specifier = ">=2.11.7,<2.13.0" },
-    { name = "pyiceberg", marker = "extra == 'iceberg'", specifier = "==0.10.0" },
-    { name = "pytest-order", marker = "extra == 'tests'", specifier = "==1.3.0" },
-    { name = "python-dotenv", specifier = "==1.2.1" },
-    { name = "pyyaml", marker = "extra == 'scale-data-generator'", specifier = "==6.0.3" },
-    { name = "redis", extras = ["hiredis"], marker = "extra == 'distributed-lock'", specifier = "==7.1.0" },
-    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlalchemy'", specifier = "==2.0.44" },
-    { name = "temporalio", marker = "extra == 'workflows'", specifier = "==1.20.0" },
-    { name = "uvloop", marker = "sys_platform != 'win32'", specifier = "==0.22.1" },
+    { name = "orjson", marker = "extra == 'workflows'", specifier = ">=3.10.18" },
+    { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3" },
+    { name = "pandas", marker = "extra == 'scale-data-generator'", specifier = ">=2.2.3" },
+    { name = "pandas", marker = "extra == 'tests'", specifier = ">=2.2.3" },
+    { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = ">=0.23.1" },
+    { name = "psutil", specifier = ">=7.0.0" },
+    { name = "pyarrow", marker = "extra == 'scale-data-generator'", specifier = ">=20.0.0" },
+    { name = "pyatlan", specifier = ">=8.0.2" },
+    { name = "pydantic", specifier = ">=2.10.6" },
+    { name = "pyiceberg", marker = "extra == 'iceberg'", specifier = ">=0.8.1" },
+    { name = "pytest-order", marker = "extra == 'tests'", specifier = ">=1.3.0" },
+    { name = "python-dotenv", specifier = ">=1.1.0" },
+    { name = "pyyaml", marker = "extra == 'scale-data-generator'", specifier = ">=6.0.2" },
+    { name = "redis", extras = ["hiredis"], marker = "extra == 'distributed-lock'", specifier = ">=5.2.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlalchemy'", specifier = ">=2.0.36" },
+    { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.7.1" },
+    { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
 ]
 provides-extras = ["workflows", "pandas", "daft", "iceberg", "sqlalchemy", "iam-auth", "tests", "scale-data-generator", "distributed-lock", "mcp"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "boto3-stubs", specifier = "==1.42.4" },
-    { name = "isort", specifier = "==7.0.0" },
-    { name = "mike", specifier = "==2.1.3" },
-    { name = "mkdocs", specifier = "==1.6.1" },
-    { name = "mkdocs-material", specifier = "==9.7.0" },
-    { name = "poethepoet", specifier = "==0.38.0" },
-    { name = "pre-commit", specifier = "==4.5.0" },
-    { name = "pydoctor", specifier = "==25.10.1" },
+    { name = "boto3-stubs", specifier = ">=1.38.6" },
+    { name = "isort", specifier = ">=5.13.2" },
+    { name = "mike", specifier = ">=2.1.3" },
+    { name = "mkdocs", specifier = ">=1.6.1" },
+    { name = "mkdocs-material", specifier = ">=9.6.4" },
+    { name = "poethepoet", specifier = ">=0.34.0" },
+    { name = "pre-commit", specifier = ">=4.2.0" },
+    { name = "pydoctor", specifier = ">=24.11.2" },
 ]
 examples = [
-    { name = "psycopg", extras = ["binary"], specifier = "==3.3.2" },
-    { name = "snowflake-sqlalchemy", specifier = "==1.8.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.7" },
+    { name = "snowflake-sqlalchemy", specifier = ">=1.7.0" },
 ]
 test = [
-    { name = "coverage", specifier = "==7.12.0" },
-    { name = "hypothesis", specifier = "==6.148.7" },
-    { name = "mock", specifier = "==5.2.0" },
-    { name = "pytest", specifier = "==8.3.3" },
-    { name = "pytest-asyncio", specifier = ">=1.1.0,<1.2.0" },
+    { name = "coverage", specifier = ">=7.6.1" },
+    { name = "hypothesis", specifier = ">=6.114.0" },
+    { name = "mock", specifier = ">=5.1.0" },
+    { name = "pytest", specifier = ">=8.3.3" },
+    { name = "pytest-asyncio", specifier = ">=0.26.0" },
 ]
 
 [[package]]
@@ -1061,7 +1061,7 @@ wheels = [
 
 [[package]]
 name = "fastapi"
-version = "0.124.0"
+version = "0.120.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
@@ -1069,9 +1069,9 @@ dependencies = [
     { name = "starlette" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/48/9c/11969bd3e3bc4aa3a711f83dd3720239d3565a934929c74fc32f6c9f3638/fastapi-0.124.0.tar.gz", hash = "sha256:260cd178ad75e6d259991f2fd9b0fee924b224850079df576a3ba604ce58f4e6", size = 357623, upload-time = "2025-12-06T13:11:35.692Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a0/fb/79e556bc8f9d360e5cc2fa7364a7ad6bda6f1736938b43a2791fa8baee7b/fastapi-0.120.2.tar.gz", hash = "sha256:4c5ab43e2a90335bbd8326d1b659eac0f3dbcc015e2af573c4f5de406232c4ac", size = 338684, upload-time = "2025-10-29T13:47:35.802Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4d/29/9e1e82e16e9a1763d3b55bfbe9b2fa39d7175a1fd97685c482fa402e111d/fastapi-0.124.0-py3-none-any.whl", hash = "sha256:91596bdc6dde303c318f06e8d2bc75eafb341fc793a0c9c92c0bc1db1ac52480", size = 112505, upload-time = "2025-12-06T13:11:34.392Z" },
+    { url = "https://files.pythonhosted.org/packages/81/cc/1c33d05f62c9349bb80dfe789cc9a7409bdfb337a63fa347fd651d25294a/fastapi-0.120.2-py3-none-any.whl", hash = "sha256:bedcf2c14240e43d56cb9a339b32bcf15104fe6b5897c0222603cb7ec416c8eb", size = 108383, upload-time = "2025-10-29T13:47:32.978Z" },
 ]
 
 [package.optional-dependencies]
