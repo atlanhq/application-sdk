@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.3 (December 09, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.2...v1.0.3
+
+### Bug Fixes
+
+- handle Azure Blob and GCP response formats in list_files method in objectstore service (#875) (by @hamza-atlan in [19d26a3](https://github.com/atlanhq/application-sdk/commit/19d26a3))
+- error handling on connection failures (#877) (by @sachi-atlan in [8108186](https://github.com/atlanhq/application-sdk/commit/8108186))
+
+
 ## v1.0.2 (December 09, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.1...v1.0.2
