@@ -51,7 +51,9 @@ SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
 
 # Output Path Constants
-#: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
+#: Output path format for workflows.
+#:
+#: Example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id}
 WORKFLOW_OUTPUT_PATH_TEMPLATE = (
     "artifacts/apps/{application_name}/workflows/{workflow_id}/{run_id}"
 )
@@ -68,14 +70,16 @@ CLEANUP_BASE_PATHS = [
 ]
 
 # State Store Constants
-#: Path template for state store files (example: objectstore://bucket/persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json)
+#: Path template for state store files.
+#:
+#: Example: objectstore://bucket/persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json
 STATE_STORE_PATH_TEMPLATE = (
     "persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json"
 )
 
 # Observability Constants
 #: Directory for storing observability data
-OBSERVABILITY_DIR = "artifacts/apps/{application_name}/observability"
+OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observability"
 
 # Workflow Client Constants
 #: Host address for the Temporal server
@@ -88,6 +92,7 @@ WORKFLOW_NAMESPACE = os.getenv("ATLAN_WORKFLOW_NAMESPACE", "default")
 WORKFLOW_UI_HOST = os.getenv("ATLAN_WORKFLOW_UI_HOST", "localhost")
 #: Port number for the Temporal UI
 WORKFLOW_UI_PORT = os.getenv("ATLAN_WORKFLOW_UI_PORT", "8233")
+
 #: Maximum timeout duration for workflows
 WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
     hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1"))
@@ -100,16 +105,23 @@ MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"
 DEPLOYMENT_SECRET_PATH = os.getenv(
     "ATLAN_DEPLOYMENT_SECRET_PATH", "ATLAN_DEPLOYMENT_SECRETS"
 )
-WORKFLOW_AUTH_ENABLED = (
-    os.getenv("ATLAN_WORKFLOW_AUTH_ENABLED", "false").lower() == "true"
+AUTH_ENABLED = os.getenv("ATLAN_AUTH_ENABLED", "false").lower() == "true"
+#: OAuth2 authentication URL for workflow services
+AUTH_URL = os.getenv("ATLAN_AUTH_URL")
+#: Whether to enable TLS for Temporal workflow connections
+WORKFLOW_TLS_ENABLED = (
+    os.getenv("ATLAN_WORKFLOW_TLS_ENABLED", "false").lower() == "true"
 )
 
 # Deployment Secret Store Key Names
-WORKFLOW_AUTH_CLIENT_ID_KEY = f"{APPLICATION_NAME}_app_client_id"
-WORKFLOW_AUTH_CLIENT_SECRET_KEY = f"{APPLICATION_NAME}_app_client_secret"
-WORKFLOW_AUTH_URL_KEY = "atlan_auth_url"
-WORKFLOW_TLS_ENABLED_KEY = "workflow_tls_enabled"
-DEPLOYMENT_NAME_KEY = "deployment_name"
+#: Key name for OAuth2 client ID in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_ID_KEY)
+WORKFLOW_AUTH_CLIENT_ID_KEY = os.getenv(
+    "ATLAN_AUTH_CLIENT_ID_KEY", "ATLAN_AUTH_CLIENT_ID"
+)
+#: Key name for OAuth2 client secret in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_SECRET_KEY)
+WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
+    "ATLAN_AUTH_CLIENT_SECRET_KEY", "ATLAN_AUTH_CLIENT_SECRET"
+)
 
 # Workflow Constants
 #: Timeout duration for activity heartbeats
@@ -146,7 +158,9 @@ WORKER_START_EVENT_VERSION = "v1"
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 # Dapr Client Configuration
-#: Maximum gRPC message length in bytes for Dapr client (default: 100MB)
+#: Maximum gRPC message length in bytes for Dapr client.
+#:
+#: Default: 100MB
 DAPR_MAX_GRPC_MESSAGE_LENGTH = int(
     os.getenv("DAPR_MAX_GRPC_MESSAGE_LENGTH", "104857600")
 )
@@ -249,9 +263,9 @@ REDIS_HOST = os.getenv("REDIS_HOST", "")
 REDIS_PORT = os.getenv("REDIS_PORT", "")
 #: Redis password (required for authenticated Redis instances)
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-#: Redis Sentinel service name (default: mymaster)
+#: Redis Sentinel service name. Default: mymaster
 REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
-#: Redis Sentinel hosts (comma-separated host:port pairs)
+#: Redis Sentinel hosts as comma-separated host:port pairs
 REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
 #: Whether to enable strict locking
 IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"
@@ -263,3 +277,9 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 #: with the application.
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
+
+
+# Disable Analytics Configuration for DAFT
+os.environ["DO_NOT_TRACK"] = "true"
+os.environ["SCARF_NO_ANALYTICS"] = "true"
+os.environ["DAFT_ANALYTICS_ENABLED"] = "0"

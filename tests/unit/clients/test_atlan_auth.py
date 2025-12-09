@@ -11,15 +11,18 @@ from application_sdk.clients.atlan_auth import AtlanAuthClient
 @pytest.fixture
 async def auth_client() -> AtlanAuthClient:
     """Create an AtlanAuthClient instance for testing."""
-    mock_config = {
-        "test_app_client_id": "test-client",
-        "test_app_client_secret": "test-secret",
-        "workflow_auth_enabled": True,
-        "workflow_auth_url": "http://auth.test/token",
-    }
 
-    with patch("application_sdk.constants.WORKFLOW_AUTH_ENABLED", True), patch(
-        "application_sdk.constants.WORKFLOW_AUTH_URL_KEY", "workflow_auth_url"
+    def mock_get_deployment_secret(key: str):
+        """Mock get_deployment_secret to return values based on key."""
+        mock_config = {
+            "test_app_client_id": "test-client",
+            "test_app_client_secret": "test-secret",
+            "workflow_auth_url": "http://auth.test/token",
+        }
+        return mock_config.get(key)
+
+    with patch("application_sdk.constants.AUTH_ENABLED", True), patch(
+        "application_sdk.constants.AUTH_URL", "http://auth.test/token"
     ), patch("application_sdk.constants.APPLICATION_NAME", "test-app"), patch(
         "application_sdk.clients.atlan_auth.APPLICATION_NAME", "test-app"
     ), patch(
@@ -29,7 +32,7 @@ async def auth_client() -> AtlanAuthClient:
         "test_app_client_secret",
     ), patch(
         "application_sdk.clients.atlan_auth.SecretStore.get_deployment_secret",
-        return_value=mock_config,
+        side_effect=mock_get_deployment_secret,
     ):
         client = AtlanAuthClient()
         return client
@@ -52,7 +55,7 @@ async def test_credential_discovery_failure(auth_client: AtlanAuthClient) -> Non
 
     with patch(
         "application_sdk.clients.atlan_auth.SecretStore.get_deployment_secret",
-        return_value={},  # Empty config means no credentials
+        return_value=None,  # Empty config means no credentials
     ):
         credentials = await auth_client_no_fallback._extract_auth_credentials()
         assert credentials is None
