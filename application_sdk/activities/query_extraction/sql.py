@@ -202,6 +202,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         try:
             state = await self._get_state(workflow_args)
+
             sql_input = SQLQueryInput(
                 engine=state.sql_client.engine,
                 query=self.get_formatted_query(self.fetch_queries_sql, workflow_args),
@@ -209,11 +210,13 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             )
             sql_input = await sql_input.get_dataframe()
 
+            sql_input.columns = [str(c).upper() for c in sql_input.columns]
+
             raw_output = ParquetOutput(
                 output_path=workflow_args["output_path"],
                 output_suffix="raw/query",
                 chunk_size=workflow_args["miner_args"].get("chunk_size", 100000),
-                start_marker=workflow_args["start_marker"],
+                start_marker=str(workflow_args["start_marker"]),
                 end_marker=workflow_args["end_marker"],
             )
             await raw_output.write_dataframe(sql_input)
@@ -528,9 +531,107 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             store_name=UPSTREAM_OBJECT_STORE_NAME,
         )
 
+        # Persist the full marker list in StateStore to avoid oversized activity results
         try:
-            await self.write_marker(parallel_markers, workflow_args)
-        except Exception as e:
-            logger.warning(f"Failed to write marker file: {e}")
+            from application_sdk.services.statestore import StateStore, StateType
 
-        return parallel_markers
+            workflow_id: str = workflow_args.get("workflow_id") or get_workflow_id()
+            await StateStore.save_state(
+                key="query_batches",
+                value=parallel_markers,
+                id=workflow_id,
+                type=StateType.WORKFLOWS,
+            )
+            logger.info(
+                f"Saved {len(parallel_markers)} query batches to StateStore for {workflow_id}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to save query batches in StateStore: {e}")
+            # Re-raise to ensure the workflow can retry per standards
+            raise
+
+        # Return a small handle to keep activity result size minimal
+        return [{"state_key": "query_batches", "count": len(parallel_markers)}]
+
+    @activity.defn
+    @auto_heartbeater
+    async def load_query_batches(
+        self, workflow_args: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Load previously saved query batches from StateStore.
+
+        Args:
+            workflow_args (Dict[str, Any]): Workflow arguments containing workflow_id
+
+        Returns:
+            List[Dict[str, Any]]: The list of parallelized query batch descriptors
+
+        Raises:
+            Exception: If retrieval from StateStore fails
+        """
+        try:
+            from application_sdk.services.statestore import StateStore, StateType
+
+            workflow_id: str = workflow_args.get("workflow_id") or get_workflow_id()
+            state = await StateStore.get_state(workflow_id, StateType.WORKFLOWS)
+            batches: List[Dict[str, Any]] = state.get("query_batches", [])
+            logger.info(
+                f"Loaded {len(batches)} query batches from StateStore for {workflow_id}"
+            )
+            return batches
+        except Exception as e:
+            logger.error(
+                f"Failed to load query batches from StateStore: {e}",
+                exc_info=True,
+            )
+            raise
+
+    @activity.defn
+    @auto_heartbeater
+    async def fetch_single_batch(
+        self, workflow_args: Dict[str, Any], batch_index: int
+    ) -> Dict[str, Any]:
+        """Fetch a single batch by index from StateStore.
+
+        Args:
+            workflow_args (Dict[str, Any]): Workflow arguments containing workflow_id
+            batch_index (int): Index of the batch to fetch
+
+        Returns:
+            Dict[str, Any]: The single batch data
+
+        Raises:
+            Exception: If batch retrieval fails
+        """
+        try:
+            from application_sdk.services.statestore import StateStore, StateType
+
+            workflow_id: str = workflow_args.get("workflow_id") or get_workflow_id()
+            state = await StateStore.get_state(workflow_id, StateType.WORKFLOWS)
+            batches: List[Dict[str, Any]] = state.get("query_batches", [])
+
+            if batch_index >= len(batches):
+                raise IndexError(
+                    f"Batch index {batch_index} out of range for {len(batches)} batches"
+                )
+
+            batch = batches[batch_index]
+            logger.info(f"Fetched batch {batch_index + 1}/{len(batches)}")
+            return batch
+
+        except Exception as e:
+            logger.error(f"Failed to fetch batch {batch_index}: {e}")
+            raise
+
+    @activity.defn
+    @auto_heartbeater
+    async def write_final_marker(self, workflow_args: Dict[str, Any]) -> None:
+        """Write final marker after all fetches complete.
+
+        Loads batches from StateStore and writes the last end marker as the markerfile.
+        """
+        try:
+            batches = await self.load_query_batches(workflow_args)
+            await self.write_marker(batches, workflow_args)
+        except Exception as e:
+            logger.warning(f"Failed to write final marker file: {e}")
