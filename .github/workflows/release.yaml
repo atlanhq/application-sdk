@@ -1,4 +1,4 @@
-name: Pre-release Version Bump
+name: Release Version Bump
 
 on:
   pull_request:
@@ -48,7 +48,7 @@ jobs:
         id: version_update
         run: |
           # Update the version
-          python .github/scripts/pre_release.py main ${{ env.CURRENT_VERSION }}
+          python .github/scripts/release.py main ${{ env.CURRENT_VERSION }}
           uv lock
 
           # Get the new version

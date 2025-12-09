@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.2 (December 09, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.1...v1.0.2
+
+### Bug Fixes
+
+- release version bump (#871) (by @inishchith in [0cf4305](https://github.com/atlanhq/application-sdk/commit/0cf4305))
+
+
 ## v1.0.1 (December 05, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.0...v1.0.1
