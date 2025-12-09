@@ -312,3 +312,140 @@ class TestObjectStore:
     #         destination="/tmp",
     #     )
     #     assert mock_download_file.await_count == 2
+
+    @pytest.mark.parametrize(
+        "response_json, prefix, expected_paths",
+        [
+            # 1: Standard List of Strings
+            (["file1.txt", "sub/file2.txt"], "", ["file1.txt", "sub/file2.txt"]),
+            # 2: AWS S3 Format (Dict with Contents)
+            (
+                {"Contents": [{"Key": "s3-file.txt"}, {"Key": "folder/s3-file2.txt"}]},
+                "",
+                ["s3-file.txt", "folder/s3-file2.txt"],
+            ),
+            # 3: Azure/GCP Format (List of Dicts with "Name")
+            (
+                [
+                    {"Name": "az-blob.txt", "etag": "123"},
+                    {"Name": "folder/az-blob2.txt"},
+                    {"Name": "folder/gcs.parquet"},
+                ],
+                "",
+                ["az-blob.txt", "folder/az-blob2.txt", "folder/gcs.parquet"],
+            ),
+            # 4: Generic Wrapper "files"
+            ({"files": ["generic1.txt"]}, "", ["generic1.txt"]),
+            # 5: Generic Wrapper "keys"
+            ({"keys": ["key1.txt"]}, "", ["key1.txt"]),
+            # 6: Mixed Invalid Types (Integers, None, Boolean)
+            (
+                ["valid.txt", 123, None, True, "valid2.txt"],
+                "",
+                ["valid.txt", "valid2.txt"],
+            ),
+            # 7: Malformed Dictionaries (Missing "Name")
+            (
+                [{"Name": "valid.txt"}, {"etag": "no-name"}, {"size": 500}],
+                "",
+                ["valid.txt"],
+            ),
+            # 8: Dict with non-string "Name" value (None, int, nested dict)
+            (
+                [
+                    {"Name": "valid.txt"},
+                    {"Name": None},
+                    {"Name": 123},
+                    {"Name": {"nested": "dict"}},
+                    {},
+                ],
+                "",
+                ["valid.txt"],
+            ),
+            # 9: S3 Items Missing "Key" (Filtered by list comprehension)
+            (
+                {"Contents": [{"Key": "good.txt"}, {"Size": 500}]},
+                "",
+                ["good.txt"],
+            ),
+            # 10: Unknown Structure (Empty Fallback)
+            ({"random": "data"}, "", []),
+            # 11: Prefix Slicing (Prefix Exists in Path)
+            # Logic: Returns substring starting from prefix
+            (
+                ["root/my-folder/image.png"],
+                "my-folder",
+                ["my-folder/image.png"],
+            ),
+            # 12: Prefix Fallback (Prefix NOT in Path)
+            # Logic: Returns os.path.basename if prefix is provided but not found
+            (
+                ["other-location/image.png"],
+                "my-folder/",
+                ["image.png"],
+            ),
+            # 13: No Prefix Provided
+            # Logic: Returns full original path
+            (
+                ["/full/path/to/file.txt"],
+                "",
+                ["/full/path/to/file.txt"],
+            ),
+        ],
+    )
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_list_files_parsing_and_logic(
+        self,
+        mock_invoke: AsyncMock,
+        response_json,
+        prefix,
+        expected_paths,
+    ) -> None:
+        """
+        1. JSON Structure parsing (List vs Dict vs S3 vs Azure)
+        2. Item validation (Skipping invalid types)
+        3. Prefix path transformation logic
+        """
+        # Arrange
+        import orjson
+
+        mock_invoke.return_value = orjson.dumps(response_json)
+
+        # Act
+        result = await ObjectStore.list_files(prefix=prefix)
+
+        # Assert
+        assert result == expected_paths
+        mock_invoke.assert_called_once()
+
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_list_files_empty_response(self, mock_invoke: AsyncMock) -> None:
+        """14: Test handling of empty/None response from Dapr."""
+        # Arrange: simulate empty byte response
+        mock_invoke.return_value = b""
+
+        # Act
+        result = await ObjectStore.list_files(prefix="test")
+
+        # Assert
+        assert result == []
+
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_list_files_malformed_json(self, mock_invoke: AsyncMock) -> None:
+        """15: Test handling of corrupt JSON response."""
+        # Arrange: simulate invalid JSON
+        mock_invoke.return_value = b"{invalid-json..."
+
+        # Act & Assert
+        with pytest.raises(Exception):  # Expecting JSONDecodeError wrapped or raised
+            await ObjectStore.list_files(prefix="test")
+
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_list_files_binding_failure(self, mock_invoke: AsyncMock) -> None:
+        """16: Test handling of Dapr binding exception."""
+        # Arrange
+        mock_invoke.side_effect = Exception("Network Error")
+
+        # Act & Assert
+        with pytest.raises(Exception, match="Network Error"):
+            await ObjectStore.list_files(prefix="test")

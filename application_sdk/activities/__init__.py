@@ -151,6 +151,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             )
             await self._clean_state()
             raise
+        except Exception as err:
+            logger.error(f"Error getting state: {str(err)}", exc_info=err)
+            await self._clean_state()
+            raise
 
     async def _clean_state(self):
         """Remove the state data for the current workflow.
