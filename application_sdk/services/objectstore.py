@@ -103,11 +103,13 @@ class ObjectStore:
                 # Azure Blob / GCP responses contain file path in "Name" field
                 if isinstance(path, dict):
                     extracted_path = path.get("Name")
-                    
+
                     if not isinstance(extracted_path, str):
-                        logger.warning(f"Skipping invalid dict entry (missing or non-string 'Name'): {path}")
+                        logger.warning(
+                            f"Skipping invalid dict entry (missing or non-string 'Name'): {path}"
+                        )
                         continue
-                        
+
                     path = extracted_path
 
                 valid_list.append(
