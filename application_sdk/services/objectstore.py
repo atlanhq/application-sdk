@@ -95,9 +95,18 @@ class ObjectStore:
 
             valid_list = []
             for path in paths:
-                if not isinstance(path, str):
-                    logger.warning(f"Skipping non-string path: {path}")
+                # Early exit for non-dict, non-string types
+                if not isinstance(path, (str, dict)):
+                    logger.warning(f"Skipping non-string/dict path: {path}")
                     continue
+                
+                # Azure Blob / GCP responses contain file path in "Name" field
+                if isinstance(path, dict):
+                    if "Name" not in path:
+                        logger.warning(f"Skipping dict path missing 'Name' key: {path}")
+                        continue
+                    path = path["Name"]
+
                 valid_list.append(
                     path[path.find(prefix) :]
                     if prefix and prefix in path
