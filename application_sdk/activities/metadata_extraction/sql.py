@@ -850,7 +850,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                         dataframe=dataframe, **workflow_args
                     )
                 await transformed_output.write_daft_dataframe(transform_metadata)
-        return await transformed_output.get_statistics()
+        return await transformed_output.get_statistics(typename=typename)
 
     @activity.defn
     @auto_heartbeater
