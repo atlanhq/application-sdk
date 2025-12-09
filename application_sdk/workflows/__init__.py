@@ -77,8 +77,8 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
         try:
             from application_sdk.observability.logger_adaptor import argo_workflow_context
             argo_metadata = {
-                "argo_workflow_run_id": workflow_config.get("argo_workflow_run_id", ""),
-                "argo_workflow_run_uuid": workflow_config.get("argo_workflow_run_uuid", "")
+                "argo_workflow_name": workflow_config.get("argo_workflow_name", ""),
+                "argo_workflow_node": workflow_config.get("argo_workflow_node", "")
             }
             argo_workflow_context.set(argo_metadata)
         except Exception:

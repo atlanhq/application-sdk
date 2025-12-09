@@ -74,9 +74,9 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
                 args = input.args[0]
                 if isinstance(args, dict):
                     argo_metadata = {
-                        "argo_workflow_run_id": args.get("argo_workflow_run_id", ""),
-                        "argo_workflow_run_uuid": args.get(
-                            "argo_workflow_run_uuid", ""
+                        "argo_workflow_name": args.get("argo_workflow_name", ""),
+                        "argo_workflow_node": args.get(
+                            "argo_workflow_node", ""
                         ),
                     }
                     argo_workflow_context.set(argo_metadata)

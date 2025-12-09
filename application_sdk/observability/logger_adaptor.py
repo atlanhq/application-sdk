@@ -65,6 +65,9 @@ class LogExtraModel(BaseModel):
     start_to_close_timeout: Optional[str] = None
     schedule_to_start_timeout: Optional[str] = None
     heartbeat_timeout: Optional[str] = None
+    # Argo context
+    argo_workflow_name: Optional[str] = None
+    argo_workflow_node: Optional[str] = None
     # Other fields
     log_type: Optional[str] = None
 
@@ -101,6 +104,8 @@ class LogExtraModel(BaseModel):
                     "start_to_close_timeout": str,
                     "schedule_to_start_timeout": str,
                     "heartbeat_timeout": str,
+                    "argo_workflow_name": str,
+                    "argo_workflow_node": str,
                     "log_type": str,
                 }
 
@@ -125,9 +130,6 @@ class LogRecordModel(BaseModel):
     file: str
     line: int
     function: str
-    # Argo context
-    argo_workflow_run_id: Optional[str] = None
-    argo_workflow_run_uuid: Optional[str] = None
     extra: LogExtraModel = Field(default_factory=LogExtraModel)
 
     @classmethod
@@ -146,9 +148,13 @@ class LogRecordModel(BaseModel):
             if k != "logger_name" and hasattr(extra, k):
                 setattr(extra, k, v)
 
-        # Extract Argo fields from extra dict
-        argo_workflow_run_id = message.record["extra"].get("argo_workflow_run_id")
-        argo_workflow_run_uuid = message.record["extra"].get("argo_workflow_run_uuid")
+        # Extract Argo fields from extra dict and set on extra model
+        argo_workflow_name = message.record["extra"].get("argo_workflow_name")
+        argo_workflow_node = message.record["extra"].get("argo_workflow_node")
+        if argo_workflow_name:
+            extra.argo_workflow_name = argo_workflow_name
+        if argo_workflow_node:
+            extra.argo_workflow_node = argo_workflow_node
 
         return cls(
             timestamp=message.record["time"].timestamp(),
@@ -158,8 +164,6 @@ class LogRecordModel(BaseModel):
             file=str(message.record["file"].path),
             line=message.record["line"],
             function=message.record["function"],
-            argo_workflow_run_id=argo_workflow_run_id,
-            argo_workflow_run_uuid=argo_workflow_run_uuid,
             extra=extra,
         )
 
@@ -172,8 +176,10 @@ class LogRecordModel(BaseModel):
 # Create a context variable for request_id
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
 
-# Create a context variable for Argo workflow metadata
-argo_workflow_context: ContextVar[Dict[str, Any]] = ContextVar("argo_workflow_context", default={})
+# Create a context variable for Argo workflow metadata (workflow run ID and UUID)
+argo_workflow_context: ContextVar[Dict[str, Any]] = ContextVar(
+    "argo_workflow_context", default={}
+)
 
 
 # Add a Loguru handler for the Python logging system
@@ -202,8 +208,9 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
-        # Add logger_name and argo_workflow_run_id to extra to prevent KeyError
-        logger_extras = {"logger_name": record.name, "argo_workflow_run_id": None}
+        # Add logger_name to extra to prevent KeyError
+        logger_extras = {"logger_name": record.name, "argo_workflow_name": ""}
+
 
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
             level, record.getMessage()
@@ -298,8 +305,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 "TRACING", no=SEVERITY_MAPPING["TRACING"], color="<magenta>", icon="🔍"
             )
 
-        # Format string with Argo workflow ID (shows value or None if not present)
-        atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> <magenta>argo_workflow_id={extra[argo_workflow_run_id]}</magenta> - <level>{message}</level>"
+        atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> <magenta>argo_workflow_name={extra[argo_workflow_name]}</magenta> - <level>{message}</level>"
 
         self.logger.add(
             sys.stderr,
@@ -540,6 +546,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         - Adds request context if available
         - Adds workflow context if in a workflow
         - Adds activity context if in an activity
+        - Adds Argo workflow context if available
         """
         kwargs["logger_name"] = self.logger_name
 
@@ -552,6 +559,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             pass
 
         workflow_context = get_workflow_context()
+
+        # Always set argo_workflow_name to ensure it's present in log format
+        kwargs["argo_workflow_name"] = workflow_context.argo_workflow_name or ""
 
         try:
             if workflow_context and workflow_context.in_workflow == "true":
@@ -570,10 +580,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 kwargs.update(workflow_context.model_dump())
         except Exception:
             pass
-
-        # Ensure argo_workflow_run_id always exists in kwargs (None if not present)
-        if "argo_workflow_run_id" not in kwargs:
-            kwargs["argo_workflow_run_id"] = None
 
         return msg, kwargs
 
