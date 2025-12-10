@@ -408,7 +408,9 @@ class TestLogFormatFunction:
 
     def test_format_excludes_correlation_context_when_empty(self):
         """Format should exclude correlation context when empty string."""
-        record = {"extra": {"logger_name": "test_logger", self.WORKFLOW_NAME_HEADER: ""}}
+        record = {
+            "extra": {"logger_name": "test_logger", self.WORKFLOW_NAME_HEADER: ""}
+        }
 
         # Collect all atlan- prefixed headers for display
         correlation_parts = []
