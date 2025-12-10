@@ -48,6 +48,7 @@ class JsonInput(Input):
         self.path = path
         self.chunk_size = chunk_size
         self.file_names = file_names
+        super().__init__()
 
     async def get_batched_dataframe(
         self,

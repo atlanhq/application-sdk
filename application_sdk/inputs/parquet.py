@@ -51,6 +51,7 @@ class ParquetInput(Input):
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
         self.file_names = file_names
+        super().__init__()
 
     async def get_dataframe(self) -> "pd.DataFrame":
         """Read data from parquet file(s) and return as pandas DataFrame.

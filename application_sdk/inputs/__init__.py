@@ -23,6 +23,32 @@ class Input(ABC):
     Abstract base class for input data sources.
     """
 
+    def __init__(self):
+        self._downloaded_files: List[str] = []
+
+    async def __aenter__(self):
+        """Context manager entry point. Triggers file download."""
+        self._downloaded_files = []
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit point. Cleans up downloaded files."""
+        await self.cleanup_files()
+
+    async def cleanup_files(self):
+        """Clean up downloaded input files."""
+        if self._downloaded_files:
+            logger.info(
+                f"Cleaning up {len(self._downloaded_files)} downloaded input files"
+            )
+            for file_path in self._downloaded_files:
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup file {file_path}: {e}")
+            self._downloaded_files = []
+
     async def download_files(self) -> List[str]:
         """Download files from object store if not available locally.
 
@@ -95,6 +121,9 @@ class Input(ABC):
 
             # Check results
             if downloaded_paths:
+                if hasattr(self, "_downloaded_files"):
+                    self._downloaded_files.extend(downloaded_paths)
+
                 logger.info(
                     f"Successfully downloaded {len(downloaded_paths)} {self._EXTENSION} files from object store"
                 )
