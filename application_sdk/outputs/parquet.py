@@ -103,11 +103,8 @@ class ParquetOutput(Output):
         self.current_buffer_size = 0
         self.current_buffer_size_bytes = 0  # Track estimated buffer size in bytes
         self.max_file_size_bytes = int(
-            DAPR_MAX_GRPC_MESSAGE_LENGTH * 0.65
-        )  # 65% of DAPR limit as safety buffer
-        # The max file size is not always honored and is used as an approximation by Dapr
-        # Dapr might create files larger than this value
-        # After thousands of runs, we have figured out this number to be a good approximation
+            DAPR_MAX_GRPC_MESSAGE_LENGTH * 0.75
+        )  # 75% of DAPR limit as safety buffer
         self.chunk_start = chunk_start
         self.chunk_part = chunk_part
         self.start_marker = start_marker
