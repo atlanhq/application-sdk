@@ -1,4 +1,5 @@
 import os
+from typing import Dict
 
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
@@ -12,7 +13,13 @@ from application_sdk.constants import (
 
 
 class WorkflowContext(BaseModel):
-    """Workflow context."""
+    """Workflow context.
+
+    This model supports dynamic correlation context fields (atlan- prefixed)
+    through Pydantic's extra="allow" configuration.
+    """
+
+    model_config = {"extra": "allow"}
 
     in_workflow: str = Field(default="false")
     in_activity: str = Field(default="false")
@@ -24,8 +31,6 @@ class WorkflowContext(BaseModel):
     activity_id: str = Field(init=False, default="")
     activity_type: str = Field(init=False, default="")
     workflow_run_id: str = Field(init=False, default="")
-    argo_workflow_name: str = Field(init=False, default="")
-    argo_workflow_node: str = Field(init=False, default="")
 
 
 def get_observability_dir() -> str:
@@ -77,14 +82,16 @@ def get_workflow_context() -> WorkflowContext:
     except Exception:
         pass
 
-    # Get Argo workflow metadata from context variable
+    # Get correlation context from context variable (atlan- prefixed headers)
     try:
-        from application_sdk.observability.logger_adaptor import argo_workflow_context
+        from application_sdk.observability.logger_adaptor import correlation_context
 
-        argo_ctx = argo_workflow_context.get()
-        if argo_ctx:
-            context.argo_workflow_name = argo_ctx.get("argo_workflow_name", "")
-            context.argo_workflow_node = argo_ctx.get("argo_workflow_node", "")
+        corr_ctx = correlation_context.get()
+        if corr_ctx:
+            # Add all correlation context fields as extra attributes
+            for key, value in corr_ctx.items():
+                if key.startswith("atlan-") and value:
+                    setattr(context, key, str(value))
     except Exception:
         pass
 

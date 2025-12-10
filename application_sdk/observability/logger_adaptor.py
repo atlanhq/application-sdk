@@ -42,7 +42,13 @@ from application_sdk.observability.utils import (
 
 
 class LogExtraModel(BaseModel):
-    """Pydantic model for log extra fields."""
+    """Pydantic model for log extra fields.
+
+    This model allows arbitrary extra fields (prefixed with atlan-) to be included
+    for correlation context propagation to OTEL.
+    """
+
+    model_config = {"extra": "allow"}
 
     client_host: Optional[str] = None
     duration_ms: Optional[int] = None
@@ -65,59 +71,8 @@ class LogExtraModel(BaseModel):
     start_to_close_timeout: Optional[str] = None
     schedule_to_start_timeout: Optional[str] = None
     heartbeat_timeout: Optional[str] = None
-    # Argo context
-    argo_workflow_name: Optional[str] = None
-    argo_workflow_node: Optional[str] = None
     # Other fields
     log_type: Optional[str] = None
-
-    class Config:
-        """Pydantic model configuration for LogExtraModel.
-
-        Provides custom parsing logic for converting dictionary values to appropriate types.
-        Handles type conversion for various fields like integers, strings, and other data types.
-        """
-
-        @classmethod
-        def parse_obj(cls, obj):
-            if isinstance(obj, dict):
-                # Define type mappings for each field
-                type_mappings = {
-                    # Integer fields
-                    "attempt": int,
-                    "duration_ms": int,
-                    "status_code": int,
-                    # String fields
-                    "client_host": str,
-                    "method": str,
-                    "path": str,
-                    "request_id": str,
-                    "url": str,
-                    "workflow_id": str,
-                    "run_id": str,
-                    "workflow_type": str,
-                    "namespace": str,
-                    "task_queue": str,
-                    "activity_id": str,
-                    "activity_type": str,
-                    "schedule_to_close_timeout": str,
-                    "start_to_close_timeout": str,
-                    "schedule_to_start_timeout": str,
-                    "heartbeat_timeout": str,
-                    "argo_workflow_name": str,
-                    "argo_workflow_node": str,
-                    "log_type": str,
-                }
-
-                # Process each field with its type conversion
-                for field, type_func in type_mappings.items():
-                    if field in obj and obj[field] is not None:
-                        try:
-                            obj[field] = type_func(obj[field])
-                        except (ValueError, TypeError):
-                            obj[field] = None
-
-            return super().parse_obj(obj)
 
 
 class LogRecordModel(BaseModel):
@@ -147,14 +102,9 @@ class LogRecordModel(BaseModel):
         for k, v in message.record["extra"].items():
             if k != "logger_name" and hasattr(extra, k):
                 setattr(extra, k, v)
-
-        # Extract Argo fields from extra dict and set on extra model
-        argo_workflow_name = message.record["extra"].get("argo_workflow_name")
-        argo_workflow_node = message.record["extra"].get("argo_workflow_node")
-        if argo_workflow_name:
-            extra.argo_workflow_name = argo_workflow_name
-        if argo_workflow_node:
-            extra.argo_workflow_node = argo_workflow_node
+            # Include atlan- prefixed fields as extra attributes (correlation context)
+            elif k.startswith("atlan-") and v is not None:
+                setattr(extra, k, str(v))
 
         return cls(
             timestamp=message.record["time"].timestamp(),
@@ -176,9 +126,9 @@ class LogRecordModel(BaseModel):
 # Create a context variable for request_id
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
 
-# Create a context variable for Argo workflow metadata (workflow run ID and UUID)
-argo_workflow_context: ContextVar[Dict[str, Any]] = ContextVar(
-    "argo_workflow_context", default={}
+# Create a context variable for correlation context (atlan- prefixed headers)
+correlation_context: ContextVar[Dict[str, Any]] = ContextVar(
+    "correlation_context", default={}
 )
 
 
@@ -308,7 +258,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         colorize = LOG_LEVEL == "DEBUG"
 
         def get_log_format(record: Any) -> str:
-            """Generate log format string with conditional argo workflow name.
+            """Generate log format string with conditional correlation context.
 
             Args:
                 record: Loguru record dictionary containing log information.
@@ -316,20 +266,24 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             Returns:
                 Format string for the log message.
             """
-            argo_name = record["extra"].get("argo_workflow_name", "")
-            argo_part = f" argo_workflow_name={argo_name}" if argo_name else ""
+            # Collect all atlan- prefixed headers for display (correlation context)
+            correlation_parts = []
+            for key, value in record["extra"].items():
+                if key.startswith("atlan-") and value:
+                    correlation_parts.append(f"{key}={value}")
+            correlation_str = f" {' '.join(correlation_parts)}" if correlation_parts else ""
 
             if colorize:
                 return (
                     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> "
                     "<blue>[{level}]</blue> "
                     "<cyan>{extra[logger_name]}</cyan>"
-                    f"<magenta>{argo_part}</magenta>"
+                    f"<magenta>{correlation_str}</magenta>"
                     " - <level>{message}</level>\n"
                 )
             return (
                 "{time:YYYY-MM-DD HH:mm:ss} [{level}] {extra[logger_name]}"
-                f"{argo_part}"
+                f"{correlation_str}"
                 " - {message}\n"
             )
 
@@ -571,7 +525,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         - Adds request context if available
         - Adds workflow context if in a workflow
         - Adds activity context if in an activity
-        - Adds Argo workflow context if available
+        - Adds correlation context if available
         """
         kwargs["logger_name"] = self.logger_name
 
@@ -584,9 +538,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             pass
 
         workflow_context = get_workflow_context()
-
-        # Always set argo_workflow_name to ensure it's present in log format
-        kwargs["argo_workflow_name"] = workflow_context.argo_workflow_name or ""
 
         try:
             if workflow_context and workflow_context.in_workflow == "true":
@@ -603,6 +554,16 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 activity_msg = f" Activity Context: Activity ID: {workflow_context.activity_id} Workflow ID: {workflow_context.workflow_id} Run ID: {workflow_context.workflow_run_id} Type: {workflow_context.activity_type}"
                 msg = f"{msg}{activity_msg}"
                 kwargs.update(workflow_context.model_dump())
+        except Exception:
+            pass
+
+        # Add correlation context (atlan- prefixed keys) to kwargs
+        try:
+            corr_ctx = correlation_context.get()
+            if corr_ctx:
+                for key, value in corr_ctx.items():
+                    if key.startswith("atlan-") and value:
+                        kwargs[key] = str(value)
         except Exception:
             pass
 

@@ -207,13 +207,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             workflow_args["workflow_id"] = workflow_id
             workflow_args["workflow_run_id"] = get_workflow_run_id()
 
-            # Preserve argo workflow metadata from workflow_config for logging context
-            workflow_args["argo_workflow_name"] = workflow_config.get(
-                "argo_workflow_name", ""
-            )
-            workflow_args["argo_workflow_node"] = workflow_config.get(
-                "argo_workflow_node", ""
-            )
+            # Preserve atlan- prefixed keys from workflow_config for logging context
+            for key, value in workflow_config.items():
+                if key.startswith("atlan-") and value:
+                    workflow_args[key] = str(value)
 
             return workflow_args
 

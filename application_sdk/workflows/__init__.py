@@ -73,17 +73,18 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
                 workflow_id is used to extract the workflow configuration from the
                 state store.
         """
-        # Set Argo workflow metadata in context variable early so all logs have access
+        # Set correlation context from workflow_config early so all logs have access
+        # Extracts all atlan- prefixed keys for correlation context
         try:
             from application_sdk.observability.logger_adaptor import (
-                argo_workflow_context,
+                correlation_context,
             )
 
-            argo_metadata = {
-                "argo_workflow_name": workflow_config.get("argo_workflow_name", ""),
-                "argo_workflow_node": workflow_config.get("argo_workflow_node", ""),
+            atlan_fields = {
+                k: str(v) for k, v in workflow_config.items()
+                if k.startswith("atlan-") and v
             }
-            argo_workflow_context.set(argo_metadata)
+            correlation_context.set(atlan_fields)
         except Exception:
             pass
 

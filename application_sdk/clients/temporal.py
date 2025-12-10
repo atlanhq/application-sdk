@@ -304,19 +304,15 @@ class TemporalWorkflowClient(WorkflowClient):
             if not self.client:
                 raise ValueError("Client is not loaded")
 
+            # Build workflow config with workflow_id and all atlan- prefixed keys
+            workflow_config = {"workflow_id": workflow_id}
+            for key, value in workflow_args.items():
+                if key.startswith("atlan-") and value:
+                    workflow_config[key] = str(value)
+
             handle = await self.client.start_workflow(
                 workflow_class,  # type: ignore
-                args=[
-                    {
-                        "workflow_id": workflow_id,
-                        "argo_workflow_name": workflow_args.get(
-                            "argo_workflow_name", ""
-                        ),
-                        "argo_workflow_node": workflow_args.get(
-                            "argo_workflow_node", ""
-                        ),
-                    }
-                ],
+                args=[workflow_config],
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),

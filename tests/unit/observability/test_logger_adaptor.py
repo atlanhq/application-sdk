@@ -327,22 +327,24 @@ async def test_parquet_sink_error_handling(mock_parquet_file):
         assert len(logger_adapter._buffer) == 0
 
 
-class TestArgoWorkflowContext:
-    """Tests for argo workflow context in logging."""
+class TestCorrelationContext:
+    """Tests for correlation context in logging."""
 
-    ARGO_WORKFLOW_NAME = "atlan-redshift-1765299569-h9wsj"
-    ARGO_WORKFLOW_NODE = "atlan-redshift-1765299569-h9wsj(0).run(0).extract-interim"
-    WORKFLOW_ID = "atlan-redshift-1765299569"
+    WORKFLOW_NAME_HEADER = "atlan-workflow-name"
+    WORKFLOW_NODE_HEADER = "atlan-workflow-node"
+    WORKFLOW_NAME = "test-workflow-123"
+    WORKFLOW_NODE = "test-workflow-123.node-1"
+    WORKFLOW_ID = "test-workflow-123"
 
-    def test_process_with_argo_workflow_context(self):
-        """Test process() when argo workflow context is set."""
+    def test_process_with_correlation_context(self):
+        """Test process() when correlation context is set."""
         with create_logger_adapter() as logger_adapter:
             with mock.patch(
-                "application_sdk.observability.logger_adaptor.argo_workflow_context"
-            ) as mock_argo_context:
-                mock_argo_context.get.return_value = {
-                    "argo_workflow_name": self.ARGO_WORKFLOW_NAME,
-                    "argo_workflow_node": self.ARGO_WORKFLOW_NODE,
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                mock_corr_context.get.return_value = {
+                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                    self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
                 }
 
                 msg, kwargs = logger_adapter.process("Test message", {})
@@ -350,13 +352,13 @@ class TestArgoWorkflowContext:
                 assert kwargs["logger_name"] == "test_logger"
                 assert msg == "Test message"
 
-    def test_process_without_argo_workflow_context(self):
-        """Test process() when argo workflow context is empty."""
+    def test_process_without_correlation_context(self):
+        """Test process() when correlation context is empty."""
         with create_logger_adapter() as logger_adapter:
             with mock.patch(
-                "application_sdk.observability.logger_adaptor.argo_workflow_context"
-            ) as mock_argo_context:
-                mock_argo_context.get.return_value = {}
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                mock_corr_context.get.return_value = {}
 
                 msg, kwargs = logger_adapter.process("Test message", {})
 
@@ -367,72 +369,95 @@ class TestArgoWorkflowContext:
 class TestLogFormatFunction:
     """Tests for the conditional log format function."""
 
-    ARGO_WORKFLOW_NAME = "atlan-redshift-1765299569-h9wsj"
-    ARGO_WORKFLOW_NODE = "atlan-redshift-1765299569-h9wsj(0).run(0).extract-interim"
+    WORKFLOW_NAME_HEADER = "atlan-workflow-name"
+    WORKFLOW_NODE_HEADER = "atlan-workflow-node"
+    WORKFLOW_NAME = "test-workflow-123"
+    WORKFLOW_NODE = "test-workflow-123.node-1"
 
-    def test_format_includes_argo_workflow_name_when_present(self):
-        """Format should include argo_workflow_name when it has a value."""
+    def test_format_includes_correlation_context_when_present(self):
+        """Format should include atlan- prefixed headers when present."""
         record = {
             "extra": {
                 "logger_name": "test_logger",
-                "argo_workflow_name": self.ARGO_WORKFLOW_NAME,
+                self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
             }
         }
 
-        argo_name = record["extra"].get("argo_workflow_name", "")
-        argo_part = f" argo_workflow_name={argo_name}" if argo_name else ""
+        # Collect all atlan- prefixed headers for display
+        correlation_parts = []
+        for key, value in record["extra"].items():
+            if key.startswith("atlan-") and value:
+                correlation_parts.append(f"{key}={value}")
+        correlation_str = f" {' '.join(correlation_parts)}" if correlation_parts else ""
 
-        assert argo_part == f" argo_workflow_name={self.ARGO_WORKFLOW_NAME}"
+        assert self.WORKFLOW_NAME_HEADER in correlation_str
+        assert self.WORKFLOW_NAME in correlation_str
 
-    def test_format_excludes_argo_workflow_name_when_missing(self):
-        """Format should exclude argo_workflow_name when not present."""
+    def test_format_excludes_correlation_context_when_missing(self):
+        """Format should exclude correlation context when not present."""
         record = {"extra": {"logger_name": "test_logger"}}
 
-        argo_name = record["extra"].get("argo_workflow_name", "")
-        argo_part = f" argo_workflow_name={argo_name}" if argo_name else ""
+        # Collect all atlan- prefixed headers for display
+        correlation_parts = []
+        for key, value in record["extra"].items():
+            if key.startswith("atlan-") and value:
+                correlation_parts.append(f"{key}={value}")
+        correlation_str = f" {' '.join(correlation_parts)}" if correlation_parts else ""
 
-        assert argo_part == ""
+        assert correlation_str == ""
 
-    def test_format_excludes_argo_workflow_name_when_empty(self):
-        """Format should exclude argo_workflow_name when empty string."""
-        record = {"extra": {"logger_name": "test_logger", "argo_workflow_name": ""}}
+    def test_format_excludes_correlation_context_when_empty(self):
+        """Format should exclude correlation context when empty string."""
+        record = {"extra": {"logger_name": "test_logger", self.WORKFLOW_NAME_HEADER: ""}}
 
-        argo_name = record["extra"].get("argo_workflow_name", "")
-        argo_part = f" argo_workflow_name={argo_name}" if argo_name else ""
+        # Collect all atlan- prefixed headers for display
+        correlation_parts = []
+        for key, value in record["extra"].items():
+            if key.startswith("atlan-") and value:
+                correlation_parts.append(f"{key}={value}")
+        correlation_str = f" {' '.join(correlation_parts)}" if correlation_parts else ""
 
-        assert argo_part == ""
+        assert correlation_str == ""
 
-    def test_format_handles_complex_node_name(self):
-        """Format should handle complex node names with special characters."""
+    def test_format_handles_multiple_correlation_headers(self):
+        """Format should handle multiple atlan- prefixed headers."""
         record = {
             "extra": {
                 "logger_name": "test_logger",
-                "argo_workflow_name": self.ARGO_WORKFLOW_NAME,
-                "argo_workflow_node": self.ARGO_WORKFLOW_NODE,
+                self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
             }
         }
 
-        argo_name = record["extra"].get("argo_workflow_name", "")
-        argo_part = f" argo_workflow_name={argo_name}" if argo_name else ""
+        # Collect all atlan- prefixed headers for display
+        correlation_parts = []
+        for key, value in record["extra"].items():
+            if key.startswith("atlan-") and value:
+                correlation_parts.append(f"{key}={value}")
+        correlation_str = f" {' '.join(correlation_parts)}" if correlation_parts else ""
 
-        assert argo_part == f" argo_workflow_name={self.ARGO_WORKFLOW_NAME}"
-        assert record["extra"]["argo_workflow_node"] == self.ARGO_WORKFLOW_NODE
+        assert self.WORKFLOW_NAME_HEADER in correlation_str
+        assert self.WORKFLOW_NODE_HEADER in correlation_str
+        assert self.WORKFLOW_NAME in correlation_str
+        assert self.WORKFLOW_NODE in correlation_str
 
 
-class TestArgoWorkflowContextIntegration:
-    """Tests for argo context combined with workflow/activity context."""
+class TestCorrelationContextIntegration:
+    """Tests for correlation context combined with workflow/activity context."""
 
-    ARGO_WORKFLOW_NAME = "atlan-redshift-1765299569-h9wsj"
-    ARGO_WORKFLOW_NODE = "atlan-redshift-1765299569-h9wsj(0).run(0).extract-interim"
-    WORKFLOW_ID = "atlan-redshift-1765299569"
+    WORKFLOW_NAME_HEADER = "atlan-workflow-name"
+    WORKFLOW_NODE_HEADER = "atlan-workflow-node"
+    WORKFLOW_NAME = "test-workflow-123"
+    WORKFLOW_NODE = "test-workflow-123.node-1"
+    WORKFLOW_ID = "test-workflow-123"
 
-    def test_argo_context_with_workflow_context(self):
-        """Argo context should work alongside workflow context."""
+    def test_correlation_context_with_workflow_context(self):
+        """Correlation context should work alongside workflow context."""
         with create_logger_adapter() as logger_adapter:
             with mock.patch("temporalio.workflow.info") as mock_workflow_info:
                 with mock.patch(
-                    "application_sdk.observability.logger_adaptor.argo_workflow_context"
-                ) as mock_argo_context:
+                    "application_sdk.observability.logger_adaptor.correlation_context"
+                ) as mock_corr_context:
                     workflow_info = mock.Mock(
                         workflow_id=self.WORKFLOW_ID,
                         run_id="019b04bd-ac10-7989-87d7-06427dc0616c",
@@ -442,9 +467,9 @@ class TestArgoWorkflowContextIntegration:
                         attempt=1,
                     )
                     mock_workflow_info.return_value = workflow_info
-                    mock_argo_context.get.return_value = {
-                        "argo_workflow_name": self.ARGO_WORKFLOW_NAME,
-                        "argo_workflow_node": self.ARGO_WORKFLOW_NODE,
+                    mock_corr_context.get.return_value = {
+                        self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                        self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
                     }
 
                     msg, kwargs = logger_adapter.process("Test message", {})
@@ -454,16 +479,16 @@ class TestArgoWorkflowContextIntegration:
                         kwargs["workflow_run_id"]
                         == "019b04bd-ac10-7989-87d7-06427dc0616c"
                     )
-                    assert "argo_workflow_name" in kwargs
-                    assert "argo_workflow_node" in kwargs
+                    assert self.WORKFLOW_NAME_HEADER in kwargs
+                    assert self.WORKFLOW_NODE_HEADER in kwargs
 
-    def test_argo_context_with_activity_context(self):
-        """Argo context should work alongside activity context."""
+    def test_correlation_context_with_activity_context(self):
+        """Correlation context should work alongside activity context."""
         with create_logger_adapter() as logger_adapter:
             with mock.patch("temporalio.activity.info") as mock_activity_info:
                 with mock.patch(
-                    "application_sdk.observability.logger_adaptor.argo_workflow_context"
-                ) as mock_argo_context:
+                    "application_sdk.observability.logger_adaptor.correlation_context"
+                ) as mock_corr_context:
                     activity_info = mock.Mock(
                         workflow_id=self.WORKFLOW_ID,
                         workflow_run_id="019b04bd-ac10-7989-87d7-06427dc0616c",
@@ -473,14 +498,14 @@ class TestArgoWorkflowContextIntegration:
                         attempt=1,
                     )
                     mock_activity_info.return_value = activity_info
-                    mock_argo_context.get.return_value = {
-                        "argo_workflow_name": self.ARGO_WORKFLOW_NAME,
-                        "argo_workflow_node": self.ARGO_WORKFLOW_NODE,
+                    mock_corr_context.get.return_value = {
+                        self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                        self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
                     }
 
                     msg, kwargs = logger_adapter.process("Test message", {})
 
                     assert kwargs["activity_id"] == "fetch_databases"
                     assert kwargs["workflow_id"] == self.WORKFLOW_ID
-                    assert "argo_workflow_name" in kwargs
-                    assert "argo_workflow_node" in kwargs
+                    assert self.WORKFLOW_NAME_HEADER in kwargs
+                    assert self.WORKFLOW_NODE_HEADER in kwargs

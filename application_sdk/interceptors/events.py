@@ -66,20 +66,21 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         Returns:
             Any: The result of the activity execution.
         """
-        # Set Argo workflow context from activity args for logging
+        # Set correlation context from activity args for logging
+        # Extracts all atlan- prefixed keys from the first activity argument
         try:
             from application_sdk.observability.logger_adaptor import (
-                argo_workflow_context,
+                correlation_context,
             )
 
             if input.args and len(input.args) > 0:
                 args = input.args[0]
                 if isinstance(args, dict):
-                    argo_metadata = {
-                        "argo_workflow_name": args.get("argo_workflow_name", ""),
-                        "argo_workflow_node": args.get("argo_workflow_node", ""),
+                    atlan_fields = {
+                        k: str(v) for k, v in args.items()
+                        if k.startswith("atlan-") and v
                     }
-                    argo_workflow_context.set(argo_metadata)
+                    correlation_context.set(atlan_fields)
         except Exception:
             pass
 
