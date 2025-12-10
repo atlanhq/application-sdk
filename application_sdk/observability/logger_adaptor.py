@@ -267,7 +267,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             for key, value in record["extra"].items():
                 if key.startswith("atlan-") and value:
                     correlation_parts.append(f"{key}={value}")
-            correlation_str = (
+            record["extra"]["_correlation_str"] = (
                 f" {' '.join(correlation_parts)}" if correlation_parts else ""
             )
 
@@ -276,12 +276,12 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> "
                     "<blue>[{level}]</blue> "
                     "<cyan>{extra[logger_name]}</cyan>"
-                    f"<magenta>{correlation_str}</magenta>"
+                    "<magenta>{extra[_correlation_str]}</magenta>"
                     " - <level>{message}</level>\n"
                 )
             return (
                 "{time:YYYY-MM-DD HH:mm:ss} [{level}] {extra[logger_name]}"
-                f"{correlation_str}"
+                "{extra[_correlation_str]}"
                 " - {message}\n"
             )
 
