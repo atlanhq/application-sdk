@@ -1,8 +1,9 @@
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, AsyncGenerator, Dict, Generator, List, Union
 from unittest.mock import patch
 
+import orjson
 import pandas as pd
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -138,3 +139,270 @@ async def test_write_error(base_output_path: str) -> None:
     # Verify counts remain unchanged after error
     assert json_output.chunk_count == 0
     assert json_output.total_record_count == 0
+
+
+# Tests for write_dict functionality
+class TestJsonFileWriterWriteDict:
+    """Test suite for JsonFileWriter.write_dict() method."""
+
+    @pytest.mark.asyncio
+    async def test_write_dict_single_dict(self, base_output_path: str) -> None:
+        """Test writing a single dictionary produces one JSONL line."""
+        with patch("application_sdk.services.objectstore.ObjectStore.upload_file"):
+            json_output = JsonFileWriter(  # type: ignore
+                output_path=os.path.join(base_output_path, "test_dict_single"),
+                chunk_size=100000,
+                buffer_size=10,
+                typename=None,
+                chunk_count=0,
+                total_record_count=0,
+                chunk_start=None,
+            )
+            test_dict = {"id": 1, "name": "test", "value": 42}
+            await json_output.write_dict(test_dict)
+
+            assert json_output.total_record_count == 1
+            # Check file was created
+            output_file = f"{json_output.output_path}/chunk-0-part0.json"
+            assert os.path.exists(output_file)
+
+            # Read and verify content
+            with open(output_file, "rb") as f:
+                content = f.read()
+                decoded = orjson.loads(content)
+                assert decoded == test_dict
+
+    @pytest.mark.asyncio
+    async def test_write_dict_list_of_dicts(self, base_output_path: str) -> None:
+        """Test writing a list of dictionaries produces multiple JSONL lines."""
+        with patch("application_sdk.services.objectstore.ObjectStore.upload_file"):
+            json_output = JsonFileWriter(  # type: ignore
+                output_path=os.path.join(base_output_path, "test_dict_list"),
+                chunk_size=100000,
+                buffer_size=10,
+                typename=None,
+                chunk_count=0,
+                total_record_count=0,
+                chunk_start=None,
+            )
+            test_dicts = [
+                {"id": 1, "name": "test1"},
+                {"id": 2, "name": "test2"},
+                {"id": 3, "name": "test3"},
+            ]
+            await json_output.write_dict(test_dicts)
+
+            assert json_output.total_record_count == 3
+            # Check file was created
+            output_file = f"{json_output.output_path}/chunk-0-part0.json"
+            assert os.path.exists(output_file)
+
+            # Read and verify content (JSONL format - one JSON object per line)
+            with open(output_file, "rb") as f:
+                lines = f.readlines()
+                assert len(lines) == 3
+                for i, line in enumerate(lines):
+                    decoded = orjson.loads(line)
+                    assert decoded == test_dicts[i]
+
+    @pytest.mark.asyncio
+    async def test_write_dict_invalid_list_contents(
+        self, base_output_path: str
+    ) -> None:
+        """Test write_dict raises TypeError when list contains non-dict items."""
+        json_output = JsonFileWriter(  # type: ignore
+            output_path=os.path.join(base_output_path, "test_dict_invalid"),
+            chunk_size=100000,
+            buffer_size=10,
+            typename=None,
+            chunk_count=0,
+            total_record_count=0,
+            chunk_start=None,
+        )
+        # Test with list of integers
+        with pytest.raises(
+            TypeError, match="Expected list\\[dict\\], but list contains non-dict items"
+        ):
+            await json_output.write_dict([1, 2, 3])
+
+        # Test with mixed types
+        with pytest.raises(
+            TypeError, match="Expected list\\[dict\\], but list contains non-dict items"
+        ):
+            await json_output.write_dict([{"id": 1}, "not_a_dict", {"id": 2}])
+
+    @pytest.mark.asyncio
+    async def test_write_dict_empty_list(self, base_output_path: str) -> None:
+        """Test write_dict with empty list does nothing and logs."""
+        json_output = JsonFileWriter(  # type: ignore
+            output_path=os.path.join(base_output_path, "test_dict_empty"),
+            chunk_size=100000,
+            buffer_size=10,
+            typename=None,
+            chunk_count=0,
+            total_record_count=0,
+            chunk_start=None,
+        )
+        # Should not raise error, just return early
+        await json_output.write_dict([])
+        assert json_output.total_record_count == 0
+        # No file should be created
+        assert not os.path.exists(f"{json_output.output_path}/chunk-1-part0.json")
+
+
+class TestJsonFileWriterWriteBatchedDict:
+    """Test suite for JsonFileWriter.write_batched_dict() method."""
+
+    @pytest.mark.asyncio
+    async def test_write_batched_dict_sync_generator_dict(
+        self, base_output_path: str
+    ) -> None:
+        """Test sync generator yielding dict."""
+        json_output = JsonFileWriter(  # type: ignore
+            output_path=os.path.join(base_output_path, "test_batched_sync_dict"),
+            chunk_size=100000,
+            buffer_size=10,
+            typename=None,
+            chunk_count=0,
+            total_record_count=0,
+            chunk_start=None,
+        )
+
+        def sync_gen() -> Generator[Dict[str, Any], None, None]:
+            yield {"id": 1, "name": "test1"}
+            yield {"id": 2, "name": "test2"}
+            yield {"id": 3, "name": "test3"}
+
+        await json_output.write_batched_dict(sync_gen())
+
+        assert json_output.total_record_count == 3
+        output_file = f"{json_output.output_path}/chunk-0-part0.json"
+        assert os.path.exists(output_file)
+
+    @pytest.mark.asyncio
+    async def test_write_batched_dict_sync_generator_list(
+        self, base_output_path: str
+    ) -> None:
+        """Test sync generator yielding list[dict]."""
+        json_output = JsonFileWriter(  # type: ignore
+            output_path=os.path.join(base_output_path, "test_batched_sync_list"),
+            chunk_size=100000,
+            buffer_size=10,
+            typename=None,
+            chunk_count=0,
+            total_record_count=0,
+            chunk_start=None,
+        )
+
+        def sync_gen() -> Generator[List[Dict[str, Any]], None, None]:
+            yield [{"id": 1, "name": "test1"}, {"id": 2, "name": "test2"}]
+            yield [{"id": 3, "name": "test3"}]
+
+        await json_output.write_batched_dict(sync_gen())
+
+        assert json_output.total_record_count == 3
+        output_file = f"{json_output.output_path}/chunk-0-part0.json"
+        assert os.path.exists(output_file)
+
+    @pytest.mark.asyncio
+    async def test_write_batched_dict_async_generator_dict(
+        self, base_output_path: str
+    ) -> None:
+        """Test async generator yielding dict."""
+        json_output = JsonFileWriter(  # type: ignore
+            output_path=os.path.join(base_output_path, "test_batched_async_dict"),
+            chunk_size=100000,
+            buffer_size=10,
+            typename=None,
+            chunk_count=0,
+            total_record_count=0,
+            chunk_start=None,
+        )
+
+        async def async_gen() -> AsyncGenerator[Dict[str, Any], None]:
+            yield {"id": 1, "name": "test1"}
+            yield {"id": 2, "name": "test2"}
+            yield {"id": 3, "name": "test3"}
+
+        await json_output.write_batched_dict(async_gen())
+
+        assert json_output.total_record_count == 3
+        output_file = f"{json_output.output_path}/chunk-0-part0.json"
+        assert os.path.exists(output_file)
+
+    @pytest.mark.asyncio
+    async def test_write_batched_dict_async_generator_list(
+        self, base_output_path: str
+    ) -> None:
+        """Test async generator yielding list[dict]."""
+        json_output = JsonFileWriter(  # type: ignore
+            output_path=os.path.join(base_output_path, "test_batched_async_list"),
+            chunk_size=100000,
+            buffer_size=10,
+            typename=None,
+            chunk_count=0,
+            total_record_count=0,
+            chunk_start=None,
+        )
+
+        async def async_gen() -> AsyncGenerator[List[Dict[str, Any]], None]:
+            yield [{"id": 1, "name": "test1"}, {"id": 2, "name": "test2"}]
+            yield [{"id": 3, "name": "test3"}]
+
+        await json_output.write_batched_dict(async_gen())
+
+        assert json_output.total_record_count == 3
+        output_file = f"{json_output.output_path}/chunk-0-part0.json"
+        assert os.path.exists(output_file)
+
+    @pytest.mark.asyncio
+    async def test_write_batched_dict_invalid_list_contents(
+        self, base_output_path: str
+    ) -> None:
+        """Test write_batched_dict raises TypeError when generator yields invalid list."""
+        json_output = JsonFileWriter(  # type: ignore
+            output_path=os.path.join(base_output_path, "test_batched_invalid"),
+            chunk_size=100000,
+            buffer_size=10,
+            typename=None,
+            chunk_count=0,
+            total_record_count=0,
+            chunk_start=None,
+        )
+
+        def sync_gen() -> Generator[List[Any], None, None]:
+            yield [1, 2, 3]  # Invalid: list of ints
+
+        with pytest.raises(
+            TypeError, match="Expected list\\[dict\\], but list contains non-dict items"
+        ):
+            await json_output.write_batched_dict(sync_gen())
+
+    @pytest.mark.asyncio
+    async def test_write_batched_dict_empty_list_skipped(
+        self, base_output_path: str
+    ) -> None:
+        """Test write_batched_dict skips empty lists from generator."""
+        json_output = JsonFileWriter(  # type: ignore
+            output_path=os.path.join(base_output_path, "test_batched_empty"),
+            chunk_size=100000,
+            buffer_size=10,
+            typename=None,
+            chunk_count=0,
+            total_record_count=0,
+            chunk_start=None,
+        )
+
+        def sync_gen() -> (
+            Generator[Union[Dict[str, Any], List[Dict[str, Any]]], None, None]
+        ):
+            yield []  # Empty list should be skipped
+            yield {"id": 1}  # Valid dict should be written
+            yield []  # Another empty list should be skipped
+
+        await json_output.write_batched_dict(sync_gen())
+
+        # Only one record should be written
+        assert json_output.total_record_count == 1
+        output_file = f"{json_output.output_path}/chunk-0-part0.json"
+        assert os.path.exists(output_file)
