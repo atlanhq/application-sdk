@@ -1,5 +1,4 @@
 import asyncio
-import ssl
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -7,6 +6,7 @@ from typing import Any, Dict, Optional, Sequence, Type, Union
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
+from temporalio.service import TLSConfig
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import (
@@ -15,7 +15,7 @@ from temporalio.worker.workflow_sandbox import (
 )
 
 from application_sdk.clients.atlan_auth import AtlanAuthClient
-from application_sdk.clients.ssl_utils import get_ssl_context
+from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -109,22 +109,25 @@ class TemporalWorkflowClient(WorkflowClient):
         workflow.logger = logger
         activity.logger = logger
 
-    def _get_tls_config(self) -> Union[bool, ssl.SSLContext]:
+    def _get_tls_config(self) -> Union[bool, TLSConfig]:
         """Get the TLS configuration for Temporal client connection.
 
         This method determines the appropriate TLS configuration:
-        1. If SSL_CERT_DIR is set and valid, returns an SSLContext with custom certificates
-           added to the default system certificates.
+        1. If SSL_CERT_DIR is set and contains valid certificate files, returns a TLSConfig
+           with the custom CA certificates loaded.
         2. Otherwise, returns the value of WORKFLOW_TLS_ENABLED (True/False).
 
+        The Temporal SDK uses its own TLS implementation (via Rust/tonic) and requires
+        certificate data as bytes in a TLSConfig object, not a Python ssl.SSLContext.
+
         Returns:
-            Union[bool, ssl.SSLContext]: An SSLContext with custom certificates if SSL_CERT_DIR
+            Union[bool, TLSConfig]: A TLSConfig with custom CA certificates if SSL_CERT_DIR
                 is set, otherwise the value of WORKFLOW_TLS_ENABLED for standard TLS handling.
         """
-        ssl_context = get_ssl_context()
-        if isinstance(ssl_context, ssl.SSLContext):
-            logger.info("Using custom SSL context with certificates from SSL_CERT_DIR")
-            return ssl_context
+        ca_cert_bytes = get_custom_ca_cert_bytes()
+        if ca_cert_bytes:
+            logger.info("Using custom TLS config with certificates from SSL_CERT_DIR")
+            return TLSConfig(server_root_ca_cert=ca_cert_bytes)
         # Fall back to WORKFLOW_TLS_ENABLED (True or False)
         return WORKFLOW_TLS_ENABLED
 
@@ -237,7 +240,7 @@ class TemporalWorkflowClient(WorkflowClient):
 
         If SSL_CERT_DIR environment variable is set and points to a valid directory
         containing certificate files (.pem, .crt, .cer, .ca-bundle), the client will
-        use an SSL context that includes both system certificates and custom certificates.
+        use a TLSConfig with custom CA certificates loaded.
         This allows connections through proxies with custom CA certificates.
 
         Raises:
@@ -245,9 +248,9 @@ class TemporalWorkflowClient(WorkflowClient):
             ValueError: If authentication is enabled but credentials are missing.
         """
         # Determine TLS configuration
-        # If SSL_CERT_DIR is set, get_ssl_context() returns an SSLContext with custom certs
-        # Otherwise, it returns True (use default SSL verification)
-        tls_config: Union[bool, ssl.SSLContext] = self._get_tls_config()
+        # If SSL_CERT_DIR is set, returns a TLSConfig with custom certs
+        # Otherwise, returns WORKFLOW_TLS_ENABLED (True/False)
+        tls_config: Union[bool, TLSConfig] = self._get_tls_config()
 
         connection_options: Dict[str, Any] = {
             "target_host": self.get_connection_string(),

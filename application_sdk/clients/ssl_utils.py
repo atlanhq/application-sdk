@@ -113,3 +113,131 @@ def get_ssl_context() -> Union[bool, ssl.SSLContext]:
         return create_ssl_context_with_custom_certs(ssl_cert_dir)
     return True
 
+
+def _get_default_ca_bundle_path() -> Optional[str]:
+    """
+    Get the path to the default CA certificate bundle.
+
+    Tries multiple sources in order:
+    1. certifi package (if available) - provides Mozilla CA bundle
+    2. SSL default verify paths from the system
+
+    Returns:
+        Optional[str]: Path to the default CA bundle file, or None if not found.
+    """
+    # Try certifi first (commonly available, provides Mozilla CA bundle)
+    try:
+        import certifi
+
+        certifi_path = certifi.where()
+        if certifi_path and os.path.isfile(certifi_path):
+            logger.debug(f"Using certifi CA bundle: {certifi_path}")
+            return certifi_path
+    except ImportError:
+        logger.debug("certifi not available, falling back to system CA paths")
+
+    # Fall back to system SSL default paths
+    default_paths = ssl.get_default_verify_paths()
+
+    # Try cafile first (single file with all certs)
+    if default_paths.cafile and os.path.isfile(default_paths.cafile):
+        logger.debug(f"Using system CA file: {default_paths.cafile}")
+        return default_paths.cafile
+
+    # Try openssl_cafile
+    if default_paths.openssl_cafile and os.path.isfile(default_paths.openssl_cafile):
+        logger.debug(f"Using OpenSSL CA file: {default_paths.openssl_cafile}")
+        return default_paths.openssl_cafile
+
+    logger.debug("No default CA bundle found")
+    return None
+
+
+def _read_default_ca_certs() -> Optional[bytes]:
+    """
+    Read the default system CA certificates as bytes.
+
+    Returns:
+        Optional[bytes]: The default CA certificates as bytes, or None if not available.
+    """
+    ca_bundle_path = _get_default_ca_bundle_path()
+    if not ca_bundle_path:
+        return None
+
+    try:
+        with open(ca_bundle_path, "rb") as f:
+            ca_bytes = f.read()
+            if ca_bytes:
+                logger.debug(
+                    f"Read default CA certificates ({len(ca_bytes)} bytes) from: {ca_bundle_path}"
+                )
+                return ca_bytes
+    except OSError as e:
+        logger.warning(f"Failed to read default CA bundle from {ca_bundle_path}: {e}")
+
+    return None
+
+
+def get_custom_ca_cert_bytes() -> Optional[bytes]:
+    """
+    Get CA certificate bytes combining default system certificates AND custom certificates.
+
+    This is useful for clients like Temporal that use their own TLS implementation
+    and require certificate data as bytes rather than an ssl.SSLContext.
+
+    If SSL_CERT_DIR is set and points to a valid directory containing certificate files,
+    this function reads all certificate files and concatenates them with the default
+    system CA certificates. This ensures that both public services (using well-known CAs)
+    and private services (using custom CAs) are trusted.
+
+    Returns:
+        Optional[bytes]: Combined certificate bytes (default + custom) if SSL_CERT_DIR is set
+            and contains valid certificate files, None otherwise.
+
+    Example:
+        >>> from temporalio.service import TLSConfig
+        >>> ca_cert_bytes = get_custom_ca_cert_bytes()
+        >>> if ca_cert_bytes:
+        ...     tls_config = TLSConfig(server_root_ca_cert=ca_cert_bytes)
+    """
+    ssl_cert_dir = get_ssl_cert_dir()
+    if not ssl_cert_dir:
+        return None
+
+    cert_files = get_certificate_files(ssl_cert_dir)
+    if not cert_files:
+        logger.debug(f"No certificate files found in {ssl_cert_dir}")
+        return None
+
+    cert_bytes_list: List[bytes] = []
+
+    # First, add the default system CA certificates
+    default_ca_bytes = _read_default_ca_certs()
+    if default_ca_bytes:
+        cert_bytes_list.append(default_ca_bytes)
+        logger.debug("Added default system CA certificates to trust store")
+
+    # Then, add custom certificates from SSL_CERT_DIR
+    custom_cert_count = 0
+    for cert_file in cert_files:
+        try:
+            with open(cert_file, "rb") as f:
+                cert_data = f.read()
+                if cert_data:
+                    cert_bytes_list.append(cert_data)
+                    custom_cert_count += 1
+                    logger.debug(f"Read custom certificate from: {cert_file}")
+        except OSError as e:
+            logger.warning(f"Failed to read certificate from {cert_file}: {e}")
+
+    if not cert_bytes_list:
+        return None
+
+    # Concatenate all certificates with newlines between them
+    combined_certs = b"\n".join(cert_bytes_list)
+    logger.debug(
+        f"Combined default CA certificates and {custom_cert_count} custom certificate(s) "
+        f"from {ssl_cert_dir} ({len(combined_certs)} bytes total)"
+    )
+    return combined_certs
+

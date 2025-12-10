@@ -1,10 +1,10 @@
-import ssl
 import tempfile
 from typing import Any, Dict, Generator
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
 import trustme
+from temporalio.service import TLSConfig
 
 from application_sdk.clients.temporal import TemporalWorkflowClient
 from application_sdk.interceptors.cleanup import cleanup
@@ -455,42 +455,39 @@ async def test_publish_token_refresh_event_exception_handling(
 
 
 class TestTemporalSslContext:
-    """Test cases for SSL context integration with Temporal client.
+    """Test cases for TLS configuration integration with Temporal client.
 
     These tests verify that:
     1. Custom CA certificates are properly loaded when SSL_CERT_DIR is set
-    2. The Temporal client uses the custom SSL context for connections
-    3. Default SSL behavior works when SSL_CERT_DIR is not set
+    2. The Temporal client uses TLSConfig with custom certificates for connections
+    3. Default TLS behavior works when SSL_CERT_DIR is not set
     4. Both scenarios work correctly with the load() method
     """
 
-    def test_get_tls_config_returns_ssl_context_when_cert_dir_set(
+    def test_get_tls_config_returns_tls_config_when_cert_dir_set(
         self, temporal_client: TemporalWorkflowClient
     ) -> None:
-        """Test that _get_tls_config returns an SSLContext when SSL_CERT_DIR is set."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch(
-                "application_sdk.clients.temporal.get_ssl_context"
-            ) as mock_get_ssl_context:
-                # Create a real SSL context for the mock to return
-                mock_ssl_context = ssl.create_default_context()
-                mock_get_ssl_context.return_value = mock_ssl_context
+        """Test that _get_tls_config returns a TLSConfig when SSL_CERT_DIR is set."""
+        # Create mock certificate bytes
+        mock_cert_bytes = b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"
 
-                result = temporal_client._get_tls_config()
+        with patch(
+            "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
+            return_value=mock_cert_bytes,
+        ):
+            result = temporal_client._get_tls_config()
 
-                # Verify get_ssl_context was called
-                mock_get_ssl_context.assert_called_once()
-
-                # Verify result is the SSL context
-                assert result is mock_ssl_context
-                assert isinstance(result, ssl.SSLContext)
+            # Verify result is a TLSConfig with the certificate bytes
+            assert isinstance(result, TLSConfig)
+            assert result.server_root_ca_cert == mock_cert_bytes
 
     def test_get_tls_config_returns_workflow_tls_enabled_when_no_cert_dir(
         self, temporal_client: TemporalWorkflowClient
     ) -> None:
         """Test that _get_tls_config returns WORKFLOW_TLS_ENABLED when no SSL_CERT_DIR is set."""
         with patch(
-            "application_sdk.clients.temporal.get_ssl_context", return_value=True
+            "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
+            return_value=None,
         ):
             with patch(
                 "application_sdk.clients.temporal.WORKFLOW_TLS_ENABLED", False
@@ -509,32 +506,34 @@ class TestTemporalSslContext:
         new_callable=AsyncMock,
     )
     @patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
-    async def test_load_uses_custom_ssl_context_when_cert_dir_set(
+    async def test_load_uses_tls_config_when_cert_dir_set(
         self,
         mock_get_config: AsyncMock,
         mock_connect: AsyncMock,
         temporal_client: TemporalWorkflowClient,
     ) -> None:
-        """Test that load() passes custom SSL context to Client.connect() when SSL_CERT_DIR is set."""
+        """Test that load() passes TLSConfig to Client.connect() when SSL_CERT_DIR is set."""
         mock_get_config.return_value = None
         mock_client = AsyncMock()
         mock_connect.return_value = mock_client
 
-        # Create a real SSL context for testing
-        mock_ssl_context = ssl.create_default_context()
+        # Create mock certificate bytes
+        mock_cert_bytes = b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"
 
         with patch(
-            "application_sdk.clients.temporal.get_ssl_context",
-            return_value=mock_ssl_context,
+            "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
+            return_value=mock_cert_bytes,
         ):
             await temporal_client.load()
 
-            # Verify Client.connect was called with the SSL context
-            mock_connect.assert_called_once_with(
-                target_host=temporal_client.get_connection_string(),
-                namespace=temporal_client.get_namespace(),
-                tls=mock_ssl_context,
-            )
+            # Verify Client.connect was called
+            mock_connect.assert_called_once()
+
+            # Verify the tls argument is a TLSConfig with the certificate bytes
+            call_kwargs = mock_connect.call_args[1]
+            tls_config = call_kwargs["tls"]
+            assert isinstance(tls_config, TLSConfig)
+            assert tls_config.server_root_ca_cert == mock_cert_bytes
 
     @patch(
         "application_sdk.clients.temporal.Client.connect",
@@ -553,7 +552,8 @@ class TestTemporalSslContext:
         mock_connect.return_value = mock_client
 
         with patch(
-            "application_sdk.clients.temporal.get_ssl_context", return_value=True
+            "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
+            return_value=None,
         ):
             with patch(
                 "application_sdk.clients.temporal.WORKFLOW_TLS_ENABLED", True
@@ -567,26 +567,10 @@ class TestTemporalSslContext:
                     tls=True,
                 )
 
-    def test_get_tls_config_with_real_ssl_context_from_cert_dir(
+    def test_get_tls_config_with_real_cert_from_cert_dir(
         self, temporal_client: TemporalWorkflowClient
     ) -> None:
-        """Integration test: verify SSL context is properly created from certificate directory."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Use the actual ssl_utils module with a real temp directory
-            with patch(
-                "application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir
-            ):
-                result = temporal_client._get_tls_config()
-
-                # Should return an SSLContext since SSL_CERT_DIR is set
-                assert isinstance(result, ssl.SSLContext)
-                assert result.verify_mode == ssl.CERT_REQUIRED
-                assert result.check_hostname is True
-
-    def test_get_tls_config_with_custom_certificate_file(
-        self, temporal_client: TemporalWorkflowClient
-    ) -> None:
-        """Test that custom certificate files are loaded into the SSL context."""
+        """Integration test: verify TLSConfig is properly created from certificate directory."""
         # Create a trustme CA and certificate
         ca = trustme.CA()
 
@@ -600,26 +584,51 @@ class TestTemporalSslContext:
             ):
                 result = temporal_client._get_tls_config()
 
-                # Should return an SSLContext with the custom certificate loaded
-                assert isinstance(result, ssl.SSLContext)
-                assert result.verify_mode == ssl.CERT_REQUIRED
-                assert result.check_hostname is True
+                # Should return a TLSConfig with the certificate bytes
+                assert isinstance(result, TLSConfig)
+                assert result.server_root_ca_cert is not None
+                # Verify the certificate bytes contain PEM data
+                assert b"-----BEGIN CERTIFICATE-----" in result.server_root_ca_cert
+
+    def test_get_tls_config_with_custom_certificate_file(
+        self, temporal_client: TemporalWorkflowClient
+    ) -> None:
+        """Test that custom certificate files are loaded into TLSConfig."""
+        # Create a trustme CA and certificate
+        ca = trustme.CA()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Export the CA certificate to the temp directory
+            ca_cert_path = f"{tmpdir}/ca.pem"
+            ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
+
+            with patch(
+                "application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir
+            ):
+                result = temporal_client._get_tls_config()
+
+                # Should return a TLSConfig with the custom certificate loaded
+                assert isinstance(result, TLSConfig)
+                assert result.server_root_ca_cert is not None
+                # The certificate bytes should contain valid PEM format
+                assert b"-----BEGIN CERTIFICATE-----" in result.server_root_ca_cert
+                assert b"-----END CERTIFICATE-----" in result.server_root_ca_cert
 
     @patch(
         "application_sdk.clients.temporal.Client.connect",
         new_callable=AsyncMock,
     )
     @patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
-    async def test_load_with_custom_cert_includes_default_and_custom_certs(
+    async def test_load_with_custom_cert_passes_tls_config(
         self,
         mock_get_config: AsyncMock,
         mock_connect: AsyncMock,
         temporal_client: TemporalWorkflowClient,
     ) -> None:
-        """Test that the SSL context includes both default system certs and custom certs.
+        """Test that load() passes a proper TLSConfig when custom certs are present.
 
-        This is the key test that verifies custom certificates are ADDED to,
-        not replacing, the default system certificates.
+        This verifies that the Temporal SDK receives the certificate bytes
+        in the format it expects (TLSConfig.server_root_ca_cert).
         """
         mock_get_config.return_value = None
         mock_client = AsyncMock()
@@ -645,9 +654,7 @@ class TestTemporalSslContext:
                 call_kwargs = mock_connect.call_args[1]
                 tls_config = call_kwargs["tls"]
 
-                # Verify it's an SSLContext with proper security settings
-                assert isinstance(tls_config, ssl.SSLContext)
-                assert tls_config.verify_mode == ssl.CERT_REQUIRED
-                assert tls_config.check_hostname is True
-                # Should use client protocol (for connecting to servers)
-                assert tls_config.protocol == ssl.PROTOCOL_TLS_CLIENT
+                # Verify it's a TLSConfig with the certificate bytes
+                assert isinstance(tls_config, TLSConfig)
+                assert tls_config.server_root_ca_cert is not None
+                assert b"-----BEGIN CERTIFICATE-----" in tls_config.server_root_ca_cert
