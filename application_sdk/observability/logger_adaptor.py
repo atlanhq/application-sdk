@@ -2,7 +2,6 @@ import asyncio
 import logging
 import sys
 import threading
-from contextvars import ContextVar
 from time import time_ns
 from typing import Any, Dict, Optional, Tuple
 
@@ -34,6 +33,7 @@ from application_sdk.constants import (
     SERVICE_NAME,
     SERVICE_VERSION,
 )
+from application_sdk.observability.context import correlation_context, request_context
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.utils import (
     get_observability_dir,
@@ -123,13 +123,9 @@ class LogRecordModel(BaseModel):
         arbitrary_types_allowed = True
 
 
-# Create a context variable for request_id
-request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
-
-# Create a context variable for correlation context (atlan- prefixed headers)
-correlation_context: ContextVar[Dict[str, Any]] = ContextVar(
-    "correlation_context", default={}
-)
+# Re-exported from context.py for backward compatibility:
+# - request_context: ContextVar for request-scoped data (e.g., request_id)
+# - correlation_context: ContextVar for atlan- prefixed headers
 
 
 # Add a Loguru handler for the Python logging system
@@ -271,7 +267,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             for key, value in record["extra"].items():
                 if key.startswith("atlan-") and value:
                     correlation_parts.append(f"{key}={value}")
-            correlation_str = f" {' '.join(correlation_parts)}" if correlation_parts else ""
+            correlation_str = (
+                f" {' '.join(correlation_parts)}" if correlation_parts else ""
+            )
 
             if colorize:
                 return (

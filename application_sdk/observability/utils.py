@@ -1,5 +1,4 @@
 import os
-from typing import Dict
 
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
@@ -10,6 +9,7 @@ from application_sdk.constants import (
     OBSERVABILITY_DIR,
     TEMPORARY_PATH,
 )
+from application_sdk.observability.context import correlation_context
 
 
 class WorkflowContext(BaseModel):
@@ -84,8 +84,6 @@ def get_workflow_context() -> WorkflowContext:
 
     # Get correlation context from context variable (atlan- prefixed headers)
     try:
-        from application_sdk.observability.logger_adaptor import correlation_context
-
         corr_ctx = correlation_context.get()
         if corr_ctx:
             # Add all correlation context fields as extra attributes

@@ -13,6 +13,7 @@ from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.constants import HEARTBEAT_TIMEOUT, START_TO_CLOSE_TIMEOUT
+from application_sdk.observability.context import correlation_context
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -76,12 +77,9 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
         # Set correlation context from workflow_config early so all logs have access
         # Extracts all atlan- prefixed keys for correlation context
         try:
-            from application_sdk.observability.logger_adaptor import (
-                correlation_context,
-            )
-
             atlan_fields = {
-                k: str(v) for k, v in workflow_config.items()
+                k: str(v)
+                for k, v in workflow_config.items()
                 if k.startswith("atlan-") and v
             }
             correlation_context.set(atlan_fields)
