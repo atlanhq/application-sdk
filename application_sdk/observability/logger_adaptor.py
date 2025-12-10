@@ -209,7 +209,7 @@ class InterceptHandler(logging.Handler):
             depth += 1
 
         # Add logger_name to extra to prevent KeyError
-        logger_extras = {"logger_name": record.name, "argo_workflow_name": ""}
+        logger_extras = {"logger_name": record.name}
 
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
             level, record.getMessage()
