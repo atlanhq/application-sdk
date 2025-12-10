@@ -1,7 +1,10 @@
+import tempfile
 from typing import Any, Dict, Generator
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
+import trustme
+from temporalio.service import TLSConfig
 
 from application_sdk.clients.temporal import TemporalWorkflowClient
 from application_sdk.interceptors.cleanup import cleanup
@@ -449,3 +452,209 @@ async def test_publish_token_refresh_event_exception_handling(
     mock_logger.warning.assert_called_once_with(
         "Failed to publish token refresh event: Event store connection failed"
     )
+
+
+class TestTemporalSslContext:
+    """Test cases for TLS configuration integration with Temporal client.
+
+    These tests verify that:
+    1. Custom CA certificates are properly loaded when SSL_CERT_DIR is set
+    2. The Temporal client uses TLSConfig with custom certificates for connections
+    3. Default TLS behavior works when SSL_CERT_DIR is not set
+    4. Both scenarios work correctly with the load() method
+    """
+
+    def test_get_tls_config_returns_tls_config_when_cert_dir_set(
+        self, temporal_client: TemporalWorkflowClient
+    ) -> None:
+        """Test that _get_tls_config returns a TLSConfig when SSL_CERT_DIR is set."""
+        # Create mock certificate bytes
+        mock_cert_bytes = b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"
+
+        with patch(
+            "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
+            return_value=mock_cert_bytes,
+        ):
+            result = temporal_client._get_tls_config()
+
+            # Verify result is a TLSConfig with the certificate bytes
+            assert isinstance(result, TLSConfig)
+            assert result.server_root_ca_cert == mock_cert_bytes
+
+    def test_get_tls_config_returns_workflow_tls_enabled_when_no_cert_dir(
+        self, temporal_client: TemporalWorkflowClient
+    ) -> None:
+        """Test that _get_tls_config returns WORKFLOW_TLS_ENABLED when no SSL_CERT_DIR is set."""
+        with patch(
+            "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
+            return_value=None,
+        ):
+            with patch(
+                "application_sdk.clients.temporal.WORKFLOW_TLS_ENABLED", False
+            ):
+                result = temporal_client._get_tls_config()
+                assert result is False
+
+            with patch(
+                "application_sdk.clients.temporal.WORKFLOW_TLS_ENABLED", True
+            ):
+                result = temporal_client._get_tls_config()
+                assert result is True
+
+    @patch(
+        "application_sdk.clients.temporal.Client.connect",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
+    async def test_load_uses_tls_config_when_cert_dir_set(
+        self,
+        mock_get_config: AsyncMock,
+        mock_connect: AsyncMock,
+        temporal_client: TemporalWorkflowClient,
+    ) -> None:
+        """Test that load() passes TLSConfig to Client.connect() when SSL_CERT_DIR is set."""
+        mock_get_config.return_value = None
+        mock_client = AsyncMock()
+        mock_connect.return_value = mock_client
+
+        # Create mock certificate bytes
+        mock_cert_bytes = b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"
+
+        with patch(
+            "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
+            return_value=mock_cert_bytes,
+        ):
+            await temporal_client.load()
+
+            # Verify Client.connect was called
+            mock_connect.assert_called_once()
+
+            # Verify the tls argument is a TLSConfig with the certificate bytes
+            call_kwargs = mock_connect.call_args[1]
+            tls_config = call_kwargs["tls"]
+            assert isinstance(tls_config, TLSConfig)
+            assert tls_config.server_root_ca_cert == mock_cert_bytes
+
+    @patch(
+        "application_sdk.clients.temporal.Client.connect",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
+    async def test_load_uses_workflow_tls_enabled_when_no_cert_dir(
+        self,
+        mock_get_config: AsyncMock,
+        mock_connect: AsyncMock,
+        temporal_client: TemporalWorkflowClient,
+    ) -> None:
+        """Test that load() uses WORKFLOW_TLS_ENABLED when SSL_CERT_DIR is not set."""
+        mock_get_config.return_value = None
+        mock_client = AsyncMock()
+        mock_connect.return_value = mock_client
+
+        with patch(
+            "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
+            return_value=None,
+        ):
+            with patch(
+                "application_sdk.clients.temporal.WORKFLOW_TLS_ENABLED", True
+            ):
+                await temporal_client.load()
+
+                # Verify Client.connect was called with tls=True
+                mock_connect.assert_called_once_with(
+                    target_host=temporal_client.get_connection_string(),
+                    namespace=temporal_client.get_namespace(),
+                    tls=True,
+                )
+
+    def test_get_tls_config_with_real_cert_from_cert_dir(
+        self, temporal_client: TemporalWorkflowClient
+    ) -> None:
+        """Integration test: verify TLSConfig is properly created from certificate directory."""
+        # Create a trustme CA and certificate
+        ca = trustme.CA()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Export the CA certificate to the temp directory
+            ca_cert_path = f"{tmpdir}/ca.pem"
+            ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
+
+            with patch(
+                "application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir
+            ):
+                result = temporal_client._get_tls_config()
+
+                # Should return a TLSConfig with the certificate bytes
+                assert isinstance(result, TLSConfig)
+                assert result.server_root_ca_cert is not None
+                # Verify the certificate bytes contain PEM data
+                assert b"-----BEGIN CERTIFICATE-----" in result.server_root_ca_cert
+
+    def test_get_tls_config_with_custom_certificate_file(
+        self, temporal_client: TemporalWorkflowClient
+    ) -> None:
+        """Test that custom certificate files are loaded into TLSConfig."""
+        # Create a trustme CA and certificate
+        ca = trustme.CA()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Export the CA certificate to the temp directory
+            ca_cert_path = f"{tmpdir}/ca.pem"
+            ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
+
+            with patch(
+                "application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir
+            ):
+                result = temporal_client._get_tls_config()
+
+                # Should return a TLSConfig with the custom certificate loaded
+                assert isinstance(result, TLSConfig)
+                assert result.server_root_ca_cert is not None
+                # The certificate bytes should contain valid PEM format
+                assert b"-----BEGIN CERTIFICATE-----" in result.server_root_ca_cert
+                assert b"-----END CERTIFICATE-----" in result.server_root_ca_cert
+
+    @patch(
+        "application_sdk.clients.temporal.Client.connect",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
+    async def test_load_with_custom_cert_passes_tls_config(
+        self,
+        mock_get_config: AsyncMock,
+        mock_connect: AsyncMock,
+        temporal_client: TemporalWorkflowClient,
+    ) -> None:
+        """Test that load() passes a proper TLSConfig when custom certs are present.
+
+        This verifies that the Temporal SDK receives the certificate bytes
+        in the format it expects (TLSConfig.server_root_ca_cert).
+        """
+        mock_get_config.return_value = None
+        mock_client = AsyncMock()
+        mock_connect.return_value = mock_client
+
+        # Create a trustme CA
+        ca = trustme.CA()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Export the CA certificate
+            ca_cert_path = f"{tmpdir}/ca.pem"
+            ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
+
+            with patch(
+                "application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir
+            ):
+                await temporal_client.load()
+
+                # Verify Client.connect was called
+                mock_connect.assert_called_once()
+
+                # Get the tls argument that was passed
+                call_kwargs = mock_connect.call_args[1]
+                tls_config = call_kwargs["tls"]
+
+                # Verify it's a TLSConfig with the certificate bytes
+                assert isinstance(tls_config, TLSConfig)
+                assert tls_config.server_root_ca_cert is not None
+                assert b"-----BEGIN CERTIFICATE-----" in tls_config.server_root_ca_cert
