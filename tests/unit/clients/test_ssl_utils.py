@@ -200,6 +200,126 @@ class TestSslContextPrivateCertificates:
             assert ssl_context.protocol == ssl.PROTOCOL_TLS_CLIENT
 
 
+class TestGetCustomCaCertBytes:
+    """Test cases for get_custom_ca_cert_bytes function.
+
+    This function is used by clients like Temporal that require raw certificate
+    bytes instead of an ssl.SSLContext. It returns BOTH system default certificates
+    AND custom certificates from SSL_CERT_DIR.
+    """
+
+    def test_returns_none_when_no_cert_dir(self):
+        """Test that None is returned when SSL_CERT_DIR is not set."""
+        with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", ""):
+            from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+
+            result = get_custom_ca_cert_bytes()
+            assert result is None
+
+    def test_returns_none_when_cert_dir_not_exists(self):
+        """Test that None is returned when SSL_CERT_DIR points to non-existent directory."""
+        with patch(
+            "application_sdk.clients.ssl_utils.SSL_CERT_DIR",
+            "/nonexistent/path/to/certs",
+        ):
+            from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+
+            result = get_custom_ca_cert_bytes()
+            assert result is None
+
+    def test_returns_none_when_cert_dir_empty(self):
+        """Test that None is returned when SSL_CERT_DIR contains no certificate files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+
+                result = get_custom_ca_cert_bytes()
+                assert result is None
+
+    def test_includes_custom_cert_when_cert_file_exists(self):
+        """Test that custom certificate bytes are included when a valid cert file exists."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a test certificate file with unique content
+            cert_content = b"-----BEGIN CERTIFICATE-----\nUNIQUE_TEST_CERT_DATA_12345\n-----END CERTIFICATE-----"
+            cert_file = f"{tmpdir}/ca.pem"
+            with open(cert_file, "wb") as f:
+                f.write(cert_content)
+
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+
+                result = get_custom_ca_cert_bytes()
+                assert result is not None
+                # Custom certificate content should be in the result
+                assert b"UNIQUE_TEST_CERT_DATA_12345" in result
+
+    def test_includes_default_system_certificates(self):
+        """Test that default system CA certificates are included along with custom certs.
+
+        This is the key test ensuring both public (system CA) and private (custom CA)
+        certificates work simultaneously.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a custom certificate file
+            custom_cert = b"-----BEGIN CERTIFICATE-----\nCUSTOM_CERT\n-----END CERTIFICATE-----"
+            cert_file = f"{tmpdir}/custom-ca.pem"
+            with open(cert_file, "wb") as f:
+                f.write(custom_cert)
+
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+
+                result = get_custom_ca_cert_bytes()
+                assert result is not None
+                # Custom certificate should be included
+                assert b"CUSTOM_CERT" in result
+                # Result should be larger than just the custom cert (includes system certs)
+                # The default CA bundle is typically several hundred KB
+                assert len(result) > len(custom_cert)
+                # Should contain multiple certificates (system CAs)
+                assert result.count(b"-----BEGIN CERTIFICATE-----") > 1
+
+    def test_concatenates_multiple_custom_cert_files(self):
+        """Test that multiple custom certificate files are concatenated with newlines."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create multiple test certificate files with unique identifiers
+            cert1_content = b"-----BEGIN CERTIFICATE-----\nCUSTOM_CERT_ONE\n-----END CERTIFICATE-----"
+            cert2_content = b"-----BEGIN CERTIFICATE-----\nCUSTOM_CERT_TWO\n-----END CERTIFICATE-----"
+
+            with open(f"{tmpdir}/ca1.pem", "wb") as f:
+                f.write(cert1_content)
+            with open(f"{tmpdir}/ca2.crt", "wb") as f:
+                f.write(cert2_content)
+
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+
+                result = get_custom_ca_cert_bytes()
+                assert result is not None
+                # Both custom certificates should be in the result
+                assert b"CUSTOM_CERT_ONE" in result
+                assert b"CUSTOM_CERT_TWO" in result
+
+    def test_returns_bytes_with_trustme_certificate(self):
+        """Test with a real trustme-generated certificate."""
+        ca = trustme.CA()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ca_cert_path = f"{tmpdir}/ca.pem"
+            ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
+
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+
+                result = get_custom_ca_cert_bytes()
+                assert result is not None
+                # Should contain valid PEM certificate format
+                assert b"-----BEGIN CERTIFICATE-----" in result
+                assert b"-----END CERTIFICATE-----" in result
+                # Should contain multiple certificates (trustme + system certs)
+                assert result.count(b"-----BEGIN CERTIFICATE-----") > 1
+
+
 @pytest.fixture
 def trustme_ca():  # type: ignore[no-untyped-def]
     """Create a trustme CA for testing."""
