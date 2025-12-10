@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
+from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.services.objectstore import ObjectStore
 
 
@@ -300,6 +301,123 @@ class TestObjectStore:
         result = await ObjectStore.get_content(key="test/file.txt", suppress_error=True)
 
         assert result is None
+
+    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.logger")
+    async def test_invoke_dapr_binding_with_large_data_warning(
+        self, mock_logger: MagicMock, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test that a warning is logged when data size exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH."""
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = b"response data"
+        mock_client.invoke_binding.return_value = mock_response
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        # Create data that exceeds the DAPR limit
+        large_data = b"x" * (DAPR_MAX_GRPC_MESSAGE_LENGTH + 1)
+
+        result = await ObjectStore._invoke_dapr_binding(
+            operation="create",
+            metadata={"key": "test"},
+            data=large_data,
+        )
+
+        # Verify warning was logged
+        mock_logger.warning.assert_called_once()
+        warning_call = mock_logger.warning.call_args[0][0]
+        assert "exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH" in warning_call
+        assert f"{DAPR_MAX_GRPC_MESSAGE_LENGTH + 1:,}" in warning_call
+
+        # Verify DaprClient was called with increased max_grpc_message_length
+        # With 5% buffer: (DAPR_MAX_GRPC_MESSAGE_LENGTH + 1) + 5% of (DAPR_MAX_GRPC_MESSAGE_LENGTH + 1)
+        mock_dapr_client.assert_called_once()
+        call_kwargs = mock_dapr_client.call_args[1]
+        expected_data_size = DAPR_MAX_GRPC_MESSAGE_LENGTH + 1
+        expected_buffer = max(
+            int(expected_data_size * 0.05), 1024
+        )  # 5% buffer, min 1KB
+        expected_max_length = expected_data_size + expected_buffer
+        assert call_kwargs["max_grpc_message_length"] == expected_max_length
+
+        # Verify the binding was invoked
+        mock_client.invoke_binding.assert_called_once()
+        assert result == b"response data"
+
+    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.logger")
+    async def test_invoke_dapr_binding_with_small_data_no_warning(
+        self, mock_logger: MagicMock, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test that no warning is logged when data size is within DAPR_MAX_GRPC_MESSAGE_LENGTH."""
+        from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = b"response data"
+        mock_client.invoke_binding.return_value = mock_response
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        # Create data that is within the DAPR limit
+        small_data = b"x" * (DAPR_MAX_GRPC_MESSAGE_LENGTH - 1000)
+
+        result = await ObjectStore._invoke_dapr_binding(
+            operation="create",
+            metadata={"key": "test"},
+            data=small_data,
+        )
+
+        # Verify no warning was logged
+        mock_logger.warning.assert_not_called()
+
+        # Verify DaprClient was called with default max_grpc_message_length
+        mock_dapr_client.assert_called_once()
+        call_kwargs = mock_dapr_client.call_args[1]
+        assert call_kwargs["max_grpc_message_length"] == DAPR_MAX_GRPC_MESSAGE_LENGTH
+
+        # Verify the binding was invoked
+        mock_client.invoke_binding.assert_called_once()
+        assert result == b"response data"
+
+    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.logger")
+    async def test_invoke_dapr_binding_with_string_data(
+        self, mock_logger: MagicMock, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test that string data is properly handled and size is calculated correctly."""
+        from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = b"response data"
+        mock_client.invoke_binding.return_value = mock_response
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        # Create a string that when encoded exceeds the DAPR limit
+        # Each character in UTF-8 is typically 1 byte, but we'll use a large string
+        large_string = "x" * (DAPR_MAX_GRPC_MESSAGE_LENGTH + 1)
+
+        result = await ObjectStore._invoke_dapr_binding(
+            operation="create",
+            metadata={"key": "test"},
+            data=large_string,
+        )
+
+        # Verify warning was logged
+        mock_logger.warning.assert_called_once()
+
+        # Verify DaprClient was called with increased max_grpc_message_length
+        mock_dapr_client.assert_called_once()
+        call_kwargs = mock_dapr_client.call_args[1]
+        # The encoded string size should be accounted for
+        assert (
+            call_kwargs["max_grpc_message_length"] >= DAPR_MAX_GRPC_MESSAGE_LENGTH + 1
+        )
+
+        # Verify the binding was invoked
+        mock_client.invoke_binding.assert_called_once()
+        assert result == b"response data"
 
     # @patch("application_sdk.services.objectstore.ObjectStore.list_files", new_callable=AsyncMock)
     # @patch("application_sdk.services.objectstore.ObjectStore._download_file", new_callable=AsyncMock)

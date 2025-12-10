@@ -460,9 +460,35 @@ class ObjectStore:
             Exception: If there's an error with the Dapr binding operation.
         """
         try:
-            with DaprClient(
-                max_grpc_message_length=DAPR_MAX_GRPC_MESSAGE_LENGTH
-            ) as client:
+            # Calculate data size (handle both bytes and str)
+            if isinstance(data, bytes):
+                data_size = len(data)
+            elif isinstance(data, str):
+                data_size = len(data.encode("utf-8"))
+            else:
+                data_size = 0
+
+            # Check if data size exceeds DAPR limit and log warning
+            if data_size > DAPR_MAX_GRPC_MESSAGE_LENGTH:
+                # gRPC adds overhead (headers, metadata, etc.) to messages
+                # Add a buffer of 5% or at least 1KB to account for this overhead
+                grpc_overhead_buffer = max(int(data_size * 0.05), 1024)
+                required_max_length = data_size + grpc_overhead_buffer
+                logger.warning(
+                    f"Data size ({data_size:,} bytes / {data_size / (1024 * 1024):.2f}MB) "
+                    f"exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH ({DAPR_MAX_GRPC_MESSAGE_LENGTH:,} bytes / "
+                    f"{DAPR_MAX_GRPC_MESSAGE_LENGTH / (1024 * 1024):.2f}MB). "
+                    f"Increasing max_grpc_message_length to {required_max_length:,} bytes "
+                    f"(data size + {grpc_overhead_buffer:,} bytes overhead buffer). "
+                    f"This may cause issues with Dapr gRPC communication."
+                )
+                # Set max_grpc_message_length to accommodate the data size plus gRPC overhead
+                max_message_length = required_max_length
+            else:
+                # Data is within limit, use default DAPR limit
+                max_message_length = DAPR_MAX_GRPC_MESSAGE_LENGTH
+
+            with DaprClient(max_grpc_message_length=max_message_length) as client:
                 response = client.invoke_binding(
                     binding_name=store_name,
                     operation=operation,
