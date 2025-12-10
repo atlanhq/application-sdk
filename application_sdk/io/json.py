@@ -434,7 +434,7 @@ class JsonFileWriter(Writer):
 
                 # If the buffer size is reached append to the file and clear the buffer
                 if self.current_buffer_size >= self.buffer_size:
-                    await self._flush_daft_buffer(buffer, self.chunk_part)
+                    await self._flush_dict_buffer(buffer, self.chunk_part)
 
                 if self.current_buffer_size_bytes > self.max_file_size_bytes or (
                     self.total_record_count > 0
@@ -447,7 +447,7 @@ class JsonFileWriter(Writer):
 
             # Write any remaining rows in the buffer
             if self.current_buffer_size > 0:
-                await self._flush_daft_buffer(buffer, self.chunk_part)
+                await self._flush_dict_buffer(buffer, self.chunk_part)
 
             # Record metrics for successful write
             self.metrics.record_metric(
@@ -488,6 +488,28 @@ class JsonFileWriter(Writer):
             value=1,
             metric_type=MetricType.COUNTER,
             labels={"type": "daft"},
+            description="Number of chunks written to JSON files",
+        )
+
+    async def _flush_dict_buffer(self, buffer: List[str], chunk_part: int):
+        """Flush the current buffer to a JSON file.
+
+        This method combines all DataFrames in the buffer, writes them to a JSON file,
+        and uploads the file to the object store.
+        """
+        output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
+        with open(output_file_name, "ab+") as f:
+            f.writelines(buffer)
+        buffer.clear()  # Clear the buffer
+
+        self.current_buffer_size = 0
+
+        # Record chunk metrics
+        self.metrics.record_metric(
+            name="json_chunks_written",
+            value=1,
+            metric_type=MetricType.COUNTER,
+            labels={"type": "dict"},
             description="Number of chunks written to JSON files",
         )
 
