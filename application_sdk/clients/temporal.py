@@ -306,11 +306,17 @@ class TemporalWorkflowClient(WorkflowClient):
 
             handle = await self.client.start_workflow(
                 workflow_class,  # type: ignore
-                args=[{
-                    "workflow_id": workflow_id,
-                    "argo_workflow_name": workflow_args.get("argo_workflow_name", ""),
-                    "argo_workflow_node": workflow_args.get("argo_workflow_node", ""),
-                }],
+                args=[
+                    {
+                        "workflow_id": workflow_id,
+                        "argo_workflow_name": workflow_args.get(
+                            "argo_workflow_name", ""
+                        ),
+                        "argo_workflow_node": workflow_args.get(
+                            "argo_workflow_node", ""
+                        ),
+                    }
+                ],
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),

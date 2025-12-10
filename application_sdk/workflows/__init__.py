@@ -75,15 +75,18 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
         """
         # Set Argo workflow metadata in context variable early so all logs have access
         try:
-            from application_sdk.observability.logger_adaptor import argo_workflow_context
+            from application_sdk.observability.logger_adaptor import (
+                argo_workflow_context,
+            )
+
             argo_metadata = {
                 "argo_workflow_name": workflow_config.get("argo_workflow_name", ""),
-                "argo_workflow_node": workflow_config.get("argo_workflow_node", "")
+                "argo_workflow_node": workflow_config.get("argo_workflow_node", ""),
             }
             argo_workflow_context.set(argo_metadata)
         except Exception:
             pass
-        
+
         # Get the workflow configuration from the state store
         workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
             self.activities_cls.get_workflow_args,

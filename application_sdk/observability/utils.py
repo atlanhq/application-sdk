@@ -80,6 +80,7 @@ def get_workflow_context() -> WorkflowContext:
     # Get Argo workflow metadata from context variable
     try:
         from application_sdk.observability.logger_adaptor import argo_workflow_context
+
         argo_ctx = argo_workflow_context.get()
         if argo_ctx:
             context.argo_workflow_name = argo_ctx.get("argo_workflow_name", "")

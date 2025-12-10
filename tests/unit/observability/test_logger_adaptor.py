@@ -450,7 +450,10 @@ class TestArgoWorkflowContextIntegration:
                     msg, kwargs = logger_adapter.process("Test message", {})
 
                     assert kwargs["workflow_id"] == self.WORKFLOW_ID
-                    assert kwargs["workflow_run_id"] == "019b04bd-ac10-7989-87d7-06427dc0616c"
+                    assert (
+                        kwargs["workflow_run_id"]
+                        == "019b04bd-ac10-7989-87d7-06427dc0616c"
+                    )
                     assert "argo_workflow_name" in kwargs
                     assert "argo_workflow_node" in kwargs
 

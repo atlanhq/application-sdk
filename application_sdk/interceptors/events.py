@@ -68,16 +68,16 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         """
         # Set Argo workflow context from activity args for logging
         try:
-            from application_sdk.observability.logger_adaptor import argo_workflow_context
+            from application_sdk.observability.logger_adaptor import (
+                argo_workflow_context,
+            )
 
             if input.args and len(input.args) > 0:
                 args = input.args[0]
                 if isinstance(args, dict):
                     argo_metadata = {
                         "argo_workflow_name": args.get("argo_workflow_name", ""),
-                        "argo_workflow_node": args.get(
-                            "argo_workflow_node", ""
-                        ),
+                        "argo_workflow_node": args.get("argo_workflow_node", ""),
                     }
                     argo_workflow_context.set(argo_metadata)
         except Exception:
