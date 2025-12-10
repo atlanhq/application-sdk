@@ -135,7 +135,9 @@ class Writer(ABC):
         """
         Method to write the pandas dataframe to an iceberg table
         """
-        if isinstance(dataframe, (dict, list)):
+        if self.dataframe_type == DataframeType.dict or isinstance(
+            dataframe, (dict, list)
+        ):
             await self._write_dictionary(dataframe, **kwargs)
         elif self.dataframe_type == DataframeType.pandas:
             await self._write_dataframe(dataframe, **kwargs)
@@ -162,8 +164,10 @@ class Writer(ABC):
             await self._write_batched_dataframe(dataframe)
         elif self.dataframe_type == DataframeType.daft:
             await self._write_batched_daft_dataframe(dataframe)
-        else:
+        elif self.dataframe_type == DataframeType.dict:
             await self._write_batched_dictionary(dataframe)
+        else:
+            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
 
     async def _write_batched_dictionary(
         self,
@@ -229,9 +233,6 @@ class Writer(ABC):
         try:
             if inspect.isasyncgen(batched_dataframe):
                 async for dataframe in batched_dataframe:
-                    if isinstance(dataframe, (dict, list)):
-                        await self._write_dictionary(dataframe)
-                        continue
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)
             else:
@@ -240,9 +241,6 @@ class Writer(ABC):
                     Generator["pd.DataFrame", None, None], batched_dataframe
                 )
                 for dataframe in sync_generator:
-                    if isinstance(dataframe, (dict, list)):
-                        await self._write_dictionary(dataframe)
-                        continue
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)
         except Exception as e:

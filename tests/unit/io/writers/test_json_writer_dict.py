@@ -16,7 +16,9 @@ def temp_output_path(tmp_path):
 async def test_write_single_dict(temp_output_path):
     with patch("application_sdk.services.objectstore.ObjectStore.upload_file"):
         writer = JsonFileWriter(
-            output_path=os.path.join(temp_output_path, "test_single"), chunk_size=100
+            output_path=os.path.join(temp_output_path, "test_single"),
+            chunk_size=100,
+            dataframe_type=DataframeType.dict,
         )
         data = {"id": 1, "name": "test"}
         await writer.write(data)
@@ -31,7 +33,11 @@ async def test_write_single_dict(temp_output_path):
 async def test_write_list_of_dicts(temp_output_path):
     with patch("application_sdk.services.objectstore.ObjectStore.upload_file"):
         output_path = os.path.join(temp_output_path, "test_list")
-        writer = JsonFileWriter(output_path=output_path, chunk_size=100)
+        writer = JsonFileWriter(
+            output_path=output_path,
+            chunk_size=100,
+            dataframe_type=DataframeType.dict,
+        )
         data = [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
         await writer.write(data)
 
@@ -51,7 +57,7 @@ async def test_write_batches_dicts(temp_output_path):
         writer = JsonFileWriter(
             output_path=os.path.join(temp_output_path, "test_batches"),
             chunk_size=100,
-            dataframe_type=DataframeType.pandas,
+            dataframe_type=DataframeType.dict,
         )
 
         def dict_generator():

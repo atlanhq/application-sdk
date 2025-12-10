@@ -6,3 +6,4 @@ class DataframeType(Enum):
 
     pandas = "pandas"
     daft = "daft"
+    dict = "dict"
