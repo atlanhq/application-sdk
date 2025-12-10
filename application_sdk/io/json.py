@@ -384,7 +384,7 @@ class JsonFileWriter(Writer):
         This method combines all DataFrames in the buffer, writes them to a JSON file,
         and uploads the file to the object store.
         """
-        output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, chunk_part, extension=self.extension)}"
+        output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
         with open(output_file_name, "ab+") as f:
             f.writelines(buffer)
         buffer.clear()  # Clear the buffer
@@ -417,7 +417,7 @@ class JsonFileWriter(Writer):
         """
         # Finally upload the final file
         if self.current_buffer_size_bytes > 0:
-            output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
+            output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
             if os.path.exists(output_file_name):
                 await self._upload_file(output_file_name)
                 self.chunk_part += 1
