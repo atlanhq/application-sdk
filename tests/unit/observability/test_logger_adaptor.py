@@ -335,6 +335,7 @@ class TestCorrelationContext:
     WORKFLOW_NAME = "test-workflow-123"
     WORKFLOW_NODE = "test-workflow-123.node-1"
     WORKFLOW_ID = "test-workflow-123"
+    TRACE_ID = "my-trace-id-123"
 
     def test_process_with_correlation_context(self):
         """Test process() when correlation context is set."""
@@ -365,83 +366,136 @@ class TestCorrelationContext:
                 assert kwargs["logger_name"] == "test_logger"
                 assert msg == "Test message"
 
+    def test_process_extracts_trace_id_from_correlation_context(self):
+        """Test process() extracts trace_id from correlation context."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                mock_corr_context.get.return_value = {
+                    "trace_id": self.TRACE_ID,
+                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                }
+
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                assert kwargs["trace_id"] == self.TRACE_ID
+                assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
+
+    def test_process_without_trace_id(self):
+        """Test process() when trace_id is not in correlation context."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                mock_corr_context.get.return_value = {
+                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                }
+
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                assert "trace_id" not in kwargs
+                assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
+
+    def test_process_handles_none_correlation_context(self):
+        """Test process() gracefully handles None when correlation context is unset."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                # ContextVar returns None when not set
+                mock_corr_context.get.return_value = None
+
+                # Should not raise exception - None is handled gracefully
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                # Verify basic functionality still works
+                assert msg == "Test message"
+                assert kwargs["logger_name"] == "test_logger"
+                # Verify no correlation context data was added
+                assert self.WORKFLOW_NAME_HEADER not in kwargs
+                assert "trace_id" not in kwargs
+
+    def test_process_handles_none_request_context(self):
+        """Test process() gracefully handles None when request context is unset."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.request_context"
+            ) as mock_req_context:
+                # ContextVar returns None when not set
+                mock_req_context.get.return_value = None
+
+                # Should not raise exception - None is handled gracefully
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                # Verify basic functionality still works
+                assert msg == "Test message"
+                assert kwargs["logger_name"] == "test_logger"
+                # Verify no request context data was added
+                assert "request_id" not in kwargs
+
 
 class TestLogFormatFunction:
-    """Tests for the conditional log format function."""
+    """Tests for the conditional log format function with trace_id."""
 
-    WORKFLOW_NAME_HEADER = "atlan-workflow-name"
-    WORKFLOW_NODE_HEADER = "atlan-workflow-node"
-    WORKFLOW_NAME = "test-workflow-123"
-    WORKFLOW_NODE = "test-workflow-123.node-1"
+    TRACE_ID = "my-workflow-trace-123"
 
-    def test_format_includes_correlation_context_when_present(self):
-        """Format should include atlan- prefixed headers when present."""
+    def test_format_includes_trace_id_when_present(self):
+        """Format should include trace_id when present."""
         record = {
             "extra": {
                 "logger_name": "test_logger",
-                self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                "trace_id": self.TRACE_ID,
             }
         }
 
-        # Collect all atlan- prefixed headers for display
-        correlation_parts = []
-        for key, value in record["extra"].items():
-            if key.startswith("atlan-") and value:
-                correlation_parts.append(f"{key}={value}")
-        correlation_str = f" {' '.join(correlation_parts)}" if correlation_parts else ""
+        # Build trace_id display string (mimics logger_adaptor logic)
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
 
-        assert self.WORKFLOW_NAME_HEADER in correlation_str
-        assert self.WORKFLOW_NAME in correlation_str
+        assert "trace_id=" in trace_id_str
+        assert self.TRACE_ID in trace_id_str
 
-    def test_format_excludes_correlation_context_when_missing(self):
-        """Format should exclude correlation context when not present."""
+    def test_format_excludes_trace_id_when_missing(self):
+        """Format should exclude trace_id when not present."""
         record = {"extra": {"logger_name": "test_logger"}}
 
-        # Collect all atlan- prefixed headers for display
-        correlation_parts = []
-        for key, value in record["extra"].items():
-            if key.startswith("atlan-") and value:
-                correlation_parts.append(f"{key}={value}")
-        correlation_str = f" {' '.join(correlation_parts)}" if correlation_parts else ""
+        # Build trace_id display string
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
 
-        assert correlation_str == ""
+        assert trace_id_str == ""
 
-    def test_format_excludes_correlation_context_when_empty(self):
-        """Format should exclude correlation context when empty string."""
-        record = {
-            "extra": {"logger_name": "test_logger", self.WORKFLOW_NAME_HEADER: ""}
-        }
+    def test_format_excludes_trace_id_when_empty(self):
+        """Format should exclude trace_id when empty string."""
+        record = {"extra": {"logger_name": "test_logger", "trace_id": ""}}
 
-        # Collect all atlan- prefixed headers for display
-        correlation_parts = []
-        for key, value in record["extra"].items():
-            if key.startswith("atlan-") and value:
-                correlation_parts.append(f"{key}={value}")
-        correlation_str = f" {' '.join(correlation_parts)}" if correlation_parts else ""
+        # Build trace_id display string
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
 
-        assert correlation_str == ""
+        assert trace_id_str == ""
 
-    def test_format_handles_multiple_correlation_headers(self):
-        """Format should handle multiple atlan- prefixed headers."""
+    def test_format_trace_id_does_not_include_atlan_headers(self):
+        """Format should only include trace_id, not atlan-* headers in display."""
         record = {
             "extra": {
                 "logger_name": "test_logger",
-                self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
-                self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
+                "trace_id": self.TRACE_ID,
+                "atlan-tenant": "test-tenant",
+                "atlan-user": "test-user",
             }
         }
 
-        # Collect all atlan- prefixed headers for display
-        correlation_parts = []
-        for key, value in record["extra"].items():
-            if key.startswith("atlan-") and value:
-                correlation_parts.append(f"{key}={value}")
-        correlation_str = f" {' '.join(correlation_parts)}" if correlation_parts else ""
+        # Build trace_id display string (only trace_id, not atlan-*)
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
 
-        assert self.WORKFLOW_NAME_HEADER in correlation_str
-        assert self.WORKFLOW_NODE_HEADER in correlation_str
-        assert self.WORKFLOW_NAME in correlation_str
-        assert self.WORKFLOW_NODE in correlation_str
+        assert "trace_id=" in trace_id_str
+        assert self.TRACE_ID in trace_id_str
+        # atlan-* headers should NOT be in the display string
+        assert "atlan-tenant" not in trace_id_str
+        assert "atlan-user" not in trace_id_str
 
 
 class TestCorrelationContextIntegration:

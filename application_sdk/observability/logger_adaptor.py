@@ -73,6 +73,8 @@ class LogExtraModel(BaseModel):
     heartbeat_timeout: Optional[str] = None
     # Other fields
     log_type: Optional[str] = None
+    # Trace context
+    trace_id: Optional[str] = None
 
 
 class LogRecordModel(BaseModel):
@@ -254,7 +256,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         colorize = LOG_LEVEL == "DEBUG"
 
         def get_log_format(record: Any) -> str:
-            """Generate log format string with conditional correlation context.
+            """Generate log format string with trace_id for correlation.
 
             Args:
                 record: Loguru record dictionary containing log information.
@@ -262,26 +264,23 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             Returns:
                 Format string for the log message.
             """
-            # Collect all atlan- prefixed headers for display (correlation context)
-            correlation_parts = []
-            for key, value in record["extra"].items():
-                if key.startswith("atlan-") and value:
-                    correlation_parts.append(f"{key}={value}")
-            record["extra"]["_correlation_str"] = (
-                f" {' '.join(correlation_parts)}" if correlation_parts else ""
+            # Build trace_id display string (only trace_id is printed, atlan-* go to OTEL)
+            trace_id = record["extra"].get("trace_id", "")
+            record["extra"]["_trace_id_str"] = (
+                f" trace_id={trace_id}" if trace_id else ""
             )
 
             if colorize:
                 return (
                     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> "
-                    "<blue>[{level}]</blue> "
+                    "<blue>[{level}]</blue>"
+                    "<magenta>{extra[_trace_id_str]}</magenta> "
                     "<cyan>{extra[logger_name]}</cyan>"
-                    "<magenta>{extra[_correlation_str]}</magenta>"
                     " - <level>{message}</level>\n"
                 )
             return (
-                "{time:YYYY-MM-DD HH:mm:ss} [{level}] {extra[logger_name]}"
-                "{extra[_correlation_str]}"
+                "{time:YYYY-MM-DD HH:mm:ss} [{level}]"
+                "{extra[_trace_id_str]} {extra[logger_name]}"
                 " - {message}\n"
             )
 
@@ -528,12 +527,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         kwargs["logger_name"] = self.logger_name
 
         # Get request context
-        try:
-            ctx = request_context.get()
-            if ctx and "request_id" in ctx:
-                kwargs["request_id"] = ctx["request_id"]
-        except Exception:
-            pass
+        ctx = request_context.get()
+        if ctx and "request_id" in ctx:
+            kwargs["request_id"] = ctx["request_id"]
 
         workflow_context = get_workflow_context()
 
@@ -555,15 +551,16 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         except Exception:
             pass
 
-        # Add correlation context (atlan- prefixed keys) to kwargs
-        try:
-            corr_ctx = correlation_context.get()
-            if corr_ctx:
-                for key, value in corr_ctx.items():
-                    if key.startswith("atlan-") and value:
-                        kwargs[key] = str(value)
-        except Exception:
-            pass
+        # Add correlation context (atlan- prefixed keys and trace_id) to kwargs
+        corr_ctx = correlation_context.get()
+        if corr_ctx:
+            # Add trace_id if present (for log format display)
+            if "trace_id" in corr_ctx and corr_ctx["trace_id"]:
+                kwargs["trace_id"] = str(corr_ctx["trace_id"])
+            # Add atlan-* headers for OTEL
+            for key, value in corr_ctx.items():
+                if key.startswith("atlan-") and value:
+                    kwargs[key] = str(value)
 
         return msg, kwargs
 

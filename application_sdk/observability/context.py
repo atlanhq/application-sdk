@@ -8,9 +8,11 @@ from contextvars import ContextVar
 from typing import Any, Dict
 
 # Context variable for request-scoped data (e.g., request_id from HTTP middleware)
-request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
+request_context: ContextVar[Dict[str, Any] | None] = ContextVar(
+    "request_context", default=None
+)
 
 # Context variable for correlation context (atlan- prefixed headers for distributed tracing)
-correlation_context: ContextVar[Dict[str, Any]] = ContextVar(
-    "correlation_context", default={}
+correlation_context: ContextVar[Dict[str, Any] | None] = ContextVar(
+    "correlation_context", default=None
 )

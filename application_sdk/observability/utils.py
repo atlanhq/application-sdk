@@ -83,14 +83,11 @@ def get_workflow_context() -> WorkflowContext:
         pass
 
     # Get correlation context from context variable (atlan- prefixed headers)
-    try:
-        corr_ctx = correlation_context.get()
-        if corr_ctx:
-            # Add all correlation context fields as extra attributes
-            for key, value in corr_ctx.items():
-                if key.startswith("atlan-") and value:
-                    setattr(context, key, str(value))
-    except Exception:
-        pass
+    corr_ctx = correlation_context.get()
+    if corr_ctx:
+        # Add all correlation context fields as extra attributes
+        for key, value in corr_ctx.items():
+            if key.startswith("atlan-") and value:
+                setattr(context, key, str(value))
 
     return context
