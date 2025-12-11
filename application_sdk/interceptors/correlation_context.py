@@ -38,24 +38,12 @@ class CorrelationContextOutboundInterceptor(WorkflowOutboundInterceptor):
         next: WorkflowOutboundInterceptor,
         inbound: "CorrelationContextWorkflowInboundInterceptor",
     ):
-        """Initialize the outbound interceptor.
-
-        Args:
-            next: The next interceptor in the chain.
-            inbound: Reference to the inbound interceptor to access correlation data.
-        """
+        """Initialize the outbound interceptor."""
         super().__init__(next)
         self.inbound = inbound
 
     def start_activity(self, input: StartActivityInput) -> workflow.ActivityHandle[Any]:
-        """Inject atlan-* headers into activity calls.
-
-        Args:
-            input: The activity input containing headers and other metadata.
-
-        Returns:
-            ActivityHandle for the started activity.
-        """
+        """Inject atlan-* headers into activity calls."""
         try:
             if self.inbound.correlation_data:
                 new_headers: Dict[str, Payload] = dict(input.headers)
@@ -77,32 +65,17 @@ class CorrelationContextWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     """Inbound workflow interceptor that extracts atlan-* context from workflow args."""
 
     def __init__(self, next: WorkflowInboundInterceptor):
-        """Initialize the inbound interceptor.
-
-        Args:
-            next: The next interceptor in the chain.
-        """
+        """Initialize the inbound interceptor."""
         super().__init__(next)
         self.correlation_data: Dict[str, str] = {}
 
     def init(self, outbound: WorkflowOutboundInterceptor) -> None:
-        """Initialize with correlation context outbound interceptor.
-
-        Args:
-            outbound: The outbound interceptor to wrap.
-        """
+        """Initialize with correlation context outbound interceptor."""
         context_outbound = CorrelationContextOutboundInterceptor(outbound, self)
         super().init(context_outbound)
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
-        """Execute workflow and extract atlan-* fields from arguments.
-
-        Args:
-            input: The workflow execution input containing args.
-
-        Returns:
-            The result of the workflow execution.
-        """
+        """Execute workflow and extract atlan-* fields from arguments."""
         try:
             if input.args and len(input.args) > 0:
                 workflow_config = input.args[0]
@@ -124,14 +97,7 @@ class CorrelationContextActivityInboundInterceptor(ActivityInboundInterceptor):
     """Activity interceptor that reads atlan-* headers and sets correlation_context."""
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
-        """Execute activity after extracting atlan-* headers.
-
-        Args:
-            input: The activity execution input containing headers.
-
-        Returns:
-            The result of the activity execution.
-        """
+        """Execute activity after extracting atlan-* headers."""
         try:
             atlan_fields: Dict[str, str] = {}
             payload_converter = default_converter().payload_converter
@@ -153,42 +119,18 @@ class CorrelationContextActivityInboundInterceptor(ActivityInboundInterceptor):
 class CorrelationContextInterceptor(Interceptor):
     """Main interceptor for propagating atlan-* correlation context.
 
-    This interceptor ensures that atlan-* fields (like atlan-ignore,
-    atlan-argo-workflow-id, atlan-argo-workflow-node) are propagated from
-    workflow arguments to all activities via Temporal headers.
-
-    Example:
-        >>> worker = Worker(
-        ...     client,
-        ...     task_queue="my-task-queue",
-        ...     workflows=[MyWorkflow],
-        ...     activities=[my_activity],
-        ...     interceptors=[CorrelationContextInterceptor()]
-        ... )
+    Ensures atlan-* fields (like atlan-ignore, atlan-argo-workflow-id, atlan-argo-workflow-node)
+    are propagated from workflow arguments to all activities via Temporal headers.
     """
 
     def workflow_interceptor_class(
         self, input: WorkflowInterceptorClassInput
     ) -> Optional[Type[WorkflowInboundInterceptor]]:
-        """Get the workflow interceptor class.
-
-        Args:
-            input: The interceptor class input.
-
-        Returns:
-            The CorrelationContextWorkflowInboundInterceptor class.
-        """
+        """Get the workflow interceptor class."""
         return CorrelationContextWorkflowInboundInterceptor
 
     def intercept_activity(
         self, next: ActivityInboundInterceptor
     ) -> ActivityInboundInterceptor:
-        """Intercept activity executions to read correlation context.
-
-        Args:
-            next: The next interceptor in the chain.
-
-        Returns:
-            The CorrelationContextActivityInboundInterceptor wrapping the next.
-        """
+        """Intercept activity executions to read correlation context."""
         return CorrelationContextActivityInboundInterceptor(next)
