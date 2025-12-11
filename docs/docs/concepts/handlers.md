@@ -151,8 +151,8 @@ This is a concrete implementation of `HandlerInterface` specifically designed fo
     *   `fetch_schemas_sql`: Query to fetch schema names for a given database.
 *   **Default Implementations:**
     *   `load()`: Calls `load()` on the provided `sql_client`.
-    *   `test_auth()`: Executes `test_authentication_sql` using `SQLQueryInput`.
-    *   `fetch_metadata()`: Based on the `metadata_type` argument, calls `prepare_metadata`, `fetch_databases`, or `fetch_schemas`. `prepare_metadata` executes `metadata_sql` using `SQLQueryInput`.
+    *   `test_auth()`: Executes `test_authentication_sql` using the SQL client's `run_query` method.
+    *   `fetch_metadata()`: Based on the `metadata_type` argument, calls `prepare_metadata`, `fetch_databases`, or `fetch_schemas`. `prepare_metadata` executes `metadata_sql` using the SQL client.
     *   `preflight_check()`: Orchestrates several checks:
         *   `check_schemas_and_databases()`: Executes `metadata_sql` and validates include/exclude filters against the results.
         *   `tables_check()`: Executes `tables_check_sql` (prepared with filters) to count tables.

@@ -12,7 +12,7 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
-from application_sdk.events.models import (
+from application_sdk.interceptors.models import (
     ApplicationEventNames,
     Event,
     EventMetadata,

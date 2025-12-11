@@ -5,8 +5,8 @@ from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.base import BaseClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import ENABLE_MCP
-from application_sdk.events.models import EventRegistration
 from application_sdk.handlers.base import BaseHandler
+from application_sdk.interceptors.models import EventRegistration
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger

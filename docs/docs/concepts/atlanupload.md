@@ -196,11 +196,13 @@ upload_stats = await AtlanStorageOutput.upload_object_store_data_to_atlan(
 - `total_bytes`: Total bytes uploaded
 - `errors`: List of error messages
 
-### JsonOutput
+### JsonFileWriter
 
-#### `write_daft_dataframe()`
+#### `write()`
 
-Stores a Daft DataFrame in the object store and local files.
+Stores a DataFrame (Pandas or Daft) in local files and automatically uploads to object store.
+
+**Note**: `JsonFileWriter` is part of the I/O module (`application_sdk.io.json`) and handles both local file writing and object store uploads transparently.
 
 ## Testing
 

@@ -20,7 +20,6 @@ from typing import (
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import CommonError
 from application_sdk.constants import TEMPORARY_PATH
-from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
 
@@ -280,13 +279,7 @@ async def get_database_names(
             temp_table_regex_sql=temp_table_regex_sql,
             use_posix_regex=True,
         )
-        # We'll run the query to get all the database names
-        database_sql_input = SQLQueryInput(
-            engine=sql_client.engine,
-            query=prepared_query,  # type: ignore
-            chunk_size=None,
-        )
-        database_dataframe = await database_sql_input.get_dataframe()
+        database_dataframe = await sql_client.get_results(prepared_query)
         database_names = list(database_dataframe["database_name"])
     return database_names
 
