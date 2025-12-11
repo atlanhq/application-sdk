@@ -11,7 +11,7 @@ This module provides a standardized way to write data to various destinations wi
         *   `write_batches(dataframe: Union[AsyncGenerator, Generator])`: Write batched DataFrames or Dictionaries.
         *   `_write_dataframe(dataframe: pd.DataFrame)`: Internal method for writing Pandas DataFrames.
         *   `_write_daft_dataframe(dataframe: daft.DataFrame)`: Internal method for writing Daft DataFrames.
-        *   `_write_dictionary(data: Union[Dict, List[Dict]])`: Internal method for writing Dictionaries.
+        *   `_write_dictionary(data: List[Dict])`: Internal method for writing Dictionaries.
     *   **Statistics:** Includes methods (`get_statistics`, `write_statistics`) to track and save metadata about the output (record count, chunk count) to a `statistics.json.ignore` file, typically alongside the data output.
     *   **Usage:** Activities typically instantiate a specific `Writer` subclass and use its write methods to persist data fetched or generated during the activity.
 

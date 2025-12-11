@@ -289,7 +289,7 @@ def normalize_dict_input(data: Any) -> Optional[List[Dict[str, Any]]]:
 
 
 def is_empty_dataframe(
-    dataframe: Union["pd.DataFrame", "daft.DataFrame", Dict, List[Dict]],
+    dataframe: Union["pd.DataFrame", "daft.DataFrame"],
 ) -> bool:  # noqa: F821
     """Check if a DataFrame or dictionary/list of dictionaries is empty.
 

@@ -9,7 +9,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 
 logger = get_logger(__name__)
-activity.logger = logger, Any
+activity.logger = logger
 
 if TYPE_CHECKING:
     import daft
