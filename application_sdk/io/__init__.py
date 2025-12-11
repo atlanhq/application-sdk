@@ -32,6 +32,7 @@ from application_sdk.common.types import DataframeType
 from application_sdk.io._utils import (
     estimate_dataframe_record_size,
     is_empty_dataframe,
+    normalize_dict_input,
     path_gen,
 )
 from application_sdk.observability.logger_adaptor import get_logger
@@ -135,10 +136,11 @@ class Writer(ABC):
         """
         Method to write the pandas dataframe to an iceberg table
         """
-        if self.dataframe_type == DataframeType.dict or isinstance(
-            dataframe, (dict, list)
-        ):
-            await self._write_dictionary(dataframe, **kwargs)
+        if self.dataframe_type == DataframeType.dict:
+            records = normalize_dict_input(dataframe)
+            if records is None:
+                raise ValueError("Invalid dictionary input")
+            await self._write_dictionary(records, **kwargs)
         elif self.dataframe_type == DataframeType.pandas:
             await self._write_dataframe(dataframe, **kwargs)
         elif self.dataframe_type == DataframeType.daft:
@@ -155,6 +157,8 @@ class Writer(ABC):
             Generator["daft.DataFrame", None, None],
             Generator[Dict[str, Any], None, None],
             Generator[List[Dict[str, Any]], None, None],
+            AsyncGenerator[Dict[str, Any], None],
+            AsyncGenerator[List[Dict[str, Any]], None],
         ],
     ):
         """
@@ -174,6 +178,8 @@ class Writer(ABC):
         batched_data: Union[
             Generator[Dict[str, Any], None, None],
             Generator[List[Dict[str, Any]], None, None],
+            AsyncGenerator[Dict[str, Any], None],
+            AsyncGenerator[List[Dict[str, Any]], None],
         ],
     ):
         """Write a batched dictionary to Output.
@@ -184,34 +190,46 @@ class Writer(ABC):
         try:
             if inspect.isasyncgen(batched_data):
                 async for data in batched_data:
-                    if not is_empty_dataframe(data):
-                        await self._write_dictionary(data)
+                    records = normalize_dict_input(data)
+                    if records is None:
+                        raise ValueError("Invalid dictionary input")
+                    if not records:
+                        continue
+                    await self._write_dictionary(records)
             else:
                 for data in batched_data:
-                    if not is_empty_dataframe(data):
-                        await self._write_dictionary(data)
+                    records = normalize_dict_input(data)
+                    if records is None:
+                        raise ValueError("Invalid dictionary input")
+                    if not records:
+                        continue
+                    await self._write_dictionary(records)
         except Exception as e:
             logger.error(f"Error writing batched dictionary: {str(e)}")
             raise
 
     async def _write_dictionary(
-        self, data: Union[Dict[str, Any], List[Dict[str, Any]]], **kwargs
+        self,
+        records: List[Dict[str, Any]],
+        **kwargs: Any,
     ):
-        """Write a dictionary or list of dictionaries to the output.
+        """Write a list of dictionaries to the output.
 
         Args:
-            data: The dictionary or list of dictionaries to write.
+            records: The list of dictionaries to write.
             **kwargs: Additional parameters.
         """
-        import pandas as pd
+        try:
+            import pandas as pd
 
-        # Default implementation: convert to pandas DataFrame and write
-        if isinstance(data, dict):
-            df = pd.DataFrame([data])
-        else:
-            df = pd.DataFrame(data)
+            if not records:
+                return
 
-        await self._write_dataframe(df, **kwargs)
+            df = pd.DataFrame(records)
+            await self._write_dataframe(df, **kwargs)
+        except Exception as e:
+            logger.error(f"Error writing dictionary: {str(e)}")
+            raise
 
     async def _write_batched_dataframe(
         self,

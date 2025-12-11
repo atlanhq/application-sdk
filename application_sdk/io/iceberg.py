@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, AsyncIterator, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
 
 from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
@@ -9,7 +9,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 
 logger = get_logger(__name__)
-activity.logger = logger
+activity.logger = logger, Any
 
 if TYPE_CHECKING:
     import daft
@@ -213,4 +213,26 @@ class IcebergTableWriter(Writer):
                 description="Number of errors while writing to Iceberg table",
             )
             logger.error(f"Error writing daft dataframe to iceberg table: {str(e)}")
+            raise
+
+    async def _write_dictionary(
+        self,
+        records: List[Dict[str, Any]],
+        **kwargs,
+    ):
+        """Write a list of dictionaries to the iceberg table.
+
+        Args:
+            records: The list of dictionaries to write.
+            **kwargs: Additional parameters.
+        """
+        try:
+            import pandas as pd
+
+            if not records:
+                return
+            df = pd.DataFrame(records)
+            await self._write_dataframe(df, **kwargs)
+        except Exception as e:
+            logger.error(f"Error writing dictionary to iceberg table: {str(e)}")
             raise

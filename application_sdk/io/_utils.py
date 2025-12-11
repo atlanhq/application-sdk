@@ -274,6 +274,20 @@ def convert_datetime_to_epoch(data: Any) -> Any:
     return data
 
 
+def normalize_dict_input(data: Any) -> Optional[List[Dict[str, Any]]]:
+    """
+    Normalize dict / list[dict] into list[dict].
+    Return None if it's not dict-like.
+    """
+    if isinstance(data, dict):
+        return [data]
+
+    if isinstance(data, list) and all(isinstance(item, dict) for item in data):
+        return data
+
+    return None
+
+
 def is_empty_dataframe(
     dataframe: Union["pd.DataFrame", "daft.DataFrame", Dict, List[Dict]],
 ) -> bool:  # noqa: F821
@@ -292,9 +306,6 @@ def is_empty_dataframe(
 
     if isinstance(dataframe, pd.DataFrame):
         return dataframe.empty
-
-    if isinstance(dataframe, (dict, list)):
-        return not bool(dataframe)
 
     try:
         import daft
