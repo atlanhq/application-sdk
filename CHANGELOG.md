@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.4 (December 11, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.3...v1.0.4
+
+### Bug Fixes
+
+- add automatic gRPC message size limit handling for large file uploads (#878) (by @SanilK2108 in [4d76838](https://github.com/atlanhq/application-sdk/commit/4d76838))
+
+
 ## v1.0.3 (December 09, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.2...v1.0.3
