@@ -43,14 +43,17 @@ class CorrelationContextOutboundInterceptor(WorkflowOutboundInterceptor):
         self.inbound = inbound
 
     def start_activity(self, input: StartActivityInput) -> workflow.ActivityHandle[Any]:
-        """Inject atlan-* headers into activity calls."""
+        """Inject atlan-* headers and trace_id into activity calls."""
         try:
             if self.inbound.correlation_data:
                 new_headers: Dict[str, Payload] = dict(input.headers)
                 payload_converter = default_converter().payload_converter
 
                 for key, value in self.inbound.correlation_data.items():
-                    if key.startswith(ATLAN_HEADER_PREFIX) and value:
+                    # Include atlan-* prefixed headers and trace_id
+                    if (
+                        key.startswith(ATLAN_HEADER_PREFIX) or key == "trace_id"
+                    ) and value:
                         payload = payload_converter.to_payload(value)
                         new_headers[key] = payload
 
@@ -75,16 +78,21 @@ class CorrelationContextWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         super().init(context_outbound)
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
-        """Execute workflow and extract atlan-* fields from arguments."""
+        """Execute workflow and extract atlan-* fields and trace_id from arguments."""
         try:
             if input.args and len(input.args) > 0:
                 workflow_config = input.args[0]
                 if isinstance(workflow_config, dict):
+                    # Extract atlan-* prefixed fields
                     self.correlation_data = {
                         k: str(v)
                         for k, v in workflow_config.items()
                         if k.startswith(ATLAN_HEADER_PREFIX) and v
                     }
+                    # Extract trace_id separately (not atlan- prefixed)
+                    trace_id = workflow_config.get("trace_id", "")
+                    if trace_id:
+                        self.correlation_data["trace_id"] = str(trace_id)
                     if self.correlation_data:
                         correlation_context.set(self.correlation_data)
         except Exception as e:
@@ -94,16 +102,17 @@ class CorrelationContextWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
 
 class CorrelationContextActivityInboundInterceptor(ActivityInboundInterceptor):
-    """Activity interceptor that reads atlan-* headers and sets correlation_context."""
+    """Activity interceptor that reads atlan-* headers and trace_id, sets correlation_context."""
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
-        """Execute activity after extracting atlan-* headers."""
+        """Execute activity after extracting atlan-* headers and trace_id."""
         try:
             atlan_fields: Dict[str, str] = {}
             payload_converter = default_converter().payload_converter
 
             for key, payload in input.headers.items():
-                if key.startswith(ATLAN_HEADER_PREFIX):
+                # Extract atlan-* prefixed headers and trace_id
+                if key.startswith(ATLAN_HEADER_PREFIX) or key == "trace_id":
                     value = payload_converter.from_payload(payload, type_hint=str)
                     atlan_fields[key] = value
 
