@@ -19,7 +19,6 @@ from application_sdk.events.models import (
     EventTypes,
     WorkflowStates,
 )
-from application_sdk.observability.context import correlation_context
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.eventstore import EventStore
 
@@ -67,21 +66,6 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         Returns:
             Any: The result of the activity execution.
         """
-        # Set correlation context from activity args for logging
-        # Extracts all atlan- prefixed keys from the first activity argument
-        try:
-            if input.args and len(input.args) > 0:
-                args = input.args[0]
-                if isinstance(args, dict):
-                    atlan_fields = {
-                        k: str(v)
-                        for k, v in args.items()
-                        if k.startswith("atlan-") and v
-                    }
-                    correlation_context.set(atlan_fields)
-        except Exception:
-            pass
-
         start_event = Event(
             event_type=EventTypes.APPLICATION_EVENT.value,
             event_name=ApplicationEventNames.ACTIVITY_START.value,
