@@ -33,6 +33,9 @@ from application_sdk.events.models import (
     WorkerTokenRefreshEventData,
 )
 from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
+from application_sdk.interceptors.correlation_context import (
+    CorrelationContextInterceptor,
+)
 from application_sdk.interceptors.events import EventInterceptor, publish_event
 from application_sdk.interceptors.lock import RedisLockInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
@@ -436,6 +439,7 @@ class TemporalWorkflowClient(WorkflowClient):
             max_concurrent_activities=max_concurrent_activities,
             activity_executor=activity_executor,
             interceptors=[
+                CorrelationContextInterceptor(),
                 EventInterceptor(),
                 CleanupInterceptor(),
                 RedisLockInterceptor(activities_dict),
