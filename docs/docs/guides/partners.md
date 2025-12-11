@@ -17,8 +17,7 @@ We believe in a transparent, low-friction workflow that keeps you in full contro
 
 Here's how it works:
 
-- Grant our team access to your private GitHub repository by adding our dedicated collaboration account:
-   - 📧 Email: connect@atlan.com
+- Grant our team access to your private GitHub repository
    - 🔑 Permission level: Write access
 - Once access is granted:
    - All contributions from Atlan are made to a dedicated branch called atlan-main.
@@ -80,7 +79,6 @@ Want co-marketing? Let's plan it together 🎯
 
 ## 📬 Contact
 
-- Email: connect@atlan.com
 - Issues: [GitHub Issues](https://github.com/atlanhq/application-sdk/issues)
 - We’ll set up a shared Slack channel for real-time collaboration
 
@@ -95,7 +93,7 @@ Once you're in:
 - Meet with the Atlan team to align on scope, process, and timelines
 - Create a private GitHub repo for your application.
 - Push your application code to the main branch.
-- Grant write access to Atlan's collaboration account: 📧 connect@atlan.com
+- Grant write access to Atlan's collaboration account for code contributions.
 - Collaborate via the `atlan-main` branch — we'll contribute changes there.
 - Review and merge changes into your `main` branch on your schedule.
 - Test functionality locally to ensure everything works in your environment.

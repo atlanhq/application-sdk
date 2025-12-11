@@ -43,7 +43,6 @@ poetry add atlan-application-sdk
 ## Need help?
 We’re here whenever you need us:
 
-- Email: **connect@atlan.com**
 - Issues: [GitHub Issues](https://github.com/atlanhq/application-sdk/issues)
 
 
