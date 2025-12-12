@@ -32,6 +32,7 @@ from application_sdk.common.types import DataframeType
 from application_sdk.io._utils import (
     estimate_dataframe_record_size,
     is_empty_dataframe,
+    normalize_dict_input,
     path_gen,
 )
 from application_sdk.observability.logger_adaptor import get_logger
@@ -125,11 +126,22 @@ class Writer(ABC):
     extension: str
     dataframe_type: DataframeType
 
-    async def write(self, dataframe: Union["pd.DataFrame", "daft.DataFrame"], **kwargs):
+    async def write(
+        self,
+        dataframe: Union[
+            "pd.DataFrame", "daft.DataFrame", Dict[str, Any], List[Dict[str, Any]]
+        ],
+        **kwargs,
+    ):
         """
         Method to write the pandas dataframe to an iceberg table
         """
-        if self.dataframe_type == DataframeType.pandas:
+        if self.dataframe_type == DataframeType.dict:
+            records = normalize_dict_input(dataframe)
+            if records is None:
+                raise ValueError("Invalid dictionary input")
+            await self._write_dictionary(records, **kwargs)
+        elif self.dataframe_type == DataframeType.pandas:
             await self._write_dataframe(dataframe, **kwargs)
         elif self.dataframe_type == DataframeType.daft:
             await self._write_daft_dataframe(dataframe, **kwargs)
@@ -143,6 +155,10 @@ class Writer(ABC):
             Generator["pd.DataFrame", None, None],
             AsyncGenerator["daft.DataFrame", None],
             Generator["daft.DataFrame", None, None],
+            Generator[Dict[str, Any], None, None],
+            Generator[List[Dict[str, Any]], None, None],
+            AsyncGenerator[Dict[str, Any], None],
+            AsyncGenerator[List[Dict[str, Any]], None],
         ],
     ):
         """
@@ -152,8 +168,68 @@ class Writer(ABC):
             await self._write_batched_dataframe(dataframe)
         elif self.dataframe_type == DataframeType.daft:
             await self._write_batched_daft_dataframe(dataframe)
+        elif self.dataframe_type == DataframeType.dict:
+            await self._write_batched_dictionary(dataframe)
         else:
             raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+
+    async def _write_batched_dictionary(
+        self,
+        batched_data: Union[
+            Generator[Dict[str, Any], None, None],
+            Generator[List[Dict[str, Any]], None, None],
+            AsyncGenerator[Dict[str, Any], None],
+            AsyncGenerator[List[Dict[str, Any]], None],
+        ],
+    ):
+        """Write a batched dictionary to Output.
+
+        Args:
+            batched_data: Generator of dictionaries to write.
+        """
+        try:
+            if inspect.isasyncgen(batched_data):
+                async for data in batched_data:
+                    records = normalize_dict_input(data)
+                    if records is None:
+                        raise ValueError("Invalid dictionary input")
+                    if not records:
+                        continue
+                    await self._write_dictionary(records)
+            else:
+                for data in batched_data:
+                    records = normalize_dict_input(data)
+                    if records is None:
+                        raise ValueError("Invalid dictionary input")
+                    if not records:
+                        continue
+                    await self._write_dictionary(records)
+        except Exception as e:
+            logger.error(f"Error writing batched dictionary: {str(e)}")
+            raise
+
+    async def _write_dictionary(
+        self,
+        records: List[Dict[str, Any]],
+        **kwargs: Any,
+    ):
+        """Write a list of dictionaries to the output.
+
+        Args:
+            records: The list of dictionaries to write.
+            **kwargs: Additional parameters.
+        """
+        try:
+            import pandas as pd
+
+            if not records:
+                return
+
+            df = pd.DataFrame(records)
+            await self._write_dataframe(df, **kwargs)
+        except Exception as e:
+            logger.error(f"Error writing dictionary: {str(e)}")
+            raise
 
     async def _write_batched_dataframe(
         self,

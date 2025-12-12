@@ -1139,3 +1139,122 @@ class TestParquetFileWriterConsolidation:
 
                 # Verify partitions tracking
                 assert len(parquet_output.partitions) == 2
+
+
+class TestParquetFileWriterDict:
+    """Test cases for ParquetFileWriter dictionary handling."""
+
+    @pytest.mark.asyncio
+    async def test_write_single_dict(self, base_output_path: str) -> None:
+        """Test writing a single dictionary to Parquet file."""
+        with patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
+        ) as mock_upload, patch(
+            "pandas.DataFrame.to_parquet"
+        ) as mock_to_parquet, patch(
+            "application_sdk.io.parquet.get_object_store_prefix"
+        ) as mock_prefix:
+            mock_upload.return_value = AsyncMock()
+            mock_prefix.return_value = "test/output/path"
+
+            parquet_output = ParquetFileWriter(
+                output_path=os.path.join(base_output_path, "test"),
+                dataframe_type=DataframeType.dict,
+            )
+
+            # Mock os.path.exists after initialization to return True for upload check
+            with patch("os.path.exists", return_value=True):
+                data = {"id": 1, "name": "test"}
+                await parquet_output.write(data)
+
+            assert parquet_output.chunk_count == 1
+            assert parquet_output.total_record_count == 1
+            mock_to_parquet.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_write_list_of_dicts(self, base_output_path: str) -> None:
+        """Test writing a list of dictionaries to Parquet file."""
+        with patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
+        ) as mock_upload, patch(
+            "pandas.DataFrame.to_parquet"
+        ) as mock_to_parquet, patch(
+            "application_sdk.io.parquet.get_object_store_prefix"
+        ) as mock_prefix:
+            mock_upload.return_value = AsyncMock()
+            mock_prefix.return_value = "test/output/path"
+
+            parquet_output = ParquetFileWriter(
+                output_path=os.path.join(base_output_path, "test_list"),
+                dataframe_type=DataframeType.dict,
+            )
+
+            # Mock os.path.exists after initialization to return True for upload check
+            with patch("os.path.exists", return_value=True):
+                data = [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+                await parquet_output.write(data)
+
+            assert parquet_output.chunk_count == 1
+            assert parquet_output.total_record_count == 2
+            mock_to_parquet.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_write_empty_dict(self, base_output_path: str) -> None:
+        """Test writing an empty dictionary list to Parquet file."""
+        parquet_output = ParquetFileWriter(
+            output_path=os.path.join(base_output_path, "test_empty"),
+            dataframe_type=DataframeType.dict,
+        )
+
+        data: list = []
+        await parquet_output.write(data)
+
+        # Should return without doing anything for empty list
+        assert parquet_output.chunk_count == 0
+        assert parquet_output.total_record_count == 0
+
+    @pytest.mark.asyncio
+    async def test_write_batches_dicts(self, base_output_path: str) -> None:
+        """Test writing batches of dictionaries to Parquet file."""
+        with patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
+        ) as mock_upload, patch(
+            "pandas.DataFrame.to_parquet"
+        ) as mock_to_parquet, patch(
+            "application_sdk.io.parquet.get_object_store_prefix"
+        ) as mock_prefix:
+            mock_upload.return_value = AsyncMock()
+            mock_prefix.return_value = "test/output/path"
+
+            parquet_output = ParquetFileWriter(
+                output_path=os.path.join(base_output_path, "test_batches"),
+                dataframe_type=DataframeType.dict,
+            )
+
+            def dict_generator():
+                yield {"id": 1}
+                yield [{"id": 2}, {"id": 3}]
+
+            # Mock os.path.exists after initialization to return True for upload check
+            with patch("os.path.exists", return_value=True):
+                await parquet_output.write_batches(dict_generator())
+
+            # Should have written 3 records total (1 + 2)
+            assert parquet_output.total_record_count == 3
+            # The base _write_dataframe splits dataframes into chunks based on buffer_size
+            # Each chunk calls _flush_buffer -> _write_chunk -> to_parquet
+            # For small dataframes (1-2 rows), each batch should result in at least one call
+            # The exact count depends on internal buffering, so we verify it was called
+            assert mock_to_parquet.call_count >= 2  # At least one call per batch
+
+    @pytest.mark.asyncio
+    async def test_write_invalid_dict_input(self, base_output_path: str) -> None:
+        """Test writing invalid dictionary input raises error."""
+        parquet_output = ParquetFileWriter(
+            output_path=os.path.join(base_output_path, "test_invalid"),
+            dataframe_type=DataframeType.dict,
+        )
+
+        invalid_data = "not_a_dict"
+        with pytest.raises(ValueError, match="Invalid dictionary input"):
+            await parquet_output.write(invalid_data)  # type: ignore

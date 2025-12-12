@@ -1,7 +1,7 @@
 import glob
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import IOError
@@ -274,23 +274,33 @@ def convert_datetime_to_epoch(data: Any) -> Any:
     return data
 
 
-def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:  # noqa: F821
-    """Check if a DataFrame is empty.
+def normalize_dict_input(data: Any) -> Optional[List[Dict[str, Any]]]:
+    """
+    Normalize dict / list[dict] into list[dict].
+    Return None if it's not dict-like.
+    """
+    if isinstance(data, dict):
+        return [data]
 
-    This function determines whether a DataFrame has any rows, supporting both
-    pandas and daft DataFrame types. For pandas DataFrames, it uses the `empty`
-    property, and for daft DataFrames, it checks if the row count is 0.
+    if isinstance(data, list) and all(isinstance(item, dict) for item in data):
+        return data
+
+    return None
+
+
+def is_empty_dataframe(
+    dataframe: Union["pd.DataFrame", "daft.DataFrame"],
+) -> bool:  # noqa: F821
+    """Check if a DataFrame or dictionary/list of dictionaries is empty.
+
+    This function determines whether a DataFrame or dictionary has any rows/keys,
+    supporting pandas and daft DataFrames, as well as dictionaries and lists.
 
     Args:
-        dataframe (Union[pd.DataFrame, daft.DataFrame]): The DataFrame to check,
-            can be either a pandas DataFrame or a daft DataFrame.
+        dataframe (Union[pd.DataFrame, daft.DataFrame, Dict, List[Dict]]): The data to check.
 
     Returns:
-        bool: True if the DataFrame has no rows, False otherwise.
-
-    Note:
-        If daft is not available and a daft DataFrame is passed, the function
-        will log a warning and return True.
+        bool: True if the data is empty, False otherwise.
     """
     import pandas as pd
 

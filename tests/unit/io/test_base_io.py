@@ -1,14 +1,15 @@
 """Unit tests for the base Reader and Writer classes."""
 
 import os
-from typing import List
-from unittest.mock import AsyncMock, patch
+from typing import Any, List
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from application_sdk.common.error_codes import IOError as SDKIOError
-from application_sdk.io import Reader
-from application_sdk.io._utils import download_files
+from application_sdk.common.types import DataframeType
+from application_sdk.io import Reader, Writer
+from application_sdk.io._utils import download_files, normalize_dict_input
 
 
 class MockReader(Reader):
@@ -422,3 +423,175 @@ class TestReaderDownloadFiles:
             mock_logger.error.assert_called_with(
                 "Failed to download from object store: Download failed"
             )
+
+
+class TestNormalizeDictInput:
+    """Test cases for normalize_dict_input utility function."""
+
+    def test_normalize_single_dict(self) -> None:
+        """Test normalizing a single dictionary."""
+        data = {"id": 1, "name": "test"}
+        result = normalize_dict_input(data)
+        assert result == [{"id": 1, "name": "test"}]
+
+    def test_normalize_list_of_dicts(self) -> None:
+        """Test normalizing a list of dictionaries."""
+        data = [{"id": 1}, {"id": 2}]
+        result = normalize_dict_input(data)
+        assert result == [{"id": 1}, {"id": 2}]
+
+    def test_normalize_empty_list(self) -> None:
+        """Test normalizing an empty list."""
+        data: list = []
+        result = normalize_dict_input(data)
+        assert result == []
+
+    def test_normalize_invalid_input_string(self) -> None:
+        """Test normalizing invalid input (string)."""
+        data = "not_a_dict"
+        result = normalize_dict_input(data)
+        assert result is None
+
+    def test_normalize_invalid_input_list_with_non_dict(self) -> None:
+        """Test normalizing invalid input (list with non-dict items)."""
+        data = [{"id": 1}, "not_a_dict", {"id": 2}]
+        result = normalize_dict_input(data)
+        assert result is None
+
+    def test_normalize_invalid_input_number(self) -> None:
+        """Test normalizing invalid input (number)."""
+        data = 123
+        result = normalize_dict_input(data)
+        assert result is None
+
+    def test_normalize_invalid_input_none(self) -> None:
+        """Test normalizing invalid input (None)."""
+        data = None
+        result = normalize_dict_input(data)
+        assert result is None
+
+
+class MockWriter(Writer):
+    """Mock implementation of Writer for testing."""
+
+    def __init__(self, dataframe_type: DataframeType = DataframeType.pandas):
+        self.output_path = "/tmp/test"
+        self.output_prefix = ""
+        self.total_record_count = 0
+        self.chunk_count = 0
+        self.chunk_part = 0
+        self.buffer_size = 1000
+        self.max_file_size_bytes = 1000000
+        self.current_buffer_size = 0
+        self.current_buffer_size_bytes = 0
+        self.partitions: List[int] = []
+        self.extension = ".json"
+        self.dataframe_type = dataframe_type
+        self.metrics = Mock()
+
+    async def _write_dataframe(self, dataframe: Any, **kwargs: Any) -> None:
+        """Mock implementation."""
+        self.total_record_count += len(dataframe)
+
+    async def _write_daft_dataframe(self, dataframe: Any, **kwargs: Any) -> None:
+        """Mock implementation."""
+        pass
+
+
+class TestWriterDictHandling:
+    """Test cases for base Writer dictionary handling."""
+
+    @pytest.mark.asyncio
+    async def test_write_single_dict(self) -> None:
+        """Test writing a single dictionary through base Writer."""
+        writer = MockWriter(dataframe_type=DataframeType.dict)
+        data = {"id": 1, "name": "test"}
+
+        await writer.write(data)
+
+        assert writer.total_record_count == 1
+
+    @pytest.mark.asyncio
+    async def test_write_list_of_dicts(self) -> None:
+        """Test writing a list of dictionaries through base Writer."""
+        writer = MockWriter(dataframe_type=DataframeType.dict)
+        data = [{"id": 1}, {"id": 2}]
+
+        await writer.write(data)
+
+        assert writer.total_record_count == 2
+
+    @pytest.mark.asyncio
+    async def test_write_empty_dict(self) -> None:
+        """Test writing an empty dictionary list through base Writer."""
+        writer = MockWriter(dataframe_type=DataframeType.dict)
+        data: list = []
+
+        await writer.write(data)
+
+        # Should return without doing anything for empty list
+        assert writer.total_record_count == 0
+
+    @pytest.mark.asyncio
+    async def test_write_invalid_dict_input(self) -> None:
+        """Test writing invalid dictionary input raises error."""
+        writer = MockWriter(dataframe_type=DataframeType.dict)
+        invalid_data = "not_a_dict"
+
+        with pytest.raises(ValueError, match="Invalid dictionary input"):
+            await writer.write(invalid_data)  # type: ignore
+
+    @pytest.mark.asyncio
+    async def test_write_batches_dicts(self) -> None:
+        """Test writing batches of dictionaries through base Writer."""
+        writer = MockWriter(dataframe_type=DataframeType.dict)
+
+        def dict_generator():
+            yield {"id": 1}
+            yield [{"id": 2}, {"id": 3}]
+
+        await writer.write_batches(dict_generator())
+
+        # Should have written 3 records total (1 + 2)
+        assert writer.total_record_count == 3
+
+    @pytest.mark.asyncio
+    async def test_write_batches_empty_dicts(self) -> None:
+        """Test writing batches with empty dictionary lists."""
+        writer = MockWriter(dataframe_type=DataframeType.dict)
+
+        def dict_generator():
+            yield {"id": 1}
+            yield []  # Empty list should be skipped
+            yield [{"id": 2}]
+
+        await writer.write_batches(dict_generator())
+
+        # Should have written 2 records (empty list skipped)
+        assert writer.total_record_count == 2
+
+    @pytest.mark.asyncio
+    async def test_write_batches_invalid_dict_input(self) -> None:
+        """Test writing batches with invalid dictionary input raises error."""
+        writer = MockWriter(dataframe_type=DataframeType.dict)
+
+        def dict_generator():
+            yield {"id": 1}
+            yield "not_a_dict"  # Invalid input
+
+        with pytest.raises(ValueError, match="Invalid dictionary input"):
+            await writer.write_batches(dict_generator())
+
+    @pytest.mark.asyncio
+    async def test_write_batches_async_generator(self) -> None:
+        """Test writing batches with async generator of dictionaries."""
+        writer = MockWriter(dataframe_type=DataframeType.dict)
+
+        async def dict_generator():
+            yield {"id": 1}
+            yield [{"id": 2}, {"id": 3}]
+
+        await writer.write_batches(dict_generator())
+
+        # Should have written 3 records total (1 + 2)
+        assert writer.total_record_count == 3
