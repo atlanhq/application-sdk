@@ -52,6 +52,7 @@ class ParquetOutput(Output):
         end_marker (Optional[str]): End marker for query extraction.
         retain_local_copy (bool): Whether to retain the local copy of the files.
         use_consolidation (bool): Whether to use consolidation.
+        skip_upload (bool): Whether to skip uploading files to the object store.
     """
 
     _EXTENSION = ".parquet"
@@ -71,6 +72,7 @@ class ParquetOutput(Output):
         end_marker: Optional[str] = None,
         retain_local_copy: bool = False,
         use_consolidation: bool = False,
+        skip_upload: bool = False,
     ):
         """Initialize the Parquet output handler.
 
@@ -91,6 +93,8 @@ class ParquetOutput(Output):
                 Defaults to False.
             use_consolidation (bool, optional): Whether to use consolidation.
                 Defaults to False.
+            skip_upload (bool, optional): Whether to skip uploading files to the object store.
+                When True, files are only written locally. Defaults to False.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
@@ -112,6 +116,7 @@ class ParquetOutput(Output):
         self.partitions = []
         self.metrics = get_metrics()
         self.retain_local_copy = retain_local_copy
+        self.skip_upload = skip_upload
 
         # Consolidation-specific attributes
         # Use consolidation to efficiently write parquet files in buffered manner
@@ -263,29 +268,30 @@ class ParquetOutput(Output):
             )
 
             #  Upload the entire directory (contains multiple parquet files created by Daft)
-            if write_mode == WriteMode.OVERWRITE:
-                # Delete the directory from object store
-                try:
-                    await ObjectStore.delete_prefix(
-                        prefix=get_object_store_prefix(self.output_path)
-                    )
-                except FileNotFoundError as e:
-                    logger.info(
-                        f"No files found under prefix {get_object_store_prefix(self.output_path)}: {str(e)}"
-                    )
-            for path in file_paths:
-                if ENABLE_ATLAN_UPLOAD:
+            if not self.skip_upload:
+                if write_mode == WriteMode.OVERWRITE:
+                    # Delete the directory from object store
+                    try:
+                        await ObjectStore.delete_prefix(
+                            prefix=get_object_store_prefix(self.output_path)
+                        )
+                    except FileNotFoundError as e:
+                        logger.info(
+                            f"No files found under prefix {get_object_store_prefix(self.output_path)}: {str(e)}"
+                        )
+                for path in file_paths:
+                    if ENABLE_ATLAN_UPLOAD:
+                        await ObjectStore.upload_file(
+                            source=path,
+                            store_name=UPSTREAM_OBJECT_STORE_NAME,
+                            destination=get_object_store_prefix(path),
+                            retain_local_copy=True,
+                        )
                     await ObjectStore.upload_file(
                         source=path,
-                        store_name=UPSTREAM_OBJECT_STORE_NAME,
                         destination=get_object_store_prefix(path),
-                        retain_local_copy=True,
+                        retain_local_copy=self.retain_local_copy,
                     )
-                await ObjectStore.upload_file(
-                    source=path,
-                    destination=get_object_store_prefix(path),
-                    retain_local_copy=self.retain_local_copy,
-                )
 
         except Exception as e:
             # Record metrics for failed write
@@ -415,11 +421,14 @@ class ParquetOutput(Output):
                         )
                         os.rename(file_path, consolidated_file_path)
 
-                        # Upload consolidated file to object store
-                        await ObjectStore.upload_file(
-                            source=consolidated_file_path,
-                            destination=get_object_store_prefix(consolidated_file_path),
-                        )
+                        # Upload consolidated file to object store (unless skip_upload is True)
+                        if not self.skip_upload:
+                            await ObjectStore.upload_file(
+                                source=consolidated_file_path,
+                                destination=get_object_store_prefix(
+                                    consolidated_file_path
+                                ),
+                            )
 
                 # Clean up temp consolidated dir
                 shutil.rmtree(temp_consolidated_dir, ignore_errors=True)
