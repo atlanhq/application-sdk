@@ -2,7 +2,6 @@
 
 Propagates atlan-* correlation context fields from workflow arguments to activities
 via Temporal headers, ensuring all activity logs include correlation identifiers
-like atlan-ignore, atlan-argo-workflow-id, and atlan-argo-workflow-node.
 """
 
 from dataclasses import replace
@@ -128,8 +127,7 @@ class CorrelationContextActivityInboundInterceptor(ActivityInboundInterceptor):
 class CorrelationContextInterceptor(Interceptor):
     """Main interceptor for propagating atlan-* correlation context.
 
-    Ensures atlan-* fields (like atlan-ignore, atlan-argo-workflow-id, atlan-argo-workflow-node)
-    are propagated from workflow arguments to all activities via Temporal headers.
+    Ensures atlan-* fields are propagated from workflow arguments to all activities via Temporal headers.
     """
 
     def workflow_interceptor_class(
