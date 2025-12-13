@@ -222,10 +222,6 @@ class ParquetOutput(Output):
             if isinstance(write_mode, str):
                 write_mode = WriteMode(write_mode)
 
-            row_count = dataframe.count_rows()
-            if row_count == 0:
-                return
-
             file_paths = []
             # Use Daft's execution context for temporary configuration
             with daft.execution_config_ctx(
@@ -239,6 +235,12 @@ class ParquetOutput(Output):
                     partition_cols=partition_cols,
                 )
                 file_paths = result.to_pydict().get("path", [])
+                        
+            # If the dataframe is empty, return 
+            # but write an empty file to the output path (necessary for ARS lookup)
+            row_count = dataframe.count_rows()
+            if row_count == 0:
+                return
 
             # Update counters
             self.chunk_count += 1
