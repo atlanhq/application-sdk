@@ -1,5 +1,17 @@
+import inspect
 import os
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    AsyncIterator,
+    Dict,
+    Generator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import orjson
 from temporalio import activity
@@ -400,6 +412,32 @@ class JsonFileWriter(Writer):
             description="Number of chunks written to JSON files",
         )
 
+    async def _flush_dict_buffer(self, buffer: List[bytes], chunk_part: int):
+        """Flush the current dict buffer to a JSON file.
+
+        This method writes buffered dict records to a JSON file.
+        Similar to _flush_daft_buffer but uses "dict" type label for metrics.
+
+        Args:
+            buffer: List of serialized JSON bytes to write.
+            chunk_part: Current chunk part number.
+        """
+        output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
+        with open(output_file_name, "ab+") as f:
+            f.writelines(buffer)
+        buffer.clear()  # Clear the buffer
+
+        self.current_buffer_size = 0
+
+        # Record chunk metrics
+        self.metrics.record_metric(
+            name="json_chunks_written",
+            value=1,
+            metric_type=MetricType.COUNTER,
+            labels={"type": "dict"},
+            description="Number of chunks written to JSON files",
+        )
+
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
         """Write a chunk to a JSON file.
 
@@ -407,6 +445,219 @@ class JsonFileWriter(Writer):
         """
         mode = "w" if not os.path.exists(file_name) else "a"
         chunk.to_json(file_name, orient="records", lines=True, mode=mode)
+
+    def _normalize_to_records(
+        self, data: Union[Dict[str, Any], List[Dict[str, Any]]]
+    ) -> List[Dict[str, Any]]:
+        """Normalize dict or list[dict] to list[dict] with validation.
+
+        Args:
+            data: A single dictionary or a list of dictionaries.
+
+        Returns:
+            List of dictionaries.
+
+        Raises:
+            TypeError: If data is not a dict or list[dict], or if list contains non-dict items.
+        """
+        if isinstance(data, dict):
+            return [data]
+        elif isinstance(data, list):
+            if not data:
+                # Empty list is valid, return as-is
+                return []
+            if not all(isinstance(item, dict) for item in data):
+                invalid_types = {
+                    type(item).__name__ for item in data if not isinstance(item, dict)
+                }
+                raise TypeError(
+                    f"Expected list[dict], but list contains non-dict items. "
+                    f"Found types: {invalid_types}"
+                )
+            return data
+
+    async def write_dict(
+        self,
+        data: Union[Dict[str, Any], List[Dict[str, Any]]],
+        preserve_fields: Optional[List[str]] = None,
+        null_to_empty_dict_fields: Optional[List[str]] = None,
+        **kwargs,
+    ) -> None:
+        """Write dictionary objects to JSON files.
+
+        This method writes a single dictionary or a list of dictionaries to JSON files
+        in newline-delimited JSON (JSONL) format with buffering, chunking, and object-store upload.
+
+        Args:
+            data: A single dictionary or a list of dictionaries to write.
+            preserve_fields: List of fields to preserve during null processing.
+                Defaults to ["identity_cycle", "number_columns_in_part_key",
+                "columns_participating_in_part_key", "engine", "is_insertable_into", "is_typed"].
+            null_to_empty_dict_fields: List of fields to convert from null to empty dict.
+                Defaults to ["attributes", "customAttributes"].
+            **kwargs: Additional parameters (currently unused).
+
+        Note:
+            If an empty list is provided, no records will be written and no error is raised.
+        """
+        records = self._normalize_to_records(data)
+
+        # Early return for empty list
+        if not records:
+            logger.info("write_dict called with empty list, no records to write")
+            return
+
+        await self._write_dict_records(
+            records, preserve_fields, null_to_empty_dict_fields
+        )
+
+    async def write_batched_dict(
+        self,
+        data: Union[
+            AsyncGenerator[Union[Dict[str, Any], List[Dict[str, Any]]], None],
+            Generator[Union[Dict[str, Any], List[Dict[str, Any]]], None, None],
+        ],
+        preserve_fields: Optional[List[str]] = None,
+        null_to_empty_dict_fields: Optional[List[str]] = None,
+        **kwargs,
+    ) -> None:
+        """Write batched dictionary objects to JSON files.
+
+        This method writes dictionaries from a generator or async generator to JSON files
+        in newline-delimited JSON (JSONL) format with buffering, chunking, and object-store upload.
+
+        Args:
+            data: A generator or async generator yielding dictionaries or lists of dictionaries.
+            preserve_fields: List of fields to preserve during null processing.
+                Defaults to ["identity_cycle", "number_columns_in_part_key",
+                "columns_participating_in_part_key", "engine", "is_insertable_into", "is_typed"].
+            null_to_empty_dict_fields: List of fields to convert from null to empty dict.
+                Defaults to ["attributes", "customAttributes"].
+            **kwargs: Additional parameters (currently unused).
+
+        Note:
+            Empty lists yielded from the generator are skipped (no error, no write).
+        """
+        try:
+            if inspect.isasyncgen(data):
+                async for item in data:
+                    records = self._normalize_to_records(item)
+                    # Skip empty lists from generator
+                    if not records:
+                        continue
+                    await self._write_dict_records(
+                        records, preserve_fields, null_to_empty_dict_fields
+                    )
+            else:
+                # Cast to Generator since we've confirmed it's not an AsyncGenerator
+                sync_generator = cast(
+                    Generator[Union[Dict[str, Any], List[Dict[str, Any]]], None, None],
+                    data,
+                )
+                for item in sync_generator:
+                    records = self._normalize_to_records(item)
+                    # Skip empty lists from generator
+                    if not records:
+                        continue
+                    await self._write_dict_records(
+                        records, preserve_fields, null_to_empty_dict_fields
+                    )
+        except Exception as e:
+            logger.error(f"Error writing batched dict: {str(e)}")
+            raise
+
+    async def _write_dict_records(
+        self,
+        records: List[Dict[str, Any]],
+        preserve_fields: Optional[List[str]] = None,
+        null_to_empty_dict_fields: Optional[List[str]] = None,
+    ) -> None:
+        """Private helper method to write a list of dictionary records to JSON files.
+
+        This method processes records, applies datetime conversion and null field processing,
+        buffers them, and writes to JSON files with rotation and upload logic.
+
+        Args:
+            records: List of dictionaries to write.
+            preserve_fields: List of fields to preserve during null processing.
+                Defaults to ["identity_cycle", "number_columns_in_part_key",
+                "columns_participating_in_part_key", "engine", "is_insertable_into", "is_typed"].
+            null_to_empty_dict_fields: List of fields to convert from null to empty dict.
+                Defaults to ["attributes", "customAttributes"].
+        """
+        # Initialize default values for mutable arguments
+        if preserve_fields is None:
+            preserve_fields = [
+                "identity_cycle",
+                "number_columns_in_part_key",
+                "columns_participating_in_part_key",
+                "engine",
+                "is_insertable_into",
+                "is_typed",
+            ]
+        if null_to_empty_dict_fields is None:
+            null_to_empty_dict_fields = [
+                "attributes",
+                "customAttributes",
+            ]
+
+        try:
+            if self.chunk_start is None:
+                self.chunk_part = 0
+
+            buffer = []
+            for record in records:
+                self.total_record_count += 1
+                # Convert datetime fields to epoch timestamps before serialization
+                record = convert_datetime_to_epoch(record)
+                # Remove null attributes from the record recursively, preserving specified fields
+                cleaned_record = process_null_fields(
+                    record, preserve_fields, null_to_empty_dict_fields
+                )
+                # Serialize the record and add it to the buffer
+                serialized_row = orjson.dumps(
+                    cleaned_record, option=orjson.OPT_APPEND_NEWLINE
+                )
+                buffer.append(serialized_row)
+                self.current_buffer_size += 1
+                self.current_buffer_size_bytes += len(serialized_row)
+
+                # If the buffer size is reached append to the file and clear the buffer
+                if self.current_buffer_size >= self.buffer_size:
+                    await self._flush_dict_buffer(buffer, self.chunk_part)
+
+                if self.current_buffer_size_bytes > self.max_file_size_bytes or (
+                    self.total_record_count > 0
+                    and self.total_record_count % self.chunk_size == 0
+                ):
+                    output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
+                    if os.path.exists(output_file_name):
+                        await self._upload_file(output_file_name)
+                        self.chunk_part += 1
+
+            # Write any remaining records in the buffer
+            if self.current_buffer_size > 0:
+                await self._flush_dict_buffer(buffer, self.chunk_part)
+
+            # Record metrics for successful write
+            self.metrics.record_metric(
+                name="json_write_records",
+                value=len(records),
+                metric_type=MetricType.COUNTER,
+                labels={"type": "dict"},
+                description="Number of records written to JSON files from dict",
+            )
+        except Exception as e:
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="json_write_errors",
+                value=1,
+                metric_type=MetricType.COUNTER,
+                labels={"type": "dict", "error": str(e)},
+                description="Number of errors while writing to JSON files",
+            )
+            logger.error(f"Error writing dict to json: {str(e)}")
+            raise
 
     async def get_statistics(
         self, typename: Optional[str] = None

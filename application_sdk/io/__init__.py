@@ -155,6 +155,49 @@ class Writer(ABC):
         else:
             raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
 
+    async def write_dict(
+        self, data: Union[Dict[str, Any], List[Dict[str, Any]]], **kwargs
+    ) -> None:
+        """Write dictionary objects to the output destination.
+
+        This method writes a single dictionary or a list of dictionaries to the output.
+        Only JsonFileWriter implements this method; other writers raise NotImplementedError.
+
+        Args:
+            data: A single dictionary or a list of dictionaries to write.
+            **kwargs: Additional parameters passed through to the implementation.
+
+        Raises:
+            NotImplementedError: If the writer does not implement dict writing.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement write_dict"
+        )
+
+    async def write_batched_dict(
+        self,
+        data: Union[
+            AsyncGenerator[Union[Dict[str, Any], List[Dict[str, Any]]], None],
+            Generator[Union[Dict[str, Any], List[Dict[str, Any]]], None, None],
+        ],
+        **kwargs,
+    ) -> None:
+        """Write batched dictionary objects to the output destination.
+
+        This method writes dictionaries from a generator or async generator to the output.
+        Only JsonFileWriter implements this method; other writers raise NotImplementedError.
+
+        Args:
+            data: A generator or async generator yielding dictionaries or lists of dictionaries.
+            **kwargs: Additional parameters passed through to the implementation.
+
+        Raises:
+            NotImplementedError: If the writer does not implement batched dict writing.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement write_batched_dict"
+        )
+
     async def _write_batched_dataframe(
         self,
         batched_dataframe: Union[
