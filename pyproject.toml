@@ -78,7 +78,7 @@ distributed_lock = [
 ]
 
 mcp = [
-    "fastmcp>=2.12.3,<2.14.0",
+    "fastmcp>=2.12.3,<2.15.0",
 ]
 
 # Development dependencies - Install using: uv sync --group dev
