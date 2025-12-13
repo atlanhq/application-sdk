@@ -17,6 +17,7 @@ class MockInput(Input):
         self.path = path
         self.file_names = file_names
         self._EXTENSION = ".parquet"  # Default extension for testing
+        super().__init__()  # Initialize parent to set up _downloaded_files
 
     async def get_batched_dataframe(self):
         """Mock implementation."""
@@ -399,3 +400,46 @@ class TestInputDownloadFiles:
             mock_logger.error.assert_called_with(
                 "Failed to download from object store: Download failed"
             )
+
+
+class TestInputContextManager:
+    """Test context manager and cleanup functionality."""
+
+    @pytest.mark.asyncio
+    async def test_context_manager_cleanup(self):
+        """Verify files are cleaned up on exit."""
+        path = "/data/test.parquet"
+        input_instance = MockInput(path)
+
+        # Simulate downloaded files
+        downloaded_file = "temp_file.parquet"
+        input_instance._downloaded_files = [downloaded_file]
+
+        # Mock os.path.exists and os.remove
+        with patch("os.path.exists", return_value=True), patch(
+            "os.remove"
+        ) as mock_remove:
+            async with input_instance:
+                # _downloaded_files should be reset on enter
+                assert input_instance._downloaded_files == []
+                # Simulate adding a file during usage
+                input_instance._downloaded_files.append(downloaded_file)
+
+            # Check cleanup called on exit
+            mock_remove.assert_called_once_with(downloaded_file)
+            assert input_instance._downloaded_files == []
+
+    @pytest.mark.asyncio
+    async def test_cleanup_handles_errors(self):
+        """Verify cleanup doesn't crash on deletion errors."""
+        input_instance = MockInput("/data")
+        input_instance._downloaded_files = ["file1", "file2"]
+
+        with patch("os.path.exists", return_value=True), patch(
+            "os.remove", side_effect=[Exception("Access denied"), None]
+        ) as mock_remove:
+            await input_instance.cleanup_files()
+
+            # Should attempt to delete both, logging the error for the first
+            assert mock_remove.call_count == 2
+            assert input_instance._downloaded_files == []
