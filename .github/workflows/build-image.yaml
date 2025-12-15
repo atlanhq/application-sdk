@@ -72,7 +72,7 @@ jobs:
 
       - name: Build and push docker image to GHCR
         id: ghcr_docker_build
-        uses: atlanhq/.github/.github/actions/secure-build-push-apps@main
+        uses: ./.github/actions/secure-build-push-apps
         with:
           branch: ${{ github.ref_name }}
           snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
@@ -114,7 +114,7 @@ jobs:
 
       - name: Build and push docker image to Docker Hub
         id: docker_build
-        uses: atlanhq/.github/.github/actions/secure-build-push-apps@main
+        uses: ./.github/actions/secure-build-push-apps
         with:
           branch: ${{ github.ref_name }}
           snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
