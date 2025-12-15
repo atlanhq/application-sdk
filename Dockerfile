@@ -5,15 +5,6 @@ USER root
 
 WORKDIR /tmp/build
 
-RUN apk add --no-cache \
-    curl \
-    bash \
-    libstdc++ \
-    git \
-    gcc \
-    python3-dev \
-    && rm -rf /var/cache/apk/*
-
 # Install Dapr CLI
 RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s 1.16.0
 
@@ -24,12 +15,6 @@ ENV UV_NO_MANAGED_PYTHON=true \
 # Install build dependencies (git is required for cloning)
 RUN apk add --no-cache git
 
-# Install application-sdk dependencies from Chainguard apk (hardened packages)
-# These are available in Chainguard's APK registry
-RUN apk add --no-cache \
-    py3.11-aiohttp=3.13.1-r0 \
-    py3.11-psutil=7.0.0-r0 \
-    py3.11-pydantic=2.10.6-r0
 
 # Clone application-sdk source from GitHub
 RUN echo "=== Cloning application-sdk from GitHub ===" && \
@@ -48,7 +33,10 @@ RUN uv pip install --system \
     "uvloop>=0.21.0,<0.23.0" \
     "python-dotenv>=1.1.0,<1.3.0" \
     "duckdb>=1.1.3,<1.5.0" \
-    "duckdb-engine>=0.17.0,<0.18.0"
+    "duckdb-engine>=0.17.0,<0.18.0" \
+    "aiohttp>=3.10.0,<3.14.0" \
+    "psutil>=7.0.0,<7.2.0" \
+    "pydantic>=2.10.6,<2.13.0"
 
 # Optional dependencies for the application-sdk
 RUN uv pip install --system \
