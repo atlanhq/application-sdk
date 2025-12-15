@@ -234,6 +234,10 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
 
             await asyncio.gather(*fetch_and_transforms)
             logger.info(f"Extraction workflow completed for {workflow_id}")
+
+            # Run the exit activities
+            await self.run_exit_activities(workflow_args)
+            
             workflow_success = True
         except Exception as e:
             logger.error(f"Workflow failed for {workflow_id}: {str(e)}")
