@@ -186,6 +186,8 @@ class TemporalWorkflowClient(WorkflowClient):
             try:
                 # Recalculate refresh interval each time in case token expiry changes
                 refresh_interval = self.auth_manager.calculate_refresh_interval()
+                # Publish token refresh event
+                await self._publish_token_refresh_event()
 
                 await asyncio.sleep(refresh_interval)
 
@@ -199,8 +201,6 @@ class TemporalWorkflowClient(WorkflowClient):
                 self._token_refresh_interval = (
                     self.auth_manager.calculate_refresh_interval()
                 )
-                # Publish token refresh event
-                await self._publish_token_refresh_event()
 
             except asyncio.CancelledError:
                 logger.info("Token refresh loop cancelled")
