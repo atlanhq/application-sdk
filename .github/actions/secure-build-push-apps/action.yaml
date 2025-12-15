@@ -16,6 +16,18 @@ inputs:
   snyk-token:
     description: 'Token for Snyk authentication.'
     required: true
+  snyk-ghcr-integration-id:
+    description: 'Snyk Integration ID for GitHub Container Registry.'
+    required: true
+  snyk-docker-integration-id:
+    description: 'Snyk Integration ID for Docker Hub.'
+    required: true
+  snyk-integration-id:
+    description: 'Default Snyk Integration ID.'
+    required: true
+  snyk-org-id:
+    description: 'Snyk Organization ID.'
+    required: true
 
   # == Complete list of inputs from docker/build-push-action ==
   add-hosts:
@@ -145,10 +157,10 @@ runs:
       id: config
       shell: bash
       env:
-        SNYK_GHCR_INTEGRATION_ID: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
-        SNYK_DOCKER_INTERGATION_ID: ${{ secrets.SNYK_DOCKER_INTERGATION_ID }}
-        SNYK_INTEGRATION_ID: ${{ secrets.SNYK_INTEGRATION_ID }}
-        SNYK_ORG_ID: ${{ secrets.SNYK_ORG_ID }}
+        SNYK_GHCR_INTEGRATION_ID: ${{ inputs.snyk-ghcr-integration-id }}
+        SNYK_DOCKER_INTERGATION_ID: ${{ inputs.snyk-docker-integration-id }}
+        SNYK_INTEGRATION_ID: ${{ inputs.snyk-integration-id }}
+        SNYK_ORG_ID: ${{ inputs.snyk-org-id }}
       run: |
         # =================================================================
         # == 🛡️ ADMIN CONFIGURATION SECTION                             ==

@@ -76,6 +76,10 @@ jobs:
         with:
           branch: ${{ github.ref_name }}
           snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
+          snyk-ghcr-integration-id: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
+          snyk-docker-integration-id: ${{ secrets.SNYK_DOCKER_INTERGATION_ID }}
+          snyk-integration-id: ${{ secrets.SNYK_INTEGRATION_ID }}
+          snyk-org-id: ${{ secrets.SNYK_ORG_ID }}
           context: .
           file: ./Dockerfile
           push: true
@@ -118,6 +122,10 @@ jobs:
         with:
           branch: ${{ github.ref_name }}
           snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
+          snyk-ghcr-integration-id: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
+          snyk-docker-integration-id: ${{ secrets.SNYK_DOCKER_INTERGATION_ID }}
+          snyk-integration-id: ${{ secrets.SNYK_INTEGRATION_ID }}
+          snyk-org-id: ${{ secrets.SNYK_ORG_ID }}
           context: .
           file: ./Dockerfile
           push: true
