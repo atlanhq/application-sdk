@@ -182,7 +182,7 @@ runs:
         SEVERITY_THRESHOLD='CRITICAL,HIGH'
         #
         # =================================================================
-        
+
         # ⭐ SNYK INTEGRATION ID MAPPING (from GitHub Secrets)
         #   Map registry hostnames to their Snyk Integration IDs.
         #   The script will automatically select the correct ID based on the image tag.
@@ -196,19 +196,19 @@ runs:
         "
         #
         # =================================================================
-        
+
         echo "ENFORCEMENT_MODE=$ENFORCEMENT_MODE" >> $GITHUB_OUTPUT
         echo "SEVERITY_THRESHOLD=$SEVERITY_THRESHOLD" >> $GITHUB_OUTPUT
         echo "SNYK_ORG_ID=$SNYK_ORG_ID" >> $GITHUB_OUTPUT
         echo "SNYK_INTEGRATION_IDS<<EOF" >> $GITHUB_OUTPUT
         echo "$SNYK_INTEGRATION_IDS" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
-        
+
         # Snyk's '--severity-threshold' flag requires the LOWEST severity you want to see.
         # This logic finds the last severity in the list (assuming CRITICAL,HIGH,MEDIUM order).
         SNYK_LOWEST_SEVERITY=$(echo "$SEVERITY_THRESHOLD" | awk -F, '{print $NF}' | tr '[:upper:]' '[:lower:]')
         echo "SNYK_SEVERITY_ARGS=--severity-threshold=$SNYK_LOWEST_SEVERITY" >> $GITHUB_OUTPUT
-        
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
@@ -287,14 +287,14 @@ runs:
           echo "Snyk scan failed to produce a report file. See 'Run Snyk Scan' step for details."
           exit 1
         fi
-        
+
         # CORRECTED: This jq query safely combines OS and all application vulnerabilities before processing.
         CRITICAL_COUNT=$(jq '((.vulnerabilities // []) + ([.applications[]?.vulnerabilities // []] | flatten)) | map(select(.severity == "critical")) | unique_by(.id) | length' snyk-results.json)
         HIGH_COUNT=$(jq '((.vulnerabilities // []) + ([.applications[]?.vulnerabilities // []] | flatten)) | map(select(.severity == "high")) | unique_by(.id) | length' snyk-results.json)
         MEDIUM_COUNT=$(jq '((.vulnerabilities // []) + ([.applications[]?.vulnerabilities // []] | flatten)) | map(select(.severity == "medium")) | unique_by(.id) | length' snyk-results.json)
-        
+
         echo "Snyk Found: $CRITICAL_COUNT critical, $HIGH_COUNT high, $MEDIUM_COUNT medium vulnerabilities."
-        
+
         echo "critical-count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
         echo "high-count=$HIGH_COUNT" >> $GITHUB_OUTPUT
         echo "medium-count=$MEDIUM_COUNT" >> $GITHUB_OUTPUT
@@ -306,7 +306,6 @@ runs:
       run: |
         # Read the first line of the multi-line tags input
         PRIMARY_TAG=$(echo "${{ inputs.tags }}" | head -n 1)
-        echo "Primary tag for scanning: $PRIMARY_TAG"
         echo "primary_tag=$PRIMARY_TAG" >> $GITHUB_OUTPUT
 
     - name: Run Trivy Scan
@@ -356,7 +355,7 @@ runs:
       run: |
         echo "Enforcement Mode: $ENFORCEMENT_MODE"
         echo "Failing on severities: $SEVERITY_THRESHOLD"
-        
+
         VULNS_FOUND=0
         if [[ "$SEVERITY_THRESHOLD" == *"CRITICAL"* && ($SNYK_CRITICAL -gt 0 || $TRIVY_CRITICAL -gt 0) ]]; then
           echo "CRITICAL vulnerabilities found."
@@ -370,7 +369,7 @@ runs:
           echo "MEDIUM vulnerabilities found."
           VULNS_FOUND=1
         fi
-        
+
         if [[ "$ENFORCEMENT_MODE" == "true" && $VULNS_FOUND -eq 1 ]]; then
           echo "❌ Scans failed in ENFORCEMENT mode. Vulnerabilities found at or above threshold."
           echo "result=false" >> $GITHUB_OUTPUT
@@ -444,24 +443,24 @@ runs:
         SNYK_ORG_ID: ${{ steps.config.outputs.SNYK_ORG_ID }}
       run: |
         set -euo pipefail
-        
+
         # Write metadata to temp file to avoid shell quoting issues
         TEMP_METADATA=$(mktemp)
         cat > "$TEMP_METADATA" << 'METADATA_EOF'
         ${{ steps.docker_push.outputs.metadata }}
         METADATA_EOF
-        
+
         # Verify the temp file has content
         if [ ! -s "$TEMP_METADATA" ]; then
           echo "❌ Build metadata was not found. Cannot import to Snyk."
           rm -f "$TEMP_METADATA"
           exit 1
         fi
-        
+
         # Parse image name from the temp file
         TARGET_IMAGES_LIST=$(jq -r '.["image.name"]' "$TEMP_METADATA")
         rm -f "$TEMP_METADATA"
-        
+
         if [ -z "$TARGET_IMAGES_LIST" ] || [ "$TARGET_IMAGES_LIST" = "null" ]; then
           echo "❌ Could not extract image name from build metadata."
           exit 1
@@ -476,7 +475,7 @@ runs:
         IFS=',' read -ra IMAGES <<< "$TARGET_IMAGES_LIST"
         for image in "${IMAGES[@]}"; do
           echo "🔍 Checking image: $image"
-          
+
           # Check if this image matches any integration
           while IFS='=' read -r key value; do
             if [[ -n "$key" && "$image" == *"$key"* ]]; then
@@ -497,7 +496,7 @@ runs:
           PRIMARY_IMAGE="${IMAGES[0]}"
           echo "📦 No integration found, using first image for CLI: ${PRIMARY_IMAGE}"
         fi
-        
+
         # Format the image name based on the registry type
         FORMATTED_IMAGE="$PRIMARY_IMAGE"
         if [[ "$REGISTRY_KEY" == "docker.io" || "$REGISTRY_KEY" == "default" ]]; then
@@ -510,12 +509,12 @@ runs:
         # If no integration ID was found, use 'snyk container monitor'.
         if [ -z "$SNYK_INTEGRATION_ID" ]; then
           echo "ℹ️ No Snyk integration ID found for this registry. Installing Snyk CLI for fallback monitoring."
-          
+
           # Install Snyk CLI
           curl -Lo /tmp/snyk "https://static.snyk.io/cli/latest/snyk-linux"
           chmod +x /tmp/snyk
           sudo mv /tmp/snyk /usr/local/bin/snyk
-          
+
           echo "📦 Using 'snyk container monitor' as a fallback."
           snyk container monitor "$FORMATTED_IMAGE" --org="$SNYK_ORG_ID"
           echo "✅ Snapshot sent to Snyk for continuous monitoring."
@@ -524,7 +523,6 @@ runs:
 
         # --- This section now only runs if an integration ID WAS found ---
         echo "📋 Registry integration found. Proceeding with API import..."
-        echo "Selected Snyk Integration ID: ${SNYK_INTEGRATION_ID}"
 
         JSON_PAYLOAD=$(jq -n \
           --arg image "$FORMATTED_IMAGE" \
@@ -533,24 +531,22 @@ runs:
                   name: $image
               }
           }')
-        
+
         # Import via API with proper error handling
         echo "🚀 Starting import job for: $FORMATTED_IMAGE"
-        
+
         RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
           "${SNYK_API}/v1/org/${SNYK_ORG_ID}/integrations/${SNYK_INTEGRATION_ID}/import" \
           -H "Authorization: token $SNYK_TOKEN" \
           -H "Content-Type: application/json" \
           -d "$JSON_PAYLOAD")
-        
+
         HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
         RESPONSE_BODY=$(echo "$RESPONSE" | head -n -1)
-        
+
         if [ "$HTTP_CODE" -eq 201 ]; then
           echo "✅ Import job started successfully."
-          echo "Response: $RESPONSE_BODY"
         else
           echo "❌ Failed to start import job. HTTP Code: $HTTP_CODE"
-          echo "Response: $RESPONSE_BODY"
           exit 1
         fi
