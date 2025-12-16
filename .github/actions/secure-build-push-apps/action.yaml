@@ -158,7 +158,7 @@ runs:
       shell: bash
       env:
         SNYK_GHCR_INTEGRATION_ID: ${{ inputs.snyk-ghcr-integration-id }}
-        SNYK_DOCKER_INTERGATION_ID: ${{ inputs.snyk-docker-integration-id }}
+        SNYK_DOCKER_INTEGRATION_ID: ${{ inputs.snyk-docker-integration-id }}
         SNYK_INTEGRATION_ID: ${{ inputs.snyk-integration-id }}
         SNYK_ORG_ID: ${{ inputs.snyk-org-id }}
       run: |
@@ -191,7 +191,7 @@ runs:
         #
         SNYK_INTEGRATION_IDS="
         ghcr.io=${SNYK_GHCR_INTEGRATION_ID}
-        docker.io=${SNYK_DOCKER_INTERGATION_ID}
+        docker.io=${SNYK_DOCKER_INTEGRATION_ID}
         default=${SNYK_INTEGRATION_ID}
         "
         #
