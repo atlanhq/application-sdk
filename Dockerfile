@@ -29,7 +29,7 @@ USER appuser
 # Default working directory for applications
 WORKDIR /app
 
-# Pre-populate venv with application-sdk and all optional dependencies
+# Pre-populate venv with application-sdk and all required dependencies
 # Apps will sync into this same venv, reusing packages when versions match
 COPY --chown=appuser:appuser pyproject.toml uv.lock README.md ./
 COPY --chown=appuser:appuser application_sdk/ ./application_sdk/
