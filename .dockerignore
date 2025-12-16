@@ -54,8 +54,8 @@ examples/
 # Components (not needed in base image)
 components/
 
-# Lock files (pyproject.toml is sufficient)
-uv.lock
+# Note: uv.lock is needed by Dockerfile for uv sync --locked
+# Keep it in build context (don't exclude it)
 
 # Other
 .DS_Store

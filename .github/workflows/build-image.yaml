@@ -1,4 +1,4 @@
-name: Publish App Docker Image
+name: Application SDK Docker Image
 
 on:
   push:
