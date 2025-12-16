@@ -49,7 +49,10 @@ RUN rm -rf pyproject.toml uv.lock README.md application_sdk/
 
 # Common environment variables for all apps
 ENV UV_CACHE_DIR=/home/appuser/.cache/uv \
-    XDG_CACHE_HOME=/home/appuser/.cache
+    XDG_CACHE_HOME=/home/appuser/.cache \
+    ATLAN_DAPR_HTTP_PORT=3500 \
+    ATLAN_DAPR_GRPC_PORT=50001 \
+    ATLAN_DAPR_METRICS_PORT=3100
 
 # Default command (can be overridden by extending images)
 CMD ["python"]
