@@ -3,86 +3,53 @@ FROM ghcr.io/atlanhq/pyatlan-chainguard-base:8.3.0-3.11
 # Switch to root for installation
 USER root
 
-WORKDIR /tmp/build
-
-# Install Dapr CLI
-RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s 1.16.0
+# Install Dapr CLI (latest version for apps to use)
+RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s 1.16.3
 
 # Set UV environment variables
 ENV UV_NO_MANAGED_PYTHON=true \
     UV_SYSTEM_PYTHON=true
 
-# Install build dependencies (git is required for cloning)
-RUN apk add --no-cache git
+# Copy uv binary for apps to use
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+# Create appuser (standardized user for all apps)
+RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser
 
-# Clone application-sdk source from GitHub
-RUN echo "=== Cloning application-sdk from GitHub ===" && \
-    git clone https://github.com/atlanhq/application-sdk.git /tmp/build/application-sdk && \
-    cd /tmp/build/application-sdk && \
-    echo "Repository cloned successfully"
+# Set up directories for apps
+RUN mkdir -p /app /home/appuser/.local/bin /home/appuser/.cache/uv && \
+    chown -R appuser:appuser /app /home/appuser
 
-
-# # Install missing dependencies that aren't available in Chainguard APK registry
-# # These core dependencies must be installed via pip/uv
-# This section will have all the optional dependencies for the application-sdk
-RUN uv pip install --system \
-    "opentelemetry-exporter-otlp==1.39.0" \
-    "fastapi[standard]>=0.120.2" \
-    "loguru>=0.7.3,<0.8.0" \
-    "uvloop>=0.21.0,<0.23.0" \
-    "python-dotenv>=1.1.0,<1.3.0" \
-    "duckdb>=1.1.3,<1.5.0" \
-    "duckdb-engine>=0.17.0,<0.18.0" \
-    "aiohttp>=3.10.0,<3.14.0" \
-    "psutil>=7.0.0,<7.2.0" \
-    "pydantic>=2.10.6,<2.13.0"
-
-# Optional dependencies for the application-sdk
-RUN uv pip install --system \
-    "dapr==1.16.0" \
-    "temporalio>=1.7.1,<1.21.0" \
-    "orjson>=3.10.18,<3.12.0" \
-    "pandas>=2.2.3,<2.4.0" \
-    "daft>=0.4.12,<0.7.0" \
-    "pyiceberg>=0.8.1,<0.11.0" \
-    "sqlalchemy[asyncio]>=2.0.36,<2.1.0" \
-    "boto3>=1.38.6,<1.43.0" \
-    "pytest-order>=1.3.0,<1.4.0" \
-    "pandera[io]>=0.23.1,<0.28.0" \
-    "pyyaml>=6.0.2,<6.1.0" \
-    "pyarrow>=20.0.0,<23.0.0" \
-    "faker>=37.1.0,<38.3.0" \
-    "numpy>=1.23.5,<2.4.0" \
-    "redis[hiredis]>=5.2.0,<7.2.0" \
-    "fastmcp>=2.12.3,<2.14.0"
-
-
-# Build and install pyatlan from source (NO PyPI!)
-RUN cd /tmp/build/application-sdk && \
-    echo "Building application-sdk from source..." && \
-    uv pip install --system --no-deps .
-
-# Verify installation
-RUN python3 -c "\
-import application_sdk; \
-import sys; \
-print('=== Application SDK Installation Verification ==='); \
-print(f'Version: {application_sdk.__version__}'); \
-print(f'Location: {application_sdk.__file__}'); \
-"
-
-# Clean up build artifacts
-RUN rm -rf /tmp/build
-
-# Remove curl and bash
+# Remove curl and bash (no longer needed)
 RUN apk del curl bash
 
-# Switch back to nonroot user
-USER nonroot
+# Switch to appuser before dapr init and venv creation
+USER appuser
 
 # Default working directory for applications
 WORKDIR /app
+
+# Pre-populate venv with application-sdk and all optional dependencies
+# Apps will sync into this same venv, reusing packages when versions match
+COPY --chown=appuser:appuser pyproject.toml uv.lock README.md ./
+COPY --chown=appuser:appuser application_sdk/ ./application_sdk/
+RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
+    uv venv .venv && \
+    uv sync --locked --all-extras --all-groups
+
+# Initialize Dapr (slim mode) for apps
+RUN dapr init --slim --runtime-version=1.16.2
+
+# Remove dashboard, placement, and scheduler from Dapr - not needed and have vulnerabilities
+RUN rm -f /home/appuser/.dapr/bin/dashboard /home/appuser/.dapr/bin/placement /home/appuser/.dapr/bin/scheduler 2>/dev/null || true
+
+# Clean up build files (apps will copy their own)
+# Keep .venv as apps will sync into it
+RUN rm -rf pyproject.toml uv.lock README.md application_sdk/
+
+# Common environment variables for all apps
+ENV UV_CACHE_DIR=/home/appuser/.cache/uv \
+    XDG_CACHE_HOME=/home/appuser/.cache
 
 # Default command (can be overridden by extending images)
 CMD ["python"]
