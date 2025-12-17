@@ -1,0 +1,23 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: messaging
+spec:
+  type: pubsub.kafka
+  version: v1
+  metadata:
+  # Kafka broker configuration
+  - name: brokers
+    value: "localhost:9092"
+  
+  # Consumer configuration
+  - name: consumerGroup
+    value: "message-processor"
+  
+  - name: clientId
+    value: "message-processor-client"
+  
+  # Session timeout
+  - name: sessionTimeout
+    value: "600s"
+

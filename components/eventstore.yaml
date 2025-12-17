@@ -1,23 +1,26 @@
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: messaging
+  name: eventstore
 spec:
-  type: pubsub.kafka
   version: v1
+  type: bindings.localstorage
+  ignoreErrors: true
   metadata:
-  # Kafka broker configuration
-  - name: brokers
-    value: "localhost:9092"
-  
-  # Consumer configuration
-  - name: consumerGroup
-    value: "message-processor"
-  
-  - name: clientId
-    value: "message-processor-client"
-  
-  # Session timeout
-  - name: sessionTimeout
-    value: "600s"
+  - name: rootPath
+    value: "./local/dapr/eventstore"
+
+# to test this with http binding - use this
+# apiVersion: dapr.io/v1alpha1
+# kind: Component
+# metadata:
+#   name: eventstore
+# spec:
+#   version: v1
+#   type: bindings.http
+#   ignoreErrors: true
+#   metadata:
+#   - name: url
+#     value: https://atlan.url/eventurl
+#     value: "https://webhook.site/testhash"
 
