@@ -147,7 +147,7 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         return self.namespace
 
-    async def _publish_token_refresh_event(self) -> None:
+    async def _publish_heartbeat_event(self) -> None:
         """Publish a token refresh event to the event store.
 
         This method creates and publishes an event containing token refresh information,
@@ -187,7 +187,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 # Recalculate refresh interval each time in case token expiry changes
                 refresh_interval = self.auth_manager.calculate_refresh_interval()
                 # Publish token refresh event
-                await self._publish_token_refresh_event()
+                await self._publish_heartbeat_event()
 
                 await asyncio.sleep(refresh_interval)
 
