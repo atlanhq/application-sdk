@@ -382,7 +382,7 @@ async def test_publish_heartbeat_event_success(
     assert event.data["time_until_expiry"] == 300.0
     assert event.data["refresh_timestamp"] == 1234567890.0
 
-    mock_logger.info.assert_called_once_with("Published token refresh event")
+    mock_logger.info.assert_called_once_with("Published heartbeat event")
     mock_logger.warning.assert_not_called()
 
 
@@ -414,7 +414,7 @@ async def test_publish_heartbeat_event_with_none_expiry_times(
     assert event.data["token_expiry_time"] == 0
     assert event.data["time_until_expiry"] == 0
 
-    mock_logger.info.assert_called_once_with("Published token refresh event")
+    mock_logger.info.assert_called_once_with("Published heartbeat event")
     mock_logger.warning.assert_not_called()
 
 
@@ -445,5 +445,5 @@ async def test_publish_heartbeat_event_exception_handling(
     mock_publish_event.assert_called_once()
     mock_logger.info.assert_not_called()
     mock_logger.warning.assert_called_once_with(
-        "Failed to publish token refresh event: Event store connection failed"
+        "Failed to publish heartbeat event: Event store connection failed"
     )
