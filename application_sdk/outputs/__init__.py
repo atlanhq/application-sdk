@@ -27,6 +27,7 @@ from temporalio import activity
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
+from application_sdk.constants import ENABLE_ATLAN_UPLOAD, UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.services.objectstore import ObjectStore
@@ -344,6 +345,13 @@ class Output(ABC):
 
     async def _upload_file(self, file_name: str):
         """Upload a file to the object store."""
+        if ENABLE_ATLAN_UPLOAD:
+            await ObjectStore.upload_file(
+                source=file_name,
+                store_name=UPSTREAM_OBJECT_STORE_NAME,
+                retain_local_copy=True,
+                destination=get_object_store_prefix(file_name),
+            )
         await ObjectStore.upload_file(
             source=file_name,
             destination=get_object_store_prefix(file_name),
