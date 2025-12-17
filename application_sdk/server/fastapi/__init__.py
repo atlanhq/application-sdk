@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Any, Callable, List, Optional, Type
+from typing import Any, Callable, Coroutine, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
@@ -32,6 +32,7 @@ from application_sdk.observability.observability import DuckDBUI
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
+from application_sdk.server.messaging import MessageProcessor, MessageProcessorConfig
 from application_sdk.server.fastapi.models import (
     ConfigMapResponse,
     EventWorkflowRequest,
@@ -42,6 +43,7 @@ from application_sdk.server.fastapi.models import (
     HttpWorkflowTrigger,
     PreflightCheckRequest,
     PreflightCheckResponse,
+    PubSubSubscription,
     TestAuthRequest,
     TestAuthResponse,
     WorkflowConfigRequest,
@@ -90,17 +92,21 @@ class APIServer(ServerInterface):
     workflow_router: APIRouter
     dapr_router: APIRouter
     events_router: APIRouter
+    messages_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
     duckdb_ui: DuckDBUI
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
+    # define PubSubSubscription as pubsub_name, topic, route class object
+    pubsub_subscriptions: List[PubSubSubscription] = []
 
     frontend_assets_path: str = "frontend/static"
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
+    message_processors: dict[str, MessageProcessor] = {}
 
     ui_enabled: bool = True
 
@@ -182,6 +188,160 @@ class APIServer(ServerInterface):
             )
         except Exception as e:
             logger.warning(str(e))
+    
+    def register_message_processor(
+        self,
+        config: MessageProcessorConfig,
+        process_callback: Optional[
+            Callable[[List[dict]], Coroutine[Any, Any, None]]
+        ] = None,
+    ):
+        """Register a message processor.
+
+        Args:
+            config: Message processor configuration
+            process_callback: Optional custom callback for processing messages
+
+        Raises:
+            ValueError: If binding name already registered or configuration invalid
+        """
+        if config.binding_name in self.message_processors:
+            raise ValueError(f"Message processor for binding '{config.binding_name}' already registered")
+
+        # Create message processor instance
+        processor = MessageProcessor(
+            config=config,
+            process_callback=process_callback,
+            workflow_client=self.workflow_client if config.trigger_workflow else None,
+        )
+
+        # Store processor
+        self.message_processors[config.binding_name] = processor
+
+        # Create endpoint handler for this binding
+        async def handle_message_binding(request: Request) -> JSONResponse:
+            """Handle incoming messages from Dapr Messaging input binding.
+
+            This endpoint is called by Dapr when messages arrive on the binding.
+            Endpoint convention: POST /{binding-name}
+            """
+            start_time = time.time()
+            metrics = get_metrics()
+
+            try:
+                # Get message from request
+                body = await request.json()
+
+                logger.info(
+                    f"Received message from Dapr Messaging input binding: {config.binding_name}"
+                )
+                logger.debug(f"Message body: {body}")
+
+                # Process the message
+                result = await processor.add_message(body)
+
+                # Record success metric
+                duration = time.time() - start_time
+                metrics.record_metric(
+                    name="messaging_binding_requests_total",
+                    value=1.0,
+                    metric_type=MetricType.COUNTER,
+                    labels={"status": "success", "binding": config.binding_name},
+                    description="Total Messaging input binding requests",
+                )
+                metrics.record_metric(
+                    name="message_processing_duration_seconds",
+                    value=duration,
+                    metric_type=MetricType.HISTOGRAM,
+                    labels={"binding": config.binding_name},
+                    description="Message processing request duration",
+                )
+
+                return JSONResponse(status_code=status.HTTP_200_OK, content=result)
+
+            except Exception as e:
+                logger.error(
+                    f"Error handling Messaging input binding {config.binding_name}: {e}",
+                    exc_info=True,
+                )
+
+                # Record error metric
+                metrics.record_metric(
+                    name="message_processing_requests_total",
+                    value=1.0,
+                    metric_type=MetricType.COUNTER,
+                    labels={"status": "error", "binding": config.binding_name},
+                    description="Total Message processing requests",
+                )
+
+                return JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"error": str(e)},
+                )
+
+        # Register the endpoint - Dapr calls POST /{binding-name}
+        #self.app.post(f"/{config.binding_name}")(handle_message_binding)
+
+        # Register pubsub subscription for Dapr
+        pubsub_name = config.pubsub_component_name
+        topic_name = config.topic
+        route = f"/{topic_name}"
+        
+        # Add subscription to the list for Dapr discovery
+        self.pubsub_subscriptions.append({
+            "pubsubname": pubsub_name,
+            "topic": topic_name,
+            "route": route
+        })
+        self.app.post(route)(handle_message_binding)
+
+        # Also register stats endpoint
+        async def get_processor_stats() -> JSONResponse:
+            """Get statistics for this message processor."""
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=processor.get_stats(),
+            )
+
+        self.messages_router.add_api_route(
+            f"/stats/{config.binding_name}",
+            get_processor_stats,
+            methods=["GET"],
+        )
+
+        mode = "batch" if config.is_batch_mode else "per-message"
+        logger.info(
+            f"Registered message processor for binding '{config.binding_name}' "
+            f"(mode={mode}, batch_size={config.batch_size}, "
+            f"timeout={config.batch_timeout}s)"
+        )
+
+
+    async def start_message_processors(self):
+        """Start all registered message processors."""
+        for binding_name, processor in self.message_processors.items():
+            try:
+                await processor.start()
+                logger.info(f"Started message processor for binding: {binding_name}")
+            except Exception as e:
+                logger.error(
+                    f"Error starting message processor {binding_name}: {e}",
+                    exc_info=True,
+                )
+                raise
+
+    async def stop_message_processors(self):
+        """Stop all registered message processors."""
+        for binding_name, processor in self.message_processors.items():
+            try:
+                await processor.stop()
+                logger.info(f"Stopped message processor for binding: {binding_name}")
+            except Exception as e:
+                logger.error(
+                    f"Error stopping message processor {binding_name}: {e}",
+                    exc_info=True,
+                )
+
 
     def frontend_home(self, request: Request) -> HTMLResponse:
         frontend_html_path = os.path.join(
@@ -432,6 +592,15 @@ class APIServer(ServerInterface):
         """
 
         subscriptions: List[dict[str, Any]] = []
+        if self.message_processors:
+            for processor in self.message_processors.values():
+                subscriptions.append(
+                    {
+                        "pubsubname": processor.config.pubsub_component_name,
+                        "topic": processor.config.topic,
+                        "route": f"/{processor.config.topic}",
+                    }
+                )
         for event_trigger in self.event_triggers:
             filters = [
                 f"({event_filter.path} {event_filter.operator} '{event_filter.value}')"
@@ -439,7 +608,7 @@ class APIServer(ServerInterface):
             ]
             filters.append(f"event.data.event_name == '{event_trigger.event_name}'")
             filters.append(f"event.data.event_type == '{event_trigger.event_type}'")
-
+            
             subscriptions.append(
                 {
                     "pubsubname": EVENT_STORE_NAME,

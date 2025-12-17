@@ -82,8 +82,6 @@ class PreflightCheckResponse(BaseModel):
                 },
             }
         }
-
-
 class WorkflowRequest(RootModel[Dict[str, Any]]):
     root: Dict[str, Any] = Field(
         ..., description="Root JSON object containing workflow configuration"
@@ -240,3 +238,9 @@ class EventWorkflowTrigger(WorkflowTrigger):
 
     def should_trigger_workflow(self, event: Event) -> bool:
         return True
+
+
+class PubSubSubscription(BaseModel):
+    pubsub_name: str
+    topic: str
+    route: str
