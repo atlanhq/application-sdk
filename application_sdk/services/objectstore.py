@@ -28,6 +28,21 @@ class ObjectStore:
     OBJECT_LIST_OPERATION = "list"
     OBJECT_DELETE_OPERATION = "delete"
 
+    @staticmethod
+    def _normalize_object_store_key(path: str) -> str:
+        """Normalize a path to use forward slashes for object store keys.
+
+        Object store keys (S3, Azure Blob, GCS, local file bindings) always use
+        forward slashes as the path separator regardless of the operating system.
+
+        Args:
+            path: The path to normalize.
+
+        Returns:
+            The normalized path (forward slashes) for object store keys.
+        """
+        return path.replace(os.sep, "/")
+
     @classmethod
     def _create_file_metadata(cls, key: str) -> dict[str, str]:
         """Create metadata for file operations (get, delete, create).
@@ -101,18 +116,26 @@ class ObjectStore:
             else:
                 return []
 
+            # Normalize prefix for cross-platform path comparison
+            normalized_prefix = (
+                cls._normalize_object_store_key(prefix) if prefix else ""
+            )
+
             valid_list = []
             for path in paths:
                 if not isinstance(path, str):
                     logger.warning(f"Skipping non-string path: {path}")
                     continue
 
+                # Normalize path separators for cross-platform compatibility
+                normalized_path = cls._normalize_object_store_key(path)
+
                 valid_list.append(
-                    path[path.find(prefix) :]
-                    if prefix and prefix in path
-                    else os.path.basename(path)
-                    if prefix
-                    else path
+                    normalized_path[normalized_path.find(normalized_prefix) :]
+                    if normalized_prefix and normalized_prefix in normalized_path
+                    else os.path.basename(normalized_path)
+                    if normalized_prefix
+                    else normalized_path
                 )
 
             return valid_list
@@ -357,8 +380,8 @@ class ObjectStore:
                     # Calculate relative path from the base directory
                     relative_path = os.path.relpath(file_path, source)
                     # Create store key by combining prefix with relative path
-                    store_key = os.path.join(destination, relative_path).replace(
-                        os.sep, "/"
+                    store_key = cls._normalize_object_store_key(
+                        os.path.join(destination, relative_path)
                     )
                     await cls.upload_file(
                         file_path, store_key, store_name, retain_local_copy
