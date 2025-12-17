@@ -203,10 +203,10 @@ class APIServer(ServerInterface):
             process_callback: Optional custom callback for processing messages
 
         Raises:
-            ValueError: If binding name already registered or configuration invalid
+            ValueError: If pubsub_component_name already registered or configuration invalid
         """
-        if config.binding_name in self.message_processors:
-            raise ValueError(f"Message processor for binding '{config.binding_name}' already registered")
+        if config.pubsub_component_name in self.message_processors:
+            raise ValueError(f"Message processor for  '{config.pubsub_component_name}' already registered")
 
         # Create message processor instance
         processor = MessageProcessor(
@@ -216,14 +216,14 @@ class APIServer(ServerInterface):
         )
 
         # Store processor
-        self.message_processors[config.binding_name] = processor
+        self.message_processors[config.pubsub_component_name] = processor
 
         # Create endpoint handler for this binding
         async def handle_message_binding(request: Request) -> JSONResponse:
             """Handle incoming messages from Dapr Messaging input binding.
 
             This endpoint is called by Dapr when messages arrive on the binding.
-            Endpoint convention: POST /{binding-name}
+            Endpoint convention: POST /{pubsub_component_name}
             """
             start_time = time.time()
             metrics = get_metrics()
@@ -246,14 +246,14 @@ class APIServer(ServerInterface):
                     name="messaging_binding_requests_total",
                     value=1.0,
                     metric_type=MetricType.COUNTER,
-                    labels={"status": "success", "binding": config.binding_name},
+                    labels={"status": "success", "binding": config.pubsub_component_name},
                     description="Total Messaging input binding requests",
                 )
                 metrics.record_metric(
                     name="message_processing_duration_seconds",
                     value=duration,
                     metric_type=MetricType.HISTOGRAM,
-                    labels={"binding": config.binding_name},
+                    labels={"binding": config.pubsub_component_name},
                     description="Message processing request duration",
                 )
 
@@ -261,7 +261,7 @@ class APIServer(ServerInterface):
 
             except Exception as e:
                 logger.error(
-                    f"Error handling Messaging input binding {config.binding_name}: {e}",
+                    f"Error handling Messaging input binding {config.pubsub_component_name}: {e}",
                     exc_info=True,
                 )
 
@@ -270,7 +270,7 @@ class APIServer(ServerInterface):
                     name="message_processing_requests_total",
                     value=1.0,
                     metric_type=MetricType.COUNTER,
-                    labels={"status": "error", "binding": config.binding_name},
+                    labels={"status": "error", "binding": config.pubsub_component_name},
                     description="Total Message processing requests",
                 )
 
@@ -303,15 +303,15 @@ class APIServer(ServerInterface):
                 content=processor.get_stats(),
             )
 
-        self.messages_router.add_api_route(
-            f"/stats/{config.binding_name}",
-            get_processor_stats,
-            methods=["GET"],
-        )
+        # self.messages_router.add_api_route(
+        #     f"/stats/{config.pubsub_component_name}",
+        #     get_processor_stats,
+        #     methods=["GET"],
+        # )
 
         mode = "batch" if config.is_batch_mode else "per-message"
         logger.info(
-            f"Registered message processor for binding '{config.binding_name}' "
+            f"Registered message processor for binding '{config.pubsub_component_name}' "
             f"(mode={mode}, batch_size={config.batch_size}, "
             f"timeout={config.batch_timeout}s)"
         )
@@ -322,10 +322,10 @@ class APIServer(ServerInterface):
         for binding_name, processor in self.message_processors.items():
             try:
                 await processor.start()
-                logger.info(f"Started message processor for binding: {binding_name}")
+                logger.info(f"Started message processor for binding: {pubsub_component_name}")
             except Exception as e:
                 logger.error(
-                    f"Error starting message processor {binding_name}: {e}",
+                    f"Error starting message processor {pubsub_component_name}: {e}",
                     exc_info=True,
                 )
                 raise
@@ -335,10 +335,10 @@ class APIServer(ServerInterface):
         for binding_name, processor in self.message_processors.items():
             try:
                 await processor.stop()
-                logger.info(f"Stopped message processor for binding: {binding_name}")
+                logger.info(f"Stopped message processor for binding: {pubsub_component_name}")
             except Exception as e:
                 logger.error(
-                    f"Error stopping message processor {binding_name}: {e}",
+                    f"Error stopping message processor {pubsub_component_name}: {e}",
                     exc_info=True,
                 )
 
