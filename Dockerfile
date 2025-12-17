@@ -38,7 +38,7 @@ RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
     uv sync --locked --all-extras --all-groups
 
 # Initialize Dapr (slim mode) for apps
-RUN dapr init --slim --runtime-version=1.16.2
+RUN dapr init --slim --runtime-version=1.16.3
 
 # Remove dashboard, placement, and scheduler from Dapr - not needed and have vulnerabilities
 RUN rm -f /home/appuser/.dapr/bin/dashboard /home/appuser/.dapr/bin/placement /home/appuser/.dapr/bin/scheduler 2>/dev/null || true
@@ -56,3 +56,4 @@ ENV UV_CACHE_DIR=/home/appuser/.cache/uv \
 
 # Default command (can be overridden by extending images)
 CMD ["python"]
+

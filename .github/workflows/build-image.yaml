@@ -93,18 +93,3 @@ jobs:
         env:
           DOCKER_CLIENT_TIMEOUT: 600
           COMPOSE_HTTP_TIMEOUT: 600
-
-      - name: Print Docker image size
-        run: |
-          IMAGE_TAG="ghcr.io/atlanhq/${{ github.event.repository.name }}-${{ needs.prepare.outputs.lowercase_branch }}:latest"
-          echo "=========================================="
-          echo "Docker Image Size Information"
-          echo "=========================================="
-          echo "Image: $IMAGE_TAG"
-          echo ""
-          echo "Checking local Docker images:"
-          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -E "(REPOSITORY|${{ github.event.repository.name }})" || echo "Image not found in local cache (may be in buildx cache)"
-          echo ""
-          echo "Inspecting image manifest from registry:"
-          docker buildx imagetools inspect $IMAGE_TAG 2>/dev/null || echo "Unable to inspect image manifest"
-          echo "=========================================="
