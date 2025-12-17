@@ -349,6 +349,7 @@ class Output(ABC):
             await ObjectStore.upload_file(
                 source=file_name,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
+                retain_local_copy=True,
                 destination=get_object_store_prefix(file_name),
             )
         await ObjectStore.upload_file(
