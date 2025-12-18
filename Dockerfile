@@ -1,10 +1,13 @@
 FROM ghcr.io/atlanhq/pyatlan-chainguard-base:8.3.0-3.11
 
+# Dapr version argument
+ARG DAPR_VERSION=1.16.3
+
 # Switch to root for installation
 USER root
 
 # Install Dapr CLI (latest version for apps to use)
-RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s 1.16.3
+RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s ${DAPR_VERSION}
 
 # Set UV environment variables
 ENV UV_NO_MANAGED_PYTHON=true \
@@ -29,23 +32,11 @@ USER appuser
 # Default working directory for applications
 WORKDIR /app
 
-# Pre-populate venv with application-sdk and all required dependencies
-# Apps will sync into this same venv, reusing packages when versions match
-COPY --chown=appuser:appuser pyproject.toml uv.lock README.md ./
-COPY --chown=appuser:appuser application_sdk/ ./application_sdk/
-RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
-    uv venv .venv && \
-    uv sync --locked --all-extras --all-groups
-
 # Initialize Dapr (slim mode) for apps
-RUN dapr init --slim --runtime-version=1.16.3
+RUN dapr init --slim --runtime-version=${DAPR_VERSION}
 
 # Remove dashboard, placement, and scheduler from Dapr - not needed and have vulnerabilities
 RUN rm -f /home/appuser/.dapr/bin/dashboard /home/appuser/.dapr/bin/placement /home/appuser/.dapr/bin/scheduler 2>/dev/null || true
-
-# Clean up build files (apps will copy their own)
-# Keep .venv as apps will sync into it
-RUN rm -rf pyproject.toml uv.lock README.md application_sdk/
 
 # Common environment variables for all apps
 ENV UV_CACHE_DIR=/home/appuser/.cache/uv \
