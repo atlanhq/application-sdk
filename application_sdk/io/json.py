@@ -406,7 +406,8 @@ class JsonFileWriter(Writer):
         This method writes a chunk to a JSON file and uploads the file to the object store.
         """
         mode = "w" if not os.path.exists(file_name) else "a"
-        chunk.to_json(file_name, orient="records", lines=True, mode=mode)
+        with open(file_name, mode=mode) as f:
+            chunk.to_json(f, orient="records", lines=True)
 
     async def get_statistics(
         self, typename: Optional[str] = None
