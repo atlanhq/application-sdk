@@ -27,6 +27,9 @@ from application_sdk.constants import (
     WORKFLOW_TLS_ENABLED,
 )
 from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
+from application_sdk.interceptors.correlation_context import (
+    CorrelationContextInterceptor,
+)
 from application_sdk.interceptors.events import EventInterceptor, publish_event
 from application_sdk.interceptors.lock import RedisLockInterceptor
 from application_sdk.interceptors.models import (
@@ -430,6 +433,7 @@ class TemporalWorkflowClient(WorkflowClient):
             max_concurrent_activities=max_concurrent_activities,
             activity_executor=activity_executor,
             interceptors=[
+                CorrelationContextInterceptor(),
                 EventInterceptor(),
                 CleanupInterceptor(),
                 RedisLockInterceptor(activities_dict),

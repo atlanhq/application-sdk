@@ -567,3 +567,101 @@ class TestObjectStore:
         # Act & Assert
         with pytest.raises(Exception, match="Network Error"):
             await ObjectStore.list_files(prefix="test")
+
+    @patch("application_sdk.services.objectstore.os.sep", "\\")
+    def test_normalize_object_store_key_windows_path(self) -> None:
+        """Test _normalize_object_store_key converts Windows backslashes to forward slashes."""
+        # Arrange
+        windows_path = "artifacts\\apps\\default\\workflows\\wf123\\file.json"
+
+        # Act
+        result = ObjectStore._normalize_object_store_key(windows_path)
+
+        # Assert
+        assert result == "artifacts/apps/default/workflows/wf123/file.json"
+        assert "\\" not in result
+
+    def test_normalize_object_store_key_unix_path(self) -> None:
+        """Test _normalize_object_store_key leaves Unix paths unchanged."""
+        # Arrange
+        unix_path = "artifacts/apps/default/workflows/wf123/file.json"
+
+        # Act
+        result = ObjectStore._normalize_object_store_key(unix_path)
+
+        # Assert
+        assert result == unix_path
+
+    @patch("application_sdk.services.objectstore.os.sep", "\\")
+    def test_normalize_object_store_key_mixed_path(self) -> None:
+        """Test _normalize_object_store_key handles mixed separators on Windows."""
+        # Arrange - on Windows, os.sep is backslash, so only backslashes get replaced
+        mixed_path = "artifacts/apps\\default/workflows\\wf123\\file.json"
+
+        # Act
+        result = ObjectStore._normalize_object_store_key(mixed_path)
+
+        # Assert - backslashes replaced, forward slashes unchanged
+        assert result == "artifacts/apps/default/workflows/wf123/file.json"
+        assert "\\" not in result
+
+    @patch(
+        "application_sdk.services.objectstore.ObjectStore.list_files",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "application_sdk.services.objectstore.ObjectStore.download_file",
+        new_callable=AsyncMock,
+    )
+    async def test_download_prefix_without_destination(
+        self, mock_download_file: AsyncMock, mock_list_files: AsyncMock
+    ) -> None:
+        """Test download_prefix uses default TEMPORARY_PATH when destination not provided."""
+        from application_sdk.constants import TEMPORARY_PATH
+
+        # Arrange
+        source_prefix = "artifacts/wf/wf123/raw/models"
+        mock_list_files.return_value = [f"{source_prefix}/file.json"]
+
+        # Act - call without destination parameter
+        await ObjectStore.download_prefix(
+            source=source_prefix,
+            store_name="objectstore",
+        )
+
+        # Assert: download_file should be called with TEMPORARY_PATH as base destination
+        # download_file is called with positional args: (source, destination, store_name)
+        mock_download_file.assert_called_once()
+        call_args = mock_download_file.call_args[0]  # positional args
+        destination_arg = call_args[1]  # second positional arg is destination
+        assert TEMPORARY_PATH in destination_arg
+
+    @patch("application_sdk.services.objectstore.os.sep", "\\")
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_list_files_normalizes_windows_prefix(
+        self, mock_invoke: AsyncMock
+    ) -> None:
+        """Test list_files normalizes Windows-style prefix before path comparison.
+
+        When running on Windows, a prefix with backslashes should still match
+        paths returned from object store (which always use forward slashes).
+        """
+        import orjson
+
+        # Arrange: prefix with Windows backslashes, paths with forward slashes
+        windows_prefix = "artifacts\\apps\\default"
+        object_store_paths = [
+            "artifacts/apps/default/file1.json",
+            "artifacts/apps/default/subdir/file2.json",
+        ]
+        mock_invoke.return_value = orjson.dumps(object_store_paths)
+
+        # Act
+        result = await ObjectStore.list_files(prefix=windows_prefix)
+
+        # Assert: paths should be correctly extracted starting from the normalized prefix
+        # Without the fix, this would return ["file1.json", "file2.json"] (basename fallback)
+        assert result == [
+            "artifacts/apps/default/file1.json",
+            "artifacts/apps/default/subdir/file2.json",
+        ]

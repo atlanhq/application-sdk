@@ -9,10 +9,17 @@ from application_sdk.constants import (
     OBSERVABILITY_DIR,
     TEMPORARY_PATH,
 )
+from application_sdk.observability.context import correlation_context
 
 
 class WorkflowContext(BaseModel):
-    """Workflow context."""
+    """Workflow context.
+
+    This model supports dynamic correlation context fields (atlan- prefixed)
+    through Pydantic's extra="allow" configuration.
+    """
+
+    model_config = {"extra": "allow"}
 
     in_workflow: str = Field(default="false")
     in_activity: str = Field(default="false")
@@ -74,5 +81,13 @@ def get_workflow_context() -> WorkflowContext:
             context.attempt = str(activity_info.attempt or 0)
     except Exception:
         pass
+
+    # Get correlation context from context variable (atlan- prefixed headers)
+    corr_ctx = correlation_context.get()
+    if corr_ctx:
+        # Add all correlation context fields as extra attributes
+        for key, value in corr_ctx.items():
+            if key.startswith("atlan-") and value:
+                setattr(context, key, str(value))
 
     return context
