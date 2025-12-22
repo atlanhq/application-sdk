@@ -55,7 +55,10 @@ from application_sdk.server.fastapi.models import (
     WorkflowTrigger,
 )
 from application_sdk.server.fastapi.routers.server import get_server_router
-from application_sdk.server.fastapi.utils import internal_server_error_handler
+from application_sdk.server.fastapi.utils import (
+    internal_server_error_handler,
+    upload_file_to_object_store,
+)
 from application_sdk.services.statestore import StateStore, StateType
 from application_sdk.workflows import WorkflowInterface
 
@@ -662,14 +665,14 @@ class APIServer(ServerInterface):
         metrics = get_metrics()
 
         try:
-            if not self.handler:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Handler not initialized",
-                )
-
-            # Pass exact request body to handler - handler handles all parsing and validation
-            metadata = await self.handler.upload_file(**body.model_dump())
+            # Call utility function to upload file and get response object
+            response = await upload_file_to_object_store(
+                file_content=body.file_content,
+                filename=body.filename,
+                content_type=body.content_type,
+                size=body.size,
+                prefix=body.prefix or "workflow_file_upload",
+            )
 
             # Record successful upload
             metrics.record_metric(
@@ -690,7 +693,7 @@ class APIServer(ServerInterface):
                 description="File upload duration in seconds",
             )
 
-            return FileUploadResponse(**metadata)
+            return response
         except HTTPException:
             raise
         except Exception as e:
