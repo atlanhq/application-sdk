@@ -28,6 +28,21 @@ class ObjectStore:
     OBJECT_LIST_OPERATION = "list"
     OBJECT_DELETE_OPERATION = "delete"
 
+    @staticmethod
+    def _normalize_object_store_key(path: str) -> str:
+        """Normalize a path to use forward slashes for object store keys.
+
+        Object store keys (S3, Azure Blob, GCS, local file bindings) always use
+        forward slashes as the path separator regardless of the operating system.
+
+        Args:
+            path: The path to normalize.
+
+        Returns:
+            The normalized path (forward slashes) for object store keys.
+        """
+        return path.replace(os.sep, "/")
+
     @classmethod
     def _create_file_metadata(cls, key: str) -> dict[str, str]:
         """Create metadata for file operations (get, delete, create).
@@ -85,7 +100,15 @@ class ObjectStore:
 
             # Extract paths based on response type
             if isinstance(file_list, list):
-                paths = file_list
+                # Handle list format: strings OR Azure Blob/GCP dicts with "Name" field
+                paths = []
+                for item in file_list:
+                    if isinstance(item, str):
+                        paths.append(item)
+                    elif isinstance(item, dict) and isinstance(item.get("Name"), str):
+                        paths.append(item["Name"])
+                    else:
+                        logger.warning(f"Skipping invalid path entry: {item}")
             elif isinstance(file_list, dict) and "Contents" in file_list:
                 paths = [item["Key"] for item in file_list["Contents"] if "Key" in item]
             elif isinstance(file_list, dict):
@@ -93,17 +116,26 @@ class ObjectStore:
             else:
                 return []
 
+            # Normalize prefix for cross-platform path comparison
+            normalized_prefix = (
+                cls._normalize_object_store_key(prefix) if prefix else ""
+            )
+
             valid_list = []
             for path in paths:
                 if not isinstance(path, str):
                     logger.warning(f"Skipping non-string path: {path}")
                     continue
+
+                # Normalize path separators for cross-platform compatibility
+                normalized_path = cls._normalize_object_store_key(path)
+
                 valid_list.append(
-                    path[path.find(prefix) :]
-                    if prefix and prefix in path
-                    else os.path.basename(path)
-                    if prefix
-                    else path
+                    normalized_path[normalized_path.find(normalized_prefix) :]
+                    if normalized_prefix and normalized_prefix in normalized_path
+                    else os.path.basename(normalized_path)
+                    if normalized_prefix
+                    else normalized_path
                 )
 
             return valid_list
@@ -385,8 +417,8 @@ class ObjectStore:
                     # Calculate relative path from the base directory
                     relative_path = os.path.relpath(file_path, source)
                     # Create store key by combining prefix with relative path
-                    store_key = os.path.join(destination, relative_path).replace(
-                        os.sep, "/"
+                    store_key = cls._normalize_object_store_key(
+                        os.path.join(destination, relative_path)
                     )
                     await cls.upload_file(
                         file_path, store_key, store_name, retain_local_copy
@@ -497,9 +529,35 @@ class ObjectStore:
             Exception: If there's an error with the Dapr binding operation.
         """
         try:
-            with DaprClient(
-                max_grpc_message_length=DAPR_MAX_GRPC_MESSAGE_LENGTH
-            ) as client:
+            # Calculate data size (handle both bytes and str)
+            if isinstance(data, bytes):
+                data_size = len(data)
+            elif isinstance(data, str):
+                data_size = len(data.encode("utf-8"))
+            else:
+                data_size = 0
+
+            # Check if data size exceeds DAPR limit and log warning
+            if data_size > DAPR_MAX_GRPC_MESSAGE_LENGTH:
+                # gRPC adds overhead (headers, metadata, etc.) to messages
+                # Add a buffer of 5% or at least 1KB to account for this overhead
+                grpc_overhead_buffer = max(int(data_size * 0.05), 1024)
+                required_max_length = data_size + grpc_overhead_buffer
+                logger.warning(
+                    f"Data size ({data_size:,} bytes / {data_size / (1024 * 1024):.2f}MB) "
+                    f"exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH ({DAPR_MAX_GRPC_MESSAGE_LENGTH:,} bytes / "
+                    f"{DAPR_MAX_GRPC_MESSAGE_LENGTH / (1024 * 1024):.2f}MB). "
+                    f"Increasing max_grpc_message_length to {required_max_length:,} bytes "
+                    f"(data size + {grpc_overhead_buffer:,} bytes overhead buffer). "
+                    f"This may cause issues with Dapr gRPC communication."
+                )
+                # Set max_grpc_message_length to accommodate the data size plus gRPC overhead
+                max_message_length = required_max_length
+            else:
+                # Data is within limit, use default DAPR limit
+                max_message_length = DAPR_MAX_GRPC_MESSAGE_LENGTH
+
+            with DaprClient(max_grpc_message_length=max_message_length) as client:
                 response = client.invoke_binding(
                     binding_name=store_name,
                     operation=operation,

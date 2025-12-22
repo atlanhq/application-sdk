@@ -1,5 +1,52 @@
 # Changelog
 
+## v1.1.1 (December 17, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.1.0...v1.1.1
+
+### Bug Fixes
+
+- pushing logs to atlan-objectstore (#894) (by @Garavitey in [76fec72](https://github.com/atlanhq/application-sdk/commit/76fec72))
+- windows path normalization for prefix download (#895) (by @inishchith in [df99afe](https://github.com/atlanhq/application-sdk/commit/df99afe))
+
+
+## v1.1.0 (December 12, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.4...v1.1.0
+
+### Features
+
+- Add Atlan Attributes to Temporal Runs (#880) (by @saig214 in [8a85a24](https://github.com/atlanhq/application-sdk/commit/8a85a24))
+
+
+## v1.0.4 (December 11, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.3...v1.0.4
+
+### Bug Fixes
+
+- add automatic gRPC message size limit handling for large file uploads (#878) (by @SanilK2108 in [4d76838](https://github.com/atlanhq/application-sdk/commit/4d76838))
+
+
+## v1.0.3 (December 09, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.2...v1.0.3
+
+### Bug Fixes
+
+- handle Azure Blob and GCP response formats in list_files method in objectstore service (#875) (by @hamza-atlan in [19d26a3](https://github.com/atlanhq/application-sdk/commit/19d26a3))
+- error handling on connection failures (#877) (by @sachi-atlan in [8108186](https://github.com/atlanhq/application-sdk/commit/8108186))
+
+
+## v1.0.2 (December 09, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.1...v1.0.2
+
+### Bug Fixes
+
+- release version bump (#871) (by @inishchith in [0cf4305](https://github.com/atlanhq/application-sdk/commit/0cf4305))
+
+
 ## v1.0.1 (December 05, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.0...v1.0.1

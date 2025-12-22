@@ -325,3 +325,243 @@ async def test_parquet_sink_error_handling(mock_parquet_file):
 
         # Verify buffer is empty (error was handled
         assert len(logger_adapter._buffer) == 0
+
+
+class TestCorrelationContext:
+    """Tests for correlation context in logging."""
+
+    WORKFLOW_NAME_HEADER = "atlan-workflow-name"
+    WORKFLOW_NODE_HEADER = "atlan-workflow-node"
+    WORKFLOW_NAME = "test-workflow-123"
+    WORKFLOW_NODE = "test-workflow-123.node-1"
+    WORKFLOW_ID = "test-workflow-123"
+    TRACE_ID = "my-trace-id-123"
+
+    def test_process_with_correlation_context(self):
+        """Test process() when correlation context is set."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                mock_corr_context.get.return_value = {
+                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                    self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
+                }
+
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                assert kwargs["logger_name"] == "test_logger"
+                assert msg == "Test message"
+
+    def test_process_without_correlation_context(self):
+        """Test process() when correlation context is empty."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                mock_corr_context.get.return_value = {}
+
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                assert kwargs["logger_name"] == "test_logger"
+                assert msg == "Test message"
+
+    def test_process_extracts_trace_id_from_correlation_context(self):
+        """Test process() extracts trace_id from correlation context."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                mock_corr_context.get.return_value = {
+                    "trace_id": self.TRACE_ID,
+                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                }
+
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                assert kwargs["trace_id"] == self.TRACE_ID
+                assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
+
+    def test_process_without_trace_id(self):
+        """Test process() when trace_id is not in correlation context."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                mock_corr_context.get.return_value = {
+                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                }
+
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                assert "trace_id" not in kwargs
+                assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
+
+    def test_process_handles_none_correlation_context(self):
+        """Test process() gracefully handles None when correlation context is unset."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                # ContextVar returns None when not set
+                mock_corr_context.get.return_value = None
+
+                # Should not raise exception - None is handled gracefully
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                # Verify basic functionality still works
+                assert msg == "Test message"
+                assert kwargs["logger_name"] == "test_logger"
+                # Verify no correlation context data was added
+                assert self.WORKFLOW_NAME_HEADER not in kwargs
+                assert "trace_id" not in kwargs
+
+    def test_process_handles_none_request_context(self):
+        """Test process() gracefully handles None when request context is unset."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.request_context"
+            ) as mock_req_context:
+                # ContextVar returns None when not set
+                mock_req_context.get.return_value = None
+
+                # Should not raise exception - None is handled gracefully
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                # Verify basic functionality still works
+                assert msg == "Test message"
+                assert kwargs["logger_name"] == "test_logger"
+                # Verify no request context data was added
+                assert "request_id" not in kwargs
+
+
+class TestLogFormatFunction:
+    """Tests for the conditional log format function with trace_id."""
+
+    TRACE_ID = "my-workflow-trace-123"
+
+    def test_format_includes_trace_id_when_present(self):
+        """Format should include trace_id when present."""
+        record = {
+            "extra": {
+                "logger_name": "test_logger",
+                "trace_id": self.TRACE_ID,
+            }
+        }
+
+        # Build trace_id display string (mimics logger_adaptor logic)
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
+
+        assert "trace_id=" in trace_id_str
+        assert self.TRACE_ID in trace_id_str
+
+    def test_format_excludes_trace_id_when_missing(self):
+        """Format should exclude trace_id when not present."""
+        record = {"extra": {"logger_name": "test_logger"}}
+
+        # Build trace_id display string
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
+
+        assert trace_id_str == ""
+
+    def test_format_excludes_trace_id_when_empty(self):
+        """Format should exclude trace_id when empty string."""
+        record = {"extra": {"logger_name": "test_logger", "trace_id": ""}}
+
+        # Build trace_id display string
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
+
+        assert trace_id_str == ""
+
+    def test_format_trace_id_does_not_include_atlan_headers(self):
+        """Format should only include trace_id, not atlan-* headers in display."""
+        record = {
+            "extra": {
+                "logger_name": "test_logger",
+                "trace_id": self.TRACE_ID,
+                "atlan-tenant": "test-tenant",
+                "atlan-user": "test-user",
+            }
+        }
+
+        # Build trace_id display string (only trace_id, not atlan-*)
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
+
+        assert "trace_id=" in trace_id_str
+        assert self.TRACE_ID in trace_id_str
+        # atlan-* headers should NOT be in the display string
+        assert "atlan-tenant" not in trace_id_str
+        assert "atlan-user" not in trace_id_str
+
+
+class TestCorrelationContextIntegration:
+    """Tests for correlation context combined with workflow/activity context."""
+
+    WORKFLOW_NAME_HEADER = "atlan-workflow-name"
+    WORKFLOW_NODE_HEADER = "atlan-workflow-node"
+    WORKFLOW_NAME = "test-workflow-123"
+    WORKFLOW_NODE = "test-workflow-123.node-1"
+    WORKFLOW_ID = "test-workflow-123"
+
+    def test_correlation_context_with_workflow_context(self):
+        """Correlation context should work alongside workflow context."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch("temporalio.workflow.info") as mock_workflow_info:
+                with mock.patch(
+                    "application_sdk.observability.logger_adaptor.correlation_context"
+                ) as mock_corr_context:
+                    workflow_info = mock.Mock(
+                        workflow_id=self.WORKFLOW_ID,
+                        run_id="019b04bd-ac10-7989-87d7-06427dc0616c",
+                        workflow_type="RedshiftMetadataExtractionWorkflow",
+                        namespace="default",
+                        task_queue="atlan-redshift-local",
+                        attempt=1,
+                    )
+                    mock_workflow_info.return_value = workflow_info
+                    mock_corr_context.get.return_value = {
+                        self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                        self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
+                    }
+
+                    msg, kwargs = logger_adapter.process("Test message", {})
+
+                    assert kwargs["workflow_id"] == self.WORKFLOW_ID
+                    assert (
+                        kwargs["workflow_run_id"]
+                        == "019b04bd-ac10-7989-87d7-06427dc0616c"
+                    )
+                    assert self.WORKFLOW_NAME_HEADER in kwargs
+                    assert self.WORKFLOW_NODE_HEADER in kwargs
+
+    def test_correlation_context_with_activity_context(self):
+        """Correlation context should work alongside activity context."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch("temporalio.activity.info") as mock_activity_info:
+                with mock.patch(
+                    "application_sdk.observability.logger_adaptor.correlation_context"
+                ) as mock_corr_context:
+                    activity_info = mock.Mock(
+                        workflow_id=self.WORKFLOW_ID,
+                        workflow_run_id="019b04bd-ac10-7989-87d7-06427dc0616c",
+                        activity_id="fetch_databases",
+                        activity_type="fetch_databases",
+                        task_queue="atlan-redshift-local",
+                        attempt=1,
+                    )
+                    mock_activity_info.return_value = activity_info
+                    mock_corr_context.get.return_value = {
+                        self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                        self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
+                    }
+
+                    msg, kwargs = logger_adapter.process("Test message", {})
+
+                    assert kwargs["activity_id"] == "fetch_databases"
+                    assert kwargs["workflow_id"] == self.WORKFLOW_ID
+                    assert self.WORKFLOW_NAME_HEADER in kwargs
+                    assert self.WORKFLOW_NODE_HEADER in kwargs

@@ -66,8 +66,6 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         Returns:
             Any: The result of the activity execution.
         """
-        # Extract activity information for tracking
-
         start_event = Event(
             event_type=EventTypes.APPLICATION_EVENT.value,
             event_name=ApplicationEventNames.ACTIVITY_START.value,

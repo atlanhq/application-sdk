@@ -23,6 +23,3 @@
 
 - [ ] Have you used any code that is subject to a Copyleft license (e.g., GPL, AGPL, LGPL)?
 - [ ] If yes, have you modified the code in the context of this project? please share additional details.
-
-
-<!-- for any questions, reach out to us at connect@atlan.com -->

@@ -38,12 +38,11 @@ poetry add atlan-application-sdk
 
 ## Partner Collaboration
 
-- For information on how to collaborate with Atlan on app development and integrations, please see our [Partner Collaboration Guide](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/guides/partners.md).
+- For information on how to collaborate with Atlan on app development and integrations, please see our [Partner Journey Guide](https://docs.atlan.com/product/capabilities/build-apps/partner-with-us/concepts/partner-journey).
 
 ## Need help?
 We’re here whenever you need us:
 
-- Email: **connect@atlan.com**
 - Issues: [GitHub Issues](https://github.com/atlanhq/application-sdk/issues)
 
 
