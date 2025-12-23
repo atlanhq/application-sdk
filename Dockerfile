@@ -1,4 +1,4 @@
-FROM ghcr.io/atlanhq/pyatlan-chainguard-base:8.3.0-3.11
+FROM cgr.dev/atlan.com/app-framework-golden:3.13.11
 
 # Dapr version argument
 ARG DAPR_VERSION=1.16.3
