@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - chainguard-image
     paths:
       - '**'
       - '!kurl-installer.yaml'
