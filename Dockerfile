@@ -9,12 +9,6 @@ USER root
 # Install Dapr CLI (latest version for apps to use)
 RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s ${DAPR_VERSION}
 
-# Set UV environment variables
-ENV UV_NO_MANAGED_PYTHON=true \
-    UV_SYSTEM_PYTHON=true
-
-# Copy uv binary for apps to use
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Create appuser (standardized user for all apps)
 RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser
@@ -23,8 +17,8 @@ RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser
 RUN mkdir -p /app /home/appuser/.local/bin /home/appuser/.cache/uv && \
     chown -R appuser:appuser /app /home/appuser
 
-# Remove curl and bash (no longer needed)
-RUN apk del curl bash
+# Remove curl and bash (no longer needed) and clean apk cache
+RUN apk del curl bash && rm -rf /var/cache/apk/*
 
 # Switch to appuser before dapr init and venv creation
 USER appuser
