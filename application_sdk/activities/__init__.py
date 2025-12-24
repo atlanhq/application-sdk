@@ -20,6 +20,7 @@ from typing import Any, Dict, Generic, Optional, TypeVar
 from pydantic import BaseModel
 from temporalio import activity
 
+from application_sdk.activities.common.models import ActivityResult
 from application_sdk.activities.common.utils import (
     auto_heartbeater,
     build_output_path,
@@ -27,6 +28,7 @@ from application_sdk.activities.common.utils import (
     get_workflow_run_id,
 )
 from application_sdk.common.error_codes import OrchestratorError
+from application_sdk.common.file_converter import FileType, convert_data_files
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
@@ -149,6 +151,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             )
             await self._clean_state()
             raise
+        except Exception as err:
+            logger.error(f"Error getting state: {str(err)}", exc_info=err)
+            await self._clean_state()
+            raise
 
     async def _clean_state(self):
         """Remove the state data for the current workflow.
@@ -200,6 +206,12 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             )
             workflow_args["workflow_id"] = workflow_id
             workflow_args["workflow_run_id"] = get_workflow_run_id()
+
+            # Preserve atlan- prefixed keys from workflow_config for logging context
+            for key, value in workflow_config.items():
+                if key.startswith("atlan-") and value:
+                    workflow_args[key] = str(value)
+
             return workflow_args
 
         except Exception as e:
@@ -241,6 +253,16 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             if not handler:
                 raise ValueError("Preflight check handler not found")
 
+            # Verify handler and client are properly initialized
+            if hasattr(handler, "sql_client") and handler.sql_client:
+                if not handler.sql_client.engine:
+                    logger.error("SQL client engine is not initialized")
+                    raise ValueError(
+                        "Preflight check failed: SQL client engine not initialized. "
+                        "This may indicate credentials were not loaded properly."
+                    )
+                logger.info("SQL client engine verified as initialized")
+
             result = await handler.preflight_check(
                 {"metadata": workflow_args["metadata"]}
             )
@@ -258,3 +280,26 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                 exc_info=e,
             )
             raise
+
+    @activity.defn
+    @auto_heartbeater
+    async def convert_files(self, workflow_args: Dict[str, Any]) -> ActivityResult:
+        """
+        Convert the input files to the specified output type.
+        """
+        converted_files = []
+        if workflow_args.get("input_files") and workflow_args.get("output_file_type"):
+            converted_files = await convert_data_files(
+                workflow_args["input_files"],
+                FileType(workflow_args["output_file_type"]),
+            )
+            return ActivityResult(
+                status="success",
+                message=f"Successfully converted files to {workflow_args['output_file_type']}",
+                metadata={"input_files": converted_files},
+            )
+        return ActivityResult(
+            status="warning",
+            message="Unable to get input files or output file type",
+            metadata={"input_files": converted_files},
+        )

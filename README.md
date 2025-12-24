@@ -1,5 +1,6 @@
 # Atlan Application SDK
 [![On-Push Checks](https://github.com/atlanhq/application-sdk/actions/workflows/push.yaml/badge.svg)](https://github.com/atlanhq/application-sdk/actions/workflows/push.yaml) [![CodeQL Advanced](https://github.com/atlanhq/application-sdk/actions/workflows/codeql.yaml/badge.svg)](https://github.com/atlanhq/application-sdk/actions/workflows/codeql.yaml) [![PyPI version](https://img.shields.io/pypi/v/atlan-application-sdk.svg)](https://pypi.org/project/atlan-application-sdk/)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/atlanhq/application-sdk)
 
 The Atlan Application SDK is a Python library designed for building applications on the Atlan platform. It offers a full PaaS (Platform-as-a-Service) toolkit — from local development to deployment and partner collaboration — so you can create integrations and tools that seamlessly extend the Atlan experience for our mutual customers.
 
@@ -37,12 +38,11 @@ poetry add atlan-application-sdk
 
 ## Partner Collaboration
 
-- For information on how to collaborate with Atlan on app development and integrations, please see our [Partner Collaboration Guide](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/guides/partners.md).
+- For information on how to collaborate with Atlan on app development and integrations, please see our [Partner Journey Guide](https://docs.atlan.com/product/capabilities/build-apps/partner-with-us/concepts/partner-journey).
 
 ## Need help?
 We’re here whenever you need us:
 
-- Email: **connect@atlan.com**
 - Issues: [GitHub Issues](https://github.com/atlanhq/application-sdk/issues)
 
 

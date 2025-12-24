@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.base import BaseClient
 from application_sdk.clients.utils import get_workflow_client
+from application_sdk.constants import ENABLE_MCP
 from application_sdk.events.models import EventRegistration
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.observability.logger_adaptor import get_logger
@@ -29,7 +30,7 @@ class BaseApplication:
         self,
         name: str,
         server: Optional[ServerInterface] = None,
-        application_manifest: Optional[dict] = None,
+        application_manifest: Optional[Dict[str, Any]] = None,
         client_class: Optional[Type[BaseClient]] = None,
         handler_class: Optional[Type[BaseHandler]] = None,
     ):
@@ -39,6 +40,9 @@ class BaseApplication:
         Args:
             name (str): The name of the application.
             server (ServerInterface): The server class for the application.
+            application_manifest (Optional[Dict[str, Any]]): Application manifest configuration.
+            client_class (Optional[Type[BaseClient]]): Client class for the application.
+            handler_class (Optional[Type[BaseHandler]]): Handler class for the application.
         """
         self.application_name = name
 
@@ -49,14 +53,21 @@ class BaseApplication:
 
         self.workflow_client = get_workflow_client(application_name=name)
 
-        self.application_manifest: Dict[str, Any] = application_manifest
+        self.application_manifest: Optional[Dict[str, Any]] = application_manifest
         self.bootstrap_event_registration()
 
         self.client_class = client_class or BaseClient
         self.handler_class = handler_class or BaseHandler
 
+        # MCP configuration
+        self.mcp_server: Optional["MCPServer"] = None
+        if ENABLE_MCP:
+            from application_sdk.server.mcp import MCPServer
+
+            self.mcp_server = MCPServer(application_name=name)
+
     def bootstrap_event_registration(self):
-        self.event_subscriptions = {}
+        self.event_subscriptions: Dict[str, EventWorkflowTrigger] = {}
         if self.application_manifest is None:
             logger.warning("No application manifest found, skipping event registration")
             return
@@ -122,8 +133,8 @@ class BaseApplication:
         ]
         workflow_activities = []
         for workflow_class, activities_class in workflow_and_activities_classes:
-            workflow_activities.extend(
-                workflow_class.get_activities(activities_class())
+            workflow_activities.extend(  # type: ignore
+                workflow_class.get_activities(activities_class())  # type: ignore
             )
 
         self.worker = Worker(
@@ -133,6 +144,13 @@ class BaseApplication:
             passthrough_modules=passthrough_modules,
             activity_executor=activity_executor,
         )
+
+        # Register MCP tools if ENABLED_MCP is True and an MCP server is initialized
+        if self.mcp_server:
+            logger.info("Registering MCP tools from workflow and activities classes")
+            await self.mcp_server.register_tools(  # type: ignore
+                workflow_and_activities_classes=workflow_and_activities_classes
+            )
 
     async def start_workflow(self, workflow_args, workflow_class) -> Any:
         """
@@ -147,7 +165,7 @@ class BaseApplication:
         """
         if self.workflow_client is None:
             raise ValueError("Workflow client not initialized")
-        return await self.workflow_client.start_workflow(workflow_args, workflow_class)
+        return await self.workflow_client.start_workflow(workflow_args, workflow_class)  # type: ignore
 
     async def start_worker(self, daemon: bool = True):
         """
@@ -162,37 +180,61 @@ class BaseApplication:
 
     async def setup_server(
         self,
-        workflow_class,
+        workflow_class: Type[WorkflowInterface],
         ui_enabled: bool = True,
+        has_configmap: bool = False,
     ):
         """
-        Optionally set up a server for the application. (No-op by default)
+        Set up FastAPI server and automatically mount MCP if enabled.
+
+        Args:
+            workflow_class (WorkflowInterface): The workflow class for the application.
+            ui_enabled (bool): Whether to enable the UI.
+            has_configmap (bool): Whether to enable the configmap.
         """
         if self.workflow_client is None:
             await self.workflow_client.load()
 
-        # Overrides the application server. serves the UI, and handles the various triggers
+        mcp_http_app: Optional[Any] = None
+        lifespan: Optional[Any] = None
+
+        if self.mcp_server:
+            try:
+                mcp_http_app = await self.mcp_server.get_http_app()
+                lifespan = mcp_http_app.lifespan
+            except Exception as e:
+                logger.warning(f"Failed to get MCP HTTP app: {e}")
+
         self.server = APIServer(
+            lifespan=lifespan,
             workflow_client=self.workflow_client,
             ui_enabled=ui_enabled,
             handler=self.handler_class(client=self.client_class()),
+            has_configmap=has_configmap,
         )
 
+        # Mount MCP at root
+        if mcp_http_app:
+            try:
+                self.server.app.mount("", mcp_http_app)  # Mount at root
+            except Exception as e:
+                logger.warning(f"Failed to mount MCP HTTP app: {e}")
+
+        # Register event-based workflows if any
         if self.event_subscriptions:
             for event_trigger in self.event_subscriptions.values():
-                if event_trigger.workflow_class is None:
+                if event_trigger.workflow_class is None:  # type: ignore
                     raise ValueError(
                         f"Workflow class not set for event trigger {event_trigger.event_id}"
                     )
 
-                self.server.register_workflow(
-                    workflow_class=event_trigger.workflow_class,
+                self.server.register_workflow(  # type: ignore
+                    workflow_class=event_trigger.workflow_class,  # type: ignore
                     triggers=[event_trigger],
                 )
 
-        # register the workflow on the application server
-        # the workflow is by default triggered by an HTTP POST request to the /start endpoint
-        self.server.register_workflow(
+        # Register the main workflow (HTTP POST /start endpoint)
+        self.server.register_workflow(  # type: ignore
             workflow_class=workflow_class,
             triggers=[HttpWorkflowTrigger()],
         )

@@ -16,13 +16,11 @@ from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
-    DAPR_BINDING_OPERATION_CREATE,
     DEPLOYMENT_OBJECT_STORE_NAME,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
     STATE_STORE_NAME,
-    TEMPORARY_PATH,
     TRACES_FILE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
@@ -365,16 +363,23 @@ class AtlanObservability(Generic[T], ABC):
             logging.error(f"Error buffering log: {e}")
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
-        """Flush records to parquet file and object store.
+        """Flush records to parquet file and object store using ParquetOutput abstraction.
 
         Args:
             records: List of records to flush
 
         This method:
-        - Groups records by partition
-        - Writes records to each partition
-        - Uploads to object store if enabled
+        - Groups records by partition (year/month/day)
+        - Uses ParquetOutput abstraction for efficient writing
+        - Automatically handles chunking, compression, and dual upload
+        - Provides robust error handling per partition
         - Cleans up old records if enabled
+
+        Features:
+        - Automatic chunking for large datasets
+        - Dual upload support (primary + upstream if enabled)
+        - Advanced consolidation for optimal performance
+        - Fault-tolerant processing (continues on partition errors)
         """
         if not ENABLE_OBSERVABILITY_DAPR_SINK:
             return
@@ -390,30 +395,15 @@ class AtlanObservability(Generic[T], ABC):
                     partition_records[partition_path] = []
                 partition_records[partition_path].append(record)
 
-            # Write records to each partition
+            # Write records to each partition using ParquetOutput abstraction
             for partition_path, partition_data in partition_records.items():
-                os.makedirs(partition_path, exist_ok=True)
-                # Use a consistent file name for each partition
-                parquet_path = os.path.join(partition_path, "data.parquet")
-
-                # Read existing data if any
-                existing_df = None
-                if os.path.exists(parquet_path):
-                    try:
-                        # Read the entire parquet file without excluding any columns
-                        existing_df = pd.read_parquet(parquet_path)
-                    except Exception as e:
-                        logging.error(f"Error reading existing parquet file: {e}")
-                        # If there's an error reading the existing file, we'll overwrite it
-                        existing_df = None
-
                 # Create new dataframe from current records
                 new_df = pd.DataFrame(partition_data)
 
-                # Extract partition values from path
-                partition_parts = os.path.basename(os.path.dirname(parquet_path)).split(
-                    os.sep
-                )
+                # Extract partition values from path and add to dataframe
+                partition_parts = os.path.basename(
+                    os.path.dirname(partition_path)
+                ).split(os.sep)
                 for part in partition_parts:
                     if part.startswith("year="):
                         new_df["year"] = int(part.split("=")[1])
@@ -422,38 +412,23 @@ class AtlanObservability(Generic[T], ABC):
                     elif part.startswith("day="):
                         new_df["day"] = int(part.split("=")[1])
 
-                # Merge with existing data if any
-                if existing_df is not None:
-                    df = pd.concat([existing_df, new_df], ignore_index=True)
-                else:
-                    df = new_df
+                # Use new data directly - let ParquetOutput handle consolidation and merging
+                df = new_df
 
-                # Sort by timestamp to maintain order
-                df = df.sort_values("timestamp")
+                # Use ParquetOutput abstraction for efficient writing and uploading
+                # Set the output path for this partition
+                try:
+                    # Lazy import and instantiation of ParquetOutput
+                    from application_sdk.outputs.parquet import ParquetOutput
 
-                # Write to parquet file
-                df.to_parquet(
-                    parquet_path,
-                    compression="snappy",
-                    index=False,
-                )
-
-                # Upload to object store
-                with open(parquet_path, "rb") as f:
-                    file_content = f.read()
-                    relative_path = os.path.relpath(parquet_path, TEMPORARY_PATH)
-                    metadata = {
-                        "key": relative_path,
-                        "blobName": relative_path,
-                        "fileName": relative_path,
-                    }
-                    with DaprClient() as client:
-                        client.invoke_binding(
-                            binding_name=DEPLOYMENT_OBJECT_STORE_NAME,
-                            operation=DAPR_BINDING_OPERATION_CREATE,
-                            data=file_content,
-                            binding_metadata=metadata,
-                        )
+                    parquet_output = ParquetOutput(
+                        output_path=partition_path,
+                        chunk_start=0,
+                        chunk_part=int(time()),
+                    )
+                    await parquet_output.write_dataframe(dataframe=df)
+                except Exception as e:
+                    print(f"Error writing records to partition: {str(e)}")
 
             # Clean up old records if enabled
             if self._cleanup_enabled:

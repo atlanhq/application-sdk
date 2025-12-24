@@ -161,12 +161,14 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         workflow_class: Type[
             BaseSQLMetadataExtractionWorkflow
         ] = BaseSQLMetadataExtractionWorkflow,
+        has_configmap: bool = False,
     ) -> Any:
         """
         Set up the FastAPI server for the SQL metadata extraction application.
 
         Args:
             workflow_class (Type): Workflow class to register with the server. Defaults to BaseSQLMetadataExtractionWorkflow.
+            has_configmap (bool): Whether the application has a configmap. Defaults to False.
 
         Returns:
             Any: None
@@ -178,6 +180,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         self.server = APIServer(
             handler=self.handler_class(sql_client=self.client_class()),
             workflow_client=self.workflow_client,
+            has_configmap=has_configmap,
         )
 
         # register the workflow on the application server

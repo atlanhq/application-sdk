@@ -1,5 +1,6 @@
 """Unit tests for output interface."""
 
+import os
 from typing import Any
 from unittest.mock import AsyncMock, mock_open, patch
 
@@ -31,6 +32,11 @@ class TestOutput:
             self.output_prefix = output_prefix
             self.total_record_count = 0
             self.chunk_count = 0
+            self.partitions = []  # Initialize partitions attribute
+            self.buffer_size = 5000
+            self.max_file_size_bytes = 1024 * 1024 * 10  # 10MB
+            self.current_buffer_size = 0
+            self.current_buffer_size_bytes = 0
 
         async def write_dataframe(self, dataframe: pd.DataFrame):
             """Implement abstract method."""
@@ -90,7 +96,9 @@ class TestOutput:
             raise Exception("Test error")
 
         with patch("application_sdk.outputs.logger.error") as mock_logger:
-            await self.output.write_batched_dataframe(generate_error())
+            # According to workspace rules, exceptions should be re-raised after logging
+            with pytest.raises(Exception, match="Test error"):
+                await self.output.write_batched_dataframe(generate_error())
             mock_logger.assert_called_once()
             assert "Error writing batched dataframe" in mock_logger.call_args[0][0]
 
@@ -107,14 +115,17 @@ class TestOutput:
         """Test write_statistics successful case."""
         self.output.total_record_count = 100
         self.output.chunk_count = 5
+        self.output.partitions = [1, 2, 1, 2, 1]
 
-        # Mock the open function, orjson.dumps, and object store upload
+        # Mock the open function, orjson.dumps, os.makedirs, and object store upload
         with patch("builtins.open", mock_open()) as mock_file, patch(
             "orjson.dumps",
-            return_value=b'{"total_record_count": 100, "chunk_count": 5}',
+            return_value=b'{"total_record_count": 100, "chunk_count": 5, "partitions": [1,2,1,2,1]}',
         ) as mock_orjson, patch(
+            "application_sdk.outputs.os.makedirs",
+        ) as mock_makedirs, patch(
             "application_sdk.outputs.get_object_store_prefix",
-            return_value="path/statistics.json.ignore",
+            return_value="path/statistics/statistics.json.ignore",
         ), patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file",
             new_callable=AsyncMock,
@@ -123,16 +134,31 @@ class TestOutput:
             stats = await self.output.write_statistics()
 
             # Assertions
-            assert stats == {"total_record_count": 100, "chunk_count": 5}
-            mock_file.assert_called_once_with("/test/path/statistics.json.ignore", "w")
+            assert stats == {
+                "total_record_count": 100,
+                "chunk_count": 5,  # This is len(self.partitions) which is 5
+                "partitions": [1, 2, 1, 2, 1],
+            }
+            expected_stats_dir = os.path.join("/test/path", "statistics")
+            mock_makedirs.assert_called_once_with(expected_stats_dir, exist_ok=True)
+            expected_file_path = os.path.join(
+                expected_stats_dir, "statistics.json.ignore"
+            )
+            mock_file.assert_called_once_with(expected_file_path, "wb")
             mock_orjson.assert_called_once_with(
-                {"total_record_count": 100, "chunk_count": 5}
+                {
+                    "total_record_count": 100,
+                    "chunk_count": 5,
+                    "partitions": [1, 2, 1, 2, 1],
+                }
             )
             # Verify the upload call
             mock_push.assert_awaited_once()
             upload_kwargs = mock_push.await_args.kwargs  # type: ignore[attr-defined]
-            assert upload_kwargs["source"] == "/test/path/statistics.json.ignore"
-            assert upload_kwargs["destination"] == "path/statistics.json.ignore"
+            assert upload_kwargs["source"] == expected_file_path
+            assert (
+                upload_kwargs["destination"] == "path/statistics/statistics.json.ignore"
+            )
 
     @pytest.mark.asyncio
     async def test_write_statistics_error(self):

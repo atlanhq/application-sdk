@@ -28,7 +28,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -47,8 +47,8 @@ jobs:
       # Install Dapr
       - name: Install Dapr CLI
         run: |
-          wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.14.1
-          dapr init --runtime-version 1.13.6 --slim
+          wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.16.2
+          dapr init --runtime-version 1.16.0 --slim
 
       # Install Temporal
       - name: Install Temporal CLI and Start Server
@@ -69,7 +69,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./install/Dockerfile
+          file: ./Dockerfile
           tags: test-sample:latest
           secrets: |
             PRIVATE_REPO_ACCESS_TOKEN=${{ secrets.ORG_PAT_GITHUB }}

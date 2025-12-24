@@ -5,13 +5,21 @@ from temporalio import activity, workflow
 
 from application_sdk.constants import (
     APPLICATION_NAME,
+    DEPLOYMENT_NAME,
     OBSERVABILITY_DIR,
     TEMPORARY_PATH,
 )
+from application_sdk.observability.context import correlation_context
 
 
 class WorkflowContext(BaseModel):
-    """Workflow context."""
+    """Workflow context.
+
+    This model supports dynamic correlation context fields (atlan- prefixed)
+    through Pydantic's extra="allow" configuration.
+    """
+
+    model_config = {"extra": "allow"}
 
     in_workflow: str = Field(default="false")
     in_activity: str = Field(default="false")
@@ -26,16 +34,16 @@ class WorkflowContext(BaseModel):
 
 
 def get_observability_dir() -> str:
-    """Build the observability path.
-
-    Args:
-        path: The path to build the observability path from.
+    """Build the observability path using deployment name.
 
     Returns:
-        str: The built observability path.
+        str: The built observability path using deployment name.
     """
     return os.path.join(
-        TEMPORARY_PATH, OBSERVABILITY_DIR.format(application_name=APPLICATION_NAME)
+        TEMPORARY_PATH,
+        OBSERVABILITY_DIR.format(
+            application_name=APPLICATION_NAME, deployment_name=DEPLOYMENT_NAME
+        ),
     )
 
 
@@ -73,5 +81,13 @@ def get_workflow_context() -> WorkflowContext:
             context.attempt = str(activity_info.attempt or 0)
     except Exception:
         pass
+
+    # Get correlation context from context variable (atlan- prefixed headers)
+    corr_ctx = correlation_context.get()
+    if corr_ctx:
+        # Add all correlation context fields as extra attributes
+        for key, value in corr_ctx.items():
+            if key.startswith("atlan-") and value:
+                setattr(context, key, str(value))
 
     return context

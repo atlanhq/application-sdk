@@ -445,7 +445,7 @@ class QueryBasedTransformer(TransformerInterface):
             )
 
             # run the SQL on the dataframe
-            logger.info(
+            logger.debug(
                 f"Running transformer for asset [{typename}] with SQL:\n {entity_sql_template}"
             )
             transformed_df = daft.sql(entity_sql_template)

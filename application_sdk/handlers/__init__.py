@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Dict
 
 
 class HandlerInterface(ABC):
@@ -37,3 +37,10 @@ class HandlerInterface(ABC):
         To be implemented by the subclass
         """
         raise NotImplementedError("fetch_metadata method not implemented")
+
+    @staticmethod
+    async def get_configmap(config_map_id: str) -> Dict[str, Any]:
+        """
+        Static method to get the configmap
+        """
+        return {}

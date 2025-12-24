@@ -31,12 +31,13 @@ Provides classes for interacting with SQL databases using SQLAlchemy.
 Both SQL client classes are typically **subclassed** for specific database types (e.g., PostgreSQL, Snowflake) rather than used directly.
 
 1.  **Connection Configuration (`DB_CONFIG` - Class Attribute):**
-    *   This dictionary **must** be defined in your `BaseSQLClient` subclass to specify how to connect.
-    *   **`template` (str):** The SQLAlchemy connection string template. Uses standard Python f-string formatting with placeholders for keys defined in `required` (e.g., `{username}`, `{host}`).
-    *   **`required` (list[str]):** List of keys that *must* be present in the `credentials` dictionary passed to `load()`. The client fetches values for these keys from `credentials` to format the `template`. The value for the `{password}` placeholder is handled specially by `get_auth_token()` based on `authType`.
-    *   **`parameters` (list[str], optional):** List of optional keys. If present in `credentials`, their values are fetched and appended as URL query parameters to the connection string (e.g., `?warehouse=my_wh&role=my_role`).
-    *   **`defaults` (dict, optional):** Default key-value pairs to append as URL query parameters if they are *not* found in `credentials`.
-    *   **Note on Credentials:** The `credentials` dictionary passed to `load()` can also contain an `extra` field (often a JSON string) which is parsed. Values for `required` and `parameters` keys are looked up first directly in `credentials`, then within the parsed `extra` dictionary. `authType` (e.g., "basic", "iam_user", "iam_role") is also read from `credentials` to determine how to handle the `password`.
+    *   Define `DB_CONFIG` using the Pydantic model `DatabaseConfig` (`application_sdk.clients.models.DatabaseConfig`).
+    *   **`template` (str):** SQLAlchemy connection string template using placeholders (e.g., `{username}`, `{host}`).
+    *   **`required` (list[str]):** Keys that must be present in `credentials`/`credentials.extra`. `{password}` is resolved via `get_auth_token()` depending on `authType`.
+    *   **`parameters` (list[str], optional):** Optional keys appended as URL query parameters when present in `credentials`/`extra`.
+    *   **`defaults` (dict[str, Any], optional):** Default URL parameters always appended unless already in the template.
+    *   **`connect_args` (dict[str, Any], optional):** Additional connection arguments to be passed directly to SQLAlchemy's `create_engine` or `create_async_engine`. Useful for driver-specific connection parameters that are not part of the connection URL. Defaults to `{}`.
+    *   **Credentials Note:** The `credentials` dictionary can include an `extra` field (JSON or dict). Lookups for `required` and `parameters` first check `credentials`, then `extra`.
 
 2.  **Loading (`load` method):**
     *   Called with a `credentials` dictionary.
@@ -52,20 +53,17 @@ Both SQL client classes are typically **subclassed** for specific database types
 
 ```python
 # In your subclass definition (e.g., my_connector/clients.py)
-from typing import Dict, Any
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.clients.models import DatabaseConfig
 
 class SnowflakeClient(BaseSQLClient):
-    DB_CONFIG: Dict[str, Any] = {
-        # Template uses required keys
-        "template": "snowflake://{username}:{password}@{account_id}",
-        # Values for these are fetched from credentials or credentials['extra']
-        "required": ["username", "password", "account_id"],
-        # If 'warehouse' or 'role' exist in credentials/extra, they are added as ?warehouse=...&role=...
-        "parameters": ["warehouse", "role"],
-        # If 'client_session_keep_alive' is NOT in credentials/extra, add ?client_session_keep_alive=true
-        "defaults": { "client_session_keep_alive": "true" }
-    }
+    DB_CONFIG = DatabaseConfig(
+        template="snowflake://{username}:{password}@{account_id}",
+        required=["username", "password", "account_id"],
+        parameters=["warehouse", "role"],
+        defaults={"client_session_keep_alive": "true"},
+        connect_args={"sslmode": "require"},  # Optional: driver-specific connection arguments
+    )
 ```
 
 ### Interaction with `SQLQueryInput` and Activities

@@ -17,8 +17,12 @@ from typing import (
     Union,
 )
 
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import CommonError
+from application_sdk.constants import TEMPORARY_PATH
+from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 
@@ -106,10 +110,42 @@ def extract_database_names_from_regex_common(
         return empty_default
 
 
+def transform_posix_regex(regex_pattern: str) -> str:
+    r"""
+    Transform regex pattern for POSIX compatibility.
+
+    Rules:
+    1. Add ^ before each database name before \.
+    2. Add an additional . between \. and * if * follows \.
+
+    Example: 'dev\.public$|dev\.atlan_test_schema$|wide_world_importers\.*'
+    Becomes: '^dev\.public$|^dev\.atlan_test_schema$|^wide_world_importers\..*'
+    """
+    if not regex_pattern:
+        return regex_pattern
+
+    # Split by | to handle each pattern separately
+    patterns = regex_pattern.split("|")
+    transformed_patterns = []
+
+    for pattern in patterns:
+        # Add ^ at the beginning if it's not already there
+        if not pattern.startswith("^"):
+            pattern = "^" + pattern
+
+            # Add additional . between \. and * if * follows \.
+            pattern = re.sub(r"\\\.\*", r"\..*", pattern)
+
+        transformed_patterns.append(pattern)
+
+    return "|".join(transformed_patterns)
+
+
 def prepare_query(
     query: Optional[str],
     workflow_args: Dict[str, Any],
     temp_table_regex_sql: Optional[str] = "",
+    use_posix_regex: Optional[bool] = False,
 ) -> Optional[str]:
     """
     Prepares a SQL query by applying include and exclude filters, and optional
@@ -158,6 +194,14 @@ def prepare_query(
             include_filter, exclude_filter
         )
 
+        if use_posix_regex:
+            normalized_include_regex_posix = transform_posix_regex(
+                normalized_include_regex
+            )
+            normalized_exclude_regex_posix = transform_posix_regex(
+                normalized_exclude_regex
+            )
+
         # Extract database names from the normalized regex patterns
         include_databases = extract_database_names_from_regex_common(
             normalized_regex=normalized_include_regex,
@@ -176,15 +220,26 @@ def prepare_query(
         )
         exclude_views = workflow_args.get("metadata", {}).get("exclude_views", False)
 
-        return query.format(
-            include_databases=include_databases,
-            exclude_databases=exclude_databases,
-            normalized_include_regex=normalized_include_regex,
-            normalized_exclude_regex=normalized_exclude_regex,
-            temp_table_regex_sql=temp_table_regex_sql,
-            exclude_empty_tables=exclude_empty_tables,
-            exclude_views=exclude_views,
-        )
+        if use_posix_regex:
+            return query.format(
+                include_databases=include_databases,
+                exclude_databases=exclude_databases,
+                normalized_include_regex=normalized_include_regex_posix,
+                normalized_exclude_regex=normalized_exclude_regex_posix,
+                temp_table_regex_sql=temp_table_regex_sql,
+                exclude_empty_tables=exclude_empty_tables,
+                exclude_views=exclude_views,
+            )
+        else:
+            return query.format(
+                include_databases=include_databases,
+                exclude_databases=exclude_databases,
+                normalized_include_regex=normalized_include_regex,
+                normalized_exclude_regex=normalized_exclude_regex,
+                temp_table_regex_sql=temp_table_regex_sql,
+                exclude_empty_tables=exclude_empty_tables,
+                exclude_views=exclude_views,
+            )
     except CommonError as e:
         # Extract the original error message from the CommonError
         error_message = str(e).split(": ", 1)[-1] if ": " in str(e) else str(e)
@@ -193,6 +248,47 @@ def prepare_query(
             error_code=CommonError.QUERY_PREPARATION_ERROR.code,
         )
         return None
+
+
+async def get_database_names(
+    sql_client, workflow_args, fetch_database_sql
+) -> Optional[List[str]]:
+    """
+    Get the database names from the workflow args if include-filter is present
+    Args:
+        workflow_args: The workflow args
+    Returns:
+        List[str]: The database names
+    """
+    database_names = parse_filter_input(
+        workflow_args.get("metadata", {}).get("include-filter", {})
+    )
+
+    database_names = [
+        re.sub(r"^[^\w]+|[^\w]+$", "", database_name)
+        for database_name in database_names
+    ]
+    if not database_names:
+        # if database_names are not provided in the include-filter, we'll run the query to get all the database names
+        # because by default for an empty include-filter, we fetch details corresponding to all the databases.
+        temp_table_regex_sql = workflow_args.get("metadata", {}).get(
+            "temp-table-regex", ""
+        )
+        prepared_query = prepare_query(
+            query=fetch_database_sql,
+            workflow_args=workflow_args,
+            temp_table_regex_sql=temp_table_regex_sql,
+            use_posix_regex=True,
+        )
+        # We'll run the query to get all the database names
+        database_sql_input = SQLQueryInput(
+            engine=sql_client.engine,
+            query=prepared_query,  # type: ignore
+            chunk_size=None,
+        )
+        database_dataframe = await database_sql_input.get_dataframe()
+        database_names = list(database_dataframe["database_name"])
+    return database_names
 
 
 def parse_filter_input(
@@ -414,6 +510,46 @@ def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     return extra  # We know it's a Dict[str, Any] due to the Union type and str check
+
+
+def has_custom_control_config(workflow_args: Dict[str, Any]) -> bool:
+    """
+    Check if custom control configuration is present in workflow arguments.
+
+    Args:
+        workflow_args: The workflow arguments
+
+    Returns:
+        bool: True if custom control configuration is present, False otherwise
+    """
+    return (
+        workflow_args.get("control-config-strategy") == "custom"
+        and workflow_args.get("control-config") is not None
+    )
+
+
+async def get_file_names(output_path: str, typename: str) -> List[str]:
+    """
+    Get file names for a specific asset type from the transformed directory.
+
+    Args:
+        output_path (str): The base output path
+        typename (str): The asset type (e.g., 'table', 'schema', 'column')
+
+    Returns:
+        List[str]: List of relative file paths for the asset type
+    """
+
+    source = get_object_store_prefix(os.path.join(output_path, typename))
+    await ObjectStore.download_prefix(source, TEMPORARY_PATH)
+
+    file_pattern = os.path.join(output_path, typename, "*.json")
+    file_names = glob.glob(file_pattern)
+    file_name_list = [
+        "/".join(file_name.rsplit("/", 2)[-2:]) for file_name in file_names
+    ]
+
+    return file_name_list
 
 
 def run_sync(func):

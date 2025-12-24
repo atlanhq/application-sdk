@@ -14,7 +14,7 @@ from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
+from application_sdk.constants import DEPLOYMENT_NAME, MAX_CONCURRENT_ACTIVITIES
 from application_sdk.events.models import (
     ApplicationEventNames,
     Event,
@@ -122,6 +122,7 @@ class Worker:
         if self.workflow_client:
             self._worker_creation_event_data = WorkerStartEventData(
                 application_name=self.workflow_client.application_name,
+                deployment_name=DEPLOYMENT_NAME,
                 task_queue=self.workflow_client.worker_task_queue,
                 namespace=self.workflow_client.namespace,
                 host=self.workflow_client.host,

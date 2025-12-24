@@ -2,14 +2,13 @@ import asyncio
 import logging
 import sys
 import threading
-from contextvars import ContextVar
 from time import time_ns
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
-from opentelemetry._logs import SeverityNumber
+from opentelemetry._logs import LogRecord, SeverityNumber
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-from opentelemetry.sdk._logs import LoggerProvider, LogRecord
+from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace.span import TraceFlags
@@ -34,6 +33,7 @@ from application_sdk.constants import (
     SERVICE_NAME,
     SERVICE_VERSION,
 )
+from application_sdk.observability.context import correlation_context, request_context
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.utils import (
     get_observability_dir,
@@ -42,7 +42,13 @@ from application_sdk.observability.utils import (
 
 
 class LogExtraModel(BaseModel):
-    """Pydantic model for log extra fields."""
+    """Pydantic model for log extra fields.
+
+    This model allows arbitrary extra fields (prefixed with atlan-) to be included
+    for correlation context propagation to OTEL.
+    """
+
+    model_config = {"extra": "allow"}
 
     client_host: Optional[str] = None
     duration_ms: Optional[int] = None
@@ -67,52 +73,8 @@ class LogExtraModel(BaseModel):
     heartbeat_timeout: Optional[str] = None
     # Other fields
     log_type: Optional[str] = None
-
-    class Config:
-        """Pydantic model configuration for LogExtraModel.
-
-        Provides custom parsing logic for converting dictionary values to appropriate types.
-        Handles type conversion for various fields like integers, strings, and other data types.
-        """
-
-        @classmethod
-        def parse_obj(cls, obj):
-            if isinstance(obj, dict):
-                # Define type mappings for each field
-                type_mappings = {
-                    # Integer fields
-                    "attempt": int,
-                    "duration_ms": int,
-                    "status_code": int,
-                    # String fields
-                    "client_host": str,
-                    "method": str,
-                    "path": str,
-                    "request_id": str,
-                    "url": str,
-                    "workflow_id": str,
-                    "run_id": str,
-                    "workflow_type": str,
-                    "namespace": str,
-                    "task_queue": str,
-                    "activity_id": str,
-                    "activity_type": str,
-                    "schedule_to_close_timeout": str,
-                    "start_to_close_timeout": str,
-                    "schedule_to_start_timeout": str,
-                    "heartbeat_timeout": str,
-                    "log_type": str,
-                }
-
-                # Process each field with its type conversion
-                for field, type_func in type_mappings.items():
-                    if field in obj and obj[field] is not None:
-                        try:
-                            obj[field] = type_func(obj[field])
-                        except (ValueError, TypeError):
-                            obj[field] = None
-
-            return super().parse_obj(obj)
+    # Trace context
+    trace_id: Optional[str] = None
 
 
 class LogRecordModel(BaseModel):
@@ -142,6 +104,9 @@ class LogRecordModel(BaseModel):
         for k, v in message.record["extra"].items():
             if k != "logger_name" and hasattr(extra, k):
                 setattr(extra, k, v)
+            # Include atlan- prefixed fields as extra attributes (correlation context)
+            elif k.startswith("atlan-") and v is not None:
+                setattr(extra, k, str(v))
 
         return cls(
             timestamp=message.record["time"].timestamp(),
@@ -160,8 +125,9 @@ class LogRecordModel(BaseModel):
         arbitrary_types_allowed = True
 
 
-# Create a context variable for request_id
-request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
+# Re-exported from context.py for backward compatibility:
+# - request_context: ContextVar for request-scoped data (e.g., request_id)
+# - correlation_context: ContextVar for atlan- prefixed headers
 
 
 # Add a Loguru handler for the Python logging system
@@ -211,14 +177,20 @@ for logger_name in DEPENDENCY_LOGGERS:
 
 # Add these constants
 SEVERITY_MAPPING = {
-    "DEBUG": SeverityNumber.DEBUG,
-    "INFO": SeverityNumber.INFO,
-    "WARNING": SeverityNumber.WARN,
-    "ERROR": SeverityNumber.ERROR,
-    "CRITICAL": SeverityNumber.FATAL,
-    "ACTIVITY": SeverityNumber.INFO,  # Using INFO severity for activity level
-    "METRIC": SeverityNumber.INFO,  # Using INFO severity for metric level
-    "TRACING": SeverityNumber.INFO,  # Using INFO severity for tracing level
+    "DEBUG": logging.getLevelNamesMapping()["DEBUG"],
+    "INFO": logging.getLevelNamesMapping()["INFO"],
+    "WARNING": logging.getLevelNamesMapping()["WARNING"],
+    "ERROR": logging.getLevelNamesMapping()["ERROR"],
+    "CRITICAL": logging.getLevelNamesMapping()["CRITICAL"],
+    "ACTIVITY": logging.getLevelNamesMapping()[
+        "INFO"
+    ],  # Using INFO severity for activity level
+    "METRIC": logging.getLevelNamesMapping()[
+        "DEBUG"
+    ],  # Using DEBUG severity for metric level
+    "TRACING": logging.getLevelNamesMapping()[
+        "DEBUG"
+    ],  # Using DEBUG severity for tracing level
 }
 
 
@@ -264,25 +236,64 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
         # Register custom log level for activity
         if "ACTIVITY" not in logger._core.levels:
-            logger.level("ACTIVITY", no=20, color="<cyan>", icon="🔵")
+            logger.level(
+                "ACTIVITY", no=SEVERITY_MAPPING["ACTIVITY"], color="<cyan>", icon="🔵"
+            )
 
         # Register custom log level for metrics
         if "METRIC" not in logger._core.levels:
-            logger.level("METRIC", no=20, color="<yellow>", icon="📊")
+            logger.level(
+                "METRIC", no=SEVERITY_MAPPING["METRIC"], color="<yellow>", icon="📊"
+            )
 
         # Register custom log level for tracing
         if "TRACING" not in logger._core.levels:
-            logger.level("TRACING", no=20, color="<magenta>", icon="🔍")
+            logger.level(
+                "TRACING", no=SEVERITY_MAPPING["TRACING"], color="<magenta>", icon="🔍"
+            )
 
-        # Update format string to use the bound logger_name
-        atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
+        # Colorize the logs only if the log level is DEBUG
+        colorize = LOG_LEVEL == "DEBUG"
+
+        def get_log_format(record: Any) -> str:
+            """Generate log format string with trace_id for correlation.
+
+            Args:
+                record: Loguru record dictionary containing log information.
+
+            Returns:
+                Format string for the log message.
+            """
+            # Build trace_id display string (only trace_id is printed, atlan-* go to OTEL)
+            trace_id = record["extra"].get("trace_id", "")
+            record["extra"]["_trace_id_str"] = (
+                f" trace_id={trace_id}" if trace_id else ""
+            )
+
+            if colorize:
+                return (
+                    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> "
+                    "<blue>[{level}]</blue>"
+                    "<magenta>{extra[_trace_id_str]}</magenta> "
+                    "<cyan>{extra[logger_name]}</cyan>"
+                    " - <level>{message}</level>\n"
+                )
+            return (
+                "{time:YYYY-MM-DD HH:mm:ss} [{level}]"
+                "{extra[_trace_id_str]} {extra[logger_name]}"
+                " - {message}\n"
+            )
+
         self.logger.add(
-            sys.stderr, format=atlan_format_str, level=LOG_LEVEL, colorize=True
+            sys.stderr,
+            format=get_log_format,
+            level=SEVERITY_MAPPING[LOG_LEVEL],
+            colorize=colorize,
         )
 
         # Add sink for parquet logging only if Dapr sink is enabled
         if ENABLE_OBSERVABILITY_DAPR_SINK:
-            self.logger.add(self.parquet_sink, level=LOG_LEVEL)
+            self.logger.add(self.parquet_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
             # Start flush task only if Dapr sink is enabled
             if not AtlanLoggerAdapter._flush_task_started:
                 try:
@@ -341,7 +352,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 self.logger_provider.add_log_record_processor(batch_processor)
 
                 # Add OTLP sink
-                self.logger.add(self.otlp_sink, level=LOG_LEVEL)
+                self.logger.add(self.otlp_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
 
             except Exception as e:
                 logging.error(f"Failed to setup OTLP logging: {str(e)}")
@@ -480,7 +491,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             severity_text=record["level"],
             severity_number=severity_number,
             body=record["message"],
-            resource=self.logger_provider.resource,
             attributes=attributes,
         )
 
@@ -512,16 +522,14 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         - Adds request context if available
         - Adds workflow context if in a workflow
         - Adds activity context if in an activity
+        - Adds correlation context if available
         """
         kwargs["logger_name"] = self.logger_name
 
         # Get request context
-        try:
-            ctx = request_context.get()
-            if ctx and "request_id" in ctx:
-                kwargs["request_id"] = ctx["request_id"]
-        except Exception:
-            pass
+        ctx = request_context.get()
+        if ctx and "request_id" in ctx:
+            kwargs["request_id"] = ctx["request_id"]
 
         workflow_context = get_workflow_context()
 
@@ -542,6 +550,17 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 kwargs.update(workflow_context.model_dump())
         except Exception:
             pass
+
+        # Add correlation context (atlan- prefixed keys and trace_id) to kwargs
+        corr_ctx = correlation_context.get()
+        if corr_ctx:
+            # Add trace_id if present (for log format display)
+            if "trace_id" in corr_ctx and corr_ctx["trace_id"]:
+                kwargs["trace_id"] = str(corr_ctx["trace_id"])
+            # Add atlan-* headers for OTEL
+            for key, value in corr_ctx.items():
+                if key.startswith("atlan-") and value:
+                    kwargs[key] = str(value)
 
         return msg, kwargs
 

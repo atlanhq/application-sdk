@@ -3,8 +3,9 @@ kind: Component
 metadata:
   name: objectstore
 spec:
-  type: bindings.localstorage
   version: v1
+  type: bindings.localstorage
+  ignoreErrors: true
   metadata:
     - name: rootPath
       value: "./local/dapr/objectstore"

@@ -1,5 +1,338 @@
 # Changelog
 
+## v1.1.1 (December 17, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.1.0...v1.1.1
+
+### Bug Fixes
+
+- pushing logs to atlan-objectstore (#894) (by @Garavitey in [76fec72](https://github.com/atlanhq/application-sdk/commit/76fec72))
+- windows path normalization for prefix download (#895) (by @inishchith in [df99afe](https://github.com/atlanhq/application-sdk/commit/df99afe))
+
+
+## v1.1.0 (December 12, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.4...v1.1.0
+
+### Features
+
+- Add Atlan Attributes to Temporal Runs (#880) (by @saig214 in [8a85a24](https://github.com/atlanhq/application-sdk/commit/8a85a24))
+
+
+## v1.0.4 (December 11, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.3...v1.0.4
+
+### Bug Fixes
+
+- add automatic gRPC message size limit handling for large file uploads (#878) (by @SanilK2108 in [4d76838](https://github.com/atlanhq/application-sdk/commit/4d76838))
+
+
+## v1.0.3 (December 09, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.2...v1.0.3
+
+### Bug Fixes
+
+- handle Azure Blob and GCP response formats in list_files method in objectstore service (#875) (by @hamza-atlan in [19d26a3](https://github.com/atlanhq/application-sdk/commit/19d26a3))
+- error handling on connection failures (#877) (by @sachi-atlan in [8108186](https://github.com/atlanhq/application-sdk/commit/8108186))
+
+
+## v1.0.2 (December 09, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.1...v1.0.2
+
+### Bug Fixes
+
+- release version bump (#871) (by @inishchith in [0cf4305](https://github.com/atlanhq/application-sdk/commit/0cf4305))
+
+
+## v1.0.1 (December 05, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.0...v1.0.1
+
+### Features
+
+- Expose accumulated metrics (#813) (by @saig214 in [095a386](https://github.com/atlanhq/application-sdk/commit/095a386))
+
+### Bug Fixes
+
+- breaking changes induced in opentelemetry 1.39.0 release (#834) (by @abhishekagrawal-atlan in [bc6359b](https://github.com/atlanhq/application-sdk/commit/bc6359b))
+
+
+## v1.0.0 (November 21, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc63...v1.0.0
+
+### Features
+
+- GA release
+
+
+## v0.1.1rc64 (November 14, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc63...v0.1.1rc64
+
+### Bug Fixes
+
+- Disable analytics tracking for DAFT (#820) (by @TechyMT in [c421233](https://github.com/atlanhq/application-sdk/commit/c421233))
+
+
+## v0.1.1rc63 (November 12, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc62...v0.1.1rc63
+
+### Features
+
+- handle single key secret stores (#812) (by @nishantmunjal7 in [abf5f6d](https://github.com/atlanhq/application-sdk/commit/abf5f6d))
+- deployment secret single-key (#816) (by @nishantmunjal7 in [c5efd9a](https://github.com/atlanhq/application-sdk/commit/c5efd9a))
+
+
+## v0.1.1rc62 (November 03, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc61...v0.1.1rc62
+
+### Features
+
+- Adding a new event whenever Token refreshes (#802) (by @Garavitey in [2e32ab4](https://github.com/atlanhq/application-sdk/commit/2e32ab4))
+
+
+## v0.1.1rc61 (October 30, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc60...v0.1.1rc61
+
+
+## v0.1.1rc60 (October 29, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc59...v0.1.1rc60
+
+### Features
+
+- Fixing the daft import issue (#803) (by @Garavitey in [0f27353](https://github.com/atlanhq/application-sdk/commit/0f27353))
+
+### Bug Fixes
+
+- bump Dapr cli to v1.16.2, helm security patch (#804) (by @inishchith in [d36a4e7](https://github.com/atlanhq/application-sdk/commit/d36a4e7))
+
+
+## v0.1.1rc59 (October 25, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc58...v0.1.1rc59
+
+### Features
+
+- Adding support to push logs decoupled for workflow (#786) (by @Garavitey in [2b291ff](https://github.com/atlanhq/application-sdk/commit/2b291ff))
+
+
+## v0.1.1rc58 (October 22, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc57...v0.1.1rc58
+
+### Bug Fixes
+
+- Updated lockname to not use APPLICATION_NAME (#797) (by @SanilK2108 in [151b811](https://github.com/atlanhq/application-sdk/commit/151b811))
+
+
+## v0.1.1rc57 (October 22, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc56...v0.1.1rc57
+
+### Bug Fixes
+
+- remove long running local activities (#792) (by @inishchith in [e046c90](https://github.com/atlanhq/application-sdk/commit/e046c90))
+
+
+## v0.1.1rc56 (October 15, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc55...v0.1.1rc56
+
+### Features
+
+- update readme file (#787) (by @junaidrahim in [2ccc631](https://github.com/atlanhq/application-sdk/commit/2ccc631))
+
+### Bug Fixes
+
+- Not logging each metric (#790) (by @TechyMT in [42a8f0f](https://github.com/atlanhq/application-sdk/commit/42a8f0f))
+
+
+## v0.1.1rc55 (October 14, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc54...v0.1.1rc55
+
+### Features
+
+- add connect_args support to DatabaseConfig (#784) (by @inishchith in [f8ad608](https://github.com/atlanhq/application-sdk/commit/f8ad608))
+
+
+## v0.1.1rc54 (October 09, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc53...v0.1.1rc54
+
+### Bug Fixes
+
+- Add file converter to sdk for QI app Json Support (#778) (by @OnkarVO7 in [177aa06](https://github.com/atlanhq/application-sdk/commit/177aa06))
+
+
+## v0.1.1rc52 (October 03, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc51...v0.1.1rc52
+
+### Bug Fixes
+
+- incorrect temporal workflow run-id reported (#750) (by @inishchith in [9e8ce3e](https://github.com/atlanhq/application-sdk/commit/9e8ce3e))
+- resolve race condition in preflight_check activity (#751) (by @inishchith in [d24fe41](https://github.com/atlanhq/application-sdk/commit/d24fe41))
+
+
+## v0.1.1rc51 (October 01, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc50...v0.1.1rc51
+
+### Features
+
+- enable Dapr hot reload and add error resilience to components (#744) (by @inishchith in [064f944](https://github.com/atlanhq/application-sdk/commit/064f944))
+
+### Bug Fixes
+
+- Adjust max file size buffer in ParquetOutput to 75% of DAPR limit (#741) (by @TechyMT in [727abef](https://github.com/atlanhq/application-sdk/commit/727abef))
+
+
+## v0.1.1rc50 (September 29, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc49...v0.1.1rc50
+
+### Features
+
+- bump Dapr version to 1.16.0 (#729) (by @inishchith in [02dab1c](https://github.com/atlanhq/application-sdk/commit/02dab1c))
+
+
+## v0.1.1rc49 (September 29, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc48...v0.1.1rc49
+
+### Bug Fixes
+
+- Make Changelog script use GitHub usernames instead of Git Author Names (#735) (by @drockparashar in [244b53f](https://github.com/atlanhq/application-sdk/commit/244b53f))
+- add env token to generate changelog step (#739) (by @inishchith in [8278e58](https://github.com/atlanhq/application-sdk/commit/8278e58))
+
+
+## v0.1.1rc48 (September 26, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc47...v0.1.1rc48
+
+### Bug Fixes
+
+- Updated constants + Refactor for multidb logic (#736) (by @Abhishek Agrawal in [cd97be3](https://github.com/atlanhq/application-sdk/commit/cd97be3))
+
+## v0.1.1rc47 (September 24, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc46...v0.1.1rc47
+
+### Bug Fixes
+
+- partition columns defaults for daft write_parquet (#728) (by @Nishchith Shetty in [7ed4949](https://github.com/atlanhq/application-sdk/commit/7ed4949))
+- Update ParquetOutput to handle file uploads correctly (#732) (by @Mustafa in [b4b2953](https://github.com/atlanhq/application-sdk/commit/b4b2953))
+- CI build path (#733) (by @Nishchith Shetty in [6d04006](https://github.com/atlanhq/application-sdk/commit/6d04006))
+
+
+
+## v0.1.1rc46 (September 18, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc45...v0.1.1rc46
+
+### Bug Fixes
+
+- Fix semaphore implementation to allow multiple batching without getting into max_concurrent_activities issue (#725) (by @Mustafa in [2a66f13](https://github.com/atlanhq/application-sdk/commit/2a66f13))
+
+## v0.1.1rc45 (September 18, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc44...v0.1.1rc45
+
+### Features
+
+- add MCP (Model Context Protocol) integration to application-sdk (#698) (by @AdvitXAtlan in [a5d496e](https://github.com/atlanhq/application-sdk/commit/a5d496e))
+- fix credentials and extra field information in docs (#724) (by @Nishchith Shetty in [a0808db](https://github.com/atlanhq/application-sdk/commit/a0808db))
+- add minimal API docs for endpoints exposed (#721) (by @Nishchith Shetty in [3301b61](https://github.com/atlanhq/application-sdk/commit/3301b61))
+
+
+
+## v0.1.1rc44 (September 17, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc43...v0.1.1rc44
+
+### Bug Fixes
+
+- memory management issues with readers and writers (#700) (by @Nishchith Shetty in [af77ed9](https://github.com/atlanhq/application-sdk/commit/af77ed9))
+
+## v0.1.1rc43 (September 16, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc42...v0.1.1rc43
+
+### Features
+
+- update configuration documentation with comprehensive constant descriptions and use cases (#646) (by @Nishchith Shetty in [6f91796](https://github.com/atlanhq/application-sdk/commit/6f91796))
+
+### Bug Fixes
+
+- file not found exception across cloud providers, suppress logs in case of upsert (#702) (by @Nishchith Shetty in [0089c5f](https://github.com/atlanhq/application-sdk/commit/0089c5f))
+
+
+
+## v0.1.1rc42 (September 15, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc41...v0.1.1rc42
+
+### Features
+
+- enhance file handling in Input classes (#697) (by @Mustafa in [a792fa6](https://github.com/atlanhq/application-sdk/commit/a792fa6))
+
+## v0.1.1rc41 (September 11, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc40...v0.1.1rc41
+
+### Features
+
+- add support for multidb extraction, enhance aws client via redshift refactor (#706) (by @Abhishek Agrawal in [4441285](https://github.com/atlanhq/application-sdk/commit/4441285))
+- add support for frontend configmap handler and static file serving (#631) (by @Angad Sethi in [13e164a](https://github.com/atlanhq/application-sdk/commit/13e164a))
+
+
+
+## v0.1.1rc40 (September 09, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc39...v0.1.1rc40
+
+### Features
+
+- add retain_local_copy option to upload methods in ObjectStore (#691) (by @Mustafa in [38285f0](https://github.com/atlanhq/application-sdk/commit/38285f0))
+- enhance bugbot rules (#681) (by @AdvitXAtlan in [546d23f](https://github.com/atlanhq/application-sdk/commit/546d23f))
+
+### Bug Fixes
+
+- make sql client use context managers (#699) (by @Nishchith Shetty in [211f31b](https://github.com/atlanhq/application-sdk/commit/211f31b))
+
+## v0.1.1rc39 (September 04, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc38...v0.1.1rc39
+
+### Features
+
+- implement delete file and prefix operations in ObjectStore (#694) (by @Mustafa in [6f71615](https://github.com/atlanhq/application-sdk/commit/6f71615))
+- add Daft configuration constants and update Parquet output handling (by @Mustafa in [68c2593](https://github.com/atlanhq/application-sdk/commit/68c2593))
+
+
+
+## v0.1.1rc38 (September 03, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc37...v0.1.1rc38
+
+## v0.1.1rc37 (September 03, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc36...v0.1.1rc37
+
+### Features
+
+- add file size-based chunking to JsonOutput (#650) (by @Nishchith Shetty in [7e7685b](https://github.com/atlanhq/application-sdk/commit/7e7685b))
+
+
 
 ## v0.1.1rc36 (September 01, 2025)
 

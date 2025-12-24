@@ -75,7 +75,7 @@ jobs:
 
       - name: Get PR Labels
         id: get-labels
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -192,7 +192,7 @@ jobs:
           uv run poe generate-apidocs
 
       - name: Setup AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           aws-region: ap-south-1
           # Only usable in atlanhq repositories

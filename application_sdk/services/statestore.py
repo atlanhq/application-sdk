@@ -104,33 +104,26 @@ class StateStore:
             >>> creds = await StateStore.get_state("db-cred-456", StateType.CREDENTIALS)
             >>> print(f"Database: {creds.get('database')}")
         """
-
         state_file_path = build_state_store_path(id, type)
-        state = {}
-
         try:
-            logger.info(f"Trying to download state object for {id} with type {type}")
-            await ObjectStore.download_file(
-                source=get_object_store_prefix(state_file_path),
-                destination=state_file_path,
+            object_store_content = await ObjectStore.get_content(
+                get_object_store_prefix(state_file_path),
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
+                suppress_error=True,
             )
-
-            with open(state_file_path, "r") as file:
-                state = json.load(file)
-
-            logger.info(f"State object downloaded for {id} with type {type}")
-        except Exception as e:
-            # local error message is "file not found", while in object store it is "object not found"
-            if "not found" in str(e).lower():
-                logger.info(
+            if not object_store_content:
+                logger.warning(
                     f"No state found for {type.value} with id '{id}', returning empty dict"
                 )
-            else:
-                logger.error(f"Failed to extract state: {str(e)}")
-                raise
+                return {}
 
-        return state
+            state = json.loads(object_store_content)
+            logger.info(f"State object retrieved for {id} with type {type}")
+
+            return state
+        except Exception as e:
+            logger.error(f"Failed to extract state: {str(e)}")
+            raise
 
     @classmethod
     async def save_state(cls, key: str, value: Any, id: str, type: StateType) -> None:
@@ -240,7 +233,9 @@ class StateStore:
             ... )
         """
         try:
-            logger.info(f"Saving state object for {id} with type {type}")
+            logger.info(
+                f"Saving state object in object store for {id} with type {type}"
+            )
             # get the current state from object store
             current_state = await cls.get_state(id, type)
             state_file_path = build_state_store_path(id, type)
@@ -260,7 +255,9 @@ class StateStore:
                 destination=get_object_store_prefix(state_file_path),
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
-            logger.info(f"State object saved for {id} with type {type}")
+            logger.info(
+                f"State object created in object store for {id} with type {type}"
+            )
             return current_state
         except Exception as e:
             logger.error(f"Failed to store state: {str(e)}")

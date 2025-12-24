@@ -33,20 +33,31 @@ def get_commits_since_last_tag(current_version):
     result = subprocess.run(["git", "tag", "-l", tag], capture_output=True, text=True)
 
     if tag in result.stdout:
-        range_spec = f"{tag}..HEAD"
+        range_spec = f"{tag}...HEAD"
     else:
         old_tag = "v0.1.0-rc.1"
         # If no tag exists, get commits from beginning (as v0.1.0-rc.1)
-        range_spec = f"{old_tag}..HEAD"
+        range_spec = f"{old_tag}...HEAD"
 
-    # Get commits with format: <hash> <subject>
+    # Hardcode to the correct repo to fetch commits from
+    owner, repo = "atlanhq", "application-sdk"
+    compare_path = f"repos/{owner}/{repo}/compare/{range_spec}"
+
+    # Use a standard pipe '|' delimiter to avoid encoding issues.
+    jq_filter = '.commits[] | "\\(.sha[0:7])|\\(.author.login // .commit.author.name)|\\(.commit.message | split("\\n")[0])"'
+
     result = subprocess.run(
-        ["git", "log", range_spec, "--pretty=format:%h¦%an¦%s"],
+        ["gh", "api", compare_path, "--jq", jq_filter],
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
 
-    return result.stdout.strip().split("\n")
+    if result.returncode != 0:
+        print(f"Error calling GitHub API: {result.stderr}")
+        return []
+
+    return result.stdout.strip().split("\n") if result.stdout.strip() else []
 
 
 def categorize_commits(commits):
@@ -61,31 +72,28 @@ def categorize_commits(commits):
     """
     categories = {"features": [], "fixes": [], "chores": [], "other": []}
 
+    # Hardcode to the correct repo for generating commit links
+    owner, repo = "atlanhq", "application-sdk"
+
     for commit in commits:
         if not commit:
             continue
 
-        # Extract commit hash and message
-        parts = commit.split("¦", 2)
+        # Use the corrected delimiter
+        parts = commit.split("|", 2)
         if len(parts) < 3:
             continue
 
         commit_hash, author_name, message_subject = parts
-        commit_link = f"https://github.com/atlanhq/application-sdk/commit/{commit_hash}"
+        commit_link = f"https://github.com/{owner}/{repo}/commit/{commit_hash}"
 
-        # Categorize based on conventional commit prefixes
-        if re.match(r"^feat(\(.*\))?:", message_subject) or re.match(
-            r"^docs(\(.*\))?:", message_subject
-        ):
-            # Extract the message without the prefix
+        if re.match(r"^(feat|docs)(\(.*\))?:", message_subject):
             msg = re.sub(r"^(feat|docs)(\(.*\))?:\s*", "", message_subject)
             categories["features"].append((commit_link, author_name, msg))
         elif re.match(r"^fix(\(.*\))?:", message_subject):
             msg = re.sub(r"^fix(\(.*\))?:\s*", "", message_subject)
             categories["fixes"].append((commit_link, author_name, msg))
-        elif re.match(r"^chore(\(.*\))?:", message_subject) or re.match(
-            r"^build(\(.*\))?:", message_subject
-        ):
+        elif re.match(r"^(chore|build)(\(.*\))?:", message_subject):
             msg = re.sub(r"^(chore|build)(\(.*\))?:\s*", "", message_subject)
             categories["chores"].append((commit_link, author_name, msg))
         else:
@@ -97,32 +105,12 @@ def categorize_commits(commits):
 def get_full_changelog_url(current_version, new_version):
     """
     Generate the full changelog URL for GitHub comparison.
-
-    Args:
-        current_version (str): The previous version
-        new_version (str): The new version
-
-    Returns:
-        str: GitHub comparison URL
     """
-    result = subprocess.run(
-        ["git", "remote", "get-url", "origin"], capture_output=True, text=True
+    # Hardcode to the correct repo for generating the full changelog link
+    owner, repo = "atlanhq", "application-sdk"
+    return (
+        f"https://github.com/{owner}/{repo}/compare/v{current_version}...v{new_version}"
     )
-
-    if result.returncode != 0:
-        return ""
-
-    # Extract repo path from Git URL
-    url = result.stdout.strip()
-    match = re.search(r"github\.com[:/](.+?)(.git)?$", url)
-    if not match:
-        return ""
-
-    repo_path = match.group(1)
-    # Remove potential .git suffix
-    repo_path = repo_path.replace(".git", "")
-
-    return f"https://github.com/{repo_path}/compare/v{current_version}...v{new_version}"
 
 
 def format_changelog_section(categories, current_version, new_version):
@@ -140,39 +128,27 @@ def format_changelog_section(categories, current_version, new_version):
     now = datetime.now()
     date_str = now.strftime("%B %d, %Y")
 
-    # Start with the header
     changelog = f"## v{new_version} ({date_str})\n\n"
-
-    # Add GitHub comparison URL
     full_changelog_url = get_full_changelog_url(current_version, new_version)
-    if full_changelog_url:
-        changelog += f"Full Changelog: {full_changelog_url}\n\n"
+    changelog += f"Full Changelog: {full_changelog_url}\n\n"
 
-    # Add Features section
     if categories["features"]:
         changelog += "### Features\n\n"
         for commit_link, author_name, msg in categories["features"]:
-            short_sha = commit_link.split("/")[-1][
-                :7
-            ]  # Extract short SHA (first 7 chars)
+            short_sha = commit_link.split("/")[-1][:7]
             changelog += (
                 f"- {msg} (by @{author_name} in [{short_sha}]({commit_link}))\n"
             )
         changelog += "\n"
 
-    # Add Fixes section
     if categories["fixes"]:
         changelog += "### Bug Fixes\n\n"
         for commit_link, author_name, msg in categories["fixes"]:
-            short_sha = commit_link.split("/")[-1][
-                :7
-            ]  # Extract short SHA (first 7 chars)
+            short_sha = commit_link.split("/")[-1][:7]
             changelog += (
                 f"- {msg} (by @{author_name} in [{short_sha}]({commit_link}))\n"
             )
         changelog += "\n"
-
-    # NOTE: Ignore chores and other changes
 
     return changelog
 
@@ -186,39 +162,42 @@ def update_changelog_file(changelog_content):
     """
     changelog_path = "CHANGELOG.md"
 
-    # If CHANGELOG.md doesn't exist or is empty, create it with initial content
     if not os.path.exists(changelog_path) or os.path.getsize(changelog_path) == 0:
-        with open(changelog_path, "w") as f:
+        with open(changelog_path, "w", encoding="utf-8") as f:
             f.write("# Changelog\n\n")
             f.write(changelog_content)
         return
 
-    # Read existing changelog
-    with open(changelog_path, "r") as f:
+    with open(changelog_path, "r", encoding="utf-8") as f:
         existing_content = f.read()
 
     # Find the position to insert new content (after the title)
     title_match = re.search(r"^# Changelog", existing_content, re.MULTILINE)
     if title_match:
-        insert_pos = title_match.end() + 1
-        # Insert a newline if needed
-        if existing_content[insert_pos : insert_pos + 2] != "\n\n":
+        # Find the end of the title line
+        title_end = title_match.end()
+
+        # Skip any existing whitespace/newlines after the title
+        insert_pos = title_end
+        while (
+            insert_pos < len(existing_content)
+            and existing_content[insert_pos] in " \t\n"
+        ):
             insert_pos += 1
 
+        # Insert with consistent spacing: title + double newline + content + newline + rest
         new_content = (
-            existing_content[:insert_pos]
-            + "\n"
+            existing_content[:title_end]
+            + "\n\n"
             + changelog_content
+            + "\n"
             + existing_content[insert_pos:]
         )
     else:
         # If no title, just prepend the new content
         new_content = "# Changelog\n\n" + changelog_content + existing_content
 
-    print(new_content)
-
-    # Write updated changelog
-    with open(changelog_path, "w") as f:
+    with open(changelog_path, "w", encoding="utf-8") as f:
         f.write(new_content)
 
 
@@ -231,10 +210,16 @@ def main():
     new_version = sys.argv[2]
 
     commits = get_commits_since_last_tag(current_version)
+    if not commits:
+        print("No new commits found to add to the changelog.")
+        return
+
     categories = categorize_commits(commits)
     changelog_content = format_changelog_section(
         categories, current_version, new_version
     )
+    # Print the new content to the console
+    print(changelog_content)
     update_changelog_file(changelog_content)
 
     print(f"Changelog updated for version {new_version}")

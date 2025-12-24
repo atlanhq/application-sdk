@@ -1,4 +1,4 @@
-name: Pre-release Version Bump
+name: Release Version Bump
 
 on:
   pull_request:
@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0  # Need full history for changelog
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -48,7 +48,7 @@ jobs:
         id: version_update
         run: |
           # Update the version
-          python .github/scripts/pre_release.py main ${{ env.CURRENT_VERSION }}
+          python .github/scripts/release.py main ${{ env.CURRENT_VERSION }}
           uv lock
 
           # Get the new version
@@ -65,6 +65,8 @@ jobs:
 
       - name: Generate changelog
         id: changelog
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: python .github/scripts/update_changelog.py "${{ env.CURRENT_VERSION }}" "${{ env.NEW_VERSION }}"
 
       - name: Commit version bump and changelog
