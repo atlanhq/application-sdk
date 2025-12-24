@@ -244,7 +244,7 @@ TRACES_FILE_NAME = "traces.parquet"
 
 # Dapr Sink Configuration
 ENABLE_OBSERVABILITY_DAPR_SINK = (
-    os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false").lower() == "true"
+    os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true").lower() == "true"
 )
 
 # atlan_client configuration (non ATLAN_ prefix are rooted in pyatlan SDK, to be revisited)
