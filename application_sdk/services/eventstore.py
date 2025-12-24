@@ -7,7 +7,7 @@ to a pub/sub system with automatic fallback to HTTP binding.
 import json
 from datetime import datetime
 
-from dapr import clients
+from dapr.aio.clients import DaprClient
 from temporalio import activity, workflow
 
 from application_sdk.common.dapr_utils import is_component_registered
@@ -154,8 +154,8 @@ class EventStore:
             auth_client = AtlanAuthClient()
             binding_metadata.update(await auth_client.get_authenticated_headers())
 
-            with clients.DaprClient() as client:
-                client.invoke_binding(
+            async with DaprClient() as client:
+                await client.invoke_binding(
                     binding_name=EVENT_STORE_NAME,
                     operation=DAPR_BINDING_OPERATION_CREATE,
                     data=payload,

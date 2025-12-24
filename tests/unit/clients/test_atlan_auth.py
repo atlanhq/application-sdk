@@ -1,7 +1,7 @@
 """Tests for the AtlanAuthClient class."""
 
 import time
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -12,7 +12,7 @@ from application_sdk.clients.atlan_auth import AtlanAuthClient
 async def auth_client() -> AtlanAuthClient:
     """Create an AtlanAuthClient instance for testing."""
 
-    def mock_get_deployment_secret(key: str):
+    async def mock_get_deployment_secret(key: str):
         """Mock get_deployment_secret to return values based on key."""
         mock_config = {
             "test_app_client_id": "test-client",
@@ -55,6 +55,7 @@ async def test_credential_discovery_failure(auth_client: AtlanAuthClient) -> Non
 
     with patch(
         "application_sdk.clients.atlan_auth.SecretStore.get_deployment_secret",
+        new_callable=AsyncMock,
         return_value=None,  # Empty config means no credentials
     ):
         credentials = await auth_client_no_fallback._extract_auth_credentials()

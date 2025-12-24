@@ -12,8 +12,8 @@ from application_sdk.services.objectstore import ObjectStore
 class TestObjectStore:
     @patch("application_sdk.services.objectstore.DaprClient")
     async def test_upload_file_success(self, mock_dapr_client: MagicMock) -> None:
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_client = AsyncMock()
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         test_file_content = b"test content"
         m = mock_open(read_data=test_file_content)
@@ -33,8 +33,8 @@ class TestObjectStore:
 
     @patch("application_sdk.services.objectstore.DaprClient")
     async def test_upload_directory_success(self, mock_dapr_client: MagicMock) -> None:
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_client = AsyncMock()
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         with patch("os.walk") as mock_walk, patch("os.path.isdir") as mock_isdir, patch(
             "os.path.exists", return_value=True
@@ -70,8 +70,8 @@ class TestObjectStore:
     @patch("application_sdk.services.objectstore.DaprClient")
     async def test_delete_file_success(self, mock_dapr_client: MagicMock) -> None:
         """Test successful deletion of a single file."""
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_client = AsyncMock()
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         await ObjectStore.delete_file(key="test/file.txt")
 
@@ -89,9 +89,9 @@ class TestObjectStore:
     @patch("application_sdk.services.objectstore.DaprClient")
     async def test_delete_file_failure(self, mock_dapr_client: MagicMock) -> None:
         """Test delete file failure handling."""
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_client.invoke_binding.side_effect = Exception("Delete failed")
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         with pytest.raises(Exception, match="Delete failed"):
             await ObjectStore.delete_file(key="test/file.txt")
@@ -195,11 +195,11 @@ class TestObjectStore:
     @patch("application_sdk.services.objectstore.DaprClient")
     async def test_get_content_success(self, mock_dapr_client: MagicMock) -> None:
         """Test successful file content retrieval."""
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.data = b"test file content"
         mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         result = await ObjectStore.get_content(key="test/file.txt")
 
@@ -220,9 +220,9 @@ class TestObjectStore:
         self, mock_dapr_client: MagicMock
     ) -> None:
         """Test get_content raises exception when file not found and suppress_error=False."""
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_client.invoke_binding.side_effect = Exception("File not found")
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         with pytest.raises(Exception, match="File not found"):
             await ObjectStore.get_content(
@@ -234,9 +234,9 @@ class TestObjectStore:
         self, mock_dapr_client: MagicMock
     ) -> None:
         """Test get_content returns None when file not found and suppress_error=True."""
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_client.invoke_binding.side_effect = Exception("File not found")
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         result = await ObjectStore.get_content(
             key="nonexistent/file.txt", suppress_error=True
@@ -249,11 +249,11 @@ class TestObjectStore:
         self, mock_dapr_client: MagicMock
     ) -> None:
         """Test get_content raises exception when no data returned and suppress_error=False."""
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.data = None
         mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         with pytest.raises(Exception, match="No data received for file: test/file.txt"):
             await ObjectStore.get_content(key="test/file.txt", suppress_error=False)
@@ -263,11 +263,11 @@ class TestObjectStore:
         self, mock_dapr_client: MagicMock
     ) -> None:
         """Test get_content returns None when no data returned and suppress_error=True."""
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.data = None
         mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         result = await ObjectStore.get_content(key="test/file.txt", suppress_error=True)
 
@@ -278,11 +278,11 @@ class TestObjectStore:
         self, mock_dapr_client: MagicMock
     ) -> None:
         """Test get_content raises exception when empty data returned and suppress_error=False."""
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.data = b""
         mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         with pytest.raises(Exception, match="No data received for file: test/file.txt"):
             await ObjectStore.get_content(key="test/file.txt", suppress_error=False)
@@ -292,11 +292,11 @@ class TestObjectStore:
         self, mock_dapr_client: MagicMock
     ) -> None:
         """Test get_content returns None when empty data returned and suppress_error=True."""
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.data = b""
         mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         result = await ObjectStore.get_content(key="test/file.txt", suppress_error=True)
 
@@ -309,11 +309,11 @@ class TestObjectStore:
     ) -> None:
         """Test that a warning is logged when data size exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH."""
 
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.data = b"response data"
         mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         # Create data that exceeds the DAPR limit
         large_data = b"x" * (DAPR_MAX_GRPC_MESSAGE_LENGTH + 1)
@@ -353,11 +353,11 @@ class TestObjectStore:
         """Test that no warning is logged when data size is within DAPR_MAX_GRPC_MESSAGE_LENGTH."""
         from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.data = b"response data"
         mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         # Create data that is within the DAPR limit
         small_data = b"x" * (DAPR_MAX_GRPC_MESSAGE_LENGTH - 1000)
@@ -388,11 +388,11 @@ class TestObjectStore:
         """Test that string data is properly handled and size is calculated correctly."""
         from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.data = b"response data"
         mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         # Create a string that when encoded exceeds the DAPR limit
         # Each character in UTF-8 is typically 1 byte, but we'll use a large string

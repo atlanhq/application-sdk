@@ -1,6 +1,6 @@
 import json
 from typing import Any, Dict
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from hypothesis import given
@@ -180,17 +180,18 @@ class TestCredentialUtils:
             assert result["test_field"] == expected_value
             assert result["extra"]["extra_field"] == expected_value
 
+    @pytest.mark.asyncio
     @patch("application_sdk.services.objectstore.DaprClient")
     @patch("application_sdk.services.statestore.StateStore.get_state")
     @patch("application_sdk.services.secretstore.DaprClient")
     @patch("application_sdk.services.secretstore.DEPLOYMENT_NAME", "production")
-    def test_fetch_secret_success(
+    async def test_fetch_secret_success(
         self, mock_secret_dapr_client, mock_get_state, mock_object_dapr_client
     ):
         """Test successful secret fetching."""
-        # Setup mock for secret store
-        mock_client = MagicMock()
-        mock_secret_dapr_client.return_value.__enter__.return_value = mock_client
+        # Setup mock for secret store (async context manager)
+        mock_client = AsyncMock()
+        mock_secret_dapr_client.return_value.__aenter__.return_value = mock_client
 
         # Mock the secret response
         mock_response = MagicMock()
@@ -200,7 +201,7 @@ class TestCredentialUtils:
         # Mock the state store response
         mock_get_state.return_value = {"additional_key": "additional_value"}
 
-        result = SecretStore.get_secret("test-key", component_name="test-component")
+        result = await SecretStore.get_secret("test-key", component_name="test-component")
 
         # Verify the result includes both secret and state data
         expected_result = {
@@ -212,29 +213,31 @@ class TestCredentialUtils:
             store_name="test-component", key="test-key"
         )
 
+    @pytest.mark.asyncio
     @patch("application_sdk.services.objectstore.DaprClient")
     @patch("application_sdk.services.statestore.StateStore.get_state")
     @patch("application_sdk.services.secretstore.DaprClient")
     @patch("application_sdk.services.secretstore.DEPLOYMENT_NAME", "production")
-    def test_fetch_secret_failure(
+    async def test_fetch_secret_failure(
         self,
         mock_secret_dapr_client: Mock,
         mock_get_state: Mock,
         mock_object_dapr_client: Mock,
     ):
         """Test failed secret fetching."""
-        mock_client = MagicMock()
-        mock_secret_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_client = AsyncMock()
+        mock_secret_dapr_client.return_value.__aenter__.return_value = mock_client
         mock_client.get_secret.side_effect = Exception("Connection failed")
 
         # Mock the state store (though it won't be reached due to the exception)
         mock_get_state.return_value = {}
 
         with pytest.raises(Exception, match="Connection failed"):
-            SecretStore.get_secret("test-key", component_name="test-component")
+            await SecretStore.get_secret("test-key", component_name="test-component")
 
-    @patch("application_sdk.services.secretstore.SecretStore.get_secret")
-    def test_fetch_single_key_secrets_success(self, mock_get_secret):
+    @pytest.mark.asyncio
+    @patch("application_sdk.services.secretstore.SecretStore.get_secret", new_callable=AsyncMock)
+    async def test_fetch_single_key_secrets_success(self, mock_get_secret):
         """Test fetching secrets in single-key mode with successful lookups."""
         credential_config = {
             "username": "user_secret_key",
@@ -247,7 +250,7 @@ class TestCredentialUtils:
             {"value": "actual_password"},
         ]
 
-        result = SecretStore._fetch_single_key_secrets(credential_config)
+        result = await SecretStore._fetch_single_key_secrets(credential_config)
 
         assert result == {
             "value": "actual_password"  # Last one overwrites
@@ -256,8 +259,9 @@ class TestCredentialUtils:
         mock_get_secret.assert_any_call("user_secret_key")
         mock_get_secret.assert_any_call("pass_secret_key")
 
-    @patch("application_sdk.services.secretstore.SecretStore.get_secret")
-    def test_fetch_single_key_secrets_with_empty_values(self, mock_get_secret):
+    @pytest.mark.asyncio
+    @patch("application_sdk.services.secretstore.SecretStore.get_secret", new_callable=AsyncMock)
+    async def test_fetch_single_key_secrets_with_empty_values(self, mock_get_secret):
         """Test fetching secrets in single-key mode with empty values filtered out."""
         credential_config = {
             "username": "user_secret_key",
@@ -269,14 +273,15 @@ class TestCredentialUtils:
             {"value": "actual_password", "null": None},
         ]
 
-        result = SecretStore._fetch_single_key_secrets(credential_config)
+        result = await SecretStore._fetch_single_key_secrets(credential_config)
 
         assert "value" in result
         assert "empty" not in result
         assert "null" not in result
 
-    @patch("application_sdk.services.secretstore.SecretStore.get_secret")
-    def test_fetch_single_key_secrets_preserves_falsy_values(self, mock_get_secret):
+    @pytest.mark.asyncio
+    @patch("application_sdk.services.secretstore.SecretStore.get_secret", new_callable=AsyncMock)
+    async def test_fetch_single_key_secrets_preserves_falsy_values(self, mock_get_secret):
         """Test that valid falsy values (False, 0) are preserved and not filtered out."""
         credential_config = {
             "enabled": "enabled_secret_key",
@@ -290,14 +295,15 @@ class TestCredentialUtils:
             {"count_secret_key": 0.0},  # Float 0.0 should be preserved
         ]
 
-        result = SecretStore._fetch_single_key_secrets(credential_config)
+        result = await SecretStore._fetch_single_key_secrets(credential_config)
 
         assert result["enabled_secret_key"] is False
         assert result["port_secret_key"] == 0
         assert result["count_secret_key"] == 0.0
 
-    @patch("application_sdk.services.secretstore.SecretStore.get_secret")
-    def test_fetch_single_key_secrets_with_exceptions(self, mock_get_secret):
+    @pytest.mark.asyncio
+    @patch("application_sdk.services.secretstore.SecretStore.get_secret", new_callable=AsyncMock)
+    async def test_fetch_single_key_secrets_with_exceptions(self, mock_get_secret):
         """Test fetching secrets in single-key mode when some lookups fail."""
         credential_config = {
             "username": "user_secret_key",
@@ -311,13 +317,14 @@ class TestCredentialUtils:
             {"value": "actual_database"},
         ]
 
-        result = SecretStore._fetch_single_key_secrets(credential_config)
+        result = await SecretStore._fetch_single_key_secrets(credential_config)
 
         assert "value" in result
         assert mock_get_secret.call_count == 3
 
-    @patch("application_sdk.services.secretstore.SecretStore.get_secret")
-    def test_fetch_single_key_secrets_no_string_fields(self, mock_get_secret):
+    @pytest.mark.asyncio
+    @patch("application_sdk.services.secretstore.SecretStore.get_secret", new_callable=AsyncMock)
+    async def test_fetch_single_key_secrets_no_string_fields(self, mock_get_secret):
         """Test fetching secrets in single-key mode with no string fields."""
         credential_config = {
             "port": 5432,
@@ -325,15 +332,15 @@ class TestCredentialUtils:
             "count": 100,
         }
 
-        result = SecretStore._fetch_single_key_secrets(credential_config)
+        result = await SecretStore._fetch_single_key_secrets(credential_config)
 
         assert result == {}
         mock_get_secret.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch("application_sdk.services.secretstore.SecretStore._fetch_single_key_secrets")
+    @patch("application_sdk.services.secretstore.SecretStore._fetch_single_key_secrets", new_callable=AsyncMock)
     @patch("application_sdk.services.secretstore.SecretStore.resolve_credentials")
-    @patch("application_sdk.services.statestore.StateStore.get_state")
+    @patch("application_sdk.services.statestore.StateStore.get_state", new_callable=AsyncMock)
     async def test_get_credentials_single_key_mode(
         self, mock_get_state, mock_resolve_credentials, mock_fetch_single_key
     ):
@@ -365,8 +372,8 @@ class TestCredentialUtils:
         assert result["password"] == "actual_password"
 
     @pytest.mark.asyncio
-    @patch("application_sdk.services.secretstore.SecretStore._fetch_single_key_secrets")
-    @patch("application_sdk.services.statestore.StateStore.get_state")
+    @patch("application_sdk.services.secretstore.SecretStore._fetch_single_key_secrets", new_callable=AsyncMock)
+    @patch("application_sdk.services.statestore.StateStore.get_state", new_callable=AsyncMock)
     async def test_get_credentials_single_key_mode_determination(
         self, mock_get_state, mock_fetch_single_key
     ):
@@ -393,9 +400,9 @@ class TestCredentialUtils:
         mock_fetch_single_key.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch("application_sdk.services.secretstore.SecretStore._fetch_single_key_secrets")
+    @patch("application_sdk.services.secretstore.SecretStore._fetch_single_key_secrets", new_callable=AsyncMock)
     @patch("application_sdk.services.secretstore.SecretStore.resolve_credentials")
-    @patch("application_sdk.services.statestore.StateStore.get_state")
+    @patch("application_sdk.services.statestore.StateStore.get_state", new_callable=AsyncMock)
     async def test_get_credentials_single_key_mode_with_extra(
         self, mock_get_state, mock_resolve_credentials, mock_fetch_single_key
     ):

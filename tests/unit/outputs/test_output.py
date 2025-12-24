@@ -163,8 +163,8 @@ class TestOutput:
     @pytest.mark.asyncio
     async def test_write_statistics_error(self):
         """Test write_statistics error handling."""
-        with patch("pandas.DataFrame.to_json") as mock_to_json:
-            mock_to_json.side_effect = Exception("Test error")
+        with patch("orjson.dumps") as mock_orjson:
+            mock_orjson.side_effect = Exception("Test error")
 
             with patch("application_sdk.outputs.logger.error") as mock_logger:
                 result = await self.output.write_statistics()

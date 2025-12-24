@@ -12,7 +12,7 @@ from typing import Any, Dict, Generic, List, TypeVar
 
 import duckdb
 import pandas as pd
-from dapr.clients import DaprClient
+from dapr.aio.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
@@ -446,9 +446,9 @@ class AtlanObservability(Generic[T], ABC):
         - Updates last cleanup time after successful cleanup
         """
         try:
-            with DaprClient() as client:
+            async with DaprClient() as client:
                 # Get last cleanup time from state store
-                state = client.get_state(
+                state = await client.get_state(
                     store_name=STATE_STORE_NAME, key=self._last_cleanup_key
                 )
                 last_cleanup = state.data.decode() if state.data else None
@@ -459,7 +459,7 @@ class AtlanObservability(Generic[T], ABC):
                 ) > timedelta(days=1):
                     await self._cleanup_old_records()
                     # Update last cleanup time
-                    client.save_state(
+                    await client.save_state(
                         store_name=STATE_STORE_NAME,
                         key=self._last_cleanup_key,
                         value=datetime.now().isoformat(),
@@ -535,8 +535,8 @@ class AtlanObservability(Generic[T], ABC):
                             shutil.rmtree(day_path)
 
                             # Delete from object store
-                            with DaprClient() as client:
-                                client.invoke_binding(
+                            async with DaprClient() as client:
+                                await client.invoke_binding(
                                     binding_name=DEPLOYMENT_OBJECT_STORE_NAME,
                                     operation="delete",
                                     data=b"",

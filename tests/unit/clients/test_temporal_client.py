@@ -18,7 +18,7 @@ class MockWorkflow(WorkflowInterface):
 def temporal_client() -> TemporalWorkflowClient:
     """Create a TemporalWorkflowClient instance for testing."""
 
-    def mock_get_deployment_secret(key: str):
+    async def mock_get_deployment_secret(key: str):
         # Return None for all keys by default (tests can override if needed)
         return None
 

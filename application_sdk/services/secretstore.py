@@ -18,7 +18,7 @@ import uuid
 from enum import Enum
 from typing import Any, Dict
 
-from dapr.clients import DaprClient
+from dapr.aio.clients import DaprClient
 
 from application_sdk.common.dapr_utils import is_component_registered
 from application_sdk.common.error_codes import CommonError
@@ -115,7 +115,7 @@ class SecretStore:
                 )
                 try:
                     logger.debug(f"Fetching multi-key secret from '{key_to_fetch}'")
-                    secret_data = cls.get_secret(secret_key=key_to_fetch)
+                    secret_data = await cls.get_secret(secret_key=key_to_fetch)
                 except Exception as e:
                     logger.warning(
                         f"Failed to fetch secret bundle '{key_to_fetch}': {e}"
@@ -123,7 +123,7 @@ class SecretStore:
 
             # Single-key mode → per-field secret lookup
             else:
-                secret_data = cls._fetch_single_key_secrets(credential_config)
+                secret_data = await cls._fetch_single_key_secrets(credential_config)
 
             # Merge or resolve references
             if credential_source == CredentialSource.DIRECT:
@@ -145,7 +145,7 @@ class SecretStore:
     # Secret resolution helpers
 
     @classmethod
-    def _fetch_single_key_secrets(
+    async def _fetch_single_key_secrets(
         cls, credential_config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Fetch secrets in single-key mode by looking up each field individually.
@@ -161,7 +161,7 @@ class SecretStore:
         for field, value in credential_config.items():
             if isinstance(value, str):
                 try:
-                    single_secret = cls.get_secret(value)
+                    single_secret = await cls.get_secret(value)
                     if single_secret:
                         for k, v in single_secret.items():
                             # Only filter out None and empty strings, not all falsy values.
@@ -177,7 +177,7 @@ class SecretStore:
                 for extra_key, extra_value in value.items():
                     if isinstance(extra_value, str):
                         try:
-                            single_secret = cls.get_secret(extra_value)
+                            single_secret = await cls.get_secret(extra_value)
                             if single_secret:
                                 for k, v in single_secret.items():
                                     if v is None or v == "":
@@ -235,7 +235,7 @@ class SecretStore:
         return credentials
 
     @classmethod
-    def get_deployment_secret(cls, key: str) -> Any:
+    async def get_deployment_secret(cls, key: str) -> Any:
         """Get a specific key from deployment configuration in the deployment secret store.
 
         Validates that the deployment secret store component is registered
@@ -252,11 +252,11 @@ class SecretStore:
 
         Examples:
             >>> # Get a specific deployment configuration value
-            >>> auth_url = SecretStore.get_deployment_secret("ATLAN_AUTH_CLIENT_ID")
+            >>> auth_url = await SecretStore.get_deployment_secret("ATLAN_AUTH_CLIENT_ID")
             >>> if auth_url:
             ...     print(f"Auth URL: {auth_url}")
             >>> # Get deployment name
-            >>> deployment_name = SecretStore.get_deployment_secret("deployment_name")
+            >>> deployment_name = await SecretStore.get_deployment_secret("deployment_name")
             >>> if deployment_name:
             ...     print(f"Deployment: {deployment_name}")
         """
@@ -267,14 +267,14 @@ class SecretStore:
             return None
 
         try:
-            secret_data = cls.get_secret(
+            secret_data = await cls.get_secret(
                 DEPLOYMENT_SECRET_PATH, DEPLOYMENT_SECRET_STORE_NAME
             )
             if isinstance(secret_data, dict) and key in secret_data:
                 return secret_data[key]
 
             logger.debug(f"Multi-key not found, checking single-key secret for '{key}'")
-            single_secret_data = cls.get_secret(key, DEPLOYMENT_SECRET_STORE_NAME)
+            single_secret_data = await cls.get_secret(key, DEPLOYMENT_SECRET_STORE_NAME)
             if isinstance(single_secret_data, dict):
                 # Handle both {key:value} and {"value": "..."} cases
                 if key in single_secret_data:
@@ -290,7 +290,7 @@ class SecretStore:
             return None
 
     @classmethod
-    def get_secret(
+    async def get_secret(
         cls, secret_key: str, component_name: str = SECRET_STORE_NAME
     ) -> Dict[str, Any]:
         """Get secret from the Dapr secret store component.
@@ -315,10 +315,10 @@ class SecretStore:
 
         Examples:
             >>> # Get database credentials
-            >>> db_secret = SecretStore.get_secret("database-credentials")
+            >>> db_secret = await SecretStore.get_secret("database-credentials")
             >>> print(f"Host: {db_secret.get('host')}")
             >>> # Get from specific component
-            >>> api_secret = SecretStore.get_secret(
+            >>> api_secret = await SecretStore.get_secret(
             ...     "api-keys",
             ...     component_name="external-secrets"
             ... )
@@ -327,8 +327,8 @@ class SecretStore:
             return {}
 
         try:
-            with DaprClient() as client:
-                dapr_secret_object = client.get_secret(
+            async with DaprClient() as client:
+                dapr_secret_object = await client.get_secret(
                     store_name=component_name, key=secret_key
                 )
                 return cls._process_secret_data(dapr_secret_object.secret)

@@ -11,7 +11,7 @@ detailed reporting through the MigrationSummary model.
 import asyncio
 from typing import Dict, List
 
-from dapr.clients import DaprClient
+from dapr.aio.clients import DaprClient
 from pydantic import BaseModel
 from temporalio import activity
 
@@ -55,6 +55,7 @@ class AtlanStorage:
     """Handles upload operations to Atlan storage and migration from objectstore."""
 
     OBJECT_CREATE_OPERATION = "create"
+    MAX_CONCURRENT_UPLOADS = 5
 
     @classmethod
     async def _migrate_single_file(cls, file_path: str) -> tuple[str, bool, str]:
@@ -63,6 +64,9 @@ class AtlanStorage:
         This internal method handles the migration of a single file, including
         error handling and logging. It's designed to be called concurrently
         for multiple files.
+
+        Each invocation creates its own DaprClient to avoid gRPC PollerCompletionQueue
+        issues that occur when sharing a single async client across concurrent tasks.
 
         Args:
             file_path (str): The path of the file to migrate in the object store.
@@ -84,21 +88,19 @@ class AtlanStorage:
                 file_path, store_name=DEPLOYMENT_OBJECT_STORE_NAME
             )
 
-            with DaprClient() as client:
-                metadata = {"key": file_path}
+            metadata = {"key": file_path}
 
-                client.invoke_binding(
+            # Create a new DaprClient for each file to avoid gRPC async issues
+            # when sharing clients across concurrent tasks
+            async with DaprClient() as client:
+                await client.invoke_binding(
                     binding_name=UPSTREAM_OBJECT_STORE_NAME,
                     operation=cls.OBJECT_CREATE_OPERATION,
-                    data=file_data,
+                    data=file_data or "",
                     binding_metadata=metadata,
                 )
 
-                logger.debug(
-                    f"Successfully uploaded file to Atlan storage: {file_path}"
-                )
-
-            logger.debug(f"Successfully migrated: {file_path}")
+            logger.debug(f"Successfully migrated file to Atlan storage: {file_path}")
             return file_path, True, ""
         except Exception as e:
             error_msg = str(e)
@@ -168,14 +170,24 @@ class AtlanStorage:
                     destination=UPSTREAM_OBJECT_STORE_NAME,
                 )
 
+            # Limit concurrent uploads to avoid overwhelming the system
+            semaphore = asyncio.Semaphore(cls.MAX_CONCURRENT_UPLOADS)
+
+            async def migrate_with_limit(file_path: str) -> tuple[str, bool, str]:
+                async with semaphore:
+                    return await cls._migrate_single_file(file_path)
+
             # Create migration tasks for all files
             migration_tasks = [
-                asyncio.create_task(cls._migrate_single_file(file_path))
+                asyncio.create_task(migrate_with_limit(file_path))
                 for file_path in files_to_migrate
             ]
 
-            # Execute all migrations in parallel
-            logger.info(f"Starting parallel migration of {total_files} files")
+            # Execute all migrations with concurrency limit
+            logger.info(
+                f"Starting migration of {total_files} files "
+                f"(max {cls.MAX_CONCURRENT_UPLOADS} concurrent)"
+            )
             results = await asyncio.gather(*migration_tasks, return_exceptions=True)
 
             # Process results
@@ -183,7 +195,7 @@ class AtlanStorage:
             failed_migrations: List[Dict[str, str]] = []
 
             for result in results:
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     # Handle unexpected exceptions
                     logger.error(f"Unexpected error during migration: {str(result)}")
                     failed_migrations.append({"file": "unknown", "error": str(result)})
