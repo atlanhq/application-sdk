@@ -58,18 +58,18 @@ class AtlanStorage:
     MAX_CONCURRENT_UPLOADS = 5
 
     @classmethod
-    async def _migrate_single_file(
-        cls, file_path: str, client: DaprClient
-    ) -> tuple[str, bool, str]:
+    async def _migrate_single_file(cls, file_path: str) -> tuple[str, bool, str]:
         """Migrate a single file from object store to Atlan storage.
 
         This internal method handles the migration of a single file, including
         error handling and logging. It's designed to be called concurrently
         for multiple files.
 
+        Each invocation creates its own DaprClient to avoid gRPC PollerCompletionQueue
+        issues that occur when sharing a single async client across concurrent tasks.
+
         Args:
             file_path (str): The path of the file to migrate in the object store.
-            client (DaprClient): The async Dapr client to use for the upload.
 
         Returns:
             tuple[str, bool, str]: A tuple containing:
@@ -90,12 +90,15 @@ class AtlanStorage:
 
             metadata = {"key": file_path}
 
-            await client.invoke_binding(
-                binding_name=UPSTREAM_OBJECT_STORE_NAME,
-                operation=cls.OBJECT_CREATE_OPERATION,
-                data=file_data or "",
-                binding_metadata=metadata,
-            )
+            # Create a new DaprClient for each file to avoid gRPC async issues
+            # when sharing clients across concurrent tasks
+            async with DaprClient() as client:
+                await client.invoke_binding(
+                    binding_name=UPSTREAM_OBJECT_STORE_NAME,
+                    operation=cls.OBJECT_CREATE_OPERATION,
+                    data=file_data or "",
+                    binding_metadata=metadata,
+                )
 
             logger.debug(f"Successfully migrated file to Atlan storage: {file_path}")
             return file_path, True, ""
@@ -167,29 +170,25 @@ class AtlanStorage:
                     destination=UPSTREAM_OBJECT_STORE_NAME,
                 )
 
-            # Use a single DaprClient connection for all migrations
-            async with DaprClient() as client:
-                # Limit concurrent uploads to avoid overwhelming the system
-                semaphore = asyncio.Semaphore(cls.MAX_CONCURRENT_UPLOADS)
+            # Limit concurrent uploads to avoid overwhelming the system
+            semaphore = asyncio.Semaphore(cls.MAX_CONCURRENT_UPLOADS)
 
-                async def migrate_with_limit(
-                    file_path: str,
-                ) -> tuple[str, bool, str]:
-                    async with semaphore:
-                        return await cls._migrate_single_file(file_path, client)
+            async def migrate_with_limit(file_path: str) -> tuple[str, bool, str]:
+                async with semaphore:
+                    return await cls._migrate_single_file(file_path)
 
-                # Create migration tasks for all files
-                migration_tasks = [
-                    asyncio.create_task(migrate_with_limit(file_path))
-                    for file_path in files_to_migrate
-                ]
+            # Create migration tasks for all files
+            migration_tasks = [
+                asyncio.create_task(migrate_with_limit(file_path))
+                for file_path in files_to_migrate
+            ]
 
-                # Execute all migrations with concurrency limit
-                logger.info(
-                    f"Starting migration of {total_files} files "
-                    f"(max {cls.MAX_CONCURRENT_UPLOADS} concurrent)"
-                )
-                results = await asyncio.gather(*migration_tasks, return_exceptions=True)
+            # Execute all migrations with concurrency limit
+            logger.info(
+                f"Starting migration of {total_files} files "
+                f"(max {cls.MAX_CONCURRENT_UPLOADS} concurrent)"
+            )
+            results = await asyncio.gather(*migration_tasks, return_exceptions=True)
 
             # Process results
             migrated_count = 0

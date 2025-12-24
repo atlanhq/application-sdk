@@ -11,10 +11,14 @@ from application_sdk.services.atlan_storage import AtlanStorage
 class TestAtlanStorage:
     """Test suite for AtlanStorage."""
 
-    async def test_migrate_single_file_success(self) -> None:
+    @patch("application_sdk.services.atlan_storage.DaprClient")
+    async def test_migrate_single_file_success(
+        self, mock_dapr_client: MagicMock
+    ) -> None:
         """Test successful single file migration to Atlan storage."""
         # Setup
         mock_client = AsyncMock()
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         file_path = "test/path/file.txt"
         file_data = b"test file content"
@@ -24,7 +28,7 @@ class TestAtlanStorage:
             new=AsyncMock(return_value=file_data),
         ):
             # Act
-            result = await AtlanStorage._migrate_single_file(file_path, mock_client)
+            result = await AtlanStorage._migrate_single_file(file_path)
 
             # Assert
             file_path_result, success, error_msg = result
@@ -39,11 +43,15 @@ class TestAtlanStorage:
                 binding_metadata={"key": file_path},
             )
 
-    async def test_migrate_single_file_error(self) -> None:
+    @patch("application_sdk.services.atlan_storage.DaprClient")
+    async def test_migrate_single_file_error(
+        self, mock_dapr_client: MagicMock
+    ) -> None:
         """Test single file migration error handling."""
         # Setup
         mock_client = AsyncMock()
         mock_client.invoke_binding.side_effect = Exception("Upload failed")
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         file_path = "test/path/file.txt"
         file_data = b"test file content"
@@ -53,7 +61,7 @@ class TestAtlanStorage:
             new=AsyncMock(return_value=file_data),
         ):
             # Act
-            result = await AtlanStorage._migrate_single_file(file_path, mock_client)
+            result = await AtlanStorage._migrate_single_file(file_path)
 
             # Assert
             file_path_result, success, error_msg = result
