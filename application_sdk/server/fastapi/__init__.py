@@ -32,7 +32,6 @@ from application_sdk.observability.observability import DuckDBUI
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
-from application_sdk.server.messaging import MessageProcessor, MessageProcessorConfig
 from application_sdk.server.fastapi.models import (
     ConfigMapResponse,
     EventWorkflowRequest,
@@ -92,7 +91,7 @@ class APIServer(ServerInterface):
     workflow_router: APIRouter
     dapr_router: APIRouter
     events_router: APIRouter
-    messages_router: APIRouter
+    messaging_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
     duckdb_ui: DuckDBUI
@@ -100,13 +99,13 @@ class APIServer(ServerInterface):
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
     # define PubSubSubscription as pubsub_name, topic, route class object
-    pubsub_subscriptions: List[PubSubSubscription] = []
+    messaging_subscriptions: List[PubSubSubscription] = []
 
     frontend_assets_path: str = "frontend/static"
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
-    message_processors: dict[str, MessageProcessor] = {}
+    #message_processors: dict[str, MessageProcessor] = {}
 
     ui_enabled: bool = True
 
@@ -118,6 +117,8 @@ class APIServer(ServerInterface):
         frontend_templates_path: str = "frontend/templates",
         ui_enabled: bool = True,
         has_configmap: bool = False,
+        # messaging_routers: List[APIRouter] = [],
+        messaging_subscriptions: List[PubSubSubscription] = [],
     ):
         """Initialize the FastAPI application.
 
@@ -144,7 +145,10 @@ class APIServer(ServerInterface):
         self.workflow_router = APIRouter()
         self.dapr_router = APIRouter()
         self.events_router = APIRouter()
-
+        # if len(messaging_routers) > 0:
+        #     self.messaging_routers = messaging_routers
+        if len(messaging_subscriptions) > 0:
+            self.messaging_subscriptions = messaging_subscriptions
         # Set up the application
         error_handler = internal_server_error_handler  # Store as local variable
         self.app.add_exception_handler(
@@ -189,160 +193,6 @@ class APIServer(ServerInterface):
         except Exception as e:
             logger.warning(str(e))
     
-    def register_message_processor(
-        self,
-        config: MessageProcessorConfig,
-        process_callback: Optional[
-            Callable[[List[dict]], Coroutine[Any, Any, None]]
-        ] = None,
-    ):
-        """Register a message processor.
-
-        Args:
-            config: Message processor configuration
-            process_callback: Optional custom callback for processing messages
-
-        Raises:
-            ValueError: If pubsub_component_name already registered or configuration invalid
-        """
-        if config.pubsub_component_name in self.message_processors:
-            raise ValueError(f"Message processor for  '{config.pubsub_component_name}' already registered")
-
-        # Create message processor instance
-        processor = MessageProcessor(
-            config=config,
-            process_callback=process_callback,
-            workflow_client=self.workflow_client if config.trigger_workflow else None,
-        )
-
-        # Store processor
-        self.message_processors[config.pubsub_component_name] = processor
-
-        # Create endpoint handler for this binding
-        async def handle_message_binding(request: Request) -> JSONResponse:
-            """Handle incoming messages from Dapr Messaging input binding.
-
-            This endpoint is called by Dapr when messages arrive on the binding.
-            Endpoint convention: POST /{pubsub_component_name}
-            """
-            start_time = time.time()
-            metrics = get_metrics()
-
-            try:
-                # Get message from request
-                body = await request.json()
-
-                logger.info(
-                    f"Received message from Dapr Messaging input binding: {config.binding_name}"
-                )
-                logger.debug(f"Message body: {body}")
-
-                # Process the message
-                result = await processor.add_message(body)
-
-                # Record success metric
-                duration = time.time() - start_time
-                metrics.record_metric(
-                    name="messaging_binding_requests_total",
-                    value=1.0,
-                    metric_type=MetricType.COUNTER,
-                    labels={"status": "success", "binding": config.pubsub_component_name},
-                    description="Total Messaging input binding requests",
-                )
-                metrics.record_metric(
-                    name="message_processing_duration_seconds",
-                    value=duration,
-                    metric_type=MetricType.HISTOGRAM,
-                    labels={"binding": config.pubsub_component_name},
-                    description="Message processing request duration",
-                )
-
-                return JSONResponse(status_code=status.HTTP_200_OK, content=result)
-
-            except Exception as e:
-                logger.error(
-                    f"Error handling Messaging input binding {config.pubsub_component_name}: {e}",
-                    exc_info=True,
-                )
-
-                # Record error metric
-                metrics.record_metric(
-                    name="message_processing_requests_total",
-                    value=1.0,
-                    metric_type=MetricType.COUNTER,
-                    labels={"status": "error", "binding": config.pubsub_component_name},
-                    description="Total Message processing requests",
-                )
-
-                return JSONResponse(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    content={"error": str(e)},
-                )
-
-        # Register the endpoint - Dapr calls POST /{binding-name}
-        #self.app.post(f"/{config.binding_name}")(handle_message_binding)
-
-        # Register pubsub subscription for Dapr
-        pubsub_name = config.pubsub_component_name
-        topic_name = config.topic
-        route = f"/{topic_name}"
-        
-        # Add subscription to the list for Dapr discovery
-        self.pubsub_subscriptions.append({
-            "pubsubname": pubsub_name,
-            "topic": topic_name,
-            "route": route
-        })
-        self.app.post(route)(handle_message_binding)
-
-        # Also register stats endpoint
-        async def get_processor_stats() -> JSONResponse:
-            """Get statistics for this message processor."""
-            return JSONResponse(
-                status_code=status.HTTP_200_OK,
-                content=processor.get_stats(),
-            )
-
-        # self.messages_router.add_api_route(
-        #     f"/stats/{config.pubsub_component_name}",
-        #     get_processor_stats,
-        #     methods=["GET"],
-        # )
-
-        mode = "batch" if config.is_batch_mode else "per-message"
-        logger.info(
-            f"Registered message processor for binding '{config.pubsub_component_name}' "
-            f"(mode={mode}, batch_size={config.batch_size}, "
-            f"timeout={config.batch_timeout}s)"
-        )
-
-
-    async def start_message_processors(self):
-        """Start all registered message processors."""
-        for binding_name, processor in self.message_processors.items():
-            try:
-                await processor.start()
-                logger.info(f"Started message processor for binding: {pubsub_component_name}")
-            except Exception as e:
-                logger.error(
-                    f"Error starting message processor {pubsub_component_name}: {e}",
-                    exc_info=True,
-                )
-                raise
-
-    async def stop_message_processors(self):
-        """Stop all registered message processors."""
-        for binding_name, processor in self.message_processors.items():
-            try:
-                await processor.stop()
-                logger.info(f"Stopped message processor for binding: {pubsub_component_name}")
-            except Exception as e:
-                logger.error(
-                    f"Error stopping message processor {pubsub_component_name}: {e}",
-                    exc_info=True,
-                )
-
-
     def frontend_home(self, request: Request) -> HTMLResponse:
         frontend_html_path = os.path.join(
             self.frontend_assets_path,
@@ -374,6 +224,17 @@ class APIServer(ServerInterface):
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
+        
+        # Register messaging routes from subscriptions with message_handler callbacks
+        if len(self.messaging_subscriptions) > 0:
+            messaging_router = APIRouter()
+            for subscription in self.messaging_subscriptions:
+                messaging_router.add_api_route(
+                    f"/{subscription.route}",
+                    subscription.message_handler,
+                    methods=["POST"],
+                )
+            self.app.include_router(messaging_router, prefix="/message-processor")
 
     def fallback_home(self, request: Request) -> HTMLResponse:
         return self.templates.TemplateResponse(
@@ -592,14 +453,23 @@ class APIServer(ServerInterface):
         """
 
         subscriptions: List[dict[str, Any]] = []
-        if self.message_processors:
-            for processor in self.message_processors.values():
-                subscriptions.append(
-                    {
-                        "pubsubname": processor.config.pubsub_component_name,
-                        "topic": processor.config.topic,
-                        "route": f"/{processor.config.topic}",
+        if self.messaging_subscriptions:
+            for subscription in self.messaging_subscriptions:
+                subscription_dict: dict[str, Any] = {
+                    "pubsubname": subscription.pubsub_component_name,
+                    "topic": subscription.topic,
+                    "route": f"/message-processor/{subscription.route}",
+                }
+                if subscription.bulk_subscribe and subscription.bulk_subscribe.enabled:
+                    subscription_dict["bulkSubscribe"] = {
+                        "enabled": subscription.bulk_subscribe.enabled,
+                        "maxMessagesCount": subscription.bulk_subscribe.maxMessagesCount,
+                        "maxAwaitDurationMs": subscription.bulk_subscribe.maxAwaitDurationMs,
                     }
+                if subscription.dead_letter_topic:
+                    subscription_dict["deadLetterTopic"] = subscription.dead_letter_topic
+                subscriptions.append(
+                    subscription_dict
                 )
         for event_trigger in self.event_triggers:
             filters = [
