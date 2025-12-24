@@ -41,6 +41,8 @@ runs:
 
     - name: Run Unit and Integration Tests with Coverage
       shell: bash
+      env:
+        ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK: "false"
       run: |
         uv run coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics
         uv run coverage xml
