@@ -105,7 +105,6 @@ class APIServer(ServerInterface):
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
-    #message_processors: dict[str, MessageProcessor] = {}
 
     ui_enabled: bool = True
 
@@ -117,7 +116,6 @@ class APIServer(ServerInterface):
         frontend_templates_path: str = "frontend/templates",
         ui_enabled: bool = True,
         has_configmap: bool = False,
-        # messaging_routers: List[APIRouter] = [],
         messaging_subscriptions: List[PubSubSubscription] = [],
     ):
         """Initialize the FastAPI application.
@@ -145,8 +143,6 @@ class APIServer(ServerInterface):
         self.workflow_router = APIRouter()
         self.dapr_router = APIRouter()
         self.events_router = APIRouter()
-        # if len(messaging_routers) > 0:
-        #     self.messaging_routers = messaging_routers
         if len(messaging_subscriptions) > 0:
             self.messaging_subscriptions = messaging_subscriptions
         # Set up the application
