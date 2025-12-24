@@ -30,7 +30,7 @@ from application_sdk.events.models import (
     ApplicationEventNames,
     Event,
     EventTypes,
-    WorkerTokenRefreshEventData,
+    WorkerHeartbeatEventData,
 )
 from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
 from application_sdk.interceptors.correlation_context import (
@@ -147,21 +147,15 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         return self.namespace
 
-    async def _publish_token_refresh_event(self) -> None:
-        """Publish a token refresh event to the event store.
+    async def _publish_heartbeat_event(self) -> None:
+        """Publish a heartbeat event to the event store.
 
-        This method creates and publishes an event containing token refresh information,
-        including application name, deployment name, token expiry times, and refresh timestamp.
-        If event publishing fails, it logs a warning but does not raise an exception to avoid
-        disrupting the token refresh loop.
-
-        Note:
-            This method handles exceptions internally and will not propagate errors,
-            ensuring the token refresh loop continues even if event publishing fails.
+        This method creates and publishes an event containing heartbeat information,
+        including application name, deployment name, and timestamp.
         """
         try:
             current_time = time.time()
-            worker_token_refresh_data = WorkerTokenRefreshEventData(
+            worker_heartbeat_data = WorkerHeartbeatEventData(
                 application_name=self.application_name,
                 deployment_name=DEPLOYMENT_NAME,
                 force_refresh=True,
@@ -173,12 +167,12 @@ class TemporalWorkflowClient(WorkflowClient):
             event = Event(
                 event_type=EventTypes.APPLICATION_EVENT.value,
                 event_name=ApplicationEventNames.TOKEN_REFRESH.value,
-                data=worker_token_refresh_data.model_dump(),
+                data=worker_heartbeat_data.model_dump(),
             )
             await EventStore.publish_event(event)
-            logger.info("Published token refresh event")
+            logger.info("Published heartbeat event")
         except Exception as e:
-            logger.warning(f"Failed to publish token refresh event: {e}")
+            logger.warning(f"Failed to publish heartbeat event: {e}")
 
     async def _token_refresh_loop(self) -> None:
         """Background loop that refreshes the authentication token dynamically."""
@@ -186,6 +180,8 @@ class TemporalWorkflowClient(WorkflowClient):
             try:
                 # Recalculate refresh interval each time in case token expiry changes
                 refresh_interval = self.auth_manager.calculate_refresh_interval()
+                # Publish token refresh event
+                await self._publish_heartbeat_event()
 
                 await asyncio.sleep(refresh_interval)
 
@@ -199,8 +195,6 @@ class TemporalWorkflowClient(WorkflowClient):
                 self._token_refresh_interval = (
                     self.auth_manager.calculate_refresh_interval()
                 )
-                # Publish token refresh event
-                await self._publish_token_refresh_event()
 
             except asyncio.CancelledError:
                 logger.info("Token refresh loop cancelled")

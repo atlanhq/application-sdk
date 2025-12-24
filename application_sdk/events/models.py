@@ -179,19 +179,11 @@ class WorkerStartEventData(BaseModel):
     activity_count: int
 
 
-class WorkerTokenRefreshEventData(BaseModel):
-    """Model for token refresh event data.
+class WorkerHeartbeatEventData(BaseModel):
+    """Model for heartbeat event data.
 
-    This model represents the data structure used when publishing token refresh events.
-    It contains information about the token refresh operation and agent status.
-
-    Attributes:
-        application_name: Name of the application the token belongs to.
-        deployment_name: Name of the deployment (e.g., dev, staging, prod).
-        force_refresh: Whether this was a forced refresh or automatic.
-        token_expiry_time: Unix timestamp when the new token expires.
-        time_until_expiry: Seconds until token expires.
-        refresh_timestamp: Unix timestamp when the refresh occurred.
+    This model represents the data structure used when publishing heartbeat events.
+    It contains information about the heartbeat operation and agent status.
     """
 
     application_name: str
