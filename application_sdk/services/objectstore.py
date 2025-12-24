@@ -6,7 +6,7 @@ import shutil
 from typing import List, Union
 
 import orjson
-from dapr.clients import DaprClient
+from dapr.aio.clients import DaprClient
 from temporalio import activity
 
 from application_sdk.constants import (
@@ -520,8 +520,8 @@ class ObjectStore:
                 # Data is within limit, use default DAPR limit
                 max_message_length = DAPR_MAX_GRPC_MESSAGE_LENGTH
 
-            with DaprClient(max_grpc_message_length=max_message_length) as client:
-                response = client.invoke_binding(
+            async with DaprClient(max_grpc_message_length=max_message_length) as client:
+                response = await client.invoke_binding(
                     binding_name=store_name,
                     operation=operation,
                     data=data,

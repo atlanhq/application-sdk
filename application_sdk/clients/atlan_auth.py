@@ -174,8 +174,8 @@ class AtlanAuthClient:
 
     async def _extract_auth_credentials(self) -> Optional[Dict[str, str]]:
         """Fetch app credentials from secret store - auth-specific logic"""
-        client_id = SecretStore.get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
-        client_secret = SecretStore.get_deployment_secret(
+        client_id = await SecretStore.get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
+        client_secret = await SecretStore.get_deployment_secret(
             WORKFLOW_AUTH_CLIENT_SECRET_KEY
         )
 

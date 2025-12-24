@@ -144,7 +144,7 @@ class TestEventStore:
         assert enriched_event.metadata.activity_type is None
         assert enriched_event.metadata.workflow_state == WorkflowStates.UNKNOWN.value
 
-    @patch("application_sdk.services.eventstore.clients.DaprClient")
+    @patch("application_sdk.services.eventstore.DaprClient")
     @patch("application_sdk.clients.atlan_auth.AtlanAuthClient")
     @patch("application_sdk.services.eventstore.is_component_registered")
     async def test_publish_event_success(
@@ -165,9 +165,9 @@ class TestEventStore:
             return_value={"Authorization": "Bearer test_token"}
         )
 
-        # Mock DAPR client
-        mock_dapr_instance = Mock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
+        # Mock DAPR client (async context manager)
+        mock_dapr_instance = AsyncMock()
+        mock_dapr_client.return_value.__aenter__.return_value = mock_dapr_instance
 
         await EventStore.publish_event(sample_event)
 
@@ -182,7 +182,9 @@ class TestEventStore:
 
     async def test_publish_event_always_enriches_metadata(self, sample_event):
         """Test publishing event always enriches metadata."""
-        with patch("application_sdk.services.eventstore.clients.DaprClient"):
+        with patch("application_sdk.services.eventstore.DaprClient") as mock_dapr:
+            mock_dapr_instance = AsyncMock()
+            mock_dapr.return_value.__aenter__.return_value = mock_dapr_instance
             with patch(
                 "application_sdk.services.eventstore.is_component_registered",
                 return_value=True,

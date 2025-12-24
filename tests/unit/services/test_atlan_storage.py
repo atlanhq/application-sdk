@@ -11,14 +11,10 @@ from application_sdk.services.atlan_storage import AtlanStorage
 class TestAtlanStorage:
     """Test suite for AtlanStorage."""
 
-    @patch("application_sdk.services.atlan_storage.DaprClient")
-    async def test_migrate_single_file_success(
-        self, mock_dapr_client: MagicMock
-    ) -> None:
+    async def test_migrate_single_file_success(self) -> None:
         """Test successful single file migration to Atlan storage."""
         # Setup
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_client = AsyncMock()
 
         file_path = "test/path/file.txt"
         file_data = b"test file content"
@@ -28,7 +24,7 @@ class TestAtlanStorage:
             new=AsyncMock(return_value=file_data),
         ):
             # Act
-            result = await AtlanStorage._migrate_single_file(file_path)
+            result = await AtlanStorage._migrate_single_file(file_path, mock_client)
 
             # Assert
             file_path_result, success, error_msg = result
@@ -43,12 +39,10 @@ class TestAtlanStorage:
                 binding_metadata={"key": file_path},
             )
 
-    @patch("application_sdk.services.atlan_storage.DaprClient")
-    async def test_migrate_single_file_error(self, mock_dapr_client: MagicMock) -> None:
+    async def test_migrate_single_file_error(self) -> None:
         """Test single file migration error handling."""
         # Setup
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_client = AsyncMock()
         mock_client.invoke_binding.side_effect = Exception("Upload failed")
 
         file_path = "test/path/file.txt"
@@ -59,7 +53,7 @@ class TestAtlanStorage:
             new=AsyncMock(return_value=file_data),
         ):
             # Act
-            result = await AtlanStorage._migrate_single_file(file_path)
+            result = await AtlanStorage._migrate_single_file(file_path, mock_client)
 
             # Assert
             file_path_result, success, error_msg = result
@@ -74,8 +68,8 @@ class TestAtlanStorage:
     ) -> None:
         """Test successful migration from objectstore to Atlan storage."""
         # Setup
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_client = AsyncMock()
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         mock_objectstore_input.list_files = AsyncMock(
             return_value=["file1.json", "file2.json", "file3.json"]
@@ -123,8 +117,8 @@ class TestAtlanStorage:
     ) -> None:
         """Test migration with some failures."""
         # Setup
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_client = AsyncMock()
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         mock_objectstore_input.list_files = AsyncMock(
             return_value=["file1.json", "file2.json", "file3.json"]
@@ -185,11 +179,15 @@ class TestAtlanStorage:
             await AtlanStorage.migrate_from_objectstore_to_atlan("test_prefix")
 
     @patch("application_sdk.services.atlan_storage.ObjectStore")
+    @patch("application_sdk.services.atlan_storage.DaprClient")
     async def test_migrate_from_objectstore_to_atlan_get_data_error(
-        self, mock_objectstore_input: MagicMock
+        self, mock_dapr_client: MagicMock, mock_objectstore_input: MagicMock
     ) -> None:
         """Test migration when getting file data fails."""
         # Setup
+        mock_client = AsyncMock()
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
+
         files_to_migrate = ["file1.txt"]
         mock_objectstore_input.list_files = AsyncMock(return_value=files_to_migrate)
         mock_objectstore_input.get_content = AsyncMock(
@@ -214,8 +212,8 @@ class TestAtlanStorage:
     ) -> None:
         """Test that files are migrated in parallel."""
         # Setup
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_client = AsyncMock()
+        mock_dapr_client.return_value.__aenter__.return_value = mock_client
 
         files = [f"file{i}.json" for i in range(10)]
         mock_objectstore_input.list_files = AsyncMock(return_value=files)
