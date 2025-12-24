@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - chainguard-image
     paths:
       - '**'
       - '!kurl-installer.yaml'
@@ -38,8 +39,8 @@ jobs:
         id: get_repo_name
         shell: bash
 
-      - name: Get version tag
-        run: echo "version=$(echo `git ls-remote https://${{ secrets.ORG_PAT_GITHUB }}@github.com/atlanhq/${{ steps.get_repo_name.outputs.repository_name }}.git ${{ steps.get_branch.outputs.branch }} | awk '{ print $1}' | cut -c1-7`)abcd" >> $GITHUB_OUTPUT
+      - name: Get version from pyproject.toml
+        run: echo "version=$(awk -F'"' '/^version = / {print $2}' pyproject.toml)" >> $GITHUB_OUTPUT
         id: get_version
 
       - name: Lowercase branch name
