@@ -8,7 +8,7 @@ import pytest
 
 from application_sdk.common.error_codes import IOError as SDKIOError
 from application_sdk.io import Reader
-from application_sdk.io._utils import download_files
+from application_sdk.io.utils import download_files
 
 
 class MockReader(Reader):

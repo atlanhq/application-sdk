@@ -30,7 +30,7 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import ENABLE_ATLAN_UPLOAD, UPSTREAM_OBJECT_STORE_NAME
-from application_sdk.io._utils import (
+from application_sdk.io.utils import (
     estimate_dataframe_record_size,
     is_empty_dataframe,
     path_gen,

@@ -7,8 +7,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.common.types import DataframeType
-from application_sdk.io._utils import download_files
 from application_sdk.io.json import JsonFileReader
+from application_sdk.io.utils import download_files
 from application_sdk.test_utils.hypothesis.strategies.inputs.json_input import (
     json_input_config_strategy,
 )

@@ -157,7 +157,7 @@ class TestParquetFileWriterPathGen:
 
     def test_path_gen_with_markers(self, base_output_path: str):
         """Test path generation with start and end markers."""
-        from application_sdk.io._utils import path_gen
+        from application_sdk.io.utils import path_gen
 
         path = path_gen(
             start_marker="start_123", end_marker="end_456", extension=".parquet"
@@ -167,7 +167,7 @@ class TestParquetFileWriterPathGen:
 
     def test_path_gen_without_chunk_start(self, base_output_path: str):
         """Test path generation without chunk count."""
-        from application_sdk.io._utils import path_gen
+        from application_sdk.io.utils import path_gen
 
         path = path_gen(chunk_part=5, extension=".parquet")
 
@@ -175,7 +175,7 @@ class TestParquetFileWriterPathGen:
 
     def test_path_gen_with_chunk_count(self, base_output_path: str):
         """Test path generation with chunk count."""
-        from application_sdk.io._utils import path_gen
+        from application_sdk.io.utils import path_gen
 
         path = path_gen(chunk_count=10, chunk_part=3, extension=".parquet")
 

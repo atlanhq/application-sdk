@@ -27,9 +27,9 @@ from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.io import DataframeType
-from application_sdk.io._utils import is_empty_dataframe
 from application_sdk.io.json import JsonFileWriter
 from application_sdk.io.parquet import ParquetFileReader, ParquetFileWriter
+from application_sdk.io.utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.services.secretstore import SecretStore

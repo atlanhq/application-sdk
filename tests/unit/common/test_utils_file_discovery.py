@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from application_sdk.io._utils import find_local_files_by_extension
+from application_sdk.io.utils import find_local_files_by_extension
 
 
 class TestFindFilesByExtension:

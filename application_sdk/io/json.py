@@ -7,7 +7,7 @@ from temporalio import activity
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
-from application_sdk.io._utils import (
+from application_sdk.io.utils import (
     JSON_FILE_EXTENSION,
     convert_datetime_to_epoch,
     download_files,

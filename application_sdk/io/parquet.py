@@ -21,7 +21,7 @@ from application_sdk.constants import (
     UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.io import DataframeType, Reader, WriteMode, Writer
-from application_sdk.io._utils import (
+from application_sdk.io.utils import (
     PARQUET_FILE_EXTENSION,
     download_files,
     is_empty_dataframe,
