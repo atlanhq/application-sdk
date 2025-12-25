@@ -57,7 +57,7 @@ The Application SDK uses environment variables for configuration. These can be s
 | Environment Variable | Description | Default Value | Use Case |
 |---------------------|-------------|---------------|----------|
 | `ATLAN_ENABLE_HIVE_PARTITIONING` | Whether to enable Hive partitioning for observability data | `true` | Organizes data by date for efficient querying and cleanup |
-| `ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK` | Whether to enable Dapr sink for observability data | `false` | Routes observability data through DAPR components |
+| `ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK` | Whether to enable Dapr sink for observability data | `true` | Routes observability data through DAPR components |
 
 ## Logging Configuration
 

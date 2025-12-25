@@ -239,6 +239,8 @@ ENABLE_OTLP_LOGS=true
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
+By default `ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK` is `true`, so logs, metrics, and traces are written to parquet locally and uploaded to the deployment object store through the Dapr binding unless explicitly disabled.
+
 ## Metrics (`metrics_adaptor.py`)
 
 The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integration and local storage capabilities.
