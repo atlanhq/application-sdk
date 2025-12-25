@@ -1,6 +1,6 @@
 # Inputs (I/O Readers)
 
-This module provides a standardized way to read data from various sources within the Application SDK framework. It defines a common `Reader` interface and offers concrete implementations for reading from Parquet files, JSON files, and Iceberg tables.
+This module provides a standardized way to read data from various sources within the Application SDK framework. It defines a common `Reader` interface and offers concrete implementations for reading from Parquet files and JSON files.
 
 ## Core Concepts
 
@@ -15,7 +15,6 @@ This module provides a standardized way to read data from various sources within
 
     *   **`ParquetFileReader` (`application_sdk.io.parquet`)**: Reads data from Parquet files.
     *   **`JsonFileReader` (`application_sdk.io.json`)**: Reads data from JSON Lines files.
-    *   **`IcebergTableReader` (`application_sdk.io.iceberg`)**: Reads data from Apache Iceberg tables.
 
 ## Object Store Integration (Automatic Download)
 
@@ -44,11 +43,6 @@ Reader classes follow a clear naming pattern that indicates what they work with:
   - Read from Parquet, JSON, or other file formats
   - Automatically download from object store if needed
   - Examples: `ParquetFileReader`, `JsonFileReader`
-
-- **`*TableReader`**: Work with managed table storage systems
-  - Read directly from table engines like Apache Iceberg
-  - Handle table-specific features (schema evolution, partitioning, time travel)
-  - Examples: `IcebergTableReader`
 
 ## Usage Patterns and Examples
 
@@ -129,30 +123,6 @@ df = await json_reader.read()
 print(f"Read {len(df)} records")
 ```
 
-### IcebergTableReader
-
-Used for reading directly from Apache Iceberg tables (requires PyIceberg).
-
-```python
-from application_sdk.io.iceberg import IcebergTableReader
-from application_sdk.io import DataframeType
-from pyiceberg.catalog import load_catalog
-
-# Load Iceberg catalog and table
-catalog = load_catalog("my_catalog")
-table = catalog.load_table("my_database.my_table")
-
-# Create reader
-iceberg_reader = IcebergTableReader(
-    table=table,
-    chunk_size=100000,
-    dataframe_type=DataframeType.daft  # Iceberg works best with Daft
-)
-
-# Read data
-df = await iceberg_reader.read()
-```
-
 ## Advanced Features
 
 ### Batched Reading for Large Datasets
@@ -209,7 +179,7 @@ daft_reader = JsonFileReader(
 
 ## Summary
 
-The readers module provides convenient classes for reading data from diverse sources (Parquet, JSON, Iceberg). Key features include:
+The readers module provides convenient classes for reading data from diverse sources (Parquet, JSON). Key features include:
 
 - **Automatic object store downloads** - no manual file management needed
 - **Memory-efficient batched reading** - process large datasets without loading everything into memory

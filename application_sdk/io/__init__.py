@@ -99,11 +99,12 @@ class Writer(ABC):
     """Abstract base class for writer handlers.
 
     This class defines the interface for writer handlers that can write data
-    to various destinations in different formats.
+    to various destinations in different formats. Follows Python's file I/O
+    pattern with open/write/close semantics and supports context managers.
 
     Attributes:
         output_path (str): Path where the writer will be written.
-        upload_file_prefix (str): Prefix for files when uploading to object store.
+        output_prefix (str): Prefix for files when uploading to object store.
         total_record_count (int): Total number of records processed.
         chunk_count (int): Number of chunks the writer was split into.
         buffer_size (int): Size of the buffer to write data to.
@@ -111,6 +112,20 @@ class Writer(ABC):
         current_buffer_size (int): Current size of the buffer to write data to.
         current_buffer_size_bytes (int): Current size of the buffer to write data to.
         partitions (List[int]): Partitions of the writer.
+
+    Example:
+        ```python
+        # Using close() explicitly
+        writer = JsonFileWriter(output_path="/data/output")
+        await writer.write(dataframe)
+        await writer.write({"key": "value"})  # Dict support
+        stats = await writer.close()
+
+        # Using context manager (recommended)
+        async with JsonFileWriter(output_path="/data/output") as writer:
+            await writer.write(dataframe)
+        # close() called automatically
+        ```
     """
 
     output_path: str
@@ -125,11 +140,98 @@ class Writer(ABC):
     partitions: List[int]
     extension: str
     dataframe_type: DataframeType
+    _is_closed: bool = False
+    _statistics: Optional[ActivityStatistics] = None
 
-    async def write(self, dataframe: Union["pd.DataFrame", "daft.DataFrame"], **kwargs):
+    async def __aenter__(self) -> "Writer":
+        """Enter the async context manager.
+
+        Returns:
+            Writer: The writer instance.
         """
-        Method to write the pandas dataframe to an iceberg table
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit the async context manager, closing the writer.
+
+        Args:
+            exc_type: Exception type if an exception was raised.
+            exc_val: Exception value if an exception was raised.
+            exc_tb: Exception traceback if an exception was raised.
         """
+        await self.close()
+
+    def _convert_to_dataframe(
+        self,
+        data: Union[
+            "pd.DataFrame", "daft.DataFrame", Dict[str, Any], List[Dict[str, Any]]
+        ],
+    ) -> Union["pd.DataFrame", "daft.DataFrame"]:
+        """Convert input data to a DataFrame if needed.
+
+        Args:
+            data: Input data - can be a DataFrame, dict, or list of dicts.
+
+        Returns:
+            A pandas or daft DataFrame depending on self.dataframe_type.
+
+        Raises:
+            TypeError: If data type is not supported.
+        """
+        import pandas as pd
+
+        # Already a pandas DataFrame - return as-is
+        if isinstance(data, pd.DataFrame):
+            return data
+
+        # Check for daft DataFrame
+        try:
+            import daft
+
+            if isinstance(data, daft.DataFrame):
+                return data
+        except ImportError:
+            pass
+
+        # Convert dict to single-row DataFrame
+        if isinstance(data, dict):
+            return pd.DataFrame([data])
+
+        # Convert list of dicts to DataFrame
+        if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+            return pd.DataFrame(data)
+
+        raise TypeError(
+            f"Unsupported data type: {type(data).__name__}. "
+            "Expected DataFrame, dict, or list of dicts."
+        )
+
+    async def write(
+        self,
+        data: Union[
+            "pd.DataFrame", "daft.DataFrame", Dict[str, Any], List[Dict[str, Any]]
+        ],
+        **kwargs: Any,
+    ) -> None:
+        """Write data to the output destination.
+
+        Supports writing DataFrames, dicts (converted to single-row DataFrame),
+        or lists of dicts (converted to multi-row DataFrame).
+
+        Args:
+            data: Data to write - DataFrame, dict, or list of dicts.
+            **kwargs: Additional parameters passed to the underlying write method.
+
+        Raises:
+            ValueError: If the writer has been closed or dataframe_type is unsupported.
+            TypeError: If data type is not supported.
+        """
+        if self._is_closed:
+            raise ValueError("Cannot write to a closed writer")
+
+        # Convert to DataFrame if needed
+        dataframe = self._convert_to_dataframe(data)
+
         if self.dataframe_type == DataframeType.pandas:
             await self._write_dataframe(dataframe, **kwargs)
         elif self.dataframe_type == DataframeType.daft:
@@ -145,10 +247,18 @@ class Writer(ABC):
             AsyncGenerator["daft.DataFrame", None],
             Generator["daft.DataFrame", None, None],
         ],
-    ):
+    ) -> None:
+        """Write batched DataFrames to the output destination.
+
+        Args:
+            dataframe: Async or sync generator yielding DataFrames.
+
+        Raises:
+            ValueError: If the writer has been closed or dataframe_type is unsupported.
         """
-        Method to write the pandas dataframe to an iceberg table
-        """
+        if self._is_closed:
+            raise ValueError("Cannot write to a closed writer")
+
         if self.dataframe_type == DataframeType.pandas:
             await self._write_batched_dataframe(dataframe)
         elif self.dataframe_type == DataframeType.daft:
@@ -315,30 +425,83 @@ class Writer(ABC):
         """
         pass
 
-    async def get_statistics(
-        self, typename: Optional[str] = None
-    ) -> ActivityStatistics:
-        """Returns statistics about the output.
+    @property
+    def statistics(self) -> ActivityStatistics:
+        """Get current statistics without closing the writer.
 
-        This method returns a ActivityStatistics object with total record count and chunk count.
+        Returns:
+            ActivityStatistics: Current statistics (record count, chunk count, partitions).
 
-        Args:
-            typename (str): Type name of the entity e.g database, schema, table.
+        Note:
+            This returns the current state. For final statistics after all
+            writes complete, use close() instead.
+        """
+        return ActivityStatistics(
+            total_record_count=self.total_record_count,
+            chunk_count=len(self.partitions),
+            partitions=self.partitions,
+        )
+
+    async def _finalize(self) -> None:
+        """Finalize the writer before closing.
+
+        Override this method in subclasses to perform any final flush operations,
+        upload remaining files, etc. This is called by close() before writing statistics.
+        """
+        pass
+
+    async def close(self) -> ActivityStatistics:
+        """Close the writer, flush buffers, upload files, and return statistics.
+
+        This method finalizes all pending writes, uploads any remaining files to
+        the object store, writes statistics, and marks the writer as closed.
+        Calling close() multiple times is safe (subsequent calls are no-ops).
+
+        The typename for statistics is automatically taken from `self.typename`
+        if it was set during initialization.
+
+        Returns:
+            ActivityStatistics: Final statistics including total_record_count,
+                chunk_count, and partitions.
 
         Raises:
-            ValidationError: If the statistics data is invalid
-            Exception: If there's an error writing the statistics
+            ValueError: If statistics data is invalid.
+            Exception: If there's an error during finalization or writing statistics.
+
+        Example:
+            ```python
+            writer = JsonFileWriter(output_path="/data/output", typename="table")
+            await writer.write(dataframe)
+            stats = await writer.close()
+            print(f"Wrote {stats.total_record_count} records")
+            ```
         """
+        if self._is_closed:
+            if self._statistics:
+                return self._statistics
+            return self.statistics
+
         try:
-            statistics = await self.write_statistics(typename)
-            if not statistics:
+            # Allow subclasses to perform final flush/upload operations
+            await self._finalize()
+
+            # Use self.typename if available
+            typename = getattr(self, "typename", None)
+
+            # Write statistics to file and object store
+            statistics_dict = await self._write_statistics(typename)
+            if not statistics_dict:
                 raise ValueError("No statistics data available")
-            statistics = ActivityStatistics.model_validate(statistics)
+
+            self._statistics = ActivityStatistics.model_validate(statistics_dict)
             if typename:
-                statistics.typename = typename
-            return statistics
+                self._statistics.typename = typename
+
+            self._is_closed = True
+            return self._statistics
+
         except Exception as e:
-            logger.error(f"Error getting statistics: {str(e)}")
+            logger.error(f"Error closing writer: {str(e)}")
             raise
 
     async def _upload_file(self, file_name: str):
@@ -395,13 +558,18 @@ class Writer(ABC):
             logger.error(f"Error flushing buffer to files: {str(e)}")
             raise e
 
-    async def write_statistics(
+    async def _write_statistics(
         self, typename: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Write statistics about the output to a JSON file.
 
-        This method writes statistics including total record count and chunk count
-        to a JSON file and uploads it to the object store.
+        Internal method called by close() to persist statistics.
+
+        Args:
+            typename (str, optional): Type name for organizing statistics.
+
+        Returns:
+            Dict containing statistics data.
 
         Raises:
             Exception: If there's an error writing or uploading the statistics.

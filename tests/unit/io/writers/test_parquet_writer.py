@@ -277,22 +277,27 @@ class TestParquetFileWriterWriteDataframe:
 
 
 class TestParquetFileWriterWriteDaftDataframe:
-    """Test ParquetFileWriter daft DataFrame writing."""
+    """Test ParquetFileWriter daft DataFrame writing via _write_daft_dataframe.
+
+    Note: These tests call _write_daft_dataframe directly to test the daft-specific
+    implementation without going through the type-checking in write().
+    """
 
     @pytest.mark.asyncio
     async def test_write_empty(self, base_output_path: str):
         """Test writing an empty daft DataFrame."""
-        with patch("daft.from_pydict") as mock_daft:
-            mock_df = MagicMock()
-            mock_df.count_rows.return_value = 0
-            mock_daft.return_value = mock_df
+        mock_df = MagicMock()
+        mock_df.count_rows.return_value = 0
 
-            parquet_output = ParquetFileWriter(output_path=base_output_path)
+        parquet_output = ParquetFileWriter(
+            output_path=base_output_path,
+            dataframe_type=DataframeType.daft,
+        )
 
-            await parquet_output.write(mock_df)
+        await parquet_output._write_daft_dataframe(mock_df)
 
-            assert parquet_output.chunk_count == 0
-            assert parquet_output.total_record_count == 0
+        assert parquet_output.chunk_count == 0
+        assert parquet_output.total_record_count == 0
 
     @pytest.mark.asyncio
     async def test_write_success(self, base_output_path: str):
@@ -319,7 +324,7 @@ class TestParquetFileWriterWriteDaftDataframe:
                 dataframe_type=DataframeType.daft,
             )
 
-            await parquet_output.write(mock_df)
+            await parquet_output._write_daft_dataframe(mock_df)
 
             assert parquet_output.chunk_count == 1
             assert parquet_output.total_record_count == 1000
@@ -363,7 +368,7 @@ class TestParquetFileWriterWriteDaftDataframe:
             )
 
             # Override parameters in method call
-            await parquet_output.write(
+            await parquet_output._write_daft_dataframe(
                 mock_df, partition_cols=["department", "year"], write_mode="overwrite"
             )
 
@@ -403,7 +408,7 @@ class TestParquetFileWriterWriteDaftDataframe:
             )
 
             # Use default parameters
-            await parquet_output.write(mock_df)
+            await parquet_output._write_daft_dataframe(mock_df)
 
             # Check that default method parameters were used
             mock_df.write_parquet.assert_called_once_with(
@@ -437,7 +442,7 @@ class TestParquetFileWriterWriteDaftDataframe:
                 dataframe_type=DataframeType.daft,
             )
 
-            await parquet_output.write(mock_df)
+            await parquet_output._write_daft_dataframe(mock_df)
 
             # Check that execution context was called (don't check exact value since DAPR_MAX_GRPC_MESSAGE_LENGTH is imported)
             mock_ctx.assert_called_once()
@@ -461,7 +466,7 @@ class TestParquetFileWriterWriteDaftDataframe:
         )
 
         with pytest.raises(Exception, match="Count rows error"):
-            await parquet_output.write(mock_df)
+            await parquet_output._write_daft_dataframe(mock_df)
 
 
 class TestParquetFileWriterMetrics:
@@ -522,7 +527,8 @@ class TestParquetFileWriterMetrics:
                 dataframe_type=DataframeType.daft,
             )
 
-            await parquet_output.write(mock_df)
+            # Call _write_daft_dataframe directly to test daft-specific metrics
+            await parquet_output._write_daft_dataframe(mock_df)
 
             # Check that record metrics were called with correct labels
             assert (

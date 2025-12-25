@@ -133,7 +133,7 @@ async def test_write_error(base_output_path: str) -> None:
         chunk_start=None,
     )
     invalid_df = "not_a_dataframe"
-    with pytest.raises(AttributeError, match="'str' object has no attribute"):
+    with pytest.raises(TypeError, match="Unsupported data type: str"):
         await json_output.write(invalid_df)  # type: ignore
     # Verify counts remain unchanged after error
     assert json_output.chunk_count == 0

@@ -339,7 +339,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             logger.info(
                 f"Successfully wrote query results to {parquet_output.get_full_path()}"
             )
-            return await parquet_output.get_statistics(typename=typename)
+            return await parquet_output.close()
 
         logger.warning("No parquet output configured for single-db execution")
         return None
@@ -603,7 +603,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                         dataframe=dataframe, **workflow_args
                     )
                     await transformed_output.write(transform_metadata)
-        return await transformed_output.get_statistics(typename=typename)
+        return await transformed_output.close()
 
     @activity.defn
     @auto_heartbeater

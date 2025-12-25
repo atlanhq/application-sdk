@@ -140,7 +140,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
@@ -150,7 +150,7 @@ class TestBaseSQLMetadataExtractionActivities:
     async def test_query_executor_success(
         self,
         mock_get_batched_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -160,7 +160,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_dataframe = Mock()
         mock_dataframe.__len__ = Mock(return_value=10)
         mock_get_batched_dataframe.return_value = (df for df in [mock_dataframe])
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=10)
+        mock_close.return_value = ActivityStatistics(total_record_count=10)
 
         # Create a proper mock SQL client with async methods
         sql_client = Mock()
@@ -183,7 +183,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
@@ -193,7 +193,7 @@ class TestBaseSQLMetadataExtractionActivities:
     async def test_query_executor_empty_dataframe(
         self,
         mock_get_batched_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -203,7 +203,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_dataframe = Mock()
         mock_dataframe.__len__ = Mock(return_value=0)
         mock_get_batched_dataframe.return_value = (df for df in [mock_dataframe])
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=0)
+        mock_close.return_value = ActivityStatistics(total_record_count=0)
         # Create a proper mock SQL client with dict-like credentials
         sql_client = Mock()
         sql_client.credentials = {"extra": "{}"}
@@ -315,12 +315,10 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
-    @patch(
-        "application_sdk.io.json.JsonFileWriter.get_statistics", new_callable=AsyncMock
-    )
+    @patch("application_sdk.io.json.JsonFileWriter.close", new_callable=AsyncMock)
     @patch("application_sdk.io.parquet.ParquetFileReader.read")
     @patch(
         "application_sdk.io.parquet.download_files",
@@ -344,8 +342,8 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_read_parquet,
         mock_download_files,
         mock_read,
-        mock_get_statistics_json,
-        mock_get_statistics_parquet,
+        mock_close_json,
+        mock_close_parquet,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -368,12 +366,8 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_read_parquet.return_value = mock_daft_df
         mock_transform_metadata.return_value = {"transformed": "data"}
         mock_write_daft_dataframe.return_value = None
-        mock_get_statistics_parquet.return_value = ActivityStatistics(
-            total_record_count=20
-        )
-        mock_get_statistics_json.return_value = ActivityStatistics(
-            total_record_count=20
-        )
+        mock_close_parquet.return_value = ActivityStatistics(total_record_count=20)
+        mock_close_json.return_value = ActivityStatistics(total_record_count=20)
         result = await mock_activities.transform_data(sample_workflow_args)
         assert result is not None
         assert isinstance(result, ActivityStatistics)
@@ -388,7 +382,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
@@ -400,7 +394,7 @@ class TestBaseSQLMetadataExtractionActivities:
         self,
         mock_write_batched_dataframe,
         mock_get_batched_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -415,7 +409,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_batched_iter = [mock_dataframe]
         mock_get_batched_dataframe.return_value = mock_batched_iter
         mock_write_batched_dataframe.return_value = None
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=10)
+        mock_close.return_value = ActivityStatistics(total_record_count=10)
 
         # Create a proper mock SQL client with dict-like credentials
         sql_client = Mock()
@@ -441,7 +435,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
@@ -451,7 +445,7 @@ class TestBaseSQLMetadataExtractionActivities:
     async def test_query_executor_single_db_async_iterator(
         self,
         mock_get_batched_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -467,7 +461,7 @@ class TestBaseSQLMetadataExtractionActivities:
             yield mock_df
 
         mock_get_batched_dataframe.return_value = mock_async_iter()
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=5)
+        mock_close.return_value = ActivityStatistics(total_record_count=5)
 
         # Create a proper mock SQL client with dict-like credentials
         sql_client = Mock()
@@ -574,7 +568,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
@@ -592,7 +586,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_database_names,
         mock_write_batched_dataframe,
         mock_get_batched_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -623,7 +617,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_dataframe.__len__ = Mock(return_value=5)
         mock_get_batched_dataframe.return_value = [mock_dataframe]
         mock_write_batched_dataframe.return_value = None
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=10)
+        mock_close.return_value = ActivityStatistics(total_record_count=10)
 
         # Create a proper mock SQL client with dict-like credentials
         sql_client = Mock()
@@ -696,12 +690,12 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.path.exists", return_value=True)
     @patch("application_sdk.activities.common.sql_utils.get_database_names")
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     async def test_query_executor_multidb_no_sql_client(
         self,
-        mock_get_statistics,
+        mock_close,
         mock_get_database_names,
         mock_exists,
         mock_makedirs,
@@ -718,7 +712,7 @@ class TestBaseSQLMetadataExtractionActivities:
         state.sql_client = None
 
         mock_get_database_names.return_value = ["db1"]
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=0)
+        mock_close.return_value = ActivityStatistics(total_record_count=0)
 
         # Create a proper mock SQL client with dict-like credentials
         sql_client = Mock()
@@ -930,7 +924,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
@@ -953,7 +947,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_write_dataframe,
         mock_write_batched_dataframe,
         mock_get_batched_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -989,7 +983,7 @@ class TestBaseSQLMetadataExtractionActivities:
             yield mock_dataframe
 
         mock_get_batched_dataframe.return_value = async_dataframe_iterator()
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=10)
+        mock_close.return_value = ActivityStatistics(total_record_count=10)
 
         # Create a proper mock SQL client with dict-like credentials
         sql_client = Mock()

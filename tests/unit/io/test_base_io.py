@@ -204,7 +204,7 @@ class TestReaderDownloadFiles:
         ):
             # Mock the file finding function to return empty for local check, then files after download
             with patch(
-                "application_sdk.io._utils.find_local_files_by_extension"
+                "application_sdk.io.utils.find_local_files_by_extension"
             ) as mock_find_files:
                 # Use a function that returns different values based on the path
                 def mock_find_files_func(path, extension, file_names=None):
@@ -313,7 +313,7 @@ class TestReaderDownloadFiles:
             "application_sdk.activities.common.utils.get_object_store_prefix",
             return_value="data",
         ), patch(
-            "application_sdk.io._utils.find_local_files_by_extension",
+            "application_sdk.io.utils.find_local_files_by_extension",
             side_effect=[
                 [],
                 [],
@@ -385,7 +385,7 @@ class TestReaderDownloadFiles:
         input_instance = MockReader(path)
 
         with patch("os.path.isfile", return_value=True), patch(
-            "application_sdk.io._utils.logger"
+            "application_sdk.io.utils.logger"
         ) as mock_logger:
             await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
@@ -410,7 +410,7 @@ class TestReaderDownloadFiles:
         ), patch(
             "application_sdk.activities.common.utils.get_object_store_prefix",
             return_value="data/test.parquet",
-        ), patch("application_sdk.io._utils.logger") as mock_logger:
+        ), patch("application_sdk.io.utils.logger") as mock_logger:
             with pytest.raises(SDKIOError):
                 await download_files(
                     input_instance.path, ".parquet", input_instance.file_names

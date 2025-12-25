@@ -151,7 +151,7 @@ async def finalize_multidb_results(
         Statistics or DataFrame, or None.
     """
     if write_to_file and parquet_output:
-        return await parquet_output.get_statistics(typename=typename)
+        return await parquet_output.close()
 
     if not write_to_file and concatenate:
         try:
@@ -192,9 +192,7 @@ async def finalize_multidb_results(
             concatenated_parquet_output = setup_parquet_output_func(output_path, True)
             if concatenated_parquet_output:
                 await concatenated_parquet_output.write(concatenated)  # type: ignore
-                return await concatenated_parquet_output.get_statistics(
-                    typename=typename
-                )
+                return await concatenated_parquet_output.close()
         except Exception as e:
             logger.error(
                 f"Error concatenating multi-DB dataframes: {str(e)}",

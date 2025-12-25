@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Unio
 import orjson
 from temporalio import activity
 
-from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.io.utils import (
@@ -271,6 +270,8 @@ class JsonFileWriter(Writer):
         self.retain_local_copy = retain_local_copy
         self.extension = JSON_FILE_EXTENSION
         self.dataframe_type = dataframe_type
+        self._is_closed = False
+        self._statistics = None
 
         if not self.output_path:
             raise ValueError("output_path is required")
@@ -409,14 +410,12 @@ class JsonFileWriter(Writer):
         with open(file_name, mode=mode) as f:
             chunk.to_json(f, orient="records", lines=True)
 
-    async def get_statistics(
-        self, typename: Optional[str] = None
-    ) -> ActivityStatistics:
-        """Get the statistics of the JSON files.
+    async def _finalize(self) -> None:
+        """Finalize the JSON writer before closing.
 
-        This method returns the statistics of the JSON files.
+        Uploads any remaining buffered data to the object store.
         """
-        # Finally upload the final file
+        # Upload the final file if there's remaining buffered data
         if self.current_buffer_size_bytes > 0:
             output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
             if os.path.exists(output_file_name):
@@ -428,5 +427,3 @@ class JsonFileWriter(Writer):
         if self.chunk_start is None:
             self.chunk_count += 1
         self.partitions.append(self.chunk_part)
-
-        return await super().get_statistics(typename)

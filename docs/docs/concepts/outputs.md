@@ -1,24 +1,22 @@
 # Outputs (I/O Writers)
 
-This module provides a standardized way to write data to various destinations within the Application SDK framework. It defines a common `Writer` interface and offers concrete implementations for common formats like JSON Lines, Parquet, and Iceberg tables.
+This module provides a standardized way to write data to various destinations within the Application SDK framework. It defines a common `Writer` interface and offers concrete implementations for common formats like JSON Lines and Parquet.
 
 ## Core Concepts
 
 1.  **`Writer` Interface (`application_sdk.io.Writer`)**:
     *   **Purpose:** An abstract base class defining the contract for writing data.
     *   **Key Methods:** Requires subclasses to implement methods for writing Pandas or Daft DataFrames:
-        *   `write(dataframe: Union[pd.DataFrame, daft.DataFrame])`: Write a single DataFrame (Pandas or Daft).
+        *   `write(data)`: Write a DataFrame, dict, or list of dicts.
         *   `write_batches(dataframe: Union[AsyncGenerator, Generator])`: Write batched DataFrames.
-        *   `_write_dataframe(dataframe: pd.DataFrame)`: Internal method for writing Pandas DataFrames.
-        *   `_write_daft_dataframe(dataframe: daft.DataFrame)`: Internal method for writing Daft DataFrames.
-    *   **Statistics:** Includes methods (`get_statistics`, `write_statistics`) to track and save metadata about the output (record count, chunk count) to a `statistics.json.ignore` file, typically alongside the data output.
+        *   `close()`: Flush buffers, upload files, and return statistics.
+    *   **Context Manager:** Writers support `async with` for automatic cleanup.
     *   **Usage:** Activities typically instantiate a specific `Writer` subclass and use its write methods to persist data fetched or generated during the activity.
 
 2.  **Concrete Implementations:** The SDK provides several writer classes:
 
     *   **`JsonFileWriter` (`application_sdk.io.json`)**: Writes DataFrames to JSON Lines files (`.json`).
     *   **`ParquetFileWriter` (`application_sdk.io.parquet`)**: Writes DataFrames to Parquet files (`.parquet`).
-    *   **`IcebergTableWriter` (`application_sdk.io.iceberg`)**: Writes DataFrames to Apache Iceberg tables.
 
 ## Object Store Integration (Automatic Upload)
 
@@ -50,10 +48,47 @@ Writer classes follow a clear naming pattern that indicates what they work with:
   - Support chunking and compression
   - Examples: `ParquetFileWriter`, `JsonFileWriter`
 
-- **`*TableWriter`**: Work with managed table storage systems
-  - Write directly to table engines like Apache Iceberg
-  - Handle table-specific features (schema evolution, partitioning, ACID transactions)
-  - Examples: `IcebergTableWriter`
+## Writer API Patterns
+
+Writers follow Python's familiar file I/O pattern with `write()` and `close()` methods:
+
+### Basic Usage with close()
+
+```python
+from application_sdk.io.json import JsonFileWriter
+
+writer = JsonFileWriter(output_path="/data/output")
+
+# Write DataFrames
+await writer.write(dataframe)
+
+# Write dicts directly (converted to single-row DataFrame)
+await writer.write({"name": "example", "value": 123})
+
+# Write list of dicts (converted to multi-row DataFrame)
+await writer.write([{"name": "a"}, {"name": "b"}])
+
+# Close and get statistics
+stats = await writer.close()
+print(f"Wrote {stats.total_record_count} records")
+```
+
+### Context Manager (Recommended)
+
+Using `async with` ensures the writer is always properly closed:
+
+```python
+async with JsonFileWriter(output_path="/data/output") as writer:
+    await writer.write(dataframe)
+    await writer.write({"key": "value"})
+# close() is called automatically on exit
+```
+
+### Key Behaviors
+
+- **Idempotent close()**: Calling `close()` multiple times is safe
+- **Write after close**: Raises `ValueError("Cannot write to a closed writer")`
+- **Statistics property**: `writer.statistics` returns current stats without closing
 
 ## `JsonFileWriter` (`application_sdk.io.json`)
 
@@ -118,8 +153,9 @@ async def query_executor(
         df = pd.DataFrame(results)
         await json_writer.write(df)
 
-        # Get statistics (record count, chunk count) after writing
-        stats = await json_writer.get_statistics(typename=typename)
+        # Close writer and get statistics (record count, chunk count)
+        # typename is automatically taken from the writer's typename attribute
+        stats = await json_writer.close()
         return stats.model_dump()
 
     except Exception as e:
@@ -135,8 +171,7 @@ await query_executor(sql_client, sql_query, workflow_args, full_output_path, "ta
 ## Other Writer Handlers
 
 *   **`ParquetFileWriter`:** Similar to `JsonFileWriter` but writes DataFrames to Parquet format files. Uses `daft.DataFrame.write_parquet()` or `pandas.DataFrame.to_parquet()`. Also uploads files to object storage after local processing. Supports consolidation mode for efficient writing of large datasets.
-*   **`IcebergTableWriter`:** Writes DataFrames directly to an Iceberg table using `pyiceberg`. Designed for writing to managed table storage rather than files.
 
 ## Summary
 
-The I/O module provides both reader and writer classes for data persistence. `JsonFileWriter` and `ParquetFileWriter` are commonly used for saving intermediate DataFrames to local files (and then uploading them to object storage), making the data available for subsequent activities like transformations. The naming convention explicitly indicates the destination format: `*FileWriter` for file-based formats and `*TableWriter` for table-based formats like Iceberg.
+The I/O module provides both reader and writer classes for data persistence. `JsonFileWriter` and `ParquetFileWriter` are commonly used for saving intermediate DataFrames to local files (and then uploading them to object storage), making the data available for subsequent activities like transformations.

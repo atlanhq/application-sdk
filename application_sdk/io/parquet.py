@@ -414,6 +414,8 @@ class ParquetFileWriter(Writer):
         self.metrics = get_metrics()
         self.retain_local_copy = retain_local_copy
         self.dataframe_type = dataframe_type
+        self._is_closed = False
+        self._statistics = None
 
         # Consolidation-specific attributes
         # Use consolidation to efficiently write parquet files in buffered manner
