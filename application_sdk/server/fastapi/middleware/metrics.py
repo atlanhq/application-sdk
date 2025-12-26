@@ -9,6 +9,16 @@ metrics = get_metrics()
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app):
+        super().__init__(app)
+        # Paths to exclude from metrics (health checks and event ingress)
+        self.excluded_paths = {
+            "/server/health",
+            "/server/ready",
+            "/api/eventingress/",
+            "/api/eventingress",
+        }
+
     async def dispatch(self, request: Request, call_next):
         metrics = get_metrics()
         start_time = time()
@@ -24,29 +34,31 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             method = request.method
             status_code = response.status_code
 
-            labels = {
-                "path": path,
-                "method": method,
-                "status": str(status_code),
-            }
+            # Skip metrics for health check endpoints
+            if path not in self.excluded_paths:
+                labels = {
+                    "path": path,
+                    "method": method,
+                    "status": str(status_code),
+                }
 
-            # Record request count
-            metrics.record_metric(
-                name="http_requests_total",
-                value=1,
-                metric_type=MetricType.COUNTER,
-                labels=labels,
-                description="Total number of HTTP requests",
-            )
+                # Record request count
+                metrics.record_metric(
+                    name="http_requests_total",
+                    value=1,
+                    metric_type=MetricType.COUNTER,
+                    labels=labels,
+                    description="Total number of HTTP requests",
+                )
 
-            # Record request latency
-            metrics.record_metric(
-                name="http_request_duration_seconds",
-                value=process_time,
-                metric_type=MetricType.HISTOGRAM,
-                labels=labels,
-                description="Duration of HTTP requests",
-                unit="seconds",
-            )
+                # Record request latency
+                metrics.record_metric(
+                    name="http_request_duration_seconds",
+                    value=process_time,
+                    metric_type=MetricType.HISTOGRAM,
+                    labels=labels,
+                    description="Duration of HTTP requests",
+                    unit="seconds",
+                )
 
         return response
