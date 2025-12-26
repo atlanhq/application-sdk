@@ -82,6 +82,8 @@ class PreflightCheckResponse(BaseModel):
                 },
             }
         }
+
+
 class WorkflowRequest(RootModel[Dict[str, Any]]):
     root: Dict[str, Any] = Field(
         ..., description="Root JSON object containing workflow configuration"
@@ -245,9 +247,10 @@ class BulkSubscribe(BaseModel):
     maxMessagesCount: int = 100
     maxAwaitDurationMs: int = 40
 
+
 class PubSubSubscription(BaseModel):
     """PubSub subscription configuration for Dapr messaging.
-    
+
     Attributes:
         pubsub_component_name: Name of the Dapr pubsub component
         topic: Topic to subscribe to
@@ -256,8 +259,9 @@ class PubSubSubscription(BaseModel):
         bulk_subscribe: Optional bulk subscribe configuration
         dead_letter_topic: Optional dead letter topic for failed messages
     """
+
     model_config = {"arbitrary_types_allowed": True}
-    
+
     pubsub_component_name: str
     topic: str
     route: str

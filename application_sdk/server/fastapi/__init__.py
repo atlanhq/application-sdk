@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Any, Callable, Coroutine, List, Optional, Type
+from typing import Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
@@ -188,7 +188,7 @@ class APIServer(ServerInterface):
             )
         except Exception as e:
             logger.warning(str(e))
-    
+
     def frontend_home(self, request: Request) -> HTMLResponse:
         frontend_html_path = os.path.join(
             self.frontend_assets_path,
@@ -220,7 +220,7 @@ class APIServer(ServerInterface):
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
-        
+
         # Register messaging routes from subscriptions with message_handler callbacks
         if len(self.messaging_subscriptions) > 0:
             messaging_router = APIRouter()
@@ -463,10 +463,10 @@ class APIServer(ServerInterface):
                         "maxAwaitDurationMs": subscription.bulk_subscribe.maxAwaitDurationMs,
                     }
                 if subscription.dead_letter_topic:
-                    subscription_dict["deadLetterTopic"] = subscription.dead_letter_topic
-                subscriptions.append(
-                    subscription_dict
-                )
+                    subscription_dict["deadLetterTopic"] = (
+                        subscription.dead_letter_topic
+                    )
+                subscriptions.append(subscription_dict)
         for event_trigger in self.event_triggers:
             filters = [
                 f"({event_filter.path} {event_filter.operator} '{event_filter.value}')"
@@ -474,7 +474,7 @@ class APIServer(ServerInterface):
             ]
             filters.append(f"event.data.event_name == '{event_trigger.event_name}'")
             filters.append(f"event.data.event_type == '{event_trigger.event_type}'")
-            
+
             subscriptions.append(
                 {
                     "pubsubname": EVENT_STORE_NAME,
