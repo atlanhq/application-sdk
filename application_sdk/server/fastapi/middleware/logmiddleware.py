@@ -8,6 +8,7 @@ from starlette.types import ASGIApp
 
 from application_sdk.observability.context import request_context
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.server.fastapi.utils import EXCLUDED_LOG_PATHS
 
 logger = get_logger(__name__)
 
@@ -19,13 +20,6 @@ class LogMiddleware(BaseHTTPMiddleware):
         self.logger = logger
         # Remove any existing handlers to prevent duplicate logging
         self.logger.logger.handlers = []
-        # Paths to exclude from logging (health checks and event ingress)
-        self.excluded_paths = {
-            "/server/health",
-            "/server/ready",
-            "/api/eventingress/",
-            "/api/eventingress",
-        }
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
@@ -37,7 +31,7 @@ class LogMiddleware(BaseHTTPMiddleware):
         start_time = time.time()
 
         # Skip logging for health check endpoints
-        should_log = request.url.path not in self.excluded_paths
+        should_log = request.url.path not in EXCLUDED_LOG_PATHS
 
         if should_log:
             self.logger.info(

@@ -4,21 +4,12 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
+from application_sdk.server.fastapi.utils import EXCLUDED_LOG_PATHS
 
 metrics = get_metrics()
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app):
-        super().__init__(app)
-        # Paths to exclude from metrics (health checks and event ingress)
-        self.excluded_paths = {
-            "/server/health",
-            "/server/ready",
-            "/api/eventingress/",
-            "/api/eventingress",
-        }
-
     async def dispatch(self, request: Request, call_next):
         metrics = get_metrics()
         start_time = time()
@@ -35,7 +26,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             status_code = response.status_code
 
             # Skip metrics for health check endpoints
-            if path not in self.excluded_paths:
+            if path not in EXCLUDED_LOG_PATHS:
                 labels = {
                     "path": path,
                     "method": method,
