@@ -114,18 +114,18 @@ class Writer(ABC):
         partitions (List[int]): Partitions of the writer.
 
     Example:
-        ```python
-        # Using close() explicitly
-        writer = JsonFileWriter(path="/data/output")
-        await writer.write(dataframe)
-        await writer.write({"key": "value"})  # Dict support
-        stats = await writer.close()
+        Using close() explicitly::
 
-        # Using context manager (recommended)
-        async with JsonFileWriter(path="/data/output") as writer:
+            writer = JsonFileWriter(path="/data/output")
             await writer.write(dataframe)
-        # close() called automatically
-        ```
+            await writer.write({"key": "value"})  # Dict support
+            stats = await writer.close()
+
+        Using context manager (recommended)::
+
+            async with JsonFileWriter(path="/data/output") as writer:
+                await writer.write(dataframe)
+            # close() called automatically
     """
 
     path: str
