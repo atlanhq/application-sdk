@@ -369,9 +369,8 @@ class TestServer:
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             files = {"file": ("test.csv", file_content, "text/csv")}
             data = {
+                "filename": "test.csv",  # Explicitly provide filename
                 "prefix": "workflow_file_upload",
-                "force": "false",
-                # excludePrefix and isJsonFile are still accepted by endpoint for backward compatibility
             }
             response = await ac.post("/workflows/v1/file", files=files, data=data)
 
@@ -383,12 +382,12 @@ class TestServer:
         assert response_data["fileName"] == expected_response.fileName
         mock_upload_file.assert_called_once()
         call_kwargs = mock_upload_file.call_args[1]
-        assert call_kwargs["file_content"] == file_content
-        assert call_kwargs["filename"] == "test.csv"
-        assert call_kwargs["content_type"] == "text/csv"
-        assert call_kwargs["size"] == len(
-            file_content
-        )  # Model uses 'size', not 'file_size'
+        # Verify UploadFile object is passed
+        from fastapi import UploadFile
+
+        assert isinstance(call_kwargs["file"], UploadFile)
+        assert call_kwargs["file"].filename == "test.csv"
+        assert call_kwargs["filename"] == "test.csv"  # Should use provided filename
         assert call_kwargs["prefix"] == "workflow_file_upload"
 
     @pytest.mark.asyncio
@@ -420,11 +419,9 @@ class TestServer:
         # Act
         transport = ASGITransport(app=self.app.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            files = {"jsonFile": ("test.json", file_content, "application/json")}
+            files = {"file": ("test.json", file_content, "application/json")}
             data = {
                 "prefix": "workflow_file_upload",
-                "force": "false",
-                # excludePrefix and isJsonFile are still accepted by endpoint for backward compatibility
             }
             response = await ac.post("/workflows/v1/file", files=files, data=data)
 
@@ -432,8 +429,11 @@ class TestServer:
         assert response.status_code == 200
         mock_upload_file.assert_called_once()
         call_kwargs = mock_upload_file.call_args[1]
-        assert call_kwargs["file_content"] == file_content
-        assert call_kwargs["filename"] == "test.json"
+        # Verify UploadFile object is passed
+        from fastapi import UploadFile
+
+        assert isinstance(call_kwargs["file"], UploadFile)
+        assert call_kwargs["file"].filename == "test.json"
         assert call_kwargs["prefix"] == "workflow_file_upload"
 
     @pytest.mark.asyncio
@@ -469,9 +469,6 @@ class TestServer:
             files = {"file": ("test.csv", file_content, "text/csv")}
             data = {
                 "prefix": "workflow_file_upload",
-                "force": "false",
-                "excludePrefix": "false",
-                "isJsonFile": "false",
             }
             response = await ac.post("/workflows/v1/file", files=files, data=data)
 
@@ -507,12 +504,10 @@ class TestServer:
         # Act
         transport = ASGITransport(app=self.app.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            files = {"file": ("test.csv", b"test content", "text/csv")}
+            file_content = b"test content"
+            files = {"file": ("test.csv", file_content, "text/csv")}
             data = {
                 "prefix": "workflow_file_upload",
-                "force": "false",
-                "excludePrefix": "false",
-                "isJsonFile": "false",
             }
             response = await ac.post("/workflows/v1/file", files=files, data=data)
 
@@ -550,10 +545,7 @@ class TestServer:
         transport = ASGITransport(app=self.app.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             files = {"file": ("test.csv", file_content, "text/csv")}
-            data = {
-                "force": "false",
-                "isJsonFile": "false",
-            }
+            data = {}
             response = await ac.post("/workflows/v1/file", files=files, data=data)
 
         # Assert
@@ -594,8 +586,6 @@ class TestServer:
             files = {"file": ("test.csv", file_content, "text/csv")}
             data = {
                 "prefix": "custom_prefix",
-                "force": "false",
-                "isJsonFile": "false",
             }
             response = await ac.post("/workflows/v1/file", files=files, data=data)
 
@@ -603,7 +593,11 @@ class TestServer:
         assert response.status_code == 200
         mock_upload_file.assert_called_once()
         call_kwargs = mock_upload_file.call_args[1]
-        # Only fields used by utility function are checked
+        # Verify UploadFile object is passed
+        from fastapi import UploadFile
+
+        assert isinstance(call_kwargs["file"], UploadFile)
+        assert call_kwargs["filename"] is None  # Not provided in form data
         assert call_kwargs["prefix"] == "custom_prefix"
 
 

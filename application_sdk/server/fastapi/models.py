@@ -303,32 +303,6 @@ class Subscription(BaseModel):
     dead_letter_topic: Optional[str] = None
 
 
-class FileUploadRequest(BaseModel):
-    filename: str = Field(..., description="Original filename from upload")
-    prefix: Optional[str] = Field(
-        None,
-        description="Prefix for file organization (defaults to 'workflow_file_upload')",
-    )
-    content_type: str = Field(
-        ..., alias="contentType", description="Content type of the file"
-    )
-    size: int = Field(..., description="File size in bytes")
-    file_content: bytes = Field(
-        ..., alias="fileContent", description="File content as bytes"
-    )
-
-    class Config:
-        populate_by_name = True  # Allow both alias and field name
-        json_schema_extra = {
-            "example": {
-                "filename": "test.csv",
-                "prefix": "workflow_file_upload",
-                "contentType": "text/csv",
-                "size": 100,
-                "fileContent": b"file content bytes",
-            }
-        }
-
 
 class FileUploadResponse(BaseModel):
     """Response model for file upload endpoint matching heracles format."""

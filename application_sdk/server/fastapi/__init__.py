@@ -3,7 +3,7 @@ import time
 from typing import Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
-from fastapi import HTTPException, status
+from fastapi import File, Form, HTTPException, UploadFile, status
 from fastapi.applications import FastAPI
 from fastapi.requests import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -39,7 +39,6 @@ from application_sdk.server.fastapi.models import (
     EventWorkflowTrigger,
     FetchMetadataRequest,
     FetchMetadataResponse,
-    FileUploadRequest,
     FileUploadResponse,
     HttpWorkflowTrigger,
     PreflightCheckRequest,
@@ -657,7 +656,9 @@ class APIServer(ServerInterface):
 
     async def upload_file(
         self,
-        body: FileUploadRequest,
+        file: UploadFile = File(..., description="File to upload"),
+        filename: Optional[str] = Form(None, description="Original filename"),
+        prefix: Optional[str] = Form(None, description="Prefix for file organization"),
     ) -> FileUploadResponse:
         """Upload a file to the object store."""
 
@@ -665,13 +666,11 @@ class APIServer(ServerInterface):
         metrics = get_metrics()
 
         try:
-            # Call utility function to upload file and get response object
+            # Pass UploadFile and filename to utility - it will extract metadata
             response = await upload_file_to_object_store(
-                file_content=body.file_content,
-                filename=body.filename,
-                content_type=body.content_type,
-                size=body.size,
-                prefix=body.prefix or "workflow_file_upload",
+                file=file,
+                filename=filename,
+                prefix=prefix or "workflow_file_upload",
             )
 
             # Record successful upload

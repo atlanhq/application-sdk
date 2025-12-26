@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import status
+from fastapi import UploadFile, status
 from fastapi.responses import JSONResponse
 
 from application_sdk.server.fastapi.models import FileUploadResponse
@@ -55,15 +55,14 @@ def internal_server_error_handler(_, exc: Exception) -> JSONResponse:
 
 
 async def upload_file_to_object_store(
-    file_content: bytes,
-    filename: str,
-    content_type: str,
-    size: int,
+    file: UploadFile,
+    filename: Optional[str] = None,
     prefix: Optional[str] = "workflow_file_upload",
 ) -> FileUploadResponse:
     """Upload file to object store and return metadata.
 
     This function handles file uploads with the following behavior:
+    - Extracts filename, content_type, and size from UploadFile object
     - Generates a unique UUID for the file ID
     - Creates fileName as UUID + extension
     - Preserves original filename as rawName
@@ -72,10 +71,9 @@ async def upload_file_to_object_store(
     - Returns FileUploadResponse object with file metadata
 
     Args:
-        file_content (bytes): File content as bytes.
-        filename (str): Original filename from upload.
-        content_type (str): Content type (MIME type) of the file.
-        size (int): File size in bytes.
+        file (UploadFile): FastAPI UploadFile object containing the file.
+        filename (Optional[str]): Original filename from form data. If provided,
+            this takes precedence over file.filename. Defaults to None.
         prefix (Optional[str]): Prefix for file organization in object store.
             Defaults to "workflow_file_upload".
 
@@ -102,6 +100,14 @@ async def upload_file_to_object_store(
     Raises:
         Exception: If there's an error uploading to the object store.
     """
+    # Read file content
+    file_content = await file.read()
+
+    # Extract metadata from UploadFile object
+    # Use passed filename first, then file.filename, then fallback to "uploaded_file"
+    filename = filename or file.filename or "uploaded_file"
+    content_type = file.content_type or "application/octet-stream"
+    size = len(file_content)
     # Generate UUID for file ID
     file_id = str(uuid.uuid4())
 

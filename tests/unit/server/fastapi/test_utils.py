@@ -1,8 +1,9 @@
 """Unit tests for FastAPI utility functions."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import UploadFile
 
 from application_sdk.server.fastapi.utils import upload_file_to_object_store
 
@@ -19,13 +20,15 @@ class TestUploadFileToObjectStore:
         file_content = b"test file content"
         filename = "test.csv"
         content_type = "text/csv"
-        file_size = len(file_content)
+
+        # Create mock UploadFile
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = filename
+        mock_file.content_type = content_type
+        mock_file.read = AsyncMock(return_value=file_content)
 
         result = await upload_file_to_object_store(
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
-            size=file_size,
+            file=mock_file,
             prefix="workflow_file_upload",
         )
 
@@ -47,12 +50,85 @@ class TestUploadFileToObjectStore:
         assert result.key is not None
         assert result.extension == ".csv"
         assert result.contentType == content_type
-        assert result.fileSize == file_size
+        assert result.fileSize == len(file_content)
         assert result.isEncrypted is False
         assert result.redirectUrl == ""
         assert result.isUploaded is True
         assert result.uploadedAt is not None
         assert result.isArchived is False
+
+    @patch("application_sdk.server.fastapi.utils.ObjectStore")
+    async def test_upload_file_with_explicit_filename(self, mock_objectstore):
+        """Test that explicit filename parameter takes precedence over file.filename."""
+        mock_objectstore.upload_file_from_bytes = AsyncMock()
+
+        file_content = b"test file content"
+        explicit_filename = "explicit_name.csv"
+        file_filename = "file_name.csv"  # Different from explicit
+        content_type = "text/csv"
+
+        # Create mock UploadFile with different filename
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = file_filename
+        mock_file.content_type = content_type
+        mock_file.read = AsyncMock(return_value=file_content)
+
+        result = await upload_file_to_object_store(
+            file=mock_file,
+            filename=explicit_filename,  # Explicit filename should be used
+            prefix="workflow_file_upload",
+        )
+
+        # Verify that explicit filename is used, not file.filename
+        assert result.rawName == explicit_filename
+        assert result.rawName != file_filename
+
+    @patch("application_sdk.server.fastapi.utils.ObjectStore")
+    async def test_upload_file_filename_fallback(self, mock_objectstore):
+        """Test filename fallback: explicit -> file.filename -> 'uploaded_file'."""
+        mock_objectstore.upload_file_from_bytes = AsyncMock()
+
+        file_content = b"test content"
+        content_type = "text/csv"
+
+        # Test 1: No filename provided, file.filename is None -> should use "uploaded_file"
+        mock_file1 = MagicMock(spec=UploadFile)
+        mock_file1.filename = None
+        mock_file1.content_type = content_type
+        mock_file1.read = AsyncMock(return_value=file_content)
+
+        result1 = await upload_file_to_object_store(
+            file=mock_file1,
+            filename=None,
+            prefix="workflow_file_upload",
+        )
+        assert result1.rawName == "uploaded_file"
+
+        # Test 2: No explicit filename, but file.filename exists -> should use file.filename
+        mock_file2 = MagicMock(spec=UploadFile)
+        mock_file2.filename = "file_name.csv"
+        mock_file2.content_type = content_type
+        mock_file2.read = AsyncMock(return_value=file_content)
+
+        result2 = await upload_file_to_object_store(
+            file=mock_file2,
+            filename=None,
+            prefix="workflow_file_upload",
+        )
+        assert result2.rawName == "file_name.csv"
+
+        # Test 3: Explicit filename provided -> should use explicit filename
+        mock_file3 = MagicMock(spec=UploadFile)
+        mock_file3.filename = "file_name.csv"
+        mock_file3.content_type = content_type
+        mock_file3.read = AsyncMock(return_value=file_content)
+
+        result3 = await upload_file_to_object_store(
+            file=mock_file3,
+            filename="explicit_name.csv",
+            prefix="workflow_file_upload",
+        )
+        assert result3.rawName == "explicit_name.csv"
 
     @patch("application_sdk.server.fastapi.utils.ObjectStore")
     async def test_upload_file_raw_name_preserved(self, mock_objectstore):
@@ -62,13 +138,15 @@ class TestUploadFileToObjectStore:
         file_content = b"test content"
         filename = "original.txt"
         content_type = "text/plain"
-        file_size = len(file_content)
+
+        # Create mock UploadFile
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = filename
+        mock_file.content_type = content_type
+        mock_file.read = AsyncMock(return_value=file_content)
 
         result = await upload_file_to_object_store(
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
-            size=file_size,
+            file=mock_file,
             prefix="workflow_file_upload",
         )
 
@@ -84,13 +162,15 @@ class TestUploadFileToObjectStore:
         file_content = b"test content"
         filename = "testfile"  # No extension
         content_type = "text/csv"
-        file_size = len(file_content)
+
+        # Create mock UploadFile
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = filename
+        mock_file.content_type = content_type
+        mock_file.read = AsyncMock(return_value=file_content)
 
         result = await upload_file_to_object_store(
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
-            size=file_size,
+            file=mock_file,
             prefix="workflow_file_upload",
         )
 
@@ -106,13 +186,15 @@ class TestUploadFileToObjectStore:
         file_content = b"test content"
         filename = "test.csv"
         content_type = "text/csv"
-        file_size = len(file_content)
+
+        # Create mock UploadFile
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = filename
+        mock_file.content_type = content_type
+        mock_file.read = AsyncMock(return_value=file_content)
 
         result = await upload_file_to_object_store(
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
-            size=file_size,
+            file=mock_file,
             prefix="some-prefix",
         )
 
@@ -135,13 +217,15 @@ class TestUploadFileToObjectStore:
         file_content = b"test content"
         filename = "test.csv"
         content_type = "text/csv"
-        file_size = len(file_content)
+
+        # Create mock UploadFile
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = filename
+        mock_file.content_type = content_type
+        mock_file.read = AsyncMock(return_value=file_content)
 
         result = await upload_file_to_object_store(
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
-            size=file_size,
+            file=mock_file,
             prefix="",  # Empty prefix
         )
 
@@ -158,13 +242,15 @@ class TestUploadFileToObjectStore:
         file_content = b"test content"
         filename = "test.csv"
         content_type = "text/csv"
-        file_size = len(file_content)
+
+        # Create mock UploadFile
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = filename
+        mock_file.content_type = content_type
+        mock_file.read = AsyncMock(return_value=file_content)
 
         result = await upload_file_to_object_store(
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
-            size=file_size,
+            file=mock_file,
             # prefix not provided, should default to "workflow_file_upload"
         )
 
@@ -182,14 +268,16 @@ class TestUploadFileToObjectStore:
         file_content = b"test content"
         filename = "test.csv"
         content_type = "text/csv"
-        file_size = len(file_content)
+
+        # Create mock UploadFile
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = filename
+        mock_file.content_type = content_type
+        mock_file.read = AsyncMock(return_value=file_content)
 
         with pytest.raises(Exception, match="Upload failed"):
             await upload_file_to_object_store(
-                file_content=file_content,
-                filename=filename,
-                content_type=content_type,
-                size=file_size,
+                file=mock_file,
                 prefix="workflow_file_upload",
             )
 
@@ -201,21 +289,26 @@ class TestUploadFileToObjectStore:
         file_content = b"test content"
         filename = "test.csv"
         content_type = "text/csv"
-        file_size = len(file_content)
+
+        # Create mock UploadFile for first upload
+        mock_file1 = MagicMock(spec=UploadFile)
+        mock_file1.filename = filename
+        mock_file1.content_type = content_type
+        mock_file1.read = AsyncMock(return_value=file_content)
 
         result1 = await upload_file_to_object_store(
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
-            size=file_size,
+            file=mock_file1,
             prefix="workflow_file_upload",
         )
 
+        # Create mock UploadFile for second upload
+        mock_file2 = MagicMock(spec=UploadFile)
+        mock_file2.filename = filename
+        mock_file2.content_type = content_type
+        mock_file2.read = AsyncMock(return_value=file_content)
+
         result2 = await upload_file_to_object_store(
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
-            size=file_size,
+            file=mock_file2,
             prefix="workflow_file_upload",
         )
 
@@ -232,13 +325,15 @@ class TestUploadFileToObjectStore:
         file_content = b"test content"
         filename = "test.csv"
         content_type = "text/csv"
-        file_size = len(file_content)
+
+        # Create mock UploadFile
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = filename
+        mock_file.content_type = content_type
+        mock_file.read = AsyncMock(return_value=file_content)
 
         result = await upload_file_to_object_store(
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
-            size=file_size,
+            file=mock_file,
             prefix="workflow_file_upload",
         )
 
@@ -254,13 +349,15 @@ class TestUploadFileToObjectStore:
         file_content = b"test content"
         filename = "test.csv"
         content_type = "text/csv"
-        file_size = len(file_content)
+
+        # Create mock UploadFile
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = filename
+        mock_file.content_type = content_type
+        mock_file.read = AsyncMock(return_value=file_content)
 
         result = await upload_file_to_object_store(
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
-            size=file_size,
+            file=mock_file,
             prefix="workflow_file_upload",
         )
 
