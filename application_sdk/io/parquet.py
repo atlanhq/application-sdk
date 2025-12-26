@@ -48,8 +48,8 @@ class ParquetFileReader(Reader):
     def __init__(
         self,
         path: str,
-        chunk_size: int = 100000,
-        buffer_size: int = 5000,
+        chunk_size: Optional[int] = 100000,
+        buffer_size: Optional[int] = 5000,
         file_names: Optional[List[str]] = None,
         dataframe_type: DataframeType = DataframeType.pandas,
     ):
@@ -63,6 +63,7 @@ class ParquetFileReader(Reader):
             chunk_size (int): Number of rows per batch. Defaults to 100000.
             buffer_size (int): Number of rows per batch. Defaults to 5000.
             file_names (Optional[List[str]]): List of file names to read. Defaults to None.
+            dataframe_type (DataframeType): Type of dataframe to read. Defaults to DataframeType.pandas.
 
         Raises:
             ValueError: When path is not provided or when single file path is combined with file_names
@@ -213,7 +214,7 @@ class ParquetFileReader(Reader):
             for parquet_file in parquet_files:
                 df = pd.read_parquet(parquet_file)
                 for i in range(0, len(df), self.chunk_size):
-                    yield df.iloc[i : i + self.chunk_size]
+                    yield df.iloc[i : i + self.chunk_size]  # type: ignore
         except Exception as e:
             logger.error(
                 f"Error reading data from parquet file(s) in batches: {str(e)}"
@@ -345,7 +346,7 @@ class ParquetFileWriter(Writer):
     and automatic uploading to object store.
 
     Attributes:
-        output_path (str): Base path where Parquet files will be written.
+        path (str): Base path where Parquet files will be written.
         typename (Optional[str]): Type name of the entity e.g database, schema, table.
         chunk_size (int): Maximum number of records per chunk.
         total_record_count (int): Total number of records processed.
@@ -359,24 +360,24 @@ class ParquetFileWriter(Writer):
 
     def __init__(
         self,
-        output_path: str = "",
+        path: str,
         typename: Optional[str] = None,
         chunk_size: Optional[int] = 100000,
-        buffer_size: int = 5000,
-        total_record_count: int = 0,
-        chunk_count: int = 0,
-        chunk_part: int = 0,
+        buffer_size: Optional[int] = 5000,
+        total_record_count: Optional[int] = 0,
+        chunk_count: Optional[int] = 0,
+        chunk_part: Optional[int] = 0,
         chunk_start: Optional[int] = None,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
-        retain_local_copy: bool = False,
-        use_consolidation: bool = False,
+        retain_local_copy: Optional[bool] = False,
+        use_consolidation: Optional[bool] = False,
         dataframe_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the Parquet output handler.
 
         Args:
-            output_path (str): Base path where Parquet files will be written.
+            path (str): Base path where Parquet files will be written.
             typename (Optional[str], optional): Type name of the entity e.g database, schema, table.
             chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
             total_record_count (int, optional): Initial total record count. Defaults to 0.
@@ -394,7 +395,7 @@ class ParquetFileWriter(Writer):
             dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
         self.extension = PARQUET_FILE_EXTENSION
-        self.output_path = output_path
+        self.path = path
         self.typename = typename
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
@@ -432,12 +433,12 @@ class ParquetFileWriter(Writer):
         if self.chunk_start:
             self.chunk_count = self.chunk_start + self.chunk_count
 
-        if not self.output_path:
-            raise ValueError("output_path is required")
+        if not self.path:
+            raise ValueError("path is required")
         # Create output directory
         if self.typename:
-            self.output_path = os.path.join(self.output_path, self.typename)
-        os.makedirs(self.output_path, exist_ok=True)
+            self.path = os.path.join(self.path, self.typename)
+        os.makedirs(self.path, exist_ok=True)
 
     async def _write_batched_dataframe(
         self,
@@ -540,7 +541,7 @@ class ParquetFileWriter(Writer):
             ):
                 # Daft automatically handles file splitting and naming
                 result = dataframe.write_parquet(
-                    root_dir=self.output_path,
+                    root_dir=self.path,
                     write_mode=write_mode.value,
                     partition_cols=partition_cols,
                 )
@@ -573,11 +574,11 @@ class ParquetFileWriter(Writer):
                 # Delete the directory from object store
                 try:
                     await ObjectStore.delete_prefix(
-                        prefix=get_object_store_prefix(self.output_path)
+                        prefix=get_object_store_prefix(self.path)
                     )
                 except FileNotFoundError as e:
                     logger.info(
-                        f"No files found under prefix {get_object_store_prefix(self.output_path)}: {str(e)}"
+                        f"No files found under prefix {get_object_store_prefix(self.path)}: {str(e)}"
                     )
             for path in file_paths:
                 if ENABLE_ATLAN_UPLOAD:
@@ -617,19 +618,19 @@ class ParquetFileWriter(Writer):
         Returns:
             str: The full path of the output file.
         """
-        return self.output_path
+        return self.path
 
     # Consolidation helper methods
 
     def _get_temp_folder_path(self, folder_index: int) -> str:
         """Generate temp folder path consistent with existing structure."""
-        temp_base_path = os.path.join(self.output_path, "temp_accumulation")
+        temp_base_path = os.path.join(self.path, "temp_accumulation")
         return os.path.join(temp_base_path, f"folder-{folder_index}")
 
     def _get_consolidated_file_path(self, folder_index: int, chunk_part: int) -> str:
         """Generate final consolidated file path using existing path_gen logic."""
         return os.path.join(
-            self.output_path,
+            self.path,
             path_gen(
                 chunk_count=folder_index,
                 chunk_part=chunk_part,
@@ -772,7 +773,7 @@ class ParquetFileWriter(Writer):
                     shutil.rmtree(temp_folder, ignore_errors=True)
 
             # Clean up base temp directory if it exists and is empty
-            temp_base_path = os.path.join(self.output_path, "temp_accumulation")
+            temp_base_path = os.path.join(self.path, "temp_accumulation")
             if os.path.exists(temp_base_path) and not os.listdir(temp_base_path):
                 os.rmdir(temp_base_path)
 

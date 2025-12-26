@@ -298,7 +298,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             return None
 
         # Setup parquet output using helper method
-        parquet_output = self._setup_parquet_output(output_path, write_to_file)
+        parquet_output = self._setup_parquet_output(
+            output_path, write_to_file, typename
+        )
 
         # If multidb mode is enabled, run per-database flow
         if getattr(self, "multidb", False):
@@ -348,6 +350,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         self,
         output_path: str,
         write_to_file: bool,
+        typename: Optional[str] = None,
     ) -> Optional[ParquetFileWriter]:
         """Create a ParquetFileWriter for the given output path.
 
@@ -362,8 +365,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             return None
 
         return ParquetFileWriter(
-            output_path=output_path,
+            path=output_path,
             use_consolidation=True,
+            typename=typename,
         )
 
     def _get_temp_table_regex_sql(self, typename: str) -> str:
@@ -404,7 +408,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
-            output_path=os.path.join(base_output_path, "raw", "database"),
+            output_path=os.path.join(base_output_path, "raw"),
             typename="database",
         )
         return statistics
@@ -438,7 +442,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
-            output_path=os.path.join(base_output_path, "raw", "schema"),
+            output_path=os.path.join(base_output_path, "raw"),
             typename="schema",
         )
         return statistics
@@ -474,7 +478,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
-            output_path=os.path.join(base_output_path, "raw", "table"),
+            output_path=os.path.join(base_output_path, "raw"),
             typename="table",
         )
         return statistics
@@ -510,7 +514,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
-            output_path=os.path.join(base_output_path, "raw", "column"),
+            output_path=os.path.join(base_output_path, "raw"),
             typename="column",
         )
         return statistics
@@ -544,7 +548,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             sql_client=state.sql_client,
             sql_query=prepared_query,
             workflow_args=workflow_args,
-            output_path=os.path.join(base_output_path, "raw", "extras-procedure"),
+            output_path=os.path.join(base_output_path, "raw"),
             typename="extras-procedure",
         )
         return statistics
@@ -584,7 +588,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         raw_input = raw_input.read_batches()
 
         transformed_output = JsonFileWriter(
-            output_path=os.path.join(output_path, "transformed"),
+            path=os.path.join(output_path, "transformed"),
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
             dataframe_type=DataframeType.daft,

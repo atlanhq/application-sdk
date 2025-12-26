@@ -103,7 +103,7 @@ class Writer(ABC):
     pattern with open/write/close semantics and supports context managers.
 
     Attributes:
-        output_path (str): Path where the writer will be written.
+        path (str): Path where the writer will be written.
         output_prefix (str): Prefix for files when uploading to object store.
         total_record_count (int): Total number of records processed.
         chunk_count (int): Number of chunks the writer was split into.
@@ -116,19 +116,19 @@ class Writer(ABC):
     Example:
         ```python
         # Using close() explicitly
-        writer = JsonFileWriter(output_path="/data/output")
+        writer = JsonFileWriter(path="/data/output")
         await writer.write(dataframe)
         await writer.write({"key": "value"})  # Dict support
         stats = await writer.close()
 
         # Using context manager (recommended)
-        async with JsonFileWriter(output_path="/data/output") as writer:
+        async with JsonFileWriter(path="/data/output") as writer:
             await writer.write(dataframe)
         # close() called automatically
         ```
     """
 
-    output_path: str
+    path: str
     output_prefix: str
     total_record_count: int
     chunk_count: int
@@ -322,7 +322,7 @@ class Writer(ABC):
                     self.current_buffer_size_bytes + chunk_size_bytes
                     > self.max_file_size_bytes
                 ):
-                    output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
+                    output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
                     if os.path.exists(output_file_name):
                         await self._upload_file(output_file_name)
                         self.chunk_part += 1
@@ -336,7 +336,7 @@ class Writer(ABC):
 
             if self.current_buffer_size_bytes > 0:
                 # Finally upload the final file to the object store
-                output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
+                output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
                 if os.path.exists(output_file_name):
                     await self._upload_file(output_file_name)
                     self.chunk_part += 1
@@ -470,7 +470,7 @@ class Writer(ABC):
 
         Example:
             ```python
-            writer = JsonFileWriter(output_path="/data/output", typename="table")
+            writer = JsonFileWriter(path="/data/output", typename="table")
             await writer.write(dataframe)
             stats = await writer.close()
             print(f"Wrote {stats.total_record_count} records")
@@ -532,7 +532,7 @@ class Writer(ABC):
         try:
             if not is_empty_dataframe(chunk):
                 self.total_record_count += len(chunk)
-                output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, chunk_part, extension=self.extension)}"
+                output_file_name = f"{self.path}/{path_gen(self.chunk_count, chunk_part, extension=self.extension)}"
                 await self._write_chunk(chunk, output_file_name)
 
                 self.current_buffer_size = 0
@@ -587,7 +587,7 @@ class Writer(ABC):
                 statistics["typename"] = typename
 
             # Write the statistics to a json file inside a dedicated statistics/ folder
-            statistics_dir = os.path.join(self.output_path, "statistics")
+            statistics_dir = os.path.join(self.path, "statistics")
             os.makedirs(statistics_dir, exist_ok=True)
             output_file_name = os.path.join(statistics_dir, "statistics.json.ignore")
             # If chunk_start is provided, include it in the statistics filename

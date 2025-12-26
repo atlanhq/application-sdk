@@ -57,7 +57,7 @@ Writers follow Python's familiar file I/O pattern with `write()` and `close()` m
 ```python
 from application_sdk.io.json import JsonFileWriter
 
-writer = JsonFileWriter(output_path="/data/output")
+writer = JsonFileWriter(path="/data/output")
 
 # Write DataFrames
 await writer.write(dataframe)
@@ -78,7 +78,7 @@ print(f"Wrote {stats.total_record_count} records")
 Using `async with` ensures the writer is always properly closed:
 
 ```python
-async with JsonFileWriter(output_path="/data/output") as writer:
+async with JsonFileWriter(path="/data/output") as writer:
     await writer.write(dataframe)
     await writer.write({"key": "value"})
 # close() is called automatically on exit
@@ -100,15 +100,15 @@ Writes Pandas or Daft DataFrames to one or more JSON Lines files locally, option
 *   **Chunking:** Automatically splits large DataFrames into multiple output files based on the `chunk_size` parameter.
 *   **Buffering (Pandas):** For Pandas DataFrames, uses an internal buffer to accumulate data before writing chunks, controlled by `buffer_size`.
 *   **File Naming:** Uses a `path_gen` function to name output files, typically incorporating chunk numbers (e.g., `1.json`, `2-100.json`). Can be customized.
-*   **Object Store Integration:** After writing files locally to the specified `output_path`, it uploads the generated files to object storage.
+*   **Object Store Integration:** After writing files locally to the specified `path`, it uploads the generated files to object storage.
 *   **Statistics:** Tracks `total_record_count` and `chunk_count` and saves them via `write_statistics`.
 
 ### Initialization
 
-`JsonFileWriter(output_path, typename=..., chunk_start=..., chunk_size=..., ...)`
+`JsonFileWriter(path, typename=..., chunk_start=..., chunk_size=..., ...)`
 
-*   `output_path` (str): The full path where files will be written (e.g., `/data/workflow_run_123/transformed`). The caller should construct this path explicitly.
-*   `typename` (str, optional): A subdirectory name added under `output_path` (e.g., `tables`, `columns`). Helps organize output.
+*   `path` (str): The full path where files will be written (e.g., `/data/workflow_run_123/transformed`). The caller should construct this path explicitly.
+*   `typename` (str, optional): A subdirectory name added under `path` (e.g., `tables`, `columns`). Helps organize output.
 *   `chunk_start` (int, optional): Starting index for chunk numbering in filenames.
 *   `chunk_size` (int, optional): Maximum number of records per output file chunk (default: 50,000).
 
@@ -135,7 +135,7 @@ async def query_executor(
 
     # Instantiate JsonFileWriter with the full output path
     json_writer = JsonFileWriter(
-        output_path=output_path,  # Full path provided by caller
+        path=output_path,  # Full path provided by caller
         typename=typename,
         # chunk_size=... (optional)
     )

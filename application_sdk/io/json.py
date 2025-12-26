@@ -36,7 +36,7 @@ class JsonFileReader(Reader):
         self,
         path: str,
         file_names: Optional[List[str]] = None,
-        chunk_size: int = 100000,
+        chunk_size: Optional[int] = 100000,
         dataframe_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the JsonInput class.
@@ -202,7 +202,7 @@ class JsonFileWriter(Writer):
     includes chunk numbers for split files.
 
     Attributes:
-        output_path (str): Full path where JSON files will be written.
+        path (str): Full path where JSON files will be written.
         typename (Optional[str]): Type identifier for the data being written.
         chunk_start (Optional[int]): Starting index for chunk numbering.
         buffer_size (int): Size of the write buffer in bytes.
@@ -215,25 +215,25 @@ class JsonFileWriter(Writer):
 
     def __init__(
         self,
-        output_path: str = "",
+        path: str,
         typename: Optional[str] = None,
         chunk_start: Optional[int] = None,
-        buffer_size: int = 5000,
+        buffer_size: Optional[int] = 5000,
         chunk_size: Optional[int] = 50000,  # to limit the memory usage on upload
-        total_record_count: int = 0,
-        chunk_count: int = 0,
+        total_record_count: Optional[int] = 0,
+        chunk_count: Optional[int] = 0,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
-        retain_local_copy: bool = False,
+        retain_local_copy: Optional[bool] = False,
         dataframe_type: DataframeType = DataframeType.pandas,
         **kwargs: Dict[str, Any],
     ):
         """Initialize the JSON output handler.
 
         Args:
-            output_path (str): Full path where JSON files will be written.
+            path (str): Full path where JSON files will be written.
             typename (Optional[str], optional): Type identifier for the data being written.
-                If provided, a subdirectory with this name will be created under output_path.
+                If provided, a subdirectory with this name will be created under path.
                 Defaults to None.
             chunk_start (Optional[int], optional): Starting index for chunk numbering.
                 Defaults to None.
@@ -249,7 +249,7 @@ class JsonFileWriter(Writer):
                 Defaults to False.
             dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
-        self.output_path = output_path
+        self.path = path
         self.typename = typename
         self.chunk_start = chunk_start
         self.total_record_count = total_record_count
@@ -273,12 +273,12 @@ class JsonFileWriter(Writer):
         self._is_closed = False
         self._statistics = None
 
-        if not self.output_path:
-            raise ValueError("output_path is required")
+        if not self.path:
+            raise ValueError("path is required")
 
         if typename:
-            self.output_path = os.path.join(self.output_path, typename)
-        os.makedirs(self.output_path, exist_ok=True)
+            self.path = os.path.join(self.path, typename)
+        os.makedirs(self.path, exist_ok=True)
 
         if self.chunk_start:
             self.chunk_count = self.chunk_start + self.chunk_count
@@ -350,7 +350,7 @@ class JsonFileWriter(Writer):
                     self.total_record_count > 0
                     and self.total_record_count % self.chunk_size == 0
                 ):
-                    output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
+                    output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
                     if os.path.exists(output_file_name):
                         await self._upload_file(output_file_name)
                         self.chunk_part += 1
@@ -385,7 +385,7 @@ class JsonFileWriter(Writer):
         This method combines all DataFrames in the buffer, writes them to a JSON file,
         and uploads the file to the object store.
         """
-        output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
+        output_file_name = f"{self.path}/{path_gen(self.chunk_count, chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
         with open(output_file_name, "ab+") as f:
             f.writelines(buffer)
         buffer.clear()  # Clear the buffer
@@ -417,7 +417,7 @@ class JsonFileWriter(Writer):
         """
         # Upload the final file if there's remaining buffered data
         if self.current_buffer_size_bytes > 0:
-            output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
+            output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
             if os.path.exists(output_file_name):
                 await self._upload_file(output_file_name)
                 self.chunk_part += 1

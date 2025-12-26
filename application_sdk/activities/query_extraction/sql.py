@@ -212,7 +212,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             sql_results = await sql_client.get_results(formatted_query)
 
             raw_output = ParquetFileWriter(
-                output_path=os.path.join(workflow_args["output_path"], "raw/query"),
+                path=os.path.join(workflow_args["output_path"], "raw/query"),
                 chunk_size=workflow_args["miner_args"].get("chunk_size", 100000),
                 start_marker=workflow_args["start_marker"],
                 end_marker=workflow_args["end_marker"],

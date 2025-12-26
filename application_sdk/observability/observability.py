@@ -422,7 +422,7 @@ class AtlanObservability(Generic[T], ABC):
                     from application_sdk.io.parquet import ParquetFileWriter
 
                     parquet_writer = ParquetFileWriter(
-                        output_path=partition_path,
+                        path=partition_path,
                         chunk_start=0,
                         chunk_part=int(time()),
                     )
