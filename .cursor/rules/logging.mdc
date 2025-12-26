@@ -1,9 +1,13 @@
 ---
-description:
+description: Logging standards and best practices using AtlanLoggerAdapter for structured logging
 globs: application_sdk/**/*.py
 alwaysApply: false
 ---
 # Logging Guidelines
+
+## Exceptions
+
+- **Observability Module**: The `application_sdk/observability/` module uses the standard `logging` module directly since it implements the `get_logger` wrapper. All other modules must use `get_logger`.
 
 - **Logger Configuration**
     - Use `AtlanLoggerAdapter` for all logging

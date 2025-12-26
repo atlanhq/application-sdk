@@ -1,10 +1,12 @@
 """Unit tests for SQL metadata extraction activities (context-free)."""
 
+import os
 from typing import Any, Dict
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from application_sdk.activities.common import sql_utils
 from application_sdk.activities.metadata_extraction.sql import (
     ActivityStatistics,
     BaseSQLMetadataExtractionActivities,
@@ -12,7 +14,7 @@ from application_sdk.activities.metadata_extraction.sql import (
 )
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.outputs.parquet import ParquetOutput
+from application_sdk.io.parquet import ParquetFileWriter
 from application_sdk.transformers import TransformerInterface
 
 
@@ -138,18 +140,17 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.outputs.parquet.ParquetOutput.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
-    @patch("application_sdk.outputs.json.JsonOutput.write_dataframe")
+    @patch(
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
+        new_callable=AsyncMock,
+    )
     async def test_query_executor_success(
         self,
-        mock_write_dataframe,
         mock_get_batched_dataframe,
-        mock_get_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -158,16 +159,22 @@ class TestBaseSQLMetadataExtractionActivities:
         await mock_activities._set_state(sample_workflow_args)
         mock_dataframe = Mock()
         mock_dataframe.__len__ = Mock(return_value=10)
-        mock_get_dataframe.return_value = mock_dataframe
         mock_get_batched_dataframe.return_value = (df for df in [mock_dataframe])
-        mock_write_dataframe.return_value = None
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=10)
-        sql_engine = Mock()
+        mock_close.return_value = ActivityStatistics(total_record_count=10)
+
+        # Create a proper mock SQL client with async methods
+        sql_client = Mock()
+        sql_client.get_batched_results = AsyncMock(
+            return_value=(df for df in [mock_dataframe])
+        )
+
         sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
         result = await mock_activities.query_executor(
-            sql_engine, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
         assert result is not None
         assert isinstance(result, ActivityStatistics)
@@ -176,16 +183,17 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.outputs.parquet.ParquetOutput.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
+    @patch(
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
+        new_callable=AsyncMock,
+    )
     async def test_query_executor_empty_dataframe(
         self,
         mock_get_batched_dataframe,
-        mock_get_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -194,15 +202,22 @@ class TestBaseSQLMetadataExtractionActivities:
         await mock_activities._set_state(sample_workflow_args)
         mock_dataframe = Mock()
         mock_dataframe.__len__ = Mock(return_value=0)
-        mock_get_dataframe.return_value = mock_dataframe
         mock_get_batched_dataframe.return_value = (df for df in [mock_dataframe])
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=0)
-        sql_engine = Mock()
+        mock_close.return_value = ActivityStatistics(total_record_count=0)
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = (
+            mock_get_batched_dataframe  # Assign the patched mock here
+        )
         sql_query = "SELECT * FROM empty_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
         result = await mock_activities.query_executor(
-            sql_engine, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
         assert isinstance(result, ActivityStatistics)
         assert result.total_record_count == 0
@@ -300,15 +315,13 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.outputs.parquet.ParquetOutput.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
+    @patch("application_sdk.io.json.JsonFileWriter.close", new_callable=AsyncMock)
+    @patch("application_sdk.io.parquet.ParquetFileReader.read")
     @patch(
-        "application_sdk.outputs.json.JsonOutput.get_statistics", new_callable=AsyncMock
-    )
-    @patch("application_sdk.inputs.parquet.ParquetInput.get_dataframe")
-    @patch(
-        "application_sdk.inputs.Input.download_files",
+        "application_sdk.io.parquet.download_files",
         new_callable=AsyncMock,
     )
     @patch("daft.read_parquet")
@@ -318,7 +331,7 @@ class TestBaseSQLMetadataExtractionActivities:
     )
     @patch.object(MockTransformer, "transform_metadata")
     @patch(
-        "application_sdk.outputs.json.JsonOutput.write_daft_dataframe",
+        "application_sdk.io.json.JsonFileWriter.write",
         new_callable=AsyncMock,
     )
     async def test_transform_data_success(
@@ -328,9 +341,9 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_is_empty,
         mock_read_parquet,
         mock_download_files,
-        mock_get_dataframe,
-        mock_get_statistics_json,
-        mock_get_statistics_parquet,
+        mock_read,
+        mock_close_json,
+        mock_close_parquet,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -341,8 +354,8 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_dataframe.__len__ = Mock(return_value=20)
         mock_dataframe.empty = False
         mock_dataframe.shape = (20, 1)
-        # Patch get_dataframe to return a list with one mock dataframe
-        mock_get_dataframe.return_value = [mock_dataframe]
+        # Patch read to return a list with one mock dataframe
+        mock_read.return_value = [mock_dataframe]
         mock_download_files.return_value = ["/test/path/raw/file1.parquet"]
 
         # Create a proper mock for daft DataFrame with chunked behavior
@@ -353,16 +366,15 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_read_parquet.return_value = mock_daft_df
         mock_transform_metadata.return_value = {"transformed": "data"}
         mock_write_daft_dataframe.return_value = None
-        mock_get_statistics_parquet.return_value = ActivityStatistics(
-            total_record_count=20
-        )
-        mock_get_statistics_json.return_value = ActivityStatistics(
-            total_record_count=20
-        )
+        mock_close_parquet.return_value = ActivityStatistics(total_record_count=20)
+        mock_close_json.return_value = ActivityStatistics(total_record_count=20)
         result = await mock_activities.transform_data(sample_workflow_args)
         assert result is not None
         assert isinstance(result, ActivityStatistics)
         assert result.total_record_count == 20
+        # Normalize path for cross-platform compatibility
+        expected_path = os.path.join("/test/path", "raw")
+        mock_download_files.assert_called_once_with(expected_path, ".parquet", None)
         mock_transform_metadata.assert_called_once()
         mock_write_daft_dataframe.assert_called_once()
 
@@ -370,16 +382,19 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.outputs.parquet.ParquetOutput.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
-    @patch("application_sdk.outputs.parquet.ParquetOutput.write_batched_dataframe")
+    @patch(
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.io.parquet.ParquetFileWriter.write_batches")
     async def test_query_executor_single_db_success(
         self,
         mock_write_batched_dataframe,
         mock_get_batched_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -394,15 +409,21 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_batched_iter = [mock_dataframe]
         mock_get_batched_dataframe.return_value = mock_batched_iter
         mock_write_batched_dataframe.return_value = None
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=10)
+        mock_close.return_value = ActivityStatistics(total_record_count=10)
 
-        sql_engine = Mock()
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = mock_get_batched_dataframe
         sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_engine, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
 
         assert result is not None
@@ -414,14 +435,17 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.outputs.parquet.ParquetOutput.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
+    @patch(
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
+        new_callable=AsyncMock,
+    )
     async def test_query_executor_single_db_async_iterator(
         self,
         mock_get_batched_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -437,15 +461,21 @@ class TestBaseSQLMetadataExtractionActivities:
             yield mock_df
 
         mock_get_batched_dataframe.return_value = mock_async_iter()
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=5)
+        mock_close.return_value = ActivityStatistics(total_record_count=5)
 
-        sql_engine = Mock()
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = AsyncMock()
         sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_engine, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
 
         assert result is not None
@@ -454,7 +484,10 @@ class TestBaseSQLMetadataExtractionActivities:
 
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
+    @patch(
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
+        new_callable=AsyncMock,
+    )
     async def test_query_executor_single_db_no_write_to_file(
         self,
         mock_get_batched_dataframe,
@@ -470,16 +503,22 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_dataframe.__len__ = Mock(return_value=10)
         mock_get_batched_dataframe.return_value = [mock_dataframe]
 
-        sql_engine = Mock()
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = AsyncMock()
         sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_engine,
+            sql_client,
             sql_query,
             sample_workflow_args,
-            output_suffix,
+            output_path,
             typename,
             write_to_file=False,
         )
@@ -490,59 +529,56 @@ class TestBaseSQLMetadataExtractionActivities:
         self, mock_activities, sample_workflow_args
     ):
         """Test query_executor with empty query."""
-        sql_engine = Mock()
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = AsyncMock()
         sql_query = ""
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_engine, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
 
         assert result is None
 
-    async def test_query_executor_missing_output_args(self, mock_activities):
-        """Test query_executor with missing output arguments."""
-        sql_engine = Mock()
-        sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
-        typename = "DATABASE"
-        workflow_args = {"workflow_id": "test"}  # Missing output_prefix and output_path
-
-        with pytest.raises(
-            ValueError, match="Output prefix and path must be specified"
-        ):
-            await mock_activities.query_executor(
-                sql_engine, sql_query, workflow_args, output_suffix, typename
-            )
-
     @patch("os.makedirs")
-    async def test_query_executor_no_sql_engine(
+    async def test_query_executor_no_sql_client(
         self, mock_makedirs, mock_activities, sample_workflow_args
     ):
-        """Test query_executor with no SQL engine."""
-        sql_engine = None
+        """Test query_executor with no SQL client."""
+        sql_client = None
         sql_query = "SELECT * FROM test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
-        with pytest.raises(ValueError, match="SQL engine must be provided"):
+        # The method validates sql_client and raises ValueError if not provided
+        with pytest.raises(ValueError, match="SQL client is required"):
             await mock_activities.query_executor(
-                sql_engine, sql_query, sample_workflow_args, output_suffix, typename
+                sql_client, sql_query, sample_workflow_args, output_path, typename
             )
 
     # Tests for multidb mode
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.outputs.parquet.ParquetOutput.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
-    @patch("application_sdk.outputs.parquet.ParquetOutput.write_batched_dataframe")
-    @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
-    @patch("application_sdk.activities.metadata_extraction.sql.prepare_query")
-    @patch("application_sdk.activities.metadata_extraction.sql.parse_credentials_extra")
+    @patch(
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.io.parquet.ParquetFileWriter.write_batches")
+    @patch("application_sdk.activities.common.sql_utils.get_database_names")
+    @patch("application_sdk.activities.common.sql_utils.prepare_query")
+    @patch("application_sdk.activities.common.sql_utils.parse_credentials_extra")
     async def test_query_executor_multidb_success(
         self,
         mock_parse_credentials_extra,
@@ -550,7 +586,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_database_names,
         mock_write_batched_dataframe,
         mock_get_batched_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -581,15 +617,21 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_dataframe.__len__ = Mock(return_value=5)
         mock_get_batched_dataframe.return_value = [mock_dataframe]
         mock_write_batched_dataframe.return_value = None
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=10)
+        mock_close.return_value = ActivityStatistics(total_record_count=10)
 
-        sql_engine = Mock()
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = AsyncMock()
         sql_query = "SELECT * FROM {database_name}.test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_engine, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
 
         assert result is not None
@@ -600,7 +642,7 @@ class TestBaseSQLMetadataExtractionActivities:
 
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
-    @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
+    @patch("application_sdk.activities.common.sql_utils.get_database_names")
     async def test_query_executor_multidb_no_databases(
         self,
         mock_get_database_names,
@@ -627,22 +669,33 @@ class TestBaseSQLMetadataExtractionActivities:
         # Mock no databases found
         mock_get_database_names.return_value = []
 
-        sql_engine = Mock()
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = AsyncMock()
         sql_query = "SELECT * FROM {database_name}.test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_engine, sql_query, sample_workflow_args, output_suffix, typename
+            sql_client, sql_query, sample_workflow_args, output_path, typename
         )
 
         assert result is None
 
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
-    @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
+    @patch("application_sdk.activities.common.sql_utils.get_database_names")
+    @patch(
+        "application_sdk.io.parquet.ParquetFileWriter.close",
+        new_callable=AsyncMock,
+    )
     async def test_query_executor_multidb_no_sql_client(
         self,
+        mock_close,
         mock_get_database_names,
         mock_exists,
         mock_makedirs,
@@ -659,16 +712,28 @@ class TestBaseSQLMetadataExtractionActivities:
         state.sql_client = None
 
         mock_get_database_names.return_value = ["db1"]
+        mock_close.return_value = ActivityStatistics(total_record_count=0)
 
-        sql_engine = Mock()
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = AsyncMock()
         sql_query = "SELECT * FROM {database_name}.test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
-        with pytest.raises(ValueError, match="SQL client not initialized"):
-            await mock_activities.query_executor(
-                sql_engine, sql_query, sample_workflow_args, output_suffix, typename
-            )
+        # The method doesn't validate state.sql_client, it uses the passed sql_client
+        # So this test should actually succeed, not raise an exception
+        result = await mock_activities.query_executor(
+            sql_client, sql_query, sample_workflow_args, output_path, typename
+        )
+
+        # Should return ActivityStatistics even with state.sql_client = None
+        assert result is not None
+        assert isinstance(result, ActivityStatistics)
 
     # Tests for helper functions
     @patch("os.makedirs")
@@ -676,42 +741,33 @@ class TestBaseSQLMetadataExtractionActivities:
         self, mock_makedirs, mock_activities, sample_workflow_args
     ):
         """Test _setup_parquet_output with valid arguments."""
-        output_suffix = "test_suffix"
-
-        result = mock_activities._setup_parquet_output(
-            sample_workflow_args, output_suffix, write_to_file=True
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
         )
 
+        result = mock_activities._setup_parquet_output(output_path, write_to_file=True)
+
         assert result is not None
-        assert isinstance(result, ParquetOutput)
+        assert isinstance(result, ParquetFileWriter)
 
     def test_setup_parquet_output_no_write_to_file(
         self, mock_activities, sample_workflow_args
     ):
         """Test _setup_parquet_output with write_to_file=False."""
-        output_suffix = "test_suffix"
-
-        result = mock_activities._setup_parquet_output(
-            sample_workflow_args, output_suffix, write_to_file=False
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
         )
+
+        result = mock_activities._setup_parquet_output(output_path, write_to_file=False)
 
         assert result is None
 
-    def test_setup_parquet_output_missing_args(self, mock_activities):
-        """Test _setup_parquet_output with missing workflow arguments."""
-        workflow_args = {"workflow_id": "test"}  # Missing output_prefix and output_path
-        output_suffix = "test_suffix"
-
-        with pytest.raises(
-            ValueError, match="Output prefix and path must be specified"
-        ):
-            mock_activities._setup_parquet_output(
-                workflow_args, output_suffix, write_to_file=True
-            )
-
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
     @patch(
-        "application_sdk.outputs.parquet.ParquetOutput.write_batched_dataframe",
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "application_sdk.io.parquet.ParquetFileWriter.write_batches",
         new_callable=AsyncMock,
     )
     async def test_execute_single_db_success_with_write(
@@ -720,11 +776,15 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe,
         mock_activities,
     ):
-        """Test _execute_single_db with write_to_file=True."""
-        sql_engine = Mock()
+        """Test execute_single_db with write_to_file=True."""
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = mock_get_batched_dataframe
         prepared_query = "SELECT * FROM test_table"
         parquet_output = Mock()
-        parquet_output.write_batched_dataframe = AsyncMock(return_value=None)
+        parquet_output.write_batches = AsyncMock(return_value=None)
 
         # Mock dataframe
         mock_dataframe = Mock()
@@ -732,23 +792,30 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe.return_value = [mock_dataframe]
         mock_write_batched_dataframe.return_value = None
 
-        success, result = await mock_activities._execute_single_db(
-            sql_engine, prepared_query, parquet_output, write_to_file=True
+        success, result = await sql_utils.execute_single_db(
+            sql_client, prepared_query, parquet_output, write_to_file=True
         )
 
         assert success is True
         assert result is None
         mock_get_batched_dataframe.assert_called_once()
-        parquet_output.write_batched_dataframe.assert_called_once()
+        parquet_output.write_batches.assert_called_once()
 
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
+    @patch(
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
+        new_callable=AsyncMock,
+    )
     async def test_execute_single_db_success_without_write(
         self,
         mock_get_batched_dataframe,
         mock_activities,
     ):
-        """Test _execute_single_db with write_to_file=False."""
-        sql_engine = Mock()
+        """Test execute_single_db with write_to_file=False."""
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = mock_get_batched_dataframe
         prepared_query = "SELECT * FROM test_table"
         parquet_output = Mock()
 
@@ -758,8 +825,8 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_batched_iter = [mock_dataframe]
         mock_get_batched_dataframe.return_value = mock_batched_iter
 
-        success, result = await mock_activities._execute_single_db(
-            sql_engine, prepared_query, parquet_output, write_to_file=False
+        success, result = await sql_utils.execute_single_db(
+            sql_client, prepared_query, parquet_output, write_to_file=False
         )
 
         assert success is True
@@ -767,40 +834,55 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe.assert_called_once()
 
     async def test_execute_single_db_no_prepared_query(self, mock_activities):
-        """Test _execute_single_db with no prepared query."""
-        sql_engine = Mock()
+        """Test execute_single_db with no prepared query."""
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = AsyncMock()
         prepared_query = None
         parquet_output = Mock()
 
-        success, result = await mock_activities._execute_single_db(
-            sql_engine, prepared_query, parquet_output, write_to_file=True
+        success, result = await sql_utils.execute_single_db(
+            sql_client, prepared_query, parquet_output, write_to_file=True
         )
 
         assert success is False
         assert result is None
 
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
+    @patch(
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
+        new_callable=AsyncMock,
+    )
     async def test_execute_single_db_exception(
         self,
         mock_get_batched_dataframe,
         mock_activities,
     ):
-        """Test _execute_single_db with exception during execution."""
-        sql_engine = Mock()
+        """Test execute_single_db with exception during execution."""
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = mock_get_batched_dataframe
         prepared_query = "SELECT * FROM test_table"
         parquet_output = Mock()
+        parquet_output.write_batches = AsyncMock()
 
         # Mock exception
         mock_get_batched_dataframe.side_effect = Exception("Database error")
 
         with pytest.raises(Exception, match="Database error"):
-            await mock_activities._execute_single_db(
-                sql_engine, prepared_query, parquet_output, write_to_file=True
+            await sql_utils.execute_single_db(
+                sql_client, prepared_query, parquet_output, write_to_file=True
             )
 
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
     @patch(
-        "application_sdk.outputs.parquet.ParquetOutput.write_batched_dataframe",
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "application_sdk.io.parquet.ParquetFileWriter.write_batches",
         new_callable=AsyncMock,
     )
     async def test_execute_single_db_async_iterator(
@@ -809,11 +891,17 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe,
         mock_activities,
     ):
-        """Test _execute_single_db with async iterator."""
-        sql_engine = Mock()
+        """Test execute_single_db with async iterator."""
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = (
+            mock_get_batched_dataframe  # Assign the patched mock here
+        )
         prepared_query = "SELECT * FROM test_table"
         parquet_output = Mock()
-        parquet_output.write_batched_dataframe = AsyncMock(return_value=None)
+        parquet_output.write_batches = AsyncMock(return_value=None)
 
         # Mock async iterator
         async def mock_async_iter():
@@ -824,30 +912,33 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_get_batched_dataframe.return_value = mock_async_iter()
         mock_write_batched_dataframe.return_value = None
 
-        success, result = await mock_activities._execute_single_db(
-            sql_engine, prepared_query, parquet_output, write_to_file=True
+        success, result = await sql_utils.execute_single_db(
+            sql_client, prepared_query, parquet_output, write_to_file=True
         )
 
         assert success is True
         assert result is None
         mock_get_batched_dataframe.assert_called_once()
-        parquet_output.write_batched_dataframe.assert_called_once()
+        parquet_output.write_batches.assert_called_once()
 
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.outputs.parquet.ParquetOutput.get_statistics",
+        "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
-    @patch("application_sdk.outputs.parquet.ParquetOutput.write_batched_dataframe")
     @patch(
-        "application_sdk.outputs.parquet.ParquetOutput.write_dataframe",
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
-    @patch("application_sdk.activities.metadata_extraction.sql.prepare_query")
-    @patch("application_sdk.activities.metadata_extraction.sql.parse_credentials_extra")
+    @patch("application_sdk.io.parquet.ParquetFileWriter.write_batches")
+    @patch(
+        "application_sdk.io.parquet.ParquetFileWriter.write",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.activities.common.sql_utils.get_database_names")
+    @patch("application_sdk.activities.common.sql_utils.prepare_query")
+    @patch("application_sdk.activities.common.sql_utils.parse_credentials_extra")
     async def test_query_executor_multidb_concatenate_success(
         self,
         mock_parse_credentials_extra,
@@ -856,7 +947,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_write_dataframe,
         mock_write_batched_dataframe,
         mock_get_batched_dataframe,
-        mock_get_statistics,
+        mock_close,
         mock_exists,
         mock_makedirs,
         mock_activities,
@@ -886,19 +977,32 @@ class TestBaseSQLMetadataExtractionActivities:
         import pandas as pd
 
         mock_dataframe = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
-        mock_get_batched_dataframe.return_value = [mock_dataframe]
-        mock_get_statistics.return_value = ActivityStatistics(total_record_count=10)
 
-        sql_engine = Mock()
+        # Create an async iterator that yields the dataframe
+        async def async_dataframe_iterator():
+            yield mock_dataframe
+
+        mock_get_batched_dataframe.return_value = async_dataframe_iterator()
+        mock_close.return_value = ActivityStatistics(total_record_count=10)
+
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = AsyncMock(
+            return_value=async_dataframe_iterator()
+        )
         sql_query = "SELECT * FROM {database_name}.test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_engine,
+            sql_client,
             sql_query,
             sample_workflow_args,
-            output_suffix,
+            output_path,
             typename,
             write_to_file=False,
             concatenate=True,
@@ -910,10 +1014,13 @@ class TestBaseSQLMetadataExtractionActivities:
 
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
-    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
-    @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
-    @patch("application_sdk.activities.metadata_extraction.sql.prepare_query")
-    @patch("application_sdk.activities.metadata_extraction.sql.parse_credentials_extra")
+    @patch(
+        "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.activities.common.sql_utils.get_database_names")
+    @patch("application_sdk.activities.common.sql_utils.prepare_query")
+    @patch("application_sdk.activities.common.sql_utils.parse_credentials_extra")
     async def test_query_executor_multidb_concatenate_return_dataframe(
         self,
         mock_parse_credentials_extra,
@@ -949,18 +1056,31 @@ class TestBaseSQLMetadataExtractionActivities:
         import pandas as pd
 
         mock_dataframe = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
-        mock_get_batched_dataframe.return_value = [mock_dataframe]
 
-        sql_engine = Mock()
+        # Create an async iterator that yields the dataframe
+        async def async_dataframe_iterator():
+            yield mock_dataframe
+
+        mock_get_batched_dataframe.return_value = async_dataframe_iterator()
+
+        # Create a proper mock SQL client with dict-like credentials
+        sql_client = Mock()
+        sql_client.credentials = {"extra": "{}"}
+        sql_client.load = AsyncMock()
+        sql_client.get_batched_results = AsyncMock(
+            return_value=async_dataframe_iterator()
+        )
         sql_query = "SELECT * FROM {database_name}.test_table"
-        output_suffix = "test_suffix"
+        output_path = os.path.join(
+            sample_workflow_args["output_path"], "raw", "database"
+        )
         typename = "DATABASE"
 
         result = await mock_activities.query_executor(
-            sql_engine,
+            sql_client,
             sql_query,
             sample_workflow_args,
-            output_suffix,
+            output_path,
             typename,
             write_to_file=False,
             concatenate=True,

@@ -363,14 +363,14 @@ class AtlanObservability(Generic[T], ABC):
             logging.error(f"Error buffering log: {e}")
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
-        """Flush records to parquet file and object store using ParquetOutput abstraction.
+        """Flush records to parquet file and object store using ParquetFileWriter.
 
         Args:
             records: List of records to flush
 
         This method:
         - Groups records by partition (year/month/day)
-        - Uses ParquetOutput abstraction for efficient writing
+        - Uses ParquetFileWriter for efficient writing
         - Automatically handles chunking, compression, and dual upload
         - Provides robust error handling per partition
         - Cleans up old records if enabled
@@ -395,7 +395,7 @@ class AtlanObservability(Generic[T], ABC):
                     partition_records[partition_path] = []
                 partition_records[partition_path].append(record)
 
-            # Write records to each partition using ParquetOutput abstraction
+                # Write records to each partition using ParquetFileWriter
             for partition_path, partition_data in partition_records.items():
                 # Create new dataframe from current records
                 new_df = pd.DataFrame(partition_data)
@@ -412,23 +412,34 @@ class AtlanObservability(Generic[T], ABC):
                     elif part.startswith("day="):
                         new_df["day"] = int(part.split("=")[1])
 
-                # Use new data directly - let ParquetOutput handle consolidation and merging
+                # Use new data directly - let ParquetFileWriter handle consolidation and merging
                 df = new_df
 
-                # Use ParquetOutput abstraction for efficient writing and uploading
+                # Use ParquetFileWriter for efficient writing and uploading
                 # Set the output path for this partition
                 try:
-                    # Lazy import and instantiation of ParquetOutput
-                    from application_sdk.outputs.parquet import ParquetOutput
+                    # Lazy import and instantiation of ParquetFileWriter
+                    from application_sdk.io.parquet import ParquetFileWriter
 
-                    parquet_output = ParquetOutput(
-                        output_path=partition_path,
+                    parquet_writer = ParquetFileWriter(
+                        path=partition_path,
                         chunk_start=0,
                         chunk_part=int(time()),
                     )
-                    await parquet_output.write_dataframe(dataframe=df)
-                except Exception as e:
-                    print(f"Error writing records to partition: {str(e)}")
+                    logging.info(
+                        f"Successfully instantiated ParquetFileWriter for partition: {partition_path}"
+                    )
+
+                    await parquet_writer._write_dataframe(dataframe=df)
+
+                    logging.info(
+                        f"Successfully wrote {len(df)} records to partition: {partition_path}"
+                    )
+
+                except Exception as partition_error:
+                    logging.error(
+                        f"Error processing partition {partition_path}: {str(partition_error)}"
+                    )
 
             # Clean up old records if enabled
             if self._cleanup_enabled:
