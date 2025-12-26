@@ -176,12 +176,22 @@ class Writer(ABC):
             A pandas or daft DataFrame depending on self.dataframe_type.
 
         Raises:
-            TypeError: If data type is not supported.
+            TypeError: If data type is not supported or if dict/list input is used with daft when daft is not available.
         """
         import pandas as pd
 
-        # Already a pandas DataFrame - return as-is
+        # Already a pandas DataFrame - return as-is or convert to daft if needed
         if isinstance(data, pd.DataFrame):
+            if self.dataframe_type == DataframeType.daft:
+                try:
+                    import daft
+
+                    return daft.from_pandas(data)
+                except ImportError:
+                    raise TypeError(
+                        "daft is not installed. Please install daft to use DataframeType.daft, "
+                        "or use DataframeType.pandas instead."
+                    )
             return data
 
         # Check for daft DataFrame
@@ -193,13 +203,35 @@ class Writer(ABC):
         except ImportError:
             pass
 
-        # Convert dict to single-row DataFrame
-        if isinstance(data, dict):
-            return pd.DataFrame([data])
+        # Convert dict or list of dicts to DataFrame
+        if isinstance(data, dict) or (
+            isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict)
+        ):
+            # For daft dataframe_type, convert to daft DataFrame directly
+            if self.dataframe_type == DataframeType.daft:
+                try:
+                    import daft
 
-        # Convert list of dicts to DataFrame
-        if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-            return pd.DataFrame(data)
+                    # Convert to columnar format for daft.from_pydict()
+                    if isinstance(data, dict):
+                        # Single dict: {"col1": "val1", "col2": "val2"} -> {"col1": ["val1"], "col2": ["val2"]}
+                        columnar_data = {k: [v] for k, v in data.items()}
+                    else:
+                        # List of dicts: [{"col1": "v1"}, {"col1": "v2"}] -> {"col1": ["v1", "v2"]}
+                        columnar_data = {}
+                        for record in data:
+                            for key, value in record.items():
+                                if key not in columnar_data:
+                                    columnar_data[key] = []
+                                columnar_data[key].append(value)
+                    return daft.from_pydict(columnar_data)
+                except ImportError:
+                    raise TypeError(
+                        "Dict and list inputs require daft to be installed when using DataframeType.daft. "
+                        "Please install daft or use DataframeType.pandas instead."
+                    )
+            # For pandas dataframe_type, convert to pandas DataFrame
+            return pd.DataFrame([data] if isinstance(data, dict) else data)
 
         raise TypeError(
             f"Unsupported data type: {type(data).__name__}. "
@@ -506,16 +538,20 @@ class Writer(ABC):
 
     async def _upload_file(self, file_name: str):
         """Upload a file to the object store."""
+        # Get retain_local_copy from the writer instance, defaulting to False
+        retain_local = getattr(self, "retain_local_copy", False)
+
         if ENABLE_ATLAN_UPLOAD:
             await ObjectStore.upload_file(
                 source=file_name,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
-                retain_local_copy=True,
+                retain_local_copy=True,  # Always retain for the second upload to deployment store
                 destination=get_object_store_prefix(file_name),
             )
         await ObjectStore.upload_file(
             source=file_name,
             destination=get_object_store_prefix(file_name),
+            retain_local_copy=retain_local,  # Respect the writer's retain_local_copy setting
         )
 
         self.current_buffer_size_bytes = 0
