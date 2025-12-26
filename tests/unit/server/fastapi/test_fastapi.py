@@ -600,6 +600,95 @@ class TestServer:
         assert call_kwargs["filename"] is None  # Not provided in form data
         assert call_kwargs["prefix"] == "custom_prefix"
 
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.upload_file_to_object_store")
+    async def test_upload_file_with_explicit_content_type(self, mock_upload_file):
+        """Test file upload with explicitly provided content type."""
+        # Arrange
+        file_content = b"certificate content"
+        expected_response = FileUploadResponse(
+            id="test-id",
+            version="test-version",
+            isActive=True,
+            createdAt=1764265919324,
+            updatedAt=1764265919324,
+            fileName="test-id.cer",
+            rawName="dev-atlan-anaplan.cer",
+            key="workflow_file_upload/test-id.cer",
+            extension=".cer",
+            contentType="application/x-x509-ca-cert",
+            fileSize=len(file_content),
+            isEncrypted=False,
+            redirectUrl="",
+            isUploaded=True,
+            uploadedAt="2024-01-01T00:00:00Z",
+            isArchived=False,
+        )
+        mock_upload_file.return_value = expected_response
+
+        # Act - include explicit content type
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("dev-atlan-anaplan.cer", file_content, "text/plain")}
+            data = {
+                "filename": "dev-atlan-anaplan.cer",
+                "prefix": "workflow_file_upload",
+                "contentType": "application/x-x509-ca-cert",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["contentType"] == "application/x-x509-ca-cert"
+        mock_upload_file.assert_called_once()
+        call_kwargs = mock_upload_file.call_args[1]
+        # Verify explicit content type is passed
+        assert call_kwargs["content_type"] == "application/x-x509-ca-cert"
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.upload_file_to_object_store")
+    async def test_upload_file_content_type_fallback(self, mock_upload_file):
+        """Test file upload with content type fallback to file.content_type."""
+        # Arrange
+        file_content = b"test file content"
+        expected_response = FileUploadResponse(
+            id="test-id",
+            version="test-version",
+            isActive=True,
+            createdAt=1764265919324,
+            updatedAt=1764265919324,
+            fileName="test-id.csv",
+            rawName="test.csv",
+            key="workflow_file_upload/test-id.csv",
+            extension=".csv",
+            contentType="text/csv",
+            fileSize=len(file_content),
+            isEncrypted=False,
+            redirectUrl="",
+            isUploaded=True,
+            uploadedAt="2024-01-01T00:00:00Z",
+            isArchived=False,
+        )
+        mock_upload_file.return_value = expected_response
+
+        # Act - don't provide explicit content type, should use file.content_type
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.csv", file_content, "text/csv")}
+            data = {
+                "filename": "test.csv",
+                "prefix": "workflow_file_upload",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        mock_upload_file.assert_called_once()
+        call_kwargs = mock_upload_file.call_args[1]
+        # Verify content_type is None (will fallback to file.content_type in utils)
+        assert call_kwargs["content_type"] is None
+
 
 class TestMessagingRouterRegistration:
     """Test suite for messaging router registration with valid subscriptions."""

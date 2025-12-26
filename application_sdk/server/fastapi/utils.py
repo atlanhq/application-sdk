@@ -7,7 +7,7 @@ error handlers and response formatters.
 import mimetypes
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -58,6 +58,7 @@ async def upload_file_to_object_store(
     file: UploadFile,
     filename: Optional[str] = None,
     prefix: Optional[str] = "workflow_file_upload",
+    content_type: Optional[str] = None,
 ) -> FileUploadResponse:
     """Upload file to object store and return metadata.
 
@@ -76,6 +77,8 @@ async def upload_file_to_object_store(
             this takes precedence over file.filename. Defaults to None.
         prefix (Optional[str]): Prefix for file organization in object store.
             Defaults to "workflow_file_upload".
+        content_type (Optional[str]): Explicit content type of the file. If provided,
+            this takes precedence over file.content_type. Defaults to None.
 
     Returns:
         FileUploadResponse: Pydantic model object containing file metadata with
@@ -106,7 +109,8 @@ async def upload_file_to_object_store(
     # Extract metadata from UploadFile object
     # Use passed filename first, then file.filename, then fallback to "uploaded_file"
     filename = filename or file.filename or "uploaded_file"
-    content_type = file.content_type or "application/octet-stream"
+    # Use explicit content_type if provided, otherwise fallback to file.content_type, then default
+    content_type = content_type or file.content_type or "application/octet-stream"
     size = len(file_content)
     # Generate UUID for file ID
     file_id = str(uuid.uuid4())
@@ -158,6 +162,6 @@ async def upload_file_to_object_store(
         isEncrypted=False,
         redirectUrl="",
         isUploaded=True,
-        uploadedAt=datetime.utcnow().isoformat() + "Z",
+        uploadedAt=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         isArchived=False,
     )

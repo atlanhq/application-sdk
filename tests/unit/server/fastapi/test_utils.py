@@ -374,3 +374,84 @@ class TestUploadFileToObjectStore:
         # uploadedAt should be ISO format with Z
         assert result.uploadedAt.endswith("Z")
         assert "T" in result.uploadedAt
+
+    @patch("application_sdk.server.fastapi.utils.ObjectStore")
+    async def test_upload_file_explicit_content_type(self, mock_objectstore):
+        """Test that explicit content type parameter is used when provided."""
+        mock_objectstore.upload_file_from_bytes = AsyncMock()
+
+        file_content = b"certificate content"
+        filename = "dev-atlan-anaplan.cer"
+        explicit_content_type = "application/x-x509-ca-cert"
+        file_content_type = "text/plain"  # Different from explicit
+
+        # Create mock UploadFile with different content type
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.filename = filename
+        mock_file.content_type = file_content_type
+        mock_file.read = AsyncMock(return_value=file_content)
+
+        result = await upload_file_to_object_store(
+            file=mock_file,
+            prefix="workflow_file_upload",
+            content_type=explicit_content_type,
+        )
+
+        # Verify explicit content type is used, not file.content_type
+        assert result.contentType == explicit_content_type
+        assert result.contentType != file_content_type
+
+    @patch("application_sdk.server.fastapi.utils.ObjectStore")
+    async def test_upload_file_content_type_fallback_chain(self, mock_objectstore):
+        """Test content type fallback chain: explicit → file.content_type → default."""
+        mock_objectstore.upload_file_from_bytes = AsyncMock()
+
+        file_content = b"test content"
+        filename = "test.csv"
+
+        # Test 1: Explicit content type provided
+        mock_file1 = MagicMock(spec=UploadFile)
+        mock_file1.filename = filename
+        mock_file1.content_type = "text/plain"
+        mock_file1.read = AsyncMock(return_value=file_content)
+
+        result1 = await upload_file_to_object_store(
+            file=mock_file1,
+            content_type="application/x-csv",
+        )
+        assert result1.contentType == "application/x-csv"
+
+        # Test 2: No explicit content type, use file.content_type
+        mock_file2 = MagicMock(spec=UploadFile)
+        mock_file2.filename = filename
+        mock_file2.content_type = "text/csv"
+        mock_file2.read = AsyncMock(return_value=file_content)
+
+        result2 = await upload_file_to_object_store(
+            file=mock_file2,
+        )
+        assert result2.contentType == "text/csv"
+
+        # Test 3: No explicit content type, file.content_type is None, use default
+        mock_file3 = MagicMock(spec=UploadFile)
+        mock_file3.filename = filename
+        mock_file3.content_type = None
+        mock_file3.read = AsyncMock(return_value=file_content)
+
+        result3 = await upload_file_to_object_store(
+            file=mock_file3,
+        )
+        assert result3.contentType == "application/octet-stream"
+
+        # Test 4: Explicit content type is empty string, fallback to file.content_type
+        mock_file4 = MagicMock(spec=UploadFile)
+        mock_file4.filename = filename
+        mock_file4.content_type = "text/csv"
+        mock_file4.read = AsyncMock(return_value=file_content)
+
+        result4 = await upload_file_to_object_store(
+            file=mock_file4,
+            content_type="",
+        )
+        # Empty string is falsy, so should fallback to file.content_type
+        assert result4.contentType == "text/csv"

@@ -659,6 +659,7 @@ class APIServer(ServerInterface):
         file: UploadFile = File(..., description="File to upload"),
         filename: Optional[str] = Form(None, description="Original filename"),
         prefix: Optional[str] = Form(None, description="Prefix for file organization"),
+        contentType: Optional[str] = Form(None, description="Content type of the file"),
     ) -> FileUploadResponse:
         """Upload a file to the object store."""
 
@@ -666,11 +667,11 @@ class APIServer(ServerInterface):
         metrics = get_metrics()
 
         try:
-            # Pass UploadFile and filename to utility - it will extract metadata
             response = await upload_file_to_object_store(
                 file=file,
                 filename=filename,
-                prefix=prefix or "workflow_file_upload",
+                prefix=prefix,
+                content_type=contentType,
             )
 
             # Record successful upload
