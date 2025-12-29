@@ -459,9 +459,22 @@ class ObjectStore:
 
             logger.info(f"Found {len(file_list)} files to download from: {source}")
 
+            # Normalize source prefix to use forward slashes for comparison
+            normalized_source = cls._normalize_object_store_key(source)
+
             # Download each file
             for file_path in file_list:
-                local_file_path = os.path.join(destination, file_path)
+                normalized_file_path = cls._normalize_object_store_key(file_path)
+                if normalized_file_path.startswith(normalized_source):
+                    # Extract relative path after the prefix
+                    relative_path = normalized_file_path[
+                        len(normalized_source) :
+                    ].lstrip("/")
+                else:
+                    # Fallback to just the filename
+                    relative_path = os.path.basename(normalized_file_path)
+
+                local_file_path = os.path.join(destination, relative_path)
                 await cls.download_file(file_path, local_file_path, store_name)
 
             logger.info(f"Successfully downloaded all files from: {source}")
