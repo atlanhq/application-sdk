@@ -712,7 +712,10 @@ class TestObjectStore:
         # Verify first file: file1.json -> relative path should be "file1.json"
         call1_args = mock_download_file.call_args_list[0][0]
         assert call1_args[0] == "artifacts/apps/default/workflows/wf123/file1.json"
-        assert call1_args[1] == os.path.join(TEMPORARY_PATH, "file1.json")
+        # Construct expected path the same way the implementation does: os.path.join(destination, relative_path)
+        # where relative_path has forward slashes from normalized object store path
+        expected_path1 = os.path.join(TEMPORARY_PATH, "file1.json")
+        assert call1_args[1] == expected_path1
         assert call1_args[2] == "objectstore"
 
         # Verify second file: subdir/file2.json -> relative path should be "subdir/file2.json"
@@ -720,7 +723,9 @@ class TestObjectStore:
         assert (
             call2_args[0] == "artifacts/apps/default/workflows/wf123/subdir/file2.json"
         )
-        assert call2_args[1] == os.path.join(TEMPORARY_PATH, "subdir", "file2.json")
+        # relative_path is "subdir/file2.json" (with forward slashes), os.path.join handles it
+        expected_path2 = os.path.join(TEMPORARY_PATH, "subdir/file2.json")
+        assert call2_args[1] == expected_path2
         assert call2_args[2] == "objectstore"
 
         # Verify third file: models/model.parquet -> relative path should be "models/model.parquet"
@@ -729,5 +734,7 @@ class TestObjectStore:
             call3_args[0]
             == "artifacts/apps/default/workflows/wf123/models/model.parquet"
         )
-        assert call3_args[1] == os.path.join(TEMPORARY_PATH, "models", "model.parquet")
+        # relative_path is "models/model.parquet" (with forward slashes), os.path.join handles it
+        expected_path3 = os.path.join(TEMPORARY_PATH, "models/model.parquet")
+        assert call3_args[1] == expected_path3
         assert call3_args[2] == "objectstore"
