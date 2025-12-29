@@ -7,6 +7,16 @@ error handlers and response formatters.
 from fastapi import status
 from fastapi.responses import JSONResponse
 
+# Paths to exclude from logging and metrics (health checks and event ingress)
+EXCLUDED_LOG_PATHS: frozenset[str] = frozenset(
+    {
+        "/server/health",
+        "/server/ready",
+        "/api/eventingress/",
+        "/api/eventingress",
+    }
+)
+
 
 def internal_server_error_handler(_, exc: Exception) -> JSONResponse:
     """Handle internal server errors in FastAPI applications.

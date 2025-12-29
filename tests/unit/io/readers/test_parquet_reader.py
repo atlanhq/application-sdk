@@ -6,7 +6,9 @@ from unittest.mock import patch
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.inputs.parquet import ParquetInput
+from application_sdk.common.types import DataframeType
+from application_sdk.io.parquet import ParquetFileReader
+from application_sdk.io.utils import download_files
 from application_sdk.test_utils.hypothesis.strategies.inputs.parquet_input import (
     parquet_input_config_strategy,
 )
@@ -20,10 +22,11 @@ settings.load_profile("parquet_input_tests")
 
 @given(config=parquet_input_config_strategy)
 def test_init(config: Dict[str, Any]) -> None:
-    parquet_input = ParquetInput(
+    parquet_input = ParquetFileReader(
         path=config["path"],
         chunk_size=config["chunk_size"],
         file_names=config["file_names"],
+        dataframe_type=DataframeType.pandas,
     )
 
     assert parquet_input.path == config["path"]
@@ -32,9 +35,13 @@ def test_init(config: Dict[str, Any]) -> None:
 
 
 def test_init_single_file_with_file_names_raises_error() -> None:
-    """Test that ParquetInput raises ValueError when single file path is combined with file_names."""
+    """Test that ParquetFileReader raises ValueError when single file path is combined with file_names."""
     with pytest.raises(ValueError, match="Cannot specify both a single file path"):
-        ParquetInput(path="/data/test.parquet", file_names=["other.parquet"])
+        ParquetFileReader(
+            path="/data/test.parquet",
+            file_names=["other.parquet"],
+            dataframe_type=DataframeType.pandas,
+        )
 
 
 @pytest.mark.asyncio
@@ -46,12 +53,15 @@ async def test_not_download_file_that_exists() -> None:
     with patch("os.path.isfile", return_value=True), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
-        parquet_input = ParquetInput(
+        parquet_input = ParquetFileReader(
             path=path,
             chunk_size=100000,  # No file_names
+            dataframe_type=DataframeType.pandas,
         )
 
-        result = await parquet_input.download_files()
+        result = await download_files(
+            parquet_input.path, ".parquet", parquet_input.file_names
+        )
         mock_download.assert_not_called()
         assert result == [path]
 
@@ -66,12 +76,16 @@ async def test_download_file_invoked_for_missing_files() -> None:
     ), patch("glob.glob", return_value=[]), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download, patch(
-        "application_sdk.inputs.get_object_store_prefix",
+        "application_sdk.activities.common.utils.get_object_store_prefix",
         return_value="local/test.parquet",
     ):
-        parquet_input = ParquetInput(path=path, chunk_size=100000)
+        parquet_input = ParquetFileReader(
+            path=path, chunk_size=100000, dataframe_type=DataframeType.pandas
+        )
 
-        result = await parquet_input.download_files()
+        result = await download_files(
+            parquet_input.path, ".parquet", parquet_input.file_names
+        )
 
         # Should attempt to download the file
         mock_download.assert_called_once_with(
@@ -89,12 +103,14 @@ async def test_download_file_invoked_for_missing_files() -> None:
 
 @pytest.mark.asyncio
 async def test_download_files_uses_base_class() -> None:
-    """Test that ParquetInput uses the base class download_files method."""
+    """Test that ParquetFileReader uses the base class download_files method."""
     path = "/data/test.parquet"
-    parquet_input = ParquetInput(path=path)
+    parquet_input = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
 
     with patch("os.path.isfile", return_value=True):
-        result = await parquet_input.download_files()
+        result = await download_files(
+            parquet_input.path, ".parquet", parquet_input.file_names
+        )
 
         assert result == [path]
 
@@ -166,24 +182,24 @@ def _install_dummy_pandas(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_dataframe_with_mocked_pandas(monkeypatch) -> None:
-    """Verify that get_dataframe calls pandas.read_parquet correctly."""
+async def test_read_with_mocked_pandas(monkeypatch) -> None:
+    """Verify that read calls pandas.read_parquet correctly."""
 
     path = "/data/test.parquet"
     call_log = _install_dummy_pandas(monkeypatch)
 
     # Mock download_files to return the path
-    async def dummy_download(self):  # noqa: D401, ANN001
-        return [self.path]  # Return the path as a list of files
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return [path]  # Return the path as a list of files
 
-    # Mock the base Input class method since ParquetInput calls super().download_files()
-    from application_sdk.inputs import Input
+    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
 
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    parquet_input = ParquetFileReader(path=path, chunk_size=100000)
 
-    parquet_input = ParquetInput(path=path, chunk_size=100000)
-
-    result = await parquet_input.get_dataframe()
+    result = await parquet_input.read()
 
     # Should return the mock DataFrame
     assert hasattr(result, "data")
@@ -194,25 +210,28 @@ async def test_get_dataframe_with_mocked_pandas(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_batched_dataframe_with_mocked_pandas(monkeypatch) -> None:
-    """Verify that get_batched_dataframe streams chunks and respects chunk_size."""
+async def test_read_batches_with_mocked_pandas(monkeypatch) -> None:
+    """Verify that read_batches streams chunks and respects chunk_size."""
 
     path = "/data/test.parquet"
     expected_chunksize = 30
     call_log = _install_dummy_pandas(monkeypatch)
 
     # Mock download_files to return the path
-    async def dummy_download(self):  # noqa: D401, ANN001
-        return [self.path]  # Return the path as a list of files
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return [path]  # Return the path as a list of files
 
-    # Mock the base Input class method since ParquetInput calls super().download_files()
-    from application_sdk.inputs import Input
+    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
 
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    parquet_input = ParquetFileReader(
+        path=path, chunk_size=expected_chunksize, dataframe_type=DataframeType.pandas
+    )
 
-    parquet_input = ParquetInput(path=path, chunk_size=expected_chunksize)
-
-    chunks = [chunk async for chunk in parquet_input.get_batched_dataframe()]
+    batches = parquet_input.read_batches()
+    chunks = [chunk async for chunk in batches]
 
     # With 100 rows and chunk_size=30, we should get 4 chunks
     expected_chunks = [
@@ -228,24 +247,27 @@ async def test_get_batched_dataframe_with_mocked_pandas(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_batched_dataframe_with_chunk_size(monkeypatch) -> None:
-    """Verify that get_batched_dataframe chunks data properly with specified chunk_size."""
+async def test_read_batches_with_chunk_size(monkeypatch) -> None:
+    """Verify that read_batches chunks data properly with specified chunk_size."""
 
     path = "/data/test.parquet"
     call_log = _install_dummy_pandas(monkeypatch)
 
     # Mock download_files to return the path
-    async def dummy_download(self):  # noqa: D401, ANN001
-        return [self.path]  # Return the path as a list of files
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return [path]  # Return the path as a list of files
 
-    # Mock the base Input class method since ParquetInput calls super().download_files()
-    from application_sdk.inputs import Input
+    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
 
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    parquet_input = ParquetFileReader(
+        path=path, chunk_size=100, dataframe_type=DataframeType.pandas
+    )
 
-    parquet_input = ParquetInput(path=path, chunk_size=100)
-
-    chunks = [chunk async for chunk in parquet_input.get_batched_dataframe()]
+    batches = parquet_input.read_batches()
+    chunks = [chunk async for chunk in batches]
 
     # With 100 rows and chunk_size=100, we should get 1 chunk
     assert len(chunks) == 1
@@ -304,10 +326,10 @@ def _install_dummy_daft(monkeypatch):  # noqa: D401, ANN001
     def read_parquet(path, _chunk_size=None):  # noqa: D401, ANN001
         call_log.append({"path": path})
         if isinstance(path, list) and len(path) > 1:
-            # For get_batched_daft_dataframe tests that need MockDaftDataFrame
+            # For read_batches tests that need MockDaftDataFrame
             return MockDaftDataFrame(path)
         elif isinstance(path, list):
-            # For get_daft_dataframe tests that expect simple string return
+            # For read tests that expect simple string return
             return f"daft_df:{path}"
         return MockDaftDataFrame(path)
 
@@ -319,62 +341,61 @@ def _install_dummy_daft(monkeypatch):  # noqa: D401, ANN001
 
 
 @pytest.mark.asyncio
-async def test_get_daft_dataframe(monkeypatch) -> None:
-    """Verify that get_daft_dataframe delegates to daft.read_parquet correctly."""
+async def test_read(monkeypatch) -> None:
+    """Verify that read delegates to pandas.read_parquet correctly."""
 
-    call_log = _install_dummy_daft(monkeypatch)
+    call_log = _install_dummy_pandas(monkeypatch)
 
     # Mock download_files to return a list of files
-    async def dummy_download(self):  # noqa: D401, ANN001
-        return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return [f"{path}/file1.parquet", f"{path}/file2.parquet"]
 
-    # Mock the base Input class method since ParquetInput calls super().download_files()
-    from application_sdk.inputs import Input
-
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
 
     path = "/tmp/data"
-    parquet_input = ParquetInput(path=path)
+    parquet_input = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
 
-    result = await parquet_input.get_daft_dataframe()
+    result = await parquet_input.read()
 
     expected_files = ["/tmp/data/file1.parquet", "/tmp/data/file2.parquet"]
-    # Since we have multiple files, the mock returns a MockDaftDataFrame object
+    # Since we have multiple files, pandas.concat returns a CombinedMockDataFrame object
     assert hasattr(
-        result, "path"
-    ), "Result should be a MockDaftDataFrame with path attribute"
-    assert result.path == expected_files
-    assert call_log == [{"path": expected_files}]
+        result, "data"
+    ), "Result should be a CombinedMockDataFrame with data attribute"
+    assert len(result.data) == 200  # 100 rows from each file
+    assert call_log == [{"path": expected_files[0]}, {"path": expected_files[1]}]
 
 
 @pytest.mark.asyncio
-async def test_get_daft_dataframe_with_file_names(monkeypatch) -> None:
-    """Verify that get_daft_dataframe works correctly with file_names parameter."""
+async def test_read_with_file_names(monkeypatch) -> None:
+    """Verify that read works correctly with file_names parameter."""
 
     call_log = _install_dummy_daft(monkeypatch)
 
     # Mock download_files to return the specific files
-    async def dummy_download(self):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return (
-            [
-                os.path.join(self.path, fn).replace(os.path.sep, "/")
-                for fn in self.file_names
-            ]
-            if hasattr(self, "file_names") and self.file_names
+            [os.path.join(path, fn).replace(os.path.sep, "/") for fn in file_names]
+            if file_names
             else []
         )
 
-    # Mock the base Input class method since ParquetInput calls super().download_files()
-    from application_sdk.inputs import Input
-
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
 
     path = "/tmp"
     file_names = ["dir/file1.parquet", "dir/file2.parquet"]
 
-    parquet_input = ParquetInput(path=path, file_names=file_names)
+    parquet_input = ParquetFileReader(
+        path=path, file_names=file_names, dataframe_type=DataframeType.daft
+    )
 
-    result = await parquet_input.get_daft_dataframe()
+    result = await parquet_input.read()
 
     expected_files = ["/tmp/dir/file1.parquet", "/tmp/dir/file2.parquet"]
     # Since we have multiple files, the mock returns a MockDaftDataFrame object
@@ -386,64 +407,67 @@ async def test_get_daft_dataframe_with_file_names(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_daft_dataframe_with_input_prefix(monkeypatch) -> None:
-    """Verify that get_daft_dataframe downloads files when input_prefix is provided."""
+async def test_read_with_input_prefix(monkeypatch) -> None:
+    """Verify that read downloads files when input_prefix is provided."""
 
-    call_log = _install_dummy_daft(monkeypatch)
+    call_log = _install_dummy_pandas(monkeypatch)
 
     # Mock download_files to return a list of files
-    async def dummy_download(self):  # noqa: D401, ANN001
-        return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return [f"{path}/file1.parquet", f"{path}/file2.parquet"]
 
-    # Mock the base Input class method since ParquetInput calls super().download_files()
-    from application_sdk.inputs import Input
-
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
 
     path = "/tmp/data"
-    parquet_input = ParquetInput(path=path)
+    parquet_input = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
 
-    result = await parquet_input.get_daft_dataframe()
+    result = await parquet_input.read()
 
     expected_files = ["/tmp/data/file1.parquet", "/tmp/data/file2.parquet"]
-    # Since we have multiple files, the mock returns a MockDaftDataFrame object
+    # Since we have multiple files, pandas.concat returns a CombinedMockDataFrame object
     assert hasattr(
-        result, "path"
-    ), "Result should be a MockDaftDataFrame with path attribute"
-    assert result.path == expected_files
-    assert call_log == [{"path": expected_files}]
+        result, "data"
+    ), "Result should be a CombinedMockDataFrame with data attribute"
+    assert len(result.data) == 200  # 100 rows from each file
+    assert call_log == [{"path": expected_files[0]}, {"path": expected_files[1]}]
 
 
 @pytest.mark.asyncio
-async def test_get_batched_daft_dataframe_with_file_names(monkeypatch) -> None:
-    """Ensure get_batched_daft_dataframe yields chunks from combined files when file_names provided."""
+async def test_read_batches_with_file_names(monkeypatch) -> None:
+    """Ensure read_batches yields chunks from combined files when file_names provided."""
 
     call_log = _install_dummy_daft(monkeypatch)
 
     # Mock download_files to return the specific files
-    async def dummy_download(self):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return (
-            [
-                os.path.join(self.path, fn).replace(os.path.sep, "/")
-                for fn in self.file_names
-            ]
-            if hasattr(self, "file_names") and self.file_names
+            [os.path.join(path, fn).replace(os.path.sep, "/") for fn in file_names]
+            if file_names
             else []
         )
 
-    # Mock the base Input class method since ParquetInput calls super().download_files()
-    from application_sdk.inputs import Input
-
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
 
     path = "/data"
     file_names = [
         "one.parquet",
         "two.parquet",
     ]
-    parquet_input = ParquetInput(path=path, file_names=file_names, buffer_size=50)
+    parquet_input = ParquetFileReader(
+        path=path,
+        file_names=file_names,
+        buffer_size=50,
+        dataframe_type=DataframeType.daft,
+    )
 
-    frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
+    batches = parquet_input.read_batches()
+    frames = [frame async for frame in batches]
 
     # With 100 total rows and buffer_size=50, expect 2 chunks
     assert len(frames) == 2
@@ -455,24 +479,27 @@ async def test_get_batched_daft_dataframe_with_file_names(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_batched_daft_dataframe_without_file_names(monkeypatch) -> None:
-    """Ensure get_batched_daft_dataframe works with chunked processing when no file_names provided."""
+async def test_read_batches_without_file_names(monkeypatch) -> None:
+    """Ensure read_batches works with chunked processing when no file_names provided."""
 
     call_log = _install_dummy_daft(monkeypatch)
 
     # Mock download_files to return a list of files
-    async def dummy_download(self):  # noqa: D401, ANN001
-        return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return [f"{path}/file1.parquet", f"{path}/file2.parquet"]
 
-    # Mock the base Input class method since ParquetInput calls super().download_files()
-    from application_sdk.inputs import Input
-
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
 
     path = "/data"
-    parquet_input = ParquetInput(path=path, buffer_size=50)
+    parquet_input = ParquetFileReader(
+        path=path, buffer_size=50, dataframe_type=DataframeType.daft
+    )
 
-    frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
+    batches = parquet_input.read_batches()
+    frames = [frame async for frame in batches]
 
     # With 100 total rows and buffer_size=50, expect 2 chunks
     assert len(frames) == 2
@@ -484,25 +511,28 @@ async def test_get_batched_daft_dataframe_without_file_names(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_get_batched_daft_dataframe_no_input_prefix(monkeypatch) -> None:
-    """Ensure get_batched_daft_dataframe works with chunked processing without input_prefix."""
+async def test_read_batches_no_input_prefix(monkeypatch) -> None:
+    """Ensure read_batches works with chunked processing without input_prefix."""
 
     call_log = _install_dummy_daft(monkeypatch)
 
     # Mock download_files to return a list of files
-    async def dummy_download(self):  # noqa: D401, ANN001
-        return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return [f"{path}/file1.parquet", f"{path}/file2.parquet"]
 
-    # Mock the base Input class method since ParquetInput calls super().download_files()
-    from application_sdk.inputs import Input
-
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
 
     path = "/data"
 
-    parquet_input = ParquetInput(path=path, buffer_size=50)
+    parquet_input = ParquetFileReader(
+        path=path, buffer_size=50, dataframe_type=DataframeType.daft
+    )
 
-    frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
+    batches = parquet_input.read_batches()
+    frames = [frame async for frame in batches]
 
     # With 100 total rows and buffer_size=50, expect 2 chunks
     assert len(frames) == 2
