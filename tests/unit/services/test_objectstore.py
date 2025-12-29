@@ -1,5 +1,6 @@
 """Unit tests for ObjectStore services."""
 
+import os
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
@@ -665,3 +666,75 @@ class TestObjectStore:
             "artifacts/apps/default/file1.json",
             "artifacts/apps/default/subdir/file2.json",
         ]
+
+    @patch("application_sdk.services.objectstore.os.sep", "\\")
+    @patch(
+        "application_sdk.services.objectstore.ObjectStore.list_files",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "application_sdk.services.objectstore.ObjectStore.download_file",
+        new_callable=AsyncMock,
+    )
+    async def test_download_prefix_normalizes_windows_path(
+        self, mock_download_file: AsyncMock, mock_list_files: AsyncMock
+    ) -> None:
+        """Test download_prefix normalizes Windows-style prefix before path comparison.
+
+        When running on Windows, a prefix with backslashes should still match
+        paths returned from object store (which always use forward slashes).
+        The relative path extraction should work correctly after normalization.
+        """
+        from application_sdk.constants import TEMPORARY_PATH
+
+        # Arrange: prefix with Windows backslashes, paths with forward slashes
+        windows_prefix = "artifacts\\apps\\default\\workflows\\wf123"
+        object_store_paths = [
+            "artifacts/apps/default/workflows/wf123/file1.json",
+            "artifacts/apps/default/workflows/wf123/subdir/file2.json",
+            "artifacts/apps/default/workflows/wf123/models/model.parquet",
+        ]
+        mock_list_files.return_value = object_store_paths
+
+        # Act
+        await ObjectStore.download_prefix(
+            source=windows_prefix,
+            destination=TEMPORARY_PATH,
+            store_name="objectstore",
+        )
+
+        # Assert: list_files should be called with the Windows prefix (not normalized)
+        mock_list_files.assert_called_once_with(windows_prefix, "objectstore")
+
+        # Assert: download_file should be called 3 times with correct relative paths
+        assert mock_download_file.call_count == 3
+
+        # Verify first file: file1.json -> relative path should be "file1.json"
+        call1_args = mock_download_file.call_args_list[0][0]
+        assert call1_args[0] == "artifacts/apps/default/workflows/wf123/file1.json"
+        # Construct expected path the same way the implementation does: os.path.join(destination, relative_path)
+        # where relative_path has forward slashes from normalized object store path
+        expected_path1 = os.path.join(TEMPORARY_PATH, "file1.json")
+        assert call1_args[1] == expected_path1
+        assert call1_args[2] == "objectstore"
+
+        # Verify second file: subdir/file2.json -> relative path should be "subdir/file2.json"
+        call2_args = mock_download_file.call_args_list[1][0]
+        assert (
+            call2_args[0] == "artifacts/apps/default/workflows/wf123/subdir/file2.json"
+        )
+        # relative_path is "subdir/file2.json" (with forward slashes), os.path.join handles it
+        expected_path2 = os.path.join(TEMPORARY_PATH, "subdir/file2.json")
+        assert call2_args[1] == expected_path2
+        assert call2_args[2] == "objectstore"
+
+        # Verify third file: models/model.parquet -> relative path should be "models/model.parquet"
+        call3_args = mock_download_file.call_args_list[2][0]
+        assert (
+            call3_args[0]
+            == "artifacts/apps/default/workflows/wf123/models/model.parquet"
+        )
+        # relative_path is "models/model.parquet" (with forward slashes), os.path.join handles it
+        expected_path3 = os.path.join(TEMPORARY_PATH, "models/model.parquet")
+        assert call3_args[1] == expected_path3
+        assert call3_args[2] == "objectstore"
