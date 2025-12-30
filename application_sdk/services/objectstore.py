@@ -2,13 +2,21 @@
 
 import json
 import os
-import shutil
 from typing import List, Union
 
 import orjson
 from dapr.clients import DaprClient
 from temporalio import activity
 
+from application_sdk.common.file_ops import (
+    safe_exists,
+    safe_isdir,
+    safe_isfile,
+    safe_makedirs,
+    safe_open,
+    safe_remove,
+    safe_rmtree,
+)
 from application_sdk.constants import (
     DAPR_MAX_GRPC_MESSAGE_LENGTH,
     DEPLOYMENT_OBJECT_STORE_NAME,
@@ -304,7 +312,7 @@ class ObjectStore:
             ... )
         """
         try:
-            with open(source, "rb") as f:
+            with safe_open(source, "rb") as f:
                 file_content = f.read()
         except IOError as e:
             logger.error(f"Error reading file {source}: {str(e)}")
@@ -366,7 +374,7 @@ class ObjectStore:
             ...     recursive=False
             ... )
         """
-        if not os.path.isdir(source):
+        if not safe_isdir(source):
             raise ValueError(f"The provided path '{source}' is not a valid directory.")
 
         try:
@@ -423,13 +431,13 @@ class ObjectStore:
         """
         # Ensure directory exists
 
-        if not os.path.exists(os.path.dirname(destination)):
-            os.makedirs(os.path.dirname(destination), exist_ok=True)
+        if not safe_exists(os.path.dirname(destination)):
+            safe_makedirs(os.path.dirname(destination), exist_ok=True)
 
         try:
             response_data = await cls.get_content(source, store_name)
 
-            with open(destination, "wb") as f:
+            with safe_open(destination, "wb") as f:
                 f.write(response_data)
 
             logger.info(f"Successfully downloaded file: {source}")
@@ -552,10 +560,10 @@ class ObjectStore:
             path: The path to the file or directory to remove.
         """
         try:
-            if os.path.isfile(path) or os.path.islink(path):
-                os.remove(path)
-            elif os.path.isdir(path):
-                shutil.rmtree(path)
+            if safe_isfile(path) or os.path.islink(path):
+                safe_remove(path)
+            elif safe_isdir(path):
+                safe_rmtree(path)
         except FileNotFoundError:
             pass  # ignore if the file or directory doesn't exist
         except Exception as e:
