@@ -1,6 +1,8 @@
 import glob
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from application_sdk.activities.common.utils import get_object_store_prefix
@@ -18,6 +20,18 @@ if TYPE_CHECKING:
 
 
 logger = get_logger(__name__)
+
+
+def to_extended_path(path: str) -> str:
+    """Robust conversion to Windows extended-length path."""
+    if sys.platform != "win32" or not path:
+        return path
+
+    if path.startswith("\\\\?\\"):
+        return path
+
+    abs_path = str(Path(path).absolute())
+    return f"\\\\?\\{abs_path}"
 
 
 def find_local_files_by_extension(
