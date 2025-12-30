@@ -14,6 +14,9 @@ description: |
   continue to function as expected in a production-like environment.
 
 inputs:
+  operating-system:
+    required: true
+    description: The operating system to use for the action.
   github-token:
     required: true
     description: The GitHub token to use for the action.
@@ -59,17 +62,17 @@ runs:
         workflow_job_steps_retry_seconds: 20
         distinct_id: "${{ env.distinct_id }}"
 
-    - name: Check the test logs using the below run URL
+    - name: Check the test logs for ${{ inputs.operating-system }} using the below run URL
       shell: bash
       run: |
         echo ${{steps.return_dispatch.outputs.run_id}}
         echo ${{steps.return_dispatch.outputs.run_url}}
 
-    - name: Check Workflow Status
+    - name: Check Workflow Status for ${{ inputs.operating-system }}
       shell: bash
       run: |
         repo_owner="atlanhq"
-        repo_name="${{ matrix.repo_name }}"
+        repo_name="${{ inputs.repo-name }}"
         run_id="${{steps.return_dispatch.outputs.run_id}}"
 
         echo "Checking status of workflow run $run_id in $repo_name"

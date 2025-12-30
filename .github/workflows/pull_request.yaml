@@ -165,17 +165,20 @@ jobs:
   e2e-apps:
     name: E2E (Apps)
     needs: matrix-builder
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
+      matrix:
+        os: [ubuntu-22.04, macOS-latest, windows-latest]
+        app: ${{ fromJson(needs.matrix-builder.outputs.matrix).include }}
     steps:
       - uses: actions/checkout@v5
       - uses: "./.github/actions/e2e-apps"
         with:
+          operating-system: ${{ matrix.os }}
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          repo-name: ${{ matrix.repo_name }}
-          target-branch: "refs/heads/${{ matrix.target_branch }}"
+          repo-name: ${{ matrix.app.repo_name }}
+          target-branch: "refs/heads/${{ matrix.app.target_branch }}"
 
   # Documentation
   docs:
