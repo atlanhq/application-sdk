@@ -26,6 +26,7 @@ from application_sdk.io.utils import (
     download_files,
     is_empty_dataframe,
     path_gen,
+    to_extended_path,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
@@ -780,7 +781,8 @@ class ParquetFileWriter(Writer):
                             folder_index=self.chunk_count,
                             chunk_part=i,
                         )
-                        os.rename(file_path, consolidated_file_path)
+                        src_extended = to_extended_path(file_path)
+                        os.rename(src_extended, consolidated_file_path)
 
                         # Upload consolidated file to object store
                         await ObjectStore.upload_file(
