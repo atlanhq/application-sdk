@@ -1,7 +1,7 @@
 # Request/Response DTOs for workflows
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -240,3 +240,31 @@ class EventWorkflowTrigger(WorkflowTrigger):
 
     def should_trigger_workflow(self, event: Event) -> bool:
         return True
+
+
+class BulkSubscribe(BaseModel):
+    enabled: bool = False
+    maxMessagesCount: int = 100
+    maxAwaitDurationMs: int = 40
+
+
+class PubSubSubscription(BaseModel):
+    """PubSub subscription configuration for Dapr messaging.
+
+    Attributes:
+        pubsub_component_name: Name of the Dapr pubsub component
+        topic: Topic to subscribe to
+        route: Route path for the message handler endpoint
+        message_handler: Required callback function to handle incoming messages
+        bulk_subscribe: Optional bulk subscribe configuration
+        dead_letter_topic: Optional dead letter topic for failed messages
+    """
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    pubsub_component_name: str
+    topic: str
+    route: str
+    message_handler: Callable[[Any], Any]  # Required callback function
+    bulk_subscribe: Optional[BulkSubscribe] = None
+    dead_letter_topic: Optional[str] = None
