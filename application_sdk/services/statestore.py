@@ -8,6 +8,7 @@ from typing import Any, Dict
 from temporalio import activity
 
 from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
     APPLICATION_NAME,
     STATE_STORE_PATH_TEMPLATE,
@@ -167,10 +168,10 @@ class StateStore:
             # update the state with the new value
             current_state[key] = value
 
-            os.makedirs(os.path.dirname(state_file_path), exist_ok=True)
+            SafeFileOps.makedirs(os.path.dirname(state_file_path), exist_ok=True)
 
             # save the state to a local file
-            with open(state_file_path, "w") as file:
+            with SafeFileOps.open(state_file_path, "w") as file:
                 json.dump(current_state, file)
 
             # save the state to the object store
@@ -243,10 +244,10 @@ class StateStore:
             # update the state with the new value
             current_state.update(value)
 
-            os.makedirs(os.path.dirname(state_file_path), exist_ok=True)
+            SafeFileOps.makedirs(os.path.dirname(state_file_path), exist_ok=True)
 
             # save the state to a local file
-            with open(state_file_path, "w") as file:
+            with SafeFileOps.open(state_file_path, "w") as file:
                 json.dump(current_state, file)
 
             # save the state to the object store
