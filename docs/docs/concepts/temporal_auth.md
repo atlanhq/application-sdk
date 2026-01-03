@@ -194,19 +194,21 @@ await worker.run()
 
 ### Manual Token Management
 
+> **Note**: Manual token management with HTTP requests requires the `rest` extra:
+> `pip install 'atlan-application-sdk[rest]'`
+
 ```python
 from application_sdk.clients.atlan_auth import AtlanAuthClient
 
 # Create auth client directly
 # Credentials are automatically fetched from the configured secret store component
 auth_client = AtlanAuthClient()
-```
 
 # Get token for external API calls
 token = await auth_manager.get_access_token()
 headers = await auth_manager.get_authenticated_headers()
 
-# Use with HTTP requests
+# Use with HTTP requests (requires 'rest' extra: pip install 'atlan-application-sdk[rest]')
 async with aiohttp.ClientSession() as session:
     await session.get("https://api.company.com/data", headers=headers)
 ```
