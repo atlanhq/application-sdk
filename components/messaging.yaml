@@ -6,7 +6,6 @@ spec:
   type: pubsub.in-memory
   version: v1
 # Bulk subscribe for in-memory pubsub has a batch size of 1 as it is not supported.
-# B
 
 ## Use the below component for Kafka. Kafka supports bulk subscribe.
 # Bulk subscribe is
