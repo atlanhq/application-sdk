@@ -1,7 +1,7 @@
 # Request/Response DTOs for workflows
 
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -265,6 +265,8 @@ class PubSubSubscription(BaseModel):
     pubsub_component_name: str
     topic: str
     route: str
-    message_handler: Callable[[Any], Any]  # Required callback function
+    message_handler: Union[
+        Callable[[Any], Any], Callable[[Any], Coroutine[Any, Any, Any]]
+    ]  # Required callback function (sync or async)
     bulk_subscribe: Optional[BulkSubscribe] = None
     dead_letter_topic: Optional[str] = None
