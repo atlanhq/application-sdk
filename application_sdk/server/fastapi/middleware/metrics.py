@@ -4,6 +4,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
+from application_sdk.server.fastapi.utils import EXCLUDED_LOG_PATHS
 
 metrics = get_metrics()
 
@@ -24,29 +25,31 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             method = request.method
             status_code = response.status_code
 
-            labels = {
-                "path": path,
-                "method": method,
-                "status": str(status_code),
-            }
+            # Skip metrics for health check endpoints
+            if path not in EXCLUDED_LOG_PATHS:
+                labels = {
+                    "path": path,
+                    "method": method,
+                    "status": str(status_code),
+                }
 
-            # Record request count
-            metrics.record_metric(
-                name="http_requests_total",
-                value=1,
-                metric_type=MetricType.COUNTER,
-                labels=labels,
-                description="Total number of HTTP requests",
-            )
+                # Record request count
+                metrics.record_metric(
+                    name="http_requests_total",
+                    value=1,
+                    metric_type=MetricType.COUNTER,
+                    labels=labels,
+                    description="Total number of HTTP requests",
+                )
 
-            # Record request latency
-            metrics.record_metric(
-                name="http_request_duration_seconds",
-                value=process_time,
-                metric_type=MetricType.HISTOGRAM,
-                labels=labels,
-                description="Duration of HTTP requests",
-                unit="seconds",
-            )
+                # Record request latency
+                metrics.record_metric(
+                    name="http_request_duration_seconds",
+                    value=process_time,
+                    metric_type=MetricType.HISTOGRAM,
+                    labels=labels,
+                    description="Duration of HTTP requests",
+                    unit="seconds",
+                )
 
         return response

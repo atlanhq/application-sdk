@@ -62,7 +62,6 @@ def dataframe_strategy(draw) -> pd.DataFrame:
 json_output_config_strategy = st.fixed_dictionaries(
     {
         "output_path": safe_path_strategy,
-        "output_suffix": st.builds(lambda x: f"/{x}", safe_path_strategy),
         "output_prefix": output_prefix_strategy,
         "chunk_size": chunk_size_strategy,
     }

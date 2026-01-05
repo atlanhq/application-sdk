@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pandas as pd
 import pytest
@@ -37,18 +37,16 @@ class TestPrepareMetadata:
             }
         )
 
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata()
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=df)
 
-            assert len(result) == 3
-            assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
-            assert result[1] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema2"}
-            assert result[2] == {"TABLE_CATALOG": "db2", "TABLE_SCHEMA": "schema1"}
-            mock_get_dataframe.assert_called_once()
+        result = await handler.prepare_metadata()
+
+        assert len(result) == 3
+        assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
+        assert result[1] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema2"}
+        assert result[2] == {"TABLE_CATALOG": "db2", "TABLE_SCHEMA": "schema1"}
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_empty_dataframe(self, handler: BaseSQLHandler) -> None:
@@ -60,16 +58,14 @@ class TestPrepareMetadata:
             }
         )
 
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata()
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=df)
 
-            assert len(result) == 0
-            assert isinstance(result, list)
-            mock_get_dataframe.assert_called_once()
+        result = await handler.prepare_metadata()
+
+        assert len(result) == 0
+        assert isinstance(result, list)
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_custom_alias_keys(self, handler: BaseSQLHandler) -> None:
@@ -79,16 +75,14 @@ class TestPrepareMetadata:
 
         df = pd.DataFrame({"DB_NAME": ["db1"], "SCHEMA_NAME": ["schema1"]})
 
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata()
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=df)
 
-            assert len(result) == 1
-            assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
-            mock_get_dataframe.assert_called_once()
+        result = await handler.prepare_metadata()
+
+        assert len(result) == 1
+        assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_custom_result_keys(self, handler: BaseSQLHandler) -> None:
@@ -98,16 +92,14 @@ class TestPrepareMetadata:
 
         df = pd.DataFrame({"TABLE_CATALOG": ["db1"], "TABLE_SCHEMA": ["schema1"]})
 
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata()
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=df)
 
-            assert len(result) == 1
-            assert result[0] == {"DATABASE": "db1", "SCHEMA": "schema1"}
-            mock_get_dataframe.assert_called_once()
+        result = await handler.prepare_metadata()
+
+        assert len(result) == 1
+        assert result[0] == {"DATABASE": "db1", "SCHEMA": "schema1"}
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_missing_columns(self, handler: BaseSQLHandler) -> None:
@@ -118,15 +110,13 @@ class TestPrepareMetadata:
             }
         )
 
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = df
-            with pytest.raises(KeyError) as exc_info:
-                await handler.prepare_metadata()
-            assert "TABLE_SCHEMA" in str(exc_info.value)
-            mock_get_dataframe.assert_called_once()
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=df)
+
+        with pytest.raises(KeyError) as exc_info:
+            await handler.prepare_metadata()
+        assert "TABLE_SCHEMA" in str(exc_info.value)
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_null_values(self, handler: BaseSQLHandler) -> None:
@@ -138,18 +128,16 @@ class TestPrepareMetadata:
             }
         )
 
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata()
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=df)
 
-            assert len(result) == 3
-            assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
-            assert result[1] == {"TABLE_CATALOG": None, "TABLE_SCHEMA": "schema2"}
-            assert result[2] == {"TABLE_CATALOG": "db2", "TABLE_SCHEMA": None}
-            mock_get_dataframe.assert_called_once()
+        result = await handler.prepare_metadata()
+
+        assert len(result) == 3
+        assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
+        assert result[1] == {"TABLE_CATALOG": None, "TABLE_SCHEMA": "schema2"}
+        assert result[2] == {"TABLE_CATALOG": "db2", "TABLE_SCHEMA": None}
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_special_characters(self, handler: BaseSQLHandler) -> None:
@@ -161,18 +149,16 @@ class TestPrepareMetadata:
             }
         )
 
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata()
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=df)
 
-            assert len(result) == 3
-            assert result[0] == {"TABLE_CATALOG": "db-1", "TABLE_SCHEMA": "schema-1"}
-            assert result[1] == {"TABLE_CATALOG": "db.2", "TABLE_SCHEMA": "schema.2"}
-            assert result[2] == {"TABLE_CATALOG": "db@3", "TABLE_SCHEMA": "schema@3"}
-            mock_get_dataframe.assert_called_once()
+        result = await handler.prepare_metadata()
+
+        assert len(result) == 3
+        assert result[0] == {"TABLE_CATALOG": "db-1", "TABLE_SCHEMA": "schema-1"}
+        assert result[1] == {"TABLE_CATALOG": "db.2", "TABLE_SCHEMA": "schema.2"}
+        assert result[2] == {"TABLE_CATALOG": "db@3", "TABLE_SCHEMA": "schema@3"}
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_duplicate_entries(self, handler: BaseSQLHandler) -> None:
@@ -184,33 +170,29 @@ class TestPrepareMetadata:
             }
         )
 
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata()
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=df)
 
-            assert (
-                len(result) == 3
-            )  # Should preserve duplicates as they might be meaningful
-            assert all(
-                entry == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
-                for entry in result
-            )
-            mock_get_dataframe.assert_called_once()
+        result = await handler.prepare_metadata()
+
+        assert (
+            len(result) == 3
+        )  # Should preserve duplicates as they might be meaningful
+        assert all(
+            entry == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
+            for entry in result
+        )
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_invalid_dataframe(self, handler: BaseSQLHandler) -> None:
         """Test metadata preparation with invalid DataFrame input"""
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = None
-            with pytest.raises(Exception):
-                await handler.prepare_metadata()
-            mock_get_dataframe.assert_called_once()
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=None)
+
+        with pytest.raises(Exception):
+            await handler.prepare_metadata()
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_extra_columns(self, handler: BaseSQLHandler) -> None:
@@ -223,14 +205,12 @@ class TestPrepareMetadata:
             }
         )
 
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata()
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=df)
 
-            assert len(result) == 1
-            assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
-            assert "EXTRA_COLUMN" not in result[0]
-            mock_get_dataframe.assert_called_once()
+        result = await handler.prepare_metadata()
+
+        assert len(result) == 1
+        assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
+        assert "EXTRA_COLUMN" not in result[0]
+        handler.sql_client.get_results.assert_called_once()

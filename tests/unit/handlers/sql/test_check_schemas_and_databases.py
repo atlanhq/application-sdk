@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pandas as pd
 import pytest
@@ -34,20 +34,16 @@ class TestCheckSchemasAndDatabases:
             {"TABLE_CATALOG": ["db1", "db1"], "TABLE_SCHEMA": ["schema1", "schema2"]}
         )
 
-        # Mock the SQLQueryInput.get_daft_dataframe to return our test data
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = test_data
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=test_data)
 
-            payload = {"metadata": {"include-filter": '{"^db1$": ["^schema1$"]}'}}
-            result = await handler.check_schemas_and_databases(payload)
+        payload = {"metadata": {"include-filter": '{"^db1$": ["^schema1$"]}'}}
+        result = await handler.check_schemas_and_databases(payload)
 
-            assert result["success"] is True
-            assert result["successMessage"] == "Schemas and Databases check successful"
-            assert result["failureMessage"] == ""
-            mock_get_dataframe.assert_called_once()
+        assert result["success"] is True
+        assert result["successMessage"] == "Schemas and Databases check successful"
+        assert result["failureMessage"] == ""
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_invalid_database(self, handler: BaseSQLHandler) -> None:
@@ -57,22 +53,16 @@ class TestCheckSchemasAndDatabases:
             {"TABLE_CATALOG": ["db1"], "TABLE_SCHEMA": ["schema1"]}
         )
 
-        # Mock the SQLQueryInput.get_daft_dataframe to return our test data
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = test_data
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=test_data)
 
-            payload = {
-                "metadata": {"include-filter": '{"^invalid_db$": ["^schema1$"]}'}
-            }
-            result = await handler.check_schemas_and_databases(payload)
+        payload = {"metadata": {"include-filter": '{"^invalid_db$": ["^schema1$"]}'}}
+        result = await handler.check_schemas_and_databases(payload)
 
-            assert result["success"] is False
-            assert result["successMessage"] == ""
-            assert "invalid_db database" in result["failureMessage"]
-            mock_get_dataframe.assert_called_once()
+        assert result["success"] is False
+        assert result["successMessage"] == ""
+        assert "invalid_db database" in result["failureMessage"]
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_invalid_schema(self, handler: BaseSQLHandler) -> None:
@@ -82,22 +72,16 @@ class TestCheckSchemasAndDatabases:
             {"TABLE_CATALOG": ["db1"], "TABLE_SCHEMA": ["schema1"]}
         )
 
-        # Mock the SQLQueryInput.get_daft_dataframe to return our test data
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = test_data
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=test_data)
 
-            payload = {
-                "metadata": {"include-filter": '{"^db1$": ["^invalid_schema$"]}'}
-            }
-            result = await handler.check_schemas_and_databases(payload)
+        payload = {"metadata": {"include-filter": '{"^db1$": ["^invalid_schema$"]}'}}
+        result = await handler.check_schemas_and_databases(payload)
 
-            assert result["success"] is False
-            assert result["successMessage"] == ""
-            assert "db1.invalid_schema schema" in result["failureMessage"]
-            mock_get_dataframe.assert_called_once()
+        assert result["success"] is False
+        assert result["successMessage"] == ""
+        assert "db1.invalid_schema schema" in result["failureMessage"]
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_wildcard_schema(self, handler: BaseSQLHandler) -> None:
@@ -107,20 +91,16 @@ class TestCheckSchemasAndDatabases:
             {"TABLE_CATALOG": ["db1", "db1"], "TABLE_SCHEMA": ["schema1", "schema2"]}
         )
 
-        # Mock the SQLQueryInput.get_daft_dataframe to return our test data
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = test_data
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=test_data)
 
-            payload = {"metadata": {"include-filter": '{"^db1$": "*"}'}}
-            result = await handler.check_schemas_and_databases(payload)
+        payload = {"metadata": {"include-filter": '{"^db1$": "*"}'}}
+        result = await handler.check_schemas_and_databases(payload)
 
-            assert result["success"] is True
-            assert result["successMessage"] == "Schemas and Databases check successful"
-            assert result["failureMessage"] == ""
-            mock_get_dataframe.assert_called_once()
+        assert result["success"] is True
+        assert result["successMessage"] == "Schemas and Databases check successful"
+        assert result["failureMessage"] == ""
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_empty_metadata(self, handler: BaseSQLHandler) -> None:
@@ -128,20 +108,16 @@ class TestCheckSchemasAndDatabases:
         # Test data - empty DataFrame
         test_data = pd.DataFrame({"TABLE_CATALOG": [], "TABLE_SCHEMA": []})
 
-        # Mock the SQLQueryInput.get_daft_dataframe to return our test data
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = test_data
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=test_data)
 
-            payload = {"metadata": {}}
-            result = await handler.check_schemas_and_databases(payload)
+        payload = {"metadata": {}}
+        result = await handler.check_schemas_and_databases(payload)
 
-            assert result["success"] is True
-            assert result["successMessage"] == "Schemas and Databases check successful"
-            assert result["failureMessage"] == ""
-            mock_get_dataframe.assert_called_once()
+        assert result["success"] is True
+        assert result["successMessage"] == "Schemas and Databases check successful"
+        assert result["failureMessage"] == ""
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_invalid_json_filter(self, handler: BaseSQLHandler) -> None:
@@ -149,39 +125,34 @@ class TestCheckSchemasAndDatabases:
         # Test data
         test_data = pd.DataFrame({"TABLE_CATALOG": [], "TABLE_SCHEMA": []})
 
-        # Mock the SQLQueryInput.get_daft_dataframe to return our test data
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = test_data
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=test_data)
 
-            payload = {"metadata": {"include-filter": "invalid json"}}
-            result = await handler.check_schemas_and_databases(payload)
+        payload = {"metadata": {"include-filter": "invalid json"}}
+        result = await handler.check_schemas_and_databases(payload)
 
-            assert result["success"] is False
-            assert result["successMessage"] == ""
-            assert "Schemas and Databases check failed" in result["failureMessage"]
-            assert "error" in result
-            mock_get_dataframe.assert_called_once()
+        assert result["success"] is False
+        assert result["successMessage"] == ""
+        assert "Schemas and Databases check failed" in result["failureMessage"]
+        assert "error" in result
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_prepare_metadata_error(self, handler: BaseSQLHandler) -> None:
         """Test check when prepare_metadata raises an error"""
-        # Mock the SQLQueryInput.get_dataframe to raise an exception
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-            side_effect=Exception("Database error"),
-        ) as mock_get_dataframe:
-            payload = {"metadata": {"include-filter": "{}"}}
-            result = await handler.check_schemas_and_databases(payload)
+        # Mock the sql_client.get_results method to raise an exception
+        handler.sql_client.get_results = AsyncMock(
+            side_effect=Exception("Database error")
+        )
 
-            assert result["success"] is False
-            assert result["successMessage"] == ""
-            assert "Schemas and Databases check failed" in result["failureMessage"]
-            assert result["error"] == "Database error"
-            mock_get_dataframe.assert_called_once()
+        payload = {"metadata": {"include-filter": "{}"}}
+        result = await handler.check_schemas_and_databases(payload)
+
+        assert result["success"] is False
+        assert result["successMessage"] == ""
+        assert "Schemas and Databases check failed" in result["failureMessage"]
+        assert result["error"] == "Database error"
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_multiple_databases_and_schemas(
@@ -196,24 +167,20 @@ class TestCheckSchemasAndDatabases:
             }
         )
 
-        # Mock the SQLQueryInput.get_daft_dataframe to return our test data
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = test_data
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=test_data)
 
-            payload = {
-                "metadata": {
-                    "include-filter": '{"^db1$": ["^schema1$", "^schema2$"], "^db2$": ["^schema1$"]}'
-                }
+        payload = {
+            "metadata": {
+                "include-filter": '{"^db1$": ["^schema1$", "^schema2$"], "^db2$": ["^schema1$"]}'
             }
-            result = await handler.check_schemas_and_databases(payload)
+        }
+        result = await handler.check_schemas_and_databases(payload)
 
-            assert result["success"] is True
-            assert result["successMessage"] == "Schemas and Databases check successful"
-            assert result["failureMessage"] == ""
-            mock_get_dataframe.assert_called_once()
+        assert result["success"] is True
+        assert result["successMessage"] == "Schemas and Databases check successful"
+        assert result["failureMessage"] == ""
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_missing_metadata_key(self, handler: BaseSQLHandler) -> None:
@@ -221,20 +188,16 @@ class TestCheckSchemasAndDatabases:
         # Test data - empty DataFrame
         test_data = pd.DataFrame({"TABLE_CATALOG": [], "TABLE_SCHEMA": []})
 
-        # Mock the SQLQueryInput.get_daft_dataframe to return our test data
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = test_data
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=test_data)
 
-            payload = {}  # Missing metadata key
-            result = await handler.check_schemas_and_databases(payload)
+        payload = {}  # Missing metadata key
+        result = await handler.check_schemas_and_databases(payload)
 
-            assert result["success"] is True  # Should default to empty filter
-            assert result["successMessage"] == "Schemas and Databases check successful"
-            assert result["failureMessage"] == ""
-            mock_get_dataframe.assert_called_once()
+        assert result["success"] is True  # Should default to empty filter
+        assert result["successMessage"] == "Schemas and Databases check successful"
+        assert result["failureMessage"] == ""
+        handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_include_filter_string_and_dict_formats(
@@ -246,39 +209,29 @@ class TestCheckSchemasAndDatabases:
             {"TABLE_CATALOG": ["db1", "db1"], "TABLE_SCHEMA": ["schema1", "schema2"]}
         )
 
-        # Mock the SQLQueryInput.get_dataframe to return our test data
-        with patch(
-            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
-            new_callable=AsyncMock,
-        ) as mock_get_dataframe:
-            mock_get_dataframe.return_value = test_data
+        # Mock the sql_client.get_results method directly
+        handler.sql_client.get_results = AsyncMock(return_value=test_data)
 
-            # Test case 1: include-filter as JSON string
-            payload_string = {
-                "metadata": {"include-filter": '{"^db1$": ["^schema1$"]}'}
-            }
-            result_string = await handler.check_schemas_and_databases(payload_string)
+        # Test case 1: include-filter as JSON string
+        payload_string = {"metadata": {"include-filter": '{"^db1$": ["^schema1$"]}'}}
+        result_string = await handler.check_schemas_and_databases(payload_string)
 
-            assert result_string["success"] is True
-            assert (
-                result_string["successMessage"]
-                == "Schemas and Databases check successful"
-            )
-            assert result_string["failureMessage"] == ""
+        assert result_string["success"] is True
+        assert (
+            result_string["successMessage"] == "Schemas and Databases check successful"
+        )
+        assert result_string["failureMessage"] == ""
 
-            # Test case 2: include-filter as dict (already parsed)
-            payload_dict = {"metadata": {"include-filter": {"^db1$": ["^schema1$"]}}}
-            result_dict = await handler.check_schemas_and_databases(payload_dict)
+        # Test case 2: include-filter as dict (already parsed)
+        payload_dict = {"metadata": {"include-filter": {"^db1$": ["^schema1$"]}}}
+        result_dict = await handler.check_schemas_and_databases(payload_dict)
 
-            assert result_dict["success"] is True
-            assert (
-                result_dict["successMessage"]
-                == "Schemas and Databases check successful"
-            )
-            assert result_dict["failureMessage"] == ""
+        assert result_dict["success"] is True
+        assert result_dict["successMessage"] == "Schemas and Databases check successful"
+        assert result_dict["failureMessage"] == ""
 
-            # Both cases should produce the same result
-            assert result_string == result_dict
+        # Both cases should produce the same result
+        assert result_string == result_dict
 
-            # Verify that get_dataframe was called twice (once for each test case)
-            assert mock_get_dataframe.call_count == 2
+        # Verify that get_results was called twice (once for each test case)
+        assert handler.sql_client.get_results.call_count == 2
