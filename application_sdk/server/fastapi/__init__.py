@@ -98,7 +98,7 @@ class APIServer(ServerInterface):
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
-    # define PubSubSubscription as pubsub_name, topic, route class object
+    # List of PubSub subscriptions to be registered
     messaging_subscriptions: List[PubSubSubscription] = []
 
     frontend_assets_path: str = "frontend/static"
