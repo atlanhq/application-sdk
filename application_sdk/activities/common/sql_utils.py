@@ -131,7 +131,9 @@ async def finalize_multidb_results(
     dataframe_list: List[
         Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]
     ],
-    setup_parquet_output_func: Callable[[str, bool], Optional[ParquetFileWriter]],
+    setup_parquet_output_func: Callable[
+        [str, bool, Optional[str]], Optional[ParquetFileWriter]
+    ],
     output_path: str,
     typename: str,
 ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
@@ -189,7 +191,9 @@ async def finalize_multidb_results(
                 return concatenated
 
             # Create new parquet output for concatenated data
-            concatenated_parquet_output = setup_parquet_output_func(output_path, True)
+            concatenated_parquet_output = setup_parquet_output_func(
+                output_path, True, typename
+            )
             if concatenated_parquet_output:
                 await concatenated_parquet_output.write(concatenated)  # type: ignore
                 return await concatenated_parquet_output.close()
