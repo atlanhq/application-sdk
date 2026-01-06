@@ -1,5 +1,7 @@
 import asyncio
-from unittest.mock import AsyncMock, Mock
+import importlib
+import sys
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -143,3 +145,113 @@ async def test_worker_start_with_workflow_client_error(
 
     with pytest.raises(Exception, match="Connection failed"):
         await worker.start(daemon=False)
+
+
+class TestEventLoopPolicy:
+    """Test event loop policy configuration for different platforms."""
+
+    @pytest.mark.parametrize("platform", ["win32", "cygwin"])
+    def test_windows_platforms_set_windows_selector_policy(self, platform):
+        """Test that Windows/Cygwin platforms set WindowsSelectorEventLoopPolicy."""
+        # Save original policy
+        original_policy = asyncio.get_event_loop_policy()
+
+        try:
+            # Mock platform and reload module
+            with patch.object(sys, "platform", platform):
+                import application_sdk.worker
+
+                importlib.reload(application_sdk.worker)
+
+                # Check that WindowsSelectorEventLoopPolicy is set
+                current_policy = asyncio.get_event_loop_policy()
+                assert isinstance(
+                    current_policy, asyncio.WindowsSelectorEventLoopPolicy
+                ), f"{platform} platform should set WindowsSelectorEventLoopPolicy"
+        finally:
+            # Restore original policy and reload module
+            asyncio.set_event_loop_policy(original_policy)
+            importlib.reload(application_sdk.worker)
+
+    def test_non_windows_platform_with_uvloop_available(self):
+        """Test that non-Windows platform uses uvloop when available."""
+        # Save original policy
+        original_policy = asyncio.get_event_loop_policy()
+
+        try:
+            # Mock non-Windows platform (Linux)
+            with patch.object(sys, "platform", "linux"):
+                # Check if uvloop is available in this environment
+                uvloop_available = False
+                try:
+                    import uvloop
+
+                    uvloop_available = True
+                except ImportError:
+                    pass
+
+                import application_sdk.worker
+
+                importlib.reload(application_sdk.worker)
+
+                # Check the policy
+                current_policy = asyncio.get_event_loop_policy()
+
+                # On non-Windows, should not be WindowsSelectorEventLoopPolicy
+                assert not isinstance(
+                    current_policy, asyncio.WindowsSelectorEventLoopPolicy
+                ), "Non-Windows platform should not use WindowsSelectorEventLoopPolicy"
+
+                # If uvloop is available, verify it was used
+                if uvloop_available:
+                    policy_class_name = type(current_policy).__module__
+                    assert (
+                        "uvloop" in policy_class_name
+                    ), f"Expected uvloop policy, got {type(current_policy)}"
+        finally:
+            # Restore original policy and reload module
+            asyncio.set_event_loop_policy(original_policy)
+            importlib.reload(application_sdk.worker)
+
+    def test_non_windows_platform_without_uvloop_falls_back(self):
+        """Test that non-Windows platform falls back to default when uvloop is unavailable."""
+        # Save original policy
+        original_policy = asyncio.get_event_loop_policy()
+        uvloop_backup = sys.modules.get("uvloop")
+
+        try:
+            with patch.object(sys, "platform", "linux"):
+                # Remove uvloop from sys.modules if it exists
+                if "uvloop" in sys.modules:
+                    del sys.modules["uvloop"]
+
+                # Mock import to raise ImportError for uvloop
+                original_import = __builtins__.__dict__.get("__import__", __import__)
+
+                def mock_import(name, *args, **kwargs):
+                    if name == "uvloop":
+                        raise ImportError("No module named 'uvloop'")
+                    return original_import(name, *args, **kwargs)
+
+                with patch("builtins.__import__", side_effect=mock_import):
+                    import application_sdk.worker
+
+                    importlib.reload(application_sdk.worker)
+
+                    current_policy = asyncio.get_event_loop_policy()
+
+                    # Verify it's not WindowsSelectorEventLoopPolicy
+                    assert not isinstance(
+                        current_policy, asyncio.WindowsSelectorEventLoopPolicy
+                    ), "Non-Windows platform should not use WindowsSelectorEventLoopPolicy"
+
+                    # Verify it's not uvloop
+                    policy_class_name = type(current_policy).__module__
+                    assert (
+                        "uvloop" not in policy_class_name
+                    ), "Policy should not be uvloop when uvloop import fails"
+        finally:
+            if uvloop_backup is not None:
+                sys.modules["uvloop"] = uvloop_backup
+            asyncio.set_event_loop_policy(original_policy)
+            importlib.reload(application_sdk.worker)
