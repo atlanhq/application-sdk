@@ -27,7 +27,10 @@ from application_sdk.services.eventstore import EventStore
 logger = get_logger(__name__)
 
 
-if sys.platform not in ("win32", "cygwin"):
+if sys.platform in ("win32", "cygwin"):
+    # Windows and Cygwin require WindowsSelectorEventLoopPolicy for async database drivers (e.g., psycopg)
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+else:
     try:
         import uvloop
 
@@ -37,9 +40,6 @@ if sys.platform not in ("win32", "cygwin"):
         # uvloop is not available, use default asyncio
         logger.warning("uvloop is not available, using default asyncio")
         pass
-else:
-    # Windows requires WindowsSelectorEventLoopPolicy for async database drivers (e.g., psycopg)
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 class Worker:
