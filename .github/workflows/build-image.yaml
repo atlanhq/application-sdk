@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - image
+  pull_request:
+    branches: [image]
     paths:
       - 'Dockerfile'
       - '*.*'
