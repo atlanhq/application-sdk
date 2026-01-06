@@ -1,0 +1,552 @@
+name: 'Composite Build, Snyk/Trivy Scan, and Push'
+description: 'A drop-in replacement for docker/build-push-action that adds mandatory Snyk and Trivy scans before pushing.'
+
+#==================================================================
+# == INPUTS                                                      ==
+#==================================================================
+inputs:
+  # == Custom inputs for this action's logic ==
+  branch:
+    description: "The current branch name (e.g., from github.ref_name)."
+    required: true
+  push:
+    description: "Set to 'true' to attempt a push after a successful scan."
+    required: false
+    default: 'false'
+  snyk-token:
+    description: 'Token for Snyk authentication.'
+    required: true
+  snyk-ghcr-integration-id:
+    description: 'Snyk Integration ID for GitHub Container Registry.'
+    required: true
+  snyk-docker-integration-id:
+    description: 'Snyk Integration ID for Docker Hub.'
+    required: true
+  snyk-integration-id:
+    description: 'Default Snyk Integration ID.'
+    required: true
+  snyk-org-id:
+    description: 'Snyk Organization ID.'
+    required: true
+
+  # == Complete list of inputs from docker/build-push-action ==
+  add-hosts:
+    description: 'List of custom host-to-IP mappings (host:ip).'
+    required: false
+  allow:
+    description: 'List of extra privileged entitlement (e.g., network.host,security.insecure).'
+    required: false
+  annotations:
+    description: 'List of OCI annotations to set on the image.'
+    required: false
+  attests:
+    description: 'List of attestations to generate (e.g., type=sbom,generator=image).'
+    required: false
+  build-args:
+    description: 'List of build-time variables.'
+    required: false
+  build-contexts:
+    description: 'List of additional build contexts (e.g., name=path).'
+    required: false
+  builder:
+    description: 'Builder instance to use.'
+    required: false
+  cache-from:
+    description: 'List of external cache sources.'
+    required: false
+    default: 'type=gha'
+  cache-to:
+    description: 'List of cache export destinations.'
+    required: false
+    default: 'type=gha,mode=min'
+  cgroup-parent:
+    description: 'Optional parent cgroup for the container.'
+    required: false
+  context:
+    description: 'Path to the build context.'
+    required: false
+    default: '.'
+  file:
+    description: 'Path to the Dockerfile.'
+    required: false
+  github-token:
+    description: 'GitHub token for authentication.'
+    required: false
+  labels:
+    description: 'List of metadata labels to apply to the image.'
+    required: false
+  load:
+    description: 'Load is a shorthand for --output=type=docker.'
+    required: false
+    default: 'false'
+  network:
+    description: 'Set the networking mode for the RUN instructions during build.'
+    required: false
+  no-cache:
+    description: 'Do not use cache when building the image.'
+    required: false
+    default: 'false'
+  no-cache-filters:
+    description: 'Do not cache specified stages.'
+    required: false
+  outputs:
+    description: 'List of output destinations (format: type=local,dest=path).'
+    required: false
+  platforms:
+    description: 'List of target platforms for build.'
+    required: false
+  provenance:
+    description: 'Generate provenance attestation for the build.'
+    required: false
+  pull:
+    description: 'Always attempt to pull all referenced images.'
+    required: false
+    default: 'false'
+  sbom:
+    description: 'Generate SBOM attestation for the build (shorthand for --attest=type=sbom).'
+    required: false
+  secrets:
+    description: 'List of secrets to expose to the build.'
+    required: false
+  secret-envs:
+    description: 'List of secret environment variables to expose to the build (e.g., MY_SECRET=MY_SECRET_VAR).'
+    required: false
+  shm-size:
+    description: 'Size of /dev/shm (e.g., 2g).'
+    required: false
+  ssh:
+    description: 'List of SSH agent sockets or keys to expose to the build.'
+    required: false
+  tags:
+    description: 'List of tags for the Docker image.'
+    required: true
+  target:
+    description: 'Sets the target stage to build.'
+    required: false
+  ulimit:
+    description: 'Ulimit options (e.g., nofile=1024:1024).'
+    required: false
+
+#==================================================================
+# == OUTPUTS                                                     ==
+#==================================================================
+outputs:
+  scan-passed:
+    description: "'true' if both scans found zero critical/high vulnerabilities, otherwise 'false'."
+    value: ${{ steps.decision.outputs.result }}
+  snyk-critical-count:
+    description: "Number of critical vulnerabilities found by Snyk."
+    value: ${{ steps.parse_snyk.outputs.critical-count }}
+  snyk-high-count:
+    description: "Number of high vulnerabilities found by Snyk."
+    value: ${{ steps.parse_snyk.outputs.high-count }}
+  trivy-critical-count:
+    description: "Number of critical vulnerabilities found by Trivy."
+    value: ${{ steps.parse_trivy.outputs.critical-count }}
+  trivy-high-count:
+    description: "Number of high vulnerabilities found by Trivy."
+    value: ${{ steps.parse_trivy.outputs.high-count }}
+
+#==================================================================
+# == EXECUTION LOGIC                                             ==
+#==================================================================
+runs:
+  using: "composite"
+  steps:
+    - name: Configure Scan Policies
+      id: config
+      shell: bash
+      env:
+        SNYK_GHCR_INTEGRATION_ID: ${{ inputs.snyk-ghcr-integration-id }}
+        SNYK_DOCKER_INTEGRATION_ID: ${{ inputs.snyk-docker-integration-id }}
+        SNYK_INTEGRATION_ID: ${{ inputs.snyk-integration-id }}
+        SNYK_ORG_ID: ${{ inputs.snyk-org-id }}
+      run: |
+        # =================================================================
+        # == 🛡️ ADMIN CONFIGURATION SECTION                             ==
+        # =================================================================
+        #
+        # ENFORCEMENT_MODE:
+        #   'true':  Fail the build if vulnerabilities are found at the
+        #            specified severity. The image will NOT be pushed.
+        #   'false': Act in "Feedback Mode". Always allow the push and
+        #            never fail the build, but still report vulnerabilities.
+        #
+        ENFORCEMENT_MODE='false'
+
+        # SEVERITY_THRESHOLD:
+        #   Comma-separated list of severities to scan for and fail on
+        #   when in enforcement mode.
+        #   Examples: 'CRITICAL', 'CRITICAL,HIGH', 'CRITICAL,HIGH,MEDIUM'
+        #
+        SEVERITY_THRESHOLD='CRITICAL,HIGH'
+        #
+        # =================================================================
+
+        # ⭐ SNYK INTEGRATION ID MAPPING (from GitHub Secrets)
+        #   Map registry hostnames to their Snyk Integration IDs.
+        #   The script will automatically select the correct ID based on the image tag.
+        #   - Use 'default' for Docker Hub or images without a full domain.
+        #   - Add new entries for other registries as needed.
+        #
+        SNYK_INTEGRATION_IDS="
+        ghcr.io=${SNYK_GHCR_INTEGRATION_ID}
+        docker.io=${SNYK_DOCKER_INTEGRATION_ID}
+        default=${SNYK_INTEGRATION_ID}
+        "
+        #
+        # =================================================================
+
+        echo "ENFORCEMENT_MODE=$ENFORCEMENT_MODE" >> $GITHUB_OUTPUT
+        echo "SEVERITY_THRESHOLD=$SEVERITY_THRESHOLD" >> $GITHUB_OUTPUT
+        echo "SNYK_ORG_ID=$SNYK_ORG_ID" >> $GITHUB_OUTPUT
+        echo "SNYK_INTEGRATION_IDS<<EOF" >> $GITHUB_OUTPUT
+        echo "$SNYK_INTEGRATION_IDS" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+        # Snyk's '--severity-threshold' flag requires the LOWEST severity you want to see.
+        # This logic finds the last severity in the list (assuming CRITICAL,HIGH,MEDIUM order).
+        SNYK_LOWEST_SEVERITY=$(echo "$SEVERITY_THRESHOLD" | awk -F, '{print $NF}' | tr '[:upper:]' '[:lower:]')
+        echo "SNYK_SEVERITY_ARGS=--severity-threshold=$SNYK_LOWEST_SEVERITY" >> $GITHUB_OUTPUT
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build single-platform image for scanning
+      id: build_for_scan
+      uses: docker/build-push-action@v6
+      with:
+        # Pass all inputs from the caller to the build action
+        add-hosts: ${{ inputs.add-hosts }}
+        allow: ${{ inputs.allow }}
+        annotations: ${{ inputs.annotations }}
+        attests: ${{ inputs.attests }}
+        build-args: ${{ inputs.build-args }}
+        build-contexts: ${{ inputs.build-contexts }}
+        builder: ${{ inputs.builder }}
+        cache-from: ${{ inputs.cache-from }}
+        # Cache is exported here
+        cache-to: ${{ inputs.cache-to }}
+        cgroup-parent: ${{ inputs.cgroup-parent }}
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        github-token: ${{ inputs.github-token }}
+        labels: ${{ inputs.labels }}
+        network: ${{ inputs.network }}
+        no-cache: ${{ inputs.no-cache }}
+        no-cache-filters: ${{ inputs.no-cache-filters }}
+        outputs: ${{ inputs.outputs }}
+        # Build only for the runner's native platform for scanning
+        platforms: linux/amd64
+        provenance: ${{ inputs.provenance }}
+        pull: ${{ inputs.pull }}
+        sbom: ${{ inputs.sbom }}
+        secrets: ${{ inputs.secrets }}
+        secret-envs: ${{ inputs.secret-envs }}
+        secret-files: ${{ inputs.secret-files }}
+        shm-size: ${{ inputs.shm-size }}
+        ssh: ${{ inputs.ssh }}
+        tags: ${{ inputs.tags }}
+        target: ${{ inputs.target }}
+        ulimit: ${{ inputs.ulimit }}
+        # Load the image for the scanners to use
+        load: true
+        push: false
+
+    - name: Run Snyk Scan to Generate Report
+      id: snyk_scan
+      continue-on-error: true
+      uses: snyk/actions/docker@0.4.0
+      env:
+        SNYK_TOKEN: ${{ inputs.snyk-token }}
+        SNYK_API: 'https://api.us.snyk.io'
+      with:
+        image: ${{ inputs.tags }}
+        args: ${{ steps.config.outputs.SNYK_SEVERITY_ARGS }} --json-file-output=snyk-results.json
+
+    # - name: DEBUG - Validate Snyk JSON
+    #   if: always()
+    #   shell: bash
+    #   run: |
+    #     echo "Validating snyk-results.json syntax..."
+    #     jq . snyk-results.json || echo "JQ validation failed: The JSON is malformed."
+
+    # - name: DEBUG - Show Snyk JSON Content
+    #   if: always()
+    #   shell: bash
+    #   run: |
+    #     echo "--- Start of snyk-results.json ---"
+    #     cat snyk-results.json
+    #     echo "--- End of snyk-results.json ---"
+
+    - name: Parse Snyk Results
+      id: parse_snyk
+      shell: bash
+      run: |
+        if [ ! -f snyk-results.json ]; then
+          echo "Snyk scan failed to produce a report file. See 'Run Snyk Scan' step for details."
+          exit 1
+        fi
+
+        # CORRECTED: This jq query safely combines OS and all application vulnerabilities before processing.
+        CRITICAL_COUNT=$(jq '((.vulnerabilities // []) + ([.applications[]?.vulnerabilities // []] | flatten)) | map(select(.severity == "critical")) | unique_by(.id) | length' snyk-results.json)
+        HIGH_COUNT=$(jq '((.vulnerabilities // []) + ([.applications[]?.vulnerabilities // []] | flatten)) | map(select(.severity == "high")) | unique_by(.id) | length' snyk-results.json)
+        MEDIUM_COUNT=$(jq '((.vulnerabilities // []) + ([.applications[]?.vulnerabilities // []] | flatten)) | map(select(.severity == "medium")) | unique_by(.id) | length' snyk-results.json)
+
+        echo "Snyk Found: $CRITICAL_COUNT critical, $HIGH_COUNT high, $MEDIUM_COUNT medium vulnerabilities."
+
+        echo "critical-count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+        echo "high-count=$HIGH_COUNT" >> $GITHUB_OUTPUT
+        echo "medium-count=$MEDIUM_COUNT" >> $GITHUB_OUTPUT
+
+    #Faced issues with Trivy not able to handle multi line inputs for image tags. Snyk handles this directly
+    - name: Extract Primary Image Tag for Scans
+      id: extract_tag
+      shell: bash
+      run: |
+        # Read the first line of the multi-line tags input
+        PRIMARY_TAG=$(echo "${{ inputs.tags }}" | head -n 1)
+        echo "primary_tag=$PRIMARY_TAG" >> $GITHUB_OUTPUT
+
+    - name: Run Trivy Scan
+      id: trivy_scan
+      uses: aquasecurity/trivy-action@0.24.0
+      with:
+        # UPDATED: Use the single, primary tag from the step above
+        image-ref: ${{ steps.extract_tag.outputs.primary_tag }}
+        format: 'json'
+        output: 'trivy-results.json'
+        severity: ${{ steps.config.outputs.SEVERITY_THRESHOLD }}
+        ignore-unfixed: true
+        exit-code: '0'
+
+    - name: Display Trivy Scan Results
+      if: always()
+      shell: bash
+      run: |
+        echo "Displaying full vulnerability report from trivy-results.json:"
+        jq '.' trivy-results.json
+
+    - name: Parse Trivy Results
+      id: parse_trivy
+      shell: bash
+      run: |
+        # Now we parse all severities, not just critical and high
+        CRITICAL_COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-results.json)
+        HIGH_COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-results.json)
+        MEDIUM_COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "MEDIUM")] | length' trivy-results.json)
+        echo "Trivy Found: $CRITICAL_COUNT critical, $HIGH_COUNT high, $MEDIUM_COUNT medium vulnerabilities."
+        echo "critical-count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+        echo "high-count=$HIGH_COUNT" >> $GITHUB_OUTPUT
+        echo "medium-count=$MEDIUM_COUNT" >> $GITHUB_OUTPUT
+
+    - name: Make Final Decision
+      id: decision
+      shell: bash
+      env:
+        ENFORCEMENT_MODE: ${{ steps.config.outputs.ENFORCEMENT_MODE }}
+        SEVERITY_THRESHOLD: ${{ steps.config.outputs.SEVERITY_THRESHOLD }}
+        SNYK_CRITICAL: ${{ steps.parse_snyk.outputs.critical-count }}
+        SNYK_HIGH: ${{ steps.parse_snyk.outputs.high-count }}
+        SNYK_MEDIUM: ${{ steps.parse_snyk.outputs.medium-count }}
+        TRIVY_CRITICAL: ${{ steps.parse_trivy.outputs.critical-count }}
+        TRIVY_HIGH: ${{ steps.parse_trivy.outputs.high-count }}
+        TRIVY_MEDIUM: ${{ steps.parse_trivy.outputs.medium-count }}
+      run: |
+        echo "Enforcement Mode: $ENFORCEMENT_MODE"
+        echo "Failing on severities: $SEVERITY_THRESHOLD"
+
+        VULNS_FOUND=0
+        if [[ "$SEVERITY_THRESHOLD" == *"CRITICAL"* && ($SNYK_CRITICAL -gt 0 || $TRIVY_CRITICAL -gt 0) ]]; then
+          echo "CRITICAL vulnerabilities found."
+          VULNS_FOUND=1
+        fi
+        if [[ "$SEVERITY_THRESHOLD" == *"HIGH"* && ($SNYK_HIGH -gt 0 || $TRIVY_HIGH -gt 0) ]]; then
+          echo "HIGH vulnerabilities found."
+          VULNS_FOUND=1
+        fi
+        if [[ "$SEVERITY_THRESHOLD" == *"MEDIUM"* && ($SNYK_MEDIUM -gt 0 || $TRIVY_MEDIUM -gt 0) ]]; then
+          echo "MEDIUM vulnerabilities found."
+          VULNS_FOUND=1
+        fi
+
+        if [[ "$ENFORCEMENT_MODE" == "true" && $VULNS_FOUND -eq 1 ]]; then
+          echo "❌ Scans failed in ENFORCEMENT mode. Vulnerabilities found at or above threshold."
+          echo "result=false" >> $GITHUB_OUTPUT
+          exit 1
+        else
+          if [[ $VULNS_FOUND -eq 1 ]]; then
+            echo "⚠️ Vulnerabilities found, but continuing in FEEDBACK mode."
+          else
+            echo "✅ All scans passed."
+          fi
+          echo "result=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Cleanup loaded scanning image
+      shell: bash
+      run: |
+        PRIMARY_TAG=$(echo "${{ inputs.tags }}" | head -n 1)
+        docker rmi "$PRIMARY_TAG" || true
+
+    - name: Build and Push multi-platform image
+      id: docker_push
+      if: ${{ steps.decision.outputs.result == 'true' }}
+      uses: docker/build-push-action@v6
+      with:
+        # Pass all relevant inputs again for the final push
+        add-hosts: ${{ inputs.add-hosts }}
+        allow: ${{ inputs.allow }}
+        annotations: ${{ inputs.annotations }}
+        attests: ${{ inputs.attests }}
+        build-args: ${{ inputs.build-args }}
+        build-contexts: ${{ inputs.build-contexts }}
+        builder: ${{ inputs.builder }}
+        # Cache is imported here
+        cache-from: ${{ inputs.cache-from }}
+        cache-to: ${{ inputs.cache-to }}
+        cgroup-parent: ${{ inputs.cgroup-parent }}
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        github-token: ${{ inputs.github-token }}
+        labels: ${{ inputs.labels }}
+        network: ${{ inputs.network }}
+        no-cache: ${{ inputs.no-cache }}
+        # CORRECTED
+        no-cache-filters: ${{ inputs.no-cache-filters }}
+        outputs: ${{ inputs.outputs }}
+        # Use the platforms the developer originally requested
+        platforms: ${{ inputs.platforms }}
+        provenance: ${{ inputs.provenance }}
+        pull: ${{ inputs.pull }}
+        # NEW
+        sbom: ${{ inputs.sbom }}
+        secrets: ${{ inputs.secrets }}
+        # NEW
+        secret-envs: ${{ inputs.secret-envs }}
+        secret-files: ${{ inputs.secret-files }}
+        shm-size: ${{ inputs.shm-size }}
+        ssh: ${{ inputs.ssh }}
+        tags: ${{ inputs.tags }}
+        target: ${{ inputs.target }}
+        ulimit: ${{ inputs.ulimit }}
+        push: ${{ inputs.push }}
+        load: ${{ inputs.load }}
+
+    - name: Import or Monitor Image in Snyk
+      if: ${{ steps.docker_push.outcome == 'success' && inputs.push == 'true' && (inputs.branch == 'main' || inputs.branch == 'master') }}
+      shell: bash
+      env:
+        SNYK_TOKEN: ${{ inputs.snyk-token }}
+        SNYK_API: 'https://api.us.snyk.io'
+        SNYK_INTEGRATION_IDS: ${{ steps.config.outputs.SNYK_INTEGRATION_IDS }}
+        SNYK_ORG_ID: ${{ steps.config.outputs.SNYK_ORG_ID }}
+      run: |
+        set -euo pipefail
+
+        # Write metadata to temp file to avoid shell quoting issues
+        TEMP_METADATA=$(mktemp)
+        cat > "$TEMP_METADATA" << 'METADATA_EOF'
+        ${{ steps.docker_push.outputs.metadata }}
+        METADATA_EOF
+
+        # Verify the temp file has content
+        if [ ! -s "$TEMP_METADATA" ]; then
+          echo "❌ Build metadata was not found. Cannot import to Snyk."
+          rm -f "$TEMP_METADATA"
+          exit 1
+        fi
+
+        # Parse image name from the temp file
+        TARGET_IMAGES_LIST=$(jq -r '.["image.name"]' "$TEMP_METADATA")
+        rm -f "$TEMP_METADATA"
+
+        if [ -z "$TARGET_IMAGES_LIST" ] || [ "$TARGET_IMAGES_LIST" = "null" ]; then
+          echo "❌ Could not extract image name from build metadata."
+          exit 1
+        fi
+
+        # Find the first image that has a Snyk integration
+        SELECTED_IMAGE=""
+        SNYK_INTEGRATION_ID=""
+        REGISTRY_KEY=""
+
+        # Convert comma-separated list to array and check each image
+        IFS=',' read -ra IMAGES <<< "$TARGET_IMAGES_LIST"
+        for image in "${IMAGES[@]}"; do
+          echo "🔍 Checking image: $image"
+
+          # Check if this image matches any integration
+          while IFS='=' read -r key value; do
+            if [[ -n "$key" && "$image" == *"$key"* ]]; then
+              SELECTED_IMAGE="$image"
+              SNYK_INTEGRATION_ID="$value"
+              REGISTRY_KEY="$key"
+              echo "✅ Found integration for: $image (registry: $key)"
+              break 2  # Break out of both loops
+            fi
+          done <<< "$SNYK_INTEGRATION_IDS"
+        done
+
+        # Use selected image or fall back to first image for CLI
+        if [ -n "$SELECTED_IMAGE" ]; then
+          PRIMARY_IMAGE="$SELECTED_IMAGE"
+          echo "📦 Using image with integration: ${PRIMARY_IMAGE}"
+        else
+          PRIMARY_IMAGE="${IMAGES[0]}"
+          echo "📦 No integration found, using first image for CLI: ${PRIMARY_IMAGE}"
+        fi
+
+        # Format the image name based on the registry type
+        FORMATTED_IMAGE="$PRIMARY_IMAGE"
+        if [[ "$REGISTRY_KEY" == "docker.io" || "$REGISTRY_KEY" == "default" ]]; then
+          # Docker Hub integration expects image name WITHOUT docker.io/ prefix
+          FORMATTED_IMAGE=$(echo "$PRIMARY_IMAGE" | sed 's|^docker\.io/||')
+          echo "📝 Formatted image for Docker Hub: $FORMATTED_IMAGE"
+        fi
+
+        # ⭐ NEW: Universal Fallback Logic
+        # If no integration ID was found, use 'snyk container monitor'.
+        if [ -z "$SNYK_INTEGRATION_ID" ]; then
+          echo "ℹ️ No Snyk integration ID found for this registry. Installing Snyk CLI for fallback monitoring."
+
+          # Install Snyk CLI
+          curl -Lo /tmp/snyk "https://static.snyk.io/cli/latest/snyk-linux"
+          chmod +x /tmp/snyk
+          sudo mv /tmp/snyk /usr/local/bin/snyk
+
+          echo "📦 Using 'snyk container monitor' as a fallback."
+          snyk container monitor "$FORMATTED_IMAGE" --org="$SNYK_ORG_ID"
+          echo "✅ Snapshot sent to Snyk for continuous monitoring."
+          exit 0 # Safely exit the step with success
+        fi
+
+        # --- This section now only runs if an integration ID WAS found ---
+        echo "📋 Registry integration found. Proceeding with API import..."
+
+        JSON_PAYLOAD=$(jq -n \
+          --arg image "$FORMATTED_IMAGE" \
+          '{
+              target: {
+                  name: $image
+              }
+          }')
+
+        # Import via API with proper error handling
+        echo "🚀 Starting import job for: $FORMATTED_IMAGE"
+
+        RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+          "${SNYK_API}/v1/org/${SNYK_ORG_ID}/integrations/${SNYK_INTEGRATION_ID}/import" \
+          -H "Authorization: token $SNYK_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "$JSON_PAYLOAD")
+
+        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        RESPONSE_BODY=$(echo "$RESPONSE" | head -n -1)
+
+        if [ "$HTTP_CODE" -eq 201 ]; then
+          echo "✅ Import job started successfully."
+        else
+          echo "❌ Failed to start import job. HTTP Code: $HTTP_CODE"
+          exit 1
+        fi
