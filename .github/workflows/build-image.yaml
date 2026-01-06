@@ -5,11 +5,7 @@ on:
     branches:
       - main
     paths:
-      - '**'
-      - '!kurl-installer.yaml'
-      - '!**.md'
-      - '!images/**'
-      - '!**.png'
+      - 'Dockerfile'
 
 permissions:
   contents: read
