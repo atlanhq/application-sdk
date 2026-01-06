@@ -4,8 +4,10 @@ on:
   push:
     branches:
       - main
+      - image
     paths:
       - 'Dockerfile'
+      - '*.*'
 
 permissions:
   contents: read
@@ -92,6 +94,7 @@ jobs:
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
           COMPOSE_HTTP_TIMEOUT: 600
