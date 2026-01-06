@@ -204,10 +204,6 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             Optional[daft.Expression]: The constructed struct expression or None if all fields are null
         """
-        # DEBUG: Inspect the level and prefix values
-        logger.debug(f"=== DEBUG: _build_struct called ===")
-        logger.debug(f"level: {level} (type: {type(level)})")
-        logger.debug(f"prefix: {prefix} (type: {type(prefix)})")
 
         # Check if level is None
         if level is None:
