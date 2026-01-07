@@ -426,15 +426,8 @@ class AtlanObservability(Generic[T], ABC):
                         chunk_start=0,
                         chunk_part=int(time()),
                     )
-                    logging.info(
-                        f"Successfully instantiated ParquetFileWriter for partition: {partition_path}"
-                    )
 
                     await parquet_writer._write_dataframe(dataframe=df)
-
-                    logging.info(
-                        f"Successfully wrote {len(df)} records to partition: {partition_path}"
-                    )
 
                 except Exception as partition_error:
                     logging.error(
