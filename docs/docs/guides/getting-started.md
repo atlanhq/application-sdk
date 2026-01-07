@@ -43,7 +43,7 @@ After setting up your development environment, you can create your first applica
    ```bash
    cd quickstart/hello_world  # or any other app directory
    ```
-   
+
 ## Step 3: Run Your First Application
 
 ### Setting Up Project Dependencies
