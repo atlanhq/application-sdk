@@ -211,6 +211,7 @@ class APIServer(ServerInterface):
         - Workflow router (/workflows/v1)
         - Pubsub router (/dapr)
         - Events router (/events/v1)
+        - Messaging router (/subscriptions/v1)
         """
         # Register all routes first
         self.register_routes()
