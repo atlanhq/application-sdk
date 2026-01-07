@@ -37,6 +37,9 @@ if sys.platform not in ("win32", "cygwin"):
         # uvloop is not available, use default asyncio
         logger.warning("uvloop is not available, using default asyncio")
         pass
+elif sys.platform == "win32":
+    # Use WindowsSelectorEventLoopPolicy for Windows platform
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 class Worker:
