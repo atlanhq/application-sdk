@@ -25,7 +25,26 @@ Choose your platform-specific setup guide to install all required dependencies:
 - [Linux Setup Guide](../setup/LINUX.md)
 - [Windows Setup Guide](../setup/WINDOWS.md)
 
-## Step 2: Run Your First Application
+## Step 2: Set Up Your First Application
+
+After setting up your development environment, you can create your first application using the Atlan Application SDK.
+
+1. Clone the sample application repository:
+
+   The Atlan team provides sample applications to help you get started quickly. Clone the repository to your local machine:
+
+   ```bash
+   git clone https://github.com/atlanhq/atlan-sample-apps.git
+   cd atlan-sample-apps
+   ```
+
+2. Navigate to the sample application directory:
+
+   ```bash
+   cd quickstart/hello_world  # or any other app directory
+   ```
+   
+## Step 3: Run Your First Application
 
 ### Setting Up Project Dependencies
 
@@ -69,7 +88,7 @@ Choose your platform-specific setup guide to install all required dependencies:
    uv run coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics
    ```
 
-## Step 3: Advanced Configuration (Optional)
+## Step 4: Advanced Configuration (Optional)
 
 > [!NOTE]
 > This step is only needed if you're:
