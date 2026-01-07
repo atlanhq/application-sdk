@@ -230,7 +230,7 @@ class APIServer(ServerInterface):
                     subscription.message_handler,
                     methods=["POST"],
                 )
-            self.app.include_router(messaging_router, prefix="/message-processor")
+            self.app.include_router(messaging_router, prefix="/subscriptions/v1")
 
     def fallback_home(self, request: Request) -> HTMLResponse:
         return self.templates.TemplateResponse(
@@ -454,7 +454,7 @@ class APIServer(ServerInterface):
                 subscription_dict: dict[str, Any] = {
                     "pubsubname": subscription.pubsub_component_name,
                     "topic": subscription.topic,
-                    "route": f"/message-processor/{subscription.route}",
+                    "route": f"/subscriptions/v1/{subscription.route}",
                 }
                 if subscription.bulk_subscribe and subscription.bulk_subscribe.enabled:
                     subscription_dict["bulkSubscribe"] = {
