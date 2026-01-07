@@ -372,7 +372,7 @@ class TestMessagingRouterRegistration:
         transport = ASGITransport(app=self.app.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post(
-                "/message-processor/process-message",
+                "/subscriptions/v1/process-message",
                 json={"test": "data"},
             )
 
@@ -400,7 +400,7 @@ class TestMessagingRouterRegistration:
         transport = ASGITransport(app=self.app.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post(
-                "/message-processor/async-process",
+                "/subscriptions/v1/async-process",
                 json={"test": "async_data"},
             )
 
@@ -440,7 +440,7 @@ class TestMessagingRouterRegistration:
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             # Test first route
             response_one = await ac.post(
-                "/message-processor/route-one",
+                "/subscriptions/v1/route-one",
                 json={},
             )
             assert response_one.status_code == 200
@@ -448,7 +448,7 @@ class TestMessagingRouterRegistration:
 
             # Test second route
             response_two = await ac.post(
-                "/message-processor/route-two",
+                "/subscriptions/v1/route-two",
                 json={},
             )
             assert response_two.status_code == 200
@@ -463,7 +463,7 @@ class TestMessagingRouterRegistration:
         transport = ASGITransport(app=self.app.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post(
-                "/message-processor/some-route",
+                "/subscriptions/v1/some-route",
                 json={},
             )
 
@@ -503,7 +503,7 @@ class TestDaprSubscriptionEndpointGeneration:
         assert len(subscriptions) == 1
         assert subscriptions[0]["pubsubname"] == "my-pubsub"
         assert subscriptions[0]["topic"] == "my-topic"
-        assert subscriptions[0]["route"] == "/message-processor/handle-message"
+        assert subscriptions[0]["route"] == "/subscriptions/v1/handle-message"
         assert "bulkSubscribe" not in subscriptions[0]
         assert "deadLetterTopic" not in subscriptions[0]
 
@@ -624,7 +624,7 @@ class TestDaprSubscriptionEndpointGeneration:
         sub = subscriptions[0]
         assert sub["pubsubname"] == "kafka-pubsub"
         assert sub["topic"] == "orders-topic"
-        assert sub["route"] == "/message-processor/process-orders"
+        assert sub["route"] == "/subscriptions/v1/process-orders"
         assert sub["bulkSubscribe"]["enabled"] is True
         assert sub["bulkSubscribe"]["maxMessagesCount"] == 500
         assert sub["bulkSubscribe"]["maxAwaitDurationMs"] == 150
@@ -666,12 +666,12 @@ class TestDaprSubscriptionEndpointGeneration:
         # First subscription
         assert subscriptions[0]["pubsubname"] == "pubsub-a"
         assert subscriptions[0]["topic"] == "topic-a"
-        assert subscriptions[0]["route"] == "/message-processor/handler-a"
+        assert subscriptions[0]["route"] == "/subscriptions/v1/handler-a"
 
         # Second subscription
         assert subscriptions[1]["pubsubname"] == "pubsub-b"
         assert subscriptions[1]["topic"] == "topic-b"
-        assert subscriptions[1]["route"] == "/message-processor/handler-b"
+        assert subscriptions[1]["route"] == "/subscriptions/v1/handler-b"
         assert subscriptions[1]["deadLetterTopic"] == "topic-b-dlq"
 
     @pytest.mark.asyncio
@@ -739,7 +739,7 @@ class TestMessageHandlerCallbackInvocation:
         transport = ASGITransport(app=self.app.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post(
-                "/message-processor/sync-route",
+                "/subscriptions/v1/sync-route",
                 json=test_payload,
             )
 
@@ -773,7 +773,7 @@ class TestMessageHandlerCallbackInvocation:
         transport = ASGITransport(app=self.app.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post(
-                "/message-processor/async-route",
+                "/subscriptions/v1/async-route",
                 json=test_payload,
             )
 
@@ -806,7 +806,7 @@ class TestMessageHandlerCallbackInvocation:
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             # First call
             response1 = await ac.post(
-                "/message-processor/tracked-route",
+                "/subscriptions/v1/tracked-route",
                 json={"test": "data"},
             )
             assert response1.status_code == 200
@@ -814,7 +814,7 @@ class TestMessageHandlerCallbackInvocation:
 
             # Second call
             response2 = await ac.post(
-                "/message-processor/tracked-route",
+                "/subscriptions/v1/tracked-route",
                 json={"test": "more_data"},
             )
             assert response2.status_code == 200
@@ -840,7 +840,7 @@ class TestMessageHandlerCallbackInvocation:
         transport = ASGITransport(app=self.app.app, raise_app_exceptions=False)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post(
-                "/message-processor/error-route",
+                "/subscriptions/v1/error-route",
                 json={},
             )
 
@@ -867,7 +867,7 @@ class TestMessageHandlerCallbackInvocation:
         transport = ASGITransport(app=self.app.app, raise_app_exceptions=False)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post(
-                "/message-processor/async-error-route",
+                "/subscriptions/v1/async-error-route",
                 json={},
             )
 
@@ -899,7 +899,7 @@ class TestMessageHandlerCallbackInvocation:
         transport = ASGITransport(app=self.app.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post(
-                "/message-processor/custom-response-route",
+                "/subscriptions/v1/custom-response-route",
                 json={},
             )
 
