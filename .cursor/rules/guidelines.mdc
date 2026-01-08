@@ -1,5 +1,5 @@
 ---
-description:
+description: Meta-guidelines for writing and maintaining cursor rule files with proper structure and formatting
 globs: .cursor/rules/*.mdc
 alwaysApply: false
 ---

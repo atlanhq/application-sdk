@@ -92,13 +92,12 @@ async def test_load(
     assert async_sql_client.connection is None
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
-async def test_fetch_metadata(mock_run_query: Any, handler: BaseSQLHandler):
+async def test_fetch_metadata(handler: BaseSQLHandler):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
     import pandas as pd
 
-    mock_run_query.return_value = pd.DataFrame(data)
+    handler.sql_client.get_results = AsyncMock(return_value=pd.DataFrame(data))
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -110,18 +109,17 @@ async def test_fetch_metadata(mock_run_query: Any, handler: BaseSQLHandler):
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    mock_run_query.assert_called_once_with()
+    handler.sql_client.get_results.assert_called_once_with(
+        "SELECT * FROM information_schema.tables"
+    )
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
-async def test_fetch_metadata_without_database_alias_key(
-    mock_run_query: Any, handler: BaseSQLHandler
-):
+async def test_fetch_metadata_without_database_alias_key(handler: BaseSQLHandler):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
     import pandas as pd
 
-    mock_run_query.return_value = pd.DataFrame(data)
+    handler.sql_client.get_results = AsyncMock(return_value=pd.DataFrame(data))
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -133,17 +131,16 @@ async def test_fetch_metadata_without_database_alias_key(
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    mock_run_query.assert_called_once_with()
+    handler.sql_client.get_results.assert_called_once_with(
+        "SELECT * FROM information_schema.tables"
+    )
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
-async def test_fetch_metadata_with_result_keys(
-    mock_run_query: Any, handler: BaseSQLHandler
-):
+async def test_fetch_metadata_with_result_keys(handler: BaseSQLHandler):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
     import pandas as pd
 
-    mock_run_query.return_value = pd.DataFrame(data)
+    handler.sql_client.get_results = AsyncMock(return_value=pd.DataFrame(data))
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -156,14 +153,15 @@ async def test_fetch_metadata_with_result_keys(
 
     # Assertions
     assert result == [{"DATABASE": "test_db", "SCHEMA": "test_schema"}]
-    mock_run_query.assert_called_once_with()
+    handler.sql_client.get_results.assert_called_once_with(
+        "SELECT * FROM information_schema.tables"
+    )
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
-async def test_fetch_metadata_with_error(
-    mock_run_query: AsyncMock, handler: BaseSQLHandler
-):
-    mock_run_query.side_effect = Exception("Simulated query failure")
+async def test_fetch_metadata_with_error(handler: BaseSQLHandler):
+    handler.sql_client.get_results = AsyncMock(
+        side_effect=Exception("Simulated query failure")
+    )
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -175,7 +173,9 @@ async def test_fetch_metadata_with_error(
         await handler.prepare_metadata()
 
     # Assertions
-    mock_run_query.assert_called_once_with()
+    handler.sql_client.get_results.assert_called_once_with(
+        "SELECT * FROM information_schema.tables"
+    )
 
 
 @pytest.mark.asyncio

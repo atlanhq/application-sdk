@@ -146,6 +146,44 @@ except Exception as e:
     # Don't re-raise for non-critical operations
 ```
 
+## Valid Exception Swallowing in This Codebase
+
+The following patterns are acceptable and used in the codebase:
+
+### **✅ VALID: Signal Handlers and Cleanup Operations**
+```python
+# From observability.py - signal handler cleanup
+except Exception as e:
+    logging.error(f"Error during signal handler flush: {e}")
+    # Don't re-raise - cleanup failures shouldn't crash the application
+```
+
+### **✅ VALID: Observability Operations (Metrics, Traces, Events)**
+```python
+# From observability_decorator.py - trace recording
+try:
+    traces.record_trace(...)
+except Exception as trace_error:
+    logger.error(f"Failed to record trace: {str(trace_error)}")
+    # Don't re-raise - observability failures shouldn't break business logic
+
+# From interceptors/events.py - event publishing
+except Exception as publish_error:
+    logger.warning(f"Failed to publish workflow end event: {publish_error}")
+    # Don't re-raise - event publishing is non-critical
+```
+
+### **✅ VALID: Cleanup in Finally Blocks**
+```python
+# From interceptors/cleanup.py - workflow cleanup
+finally:
+    try:
+        await workflow.execute_activity(cleanup, ...)
+    except Exception as e:
+        logger.warning(f"Failed to cleanup artifacts: {e}")
+        # Don't re-raise - cleanup failures shouldn't fail the workflow
+```
+
 ## Module-Specific Guidelines
 
 ### **Handlers (`application_sdk/handlers/`)**
@@ -153,15 +191,11 @@ except Exception as e:
 - **Include operation context** in error messages
 - **Use specific exception types** for different error scenarios
 
-### **Outputs (`application_sdk/outputs/`)**
-- **Critical**: Re-raise exceptions for data writing operations
-- **Non-critical**: May swallow exceptions for metrics/logging operations
-- **Resource cleanup**: Ensure files/connections are properly closed
-
-### **Inputs (`application_sdk/inputs/`)**
-- **Critical**: Re-raise exceptions for data reading operations
+### **I/O Module (`application_sdk/io/`)**
+- **Critical**: Re-raise exceptions for data reading/writing operations
 - **Include file/connection context** in error messages
 - **Handle specific I/O exceptions** appropriately
+- **Resource cleanup**: Ensure files/connections are properly closed
 
 ### **Observability (`application_sdk/observability/`)**
 - **Non-critical**: May swallow exceptions to prevent cascading failures

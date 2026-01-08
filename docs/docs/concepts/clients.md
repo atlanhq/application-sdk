@@ -47,7 +47,7 @@ Both SQL client classes are typically **subclassed** for specific database types
 3.  **Executing Queries (`run_query` method):**
     *   Takes a SQL query string and optional `batch_size`.
     *   Executes the query using the established connection.
-    *   Yields results in batches (lists of dictionaries). This method is useful for direct execution but often less used than `SQLQueryInput` within activities.
+    *   Yields results in batches (lists of dictionaries).
 
 ### Example `DB_CONFIG`
 
@@ -66,24 +66,19 @@ class SnowflakeClient(BaseSQLClient):
     )
 ```
 
-### Interaction with `SQLQueryInput` and Activities
+### Interaction with Activities
 
-While `BaseSQLClient` establishes the connection and holds the SQLAlchemy engine, the actual execution of queries *within standard activities* (like those for metadata or query extraction) is often delegated to `SQLQueryInput` (from `application_sdk.inputs`).
+`BaseSQLClient` establishes the connection and holds the SQLAlchemy engine, which is used directly by activities to execute queries.
 
-*   **Role of `SQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine to other components.
-*   **Role of `SQLQueryInput`:**
-    *   Takes the `engine` from the initialized `SQLClient` instance and a specific `query` string as input.
-    *   Handles the execution of that single query against the provided engine.
-    *   Provides methods like `get_daft_dataframe()`, `get_dataframe()`, `get_batched_dataframe()` to return the results conveniently as Daft or Pandas DataFrames, abstracting away the details of cursor handling and batch fetching for the activity developer.
+*   **Role of `SQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine and the `run_query` method to other components.
 *   **Role of Activities:**
     *   Activities (e.g., `fetch_tables`, `fetch_columns` in `BaseSQLMetadataExtractionActivities`) orchestrate the process.
-    *   They retrieve the initialized `SQLClient` (and its `engine`) from the shared activity state.
-    *   They instantiate `SQLQueryInput` with the client's engine and the appropriate SQL query (often defined as a class attribute on the activity or loaded from a file).
-    *   They call methods on `SQLQueryInput` (like `get_daft_dataframe`) to get the data.
-    *   They process the resulting DataFrame (e.g., save it to Parquet, transform it).
+    *   They retrieve the initialized `SQLClient` from the shared activity state.
+    *   They call methods on the `SQLClient` (like `run_query`) to execute queries and get the data.
+    *   They process the resulting data (e.g., save it to Parquet, transform it).
 
 **Simplified Flow:**
-`Activity` -> gets `SQLClient` from state -> creates `SQLQueryInput(engine=sql_client.engine, query=...)` -> calls `sql_query_input.get_daft_dataframe()` -> receives DataFrame -> processes DataFrame.
+`Activity` -> gets `SQLClient` from state -> calls `sql_client.run_query(query=...)` -> receives data -> processes data.
 
 ## Base Client (`base.py`)
 
@@ -254,6 +249,6 @@ if __name__ == "__main__":
 
 The `clients` module abstracts interactions with external services.
 
-`SQLClient` subclasses (configured via `DB_CONFIG`) provide the database engine, which is then typically used by `SQLQueryInput` within activities to fetch data as DataFrames. `TemporalWorkflowClient` (obtained via `get_workflow_client`) manages interactions with the Temporal service for workflow lifecycle management.
+`SQLClient` subclasses (configured via `DB_CONFIG`) provide the database engine and query execution methods, which are used by activities to fetch data. `TemporalWorkflowClient` (obtained via `get_workflow_client`) manages interactions with the Temporal service for workflow lifecycle management.
 
 `BaseClient` provides a foundation for non-SQL data sources with HTTP request support through the `execute_http_get_request` and `execute_http_post_request` methods. The class also allows for custom retry logic to be configured through the `http_retry_transport` attribute which can be set to a `httpx.AsyncBaseTransport` instance, either through the `httpx` default transport or a custom transport from libraries like `httpx-retries`.

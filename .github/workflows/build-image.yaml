@@ -1,0 +1,98 @@
+name: Application SDK Docker Image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'Dockerfile'
+
+permissions:
+  contents: read
+  packages: write
+  actions: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.get_branch.outputs.branch }}
+      version: ${{ steps.get_version.outputs.version }}
+      lowercase_branch: ${{ steps.get_lowercase_branch.outputs.lowercase_branch }}
+      repository_name: ${{ steps.get_repo_name.outputs.repository_name }}
+    steps:
+      - uses: actions/checkout@v4.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Get branch name
+        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+        id: get_branch
+
+      - name: Get repository name
+        run: echo "repository_name=`echo "$GITHUB_REPOSITORY" | awk -F / '{print $2}' | sed -e "s/:refs//"`" >> $GITHUB_OUTPUT
+        id: get_repo_name
+        shell: bash
+
+      - name: Get version from pyproject.toml
+        run: echo "version=$(awk -F'"' '/^version = / {print $2}' pyproject.toml)" >> $GITHUB_OUTPUT
+        id: get_version
+
+      - name: Lowercase branch name
+        run: echo "lowercase_branch=$(echo '${{ steps.get_branch.outputs.branch }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+        id: get_lowercase_branch
+
+  push-to-ghcr:
+    runs-on: ubuntu-latest
+    needs: prepare
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-ghcr
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: $GITHUB_ACTOR
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Log in to Chainguard Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: cgr.dev
+          username: ${{ secrets.CHAINGUARD_USERNAME }}
+          password: ${{ secrets.CHAINGUARD_PASSWORD }}
+
+      - name: Build and push docker image to GHCR
+        id: ghcr_docker_build
+        uses: ./.github/actions/secure-build-push-apps
+        with:
+          branch: ${{ github.ref_name }}
+          snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
+          snyk-ghcr-integration-id: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
+          snyk-docker-integration-id: ${{ secrets.SNYK_DOCKER_INTEGRATION_ID }}
+          snyk-integration-id: ${{ secrets.SNYK_INTEGRATION_ID }}
+          snyk-org-id: ${{ secrets.SNYK_ORG_ID }}
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/atlanhq/${{ github.event.repository.name }}-${{ needs.prepare.outputs.lowercase_branch }}:latest
+            ghcr.io/atlanhq/${{ github.event.repository.name }}-${{ needs.prepare.outputs.lowercase_branch }}:${{ needs.prepare.outputs.version }}
+          build-args: |
+            ACCESS_TOKEN_USR=$GITHUB_ACTOR
+            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+        env:
+          DOCKER_CLIENT_TIMEOUT: 600
+          COMPOSE_HTTP_TIMEOUT: 600

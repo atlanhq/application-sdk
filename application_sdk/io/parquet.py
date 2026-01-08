@@ -1,21 +1,34 @@
 import inspect
 import os
 import shutil
-from enum import Enum
-from typing import TYPE_CHECKING, AsyncGenerator, Generator, List, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    AsyncGenerator,
+    AsyncIterator,
+    Generator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 from temporalio import activity
 
 from application_sdk.activities.common.utils import get_object_store_prefix
-from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.constants import (
     DAPR_MAX_GRPC_MESSAGE_LENGTH,
     ENABLE_ATLAN_UPLOAD,
     UPSTREAM_OBJECT_STORE_NAME,
 )
+from application_sdk.io import DataframeType, Reader, WriteMode, Writer
+from application_sdk.io.utils import (
+    PARQUET_FILE_EXTENSION,
+    download_files,
+    is_empty_dataframe,
+    path_gen,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
-from application_sdk.outputs import Output
 from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
@@ -26,23 +39,370 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-class WriteMode(Enum):
-    """Enumeration of write modes for Parquet output operations."""
+class ParquetFileReader(Reader):
+    """Parquet File Reader class to read data from Parquet files using daft and pandas.
 
-    APPEND = "append"
-    OVERWRITE = "overwrite"
-    OVERWRITE_PARTITIONS = "overwrite-partitions"
+    Supports reading both single files and directories containing multiple parquet files.
+    Follows Python's file I/O pattern with read/close semantics and supports context managers.
+
+    Attributes:
+        path (str): Path to parquet file or directory containing parquet files.
+        chunk_size (int): Number of rows per batch.
+        buffer_size (int): Number of rows per batch for daft.
+        file_names (Optional[List[str]]): List of specific file names to read.
+        dataframe_type (DataframeType): Type of dataframe to return (pandas or daft).
+        cleanup_on_close (bool): Whether to clean up downloaded temp files on close.
+
+    Example:
+        Using context manager (recommended)::
+
+            async with ParquetFileReader(path="/data/input") as reader:
+                df = await reader.read()
+            # close() called automatically, temp files cleaned up
+
+        Reading in batches::
+
+            async with ParquetFileReader(path="/data/input", chunk_size=50000) as reader:
+                async for batch in reader.read_batches():
+                    process(batch)
+
+        Using close() explicitly::
+
+            reader = ParquetFileReader(path="/data/input")
+            df = await reader.read()
+            await reader.close()  # Clean up downloaded temp files
+    """
+
+    def __init__(
+        self,
+        path: str,
+        chunk_size: Optional[int] = 100000,
+        buffer_size: Optional[int] = 5000,
+        file_names: Optional[List[str]] = None,
+        dataframe_type: DataframeType = DataframeType.pandas,
+        cleanup_on_close: bool = True,
+    ):
+        """Initialize the Parquet input class.
+
+        Args:
+            path (str): Path to parquet file or directory containing parquet files.
+                It accepts both types of paths:
+                local path or object store path
+                Wildcards are not supported.
+            chunk_size (int): Number of rows per batch. Defaults to 100000.
+            buffer_size (int): Number of rows per batch. Defaults to 5000.
+            file_names (Optional[List[str]]): List of file names to read. Defaults to None.
+            dataframe_type (DataframeType): Type of dataframe to read. Defaults to DataframeType.pandas.
+            cleanup_on_close (bool): Whether to clean up downloaded temp files on close. Defaults to True.
+
+        Raises:
+            ValueError: When path is not provided or when single file path is combined with file_names
+        """
+
+        # Validate that single file path and file_names are not both specified
+        if path.endswith(PARQUET_FILE_EXTENSION) and file_names:
+            raise ValueError(
+                f"Cannot specify both a single file path ('{path}') and file_names filter. "
+                f"Either provide a directory path with file_names, or specify the exact file path without file_names."
+            )
+
+        self.path = path
+        self.chunk_size = chunk_size
+        self.buffer_size = buffer_size
+        self.file_names = file_names
+        self.dataframe_type = dataframe_type
+        self.cleanup_on_close = cleanup_on_close
+        self._is_closed = False
+        self._downloaded_files: List[str] = []
+
+    async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
+        """Read the data from the parquet files and return as a single DataFrame.
+
+        Returns:
+            Union[pd.DataFrame, daft.DataFrame]: Combined dataframe from parquet files.
+
+        Raises:
+            ValueError: If the reader has been closed or dataframe_type is unsupported.
+        """
+        if self._is_closed:
+            raise ValueError("Cannot read from a closed reader")
+
+        if self.dataframe_type == DataframeType.pandas:
+            return await self._get_dataframe()
+        elif self.dataframe_type == DataframeType.daft:
+            return await self._get_daft_dataframe()
+        else:
+            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+
+    def read_batches(
+        self,
+    ) -> Union[
+        AsyncIterator["pd.DataFrame"],
+        AsyncIterator["daft.DataFrame"],
+    ]:
+        """Read the data from the parquet files and return as batched DataFrames.
+
+        Returns:
+            Union[AsyncIterator[pd.DataFrame], AsyncIterator[daft.DataFrame]]:
+                Async iterator of DataFrames.
+
+        Raises:
+            ValueError: If the reader has been closed or dataframe_type is unsupported.
+        """
+        if self._is_closed:
+            raise ValueError("Cannot read from a closed reader")
+
+        if self.dataframe_type == DataframeType.pandas:
+            return self._get_batched_dataframe()
+        elif self.dataframe_type == DataframeType.daft:
+            return self._get_batched_daft_dataframe()
+        else:
+            raise ValueError(f"Unsupported dataframe_type: {self.dataframe_type}")
+
+    async def _get_dataframe(self) -> "pd.DataFrame":
+        """Read data from parquet file(s) and return as pandas DataFrame.
+
+        Returns:
+            pd.DataFrame: Combined dataframe from specified parquet files
+
+        Raises:
+            ValueError: When no valid path can be determined or no matching files found
+            Exception: When reading parquet files fails
+
+        Example transformation:
+        Input files:
+        +------------------+
+        | file1.parquet    |
+        | file2.parquet    |
+        | file3.parquet    |
+        +------------------+
+
+        With file_names=["file1.parquet", "file3.parquet"]:
+        +-------+-------+-------+
+        | col1  | col2  | col3  |
+        +-------+-------+-------+
+        | val1  | val2  | val3  |  # from file1.parquet
+        | val7  | val8  | val9  |  # from file3.parquet
+        +-------+-------+-------+
+
+        Transformations:
+        - Only specified files are read and combined
+        - Column schemas must be compatible across files
+        - Only reads files in the specified directory
+        """
+        try:
+            import pandas as pd
+
+            # Ensure files are available (local or downloaded)
+            parquet_files = await download_files(
+                self.path, PARQUET_FILE_EXTENSION, self.file_names
+            )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(parquet_files)
+            logger.info(f"Reading {len(parquet_files)} parquet files")
+
+            return pd.concat(
+                (pd.read_parquet(parquet_file) for parquet_file in parquet_files),
+                ignore_index=True,
+            )
+        except Exception as e:
+            logger.error(f"Error reading data from parquet file(s): {str(e)}")
+            raise
+
+    async def _get_batched_dataframe(
+        self,
+    ) -> AsyncIterator["pd.DataFrame"]:
+        """Read data from parquet file(s) in batches as pandas DataFrames.
+
+        Returns:
+            AsyncIterator[pd.DataFrame]: Async iterator of pandas dataframes
+
+        Raises:
+            ValueError: When no parquet files found locally or in object store
+            Exception: When reading parquet files fails
+
+        Example transformation:
+        Input files:
+        +------------------+
+        | file1.parquet    |
+        | file2.parquet    |
+        | file3.parquet    |
+        +------------------+
+
+        With file_names=["file1.parquet", "file2.parquet"] and chunk_size=2:
+        Batch 1:
+        +-------+-------+
+        | col1  | col2  |
+        +-------+-------+
+        | val1  | val2  |  # from file1.parquet
+        | val3  | val4  |  # from file1.parquet
+        +-------+-------+
+
+        Batch 2:
+        +-------+-------+
+        | col1  | col2  |
+        +-------+-------+
+        | val5  | val6  |  # from file2.parquet
+        | val7  | val8  |  # from file2.parquet
+        +-------+-------+
+
+        Transformations:
+        - Only specified files are combined then split into chunks
+        - Each batch is a separate DataFrame
+        - Only reads files in the specified directory
+        """
+        try:
+            import pandas as pd
+
+            # Ensure files are available (local or downloaded)
+            parquet_files = await download_files(
+                self.path, PARQUET_FILE_EXTENSION, self.file_names
+            )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(parquet_files)
+            logger.info(f"Reading {len(parquet_files)} parquet files in batches")
+
+            # Process each file individually to maintain memory efficiency
+            for parquet_file in parquet_files:
+                df = pd.read_parquet(parquet_file)
+                for i in range(0, len(df), self.chunk_size):
+                    yield df.iloc[i : i + self.chunk_size]  # type: ignore
+        except Exception as e:
+            logger.error(
+                f"Error reading data from parquet file(s) in batches: {str(e)}"
+            )
+            raise
+
+    async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
+        """Read data from parquet file(s) and return as daft DataFrame.
+
+        Returns:
+            daft.DataFrame: Combined daft dataframe from specified parquet files
+
+        Raises:
+            ValueError: When no parquet files found locally or in object store
+            Exception: When reading parquet files fails
+
+        Example transformation:
+        Input files:
+        +------------------+
+        | file1.parquet    |
+        | file2.parquet    |
+        | file3.parquet    |
+        +------------------+
+
+        With file_names=["file1.parquet", "file3.parquet"]:
+        +-------+-------+-------+
+        | col1  | col2  | col3  |
+        +-------+-------+-------+
+        | val1  | val2  | val3  |  # from file1.parquet
+        | val7  | val8  | val9  |  # from file3.parquet
+        +-------+-------+-------+
+
+        Transformations:
+        - Only specified parquet files combined into single daft DataFrame
+        - Lazy evaluation for better performance
+        - Column schemas must be compatible across files
+        """
+        try:
+            import daft  # type: ignore
+
+            # Ensure files are available (local or downloaded)
+            parquet_files = await download_files(
+                self.path, PARQUET_FILE_EXTENSION, self.file_names
+            )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(parquet_files)
+            logger.info(f"Reading {len(parquet_files)} parquet files with daft")
+
+            # Use the discovered/downloaded files directly
+            return daft.read_parquet(parquet_files)
+        except Exception as e:
+            logger.error(
+                f"Error reading data from parquet file(s) using daft: {str(e)}"
+            )
+            raise
+
+    async def _get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # type: ignore
+        """Get batched daft dataframe from parquet file(s).
+
+        Returns:
+            AsyncIterator[daft.DataFrame]: An async iterator of daft DataFrames, each containing
+            a batch of data from individual parquet files
+
+        Raises:
+            ValueError: When no parquet files found locally or in object store
+            Exception: When reading parquet files fails
+
+        Example transformation:
+        Input files:
+        +------------------+
+        | file1.parquet    |
+        | file2.parquet    |
+        | file3.parquet    |
+        +------------------+
+
+        With file_names=["file1.parquet", "file3.parquet"]:
+        Batch 1 (file1.parquet):
+        +-------+-------+
+        | col1  | col2  |
+        +-------+-------+
+        | val1  | val2  |
+        | val3  | val4  |
+        +-------+-------+
+
+        Batch 2 (file3.parquet):
+        +-------+-------+
+        | col1  | col2  |
+        +-------+-------+
+        | val7  | val8  |
+        | val9  | val10 |
+        +-------+-------+
+
+        Transformations:
+        - Each specified file becomes a separate daft DataFrame batch
+        - Lazy evaluation for better performance
+        - Files processed individually for memory efficiency
+        """
+        try:
+            import daft  # type: ignore
+
+            # Ensure files are available (local or downloaded)
+            parquet_files = await download_files(
+                self.path, PARQUET_FILE_EXTENSION, self.file_names
+            )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(parquet_files)
+            logger.info(f"Reading {len(parquet_files)} parquet files as daft batches")
+
+            # Create a lazy dataframe without loading data into memory
+            lazy_df = daft.read_parquet(parquet_files)
+
+            # Get total count efficiently
+            total_rows = lazy_df.count_rows()
+
+            # Yield chunks without loading everything into memory
+            for offset in range(0, total_rows, self.buffer_size):
+                chunk = lazy_df.offset(offset).limit(self.buffer_size)
+                yield chunk
+
+            del lazy_df
+
+        except Exception as error:
+            logger.error(
+                f"Error reading data from parquet file(s) in batches using daft: {error}"
+            )
+            raise
 
 
-class ParquetOutput(Output):
+class ParquetFileWriter(Writer):
     """Output handler for writing data to Parquet files.
 
     This class handles writing DataFrames to Parquet files with support for chunking
     and automatic uploading to object store.
 
     Attributes:
-        output_path (str): Base path where Parquet files will be written.
-        output_suffix (str): Suffix for output files.
+        path (str): Base path where Parquet files will be written.
         typename (Optional[str]): Type name of the entity e.g database, schema, table.
         chunk_size (int): Maximum number of records per chunk.
         total_record_count (int): Total number of records processed.
@@ -54,29 +414,26 @@ class ParquetOutput(Output):
         use_consolidation (bool): Whether to use consolidation.
     """
 
-    _EXTENSION = ".parquet"
-
     def __init__(
         self,
-        output_path: str = "",
-        output_suffix: str = "",
+        path: str,
         typename: Optional[str] = None,
         chunk_size: Optional[int] = 100000,
-        buffer_size: int = 5000,
-        total_record_count: int = 0,
-        chunk_count: int = 0,
-        chunk_part: int = 0,
+        buffer_size: Optional[int] = 5000,
+        total_record_count: Optional[int] = 0,
+        chunk_count: Optional[int] = 0,
+        chunk_part: Optional[int] = 0,
         chunk_start: Optional[int] = None,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
-        retain_local_copy: bool = False,
-        use_consolidation: bool = False,
+        retain_local_copy: Optional[bool] = False,
+        use_consolidation: Optional[bool] = False,
+        dataframe_type: DataframeType = DataframeType.pandas,
     ):
         """Initialize the Parquet output handler.
 
         Args:
-            output_path (str): Base path where Parquet files will be written.
-            output_suffix (str): Suffix for output files.
+            path (str): Base path where Parquet files will be written.
             typename (Optional[str], optional): Type name of the entity e.g database, schema, table.
             chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
             total_record_count (int, optional): Initial total record count. Defaults to 0.
@@ -91,9 +448,10 @@ class ParquetOutput(Output):
                 Defaults to False.
             use_consolidation (bool, optional): Whether to use consolidation.
                 Defaults to False.
+            dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
-        self.output_path = output_path
-        self.output_suffix = output_suffix
+        self.extension = PARQUET_FILE_EXTENSION
+        self.path = path
         self.typename = typename
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
@@ -112,6 +470,9 @@ class ParquetOutput(Output):
         self.partitions = []
         self.metrics = get_metrics()
         self.retain_local_copy = retain_local_copy
+        self.dataframe_type = dataframe_type
+        self._is_closed = False
+        self._statistics = None
 
         # Consolidation-specific attributes
         # Use consolidation to efficiently write parquet files in buffered manner
@@ -128,13 +489,14 @@ class ParquetOutput(Output):
         if self.chunk_start:
             self.chunk_count = self.chunk_start + self.chunk_count
 
+        if not self.path:
+            raise ValueError("path is required")
         # Create output directory
-        self.output_path = os.path.join(self.output_path, self.output_suffix)
         if self.typename:
-            self.output_path = os.path.join(self.output_path, self.typename)
-        os.makedirs(self.output_path, exist_ok=True)
+            self.path = os.path.join(self.path, self.typename)
+        os.makedirs(self.path, exist_ok=True)
 
-    async def write_batched_dataframe(
+    async def _write_batched_dataframe(
         self,
         batched_dataframe: Union[
             AsyncGenerator["pd.DataFrame", None], Generator["pd.DataFrame", None, None]
@@ -155,7 +517,7 @@ class ParquetOutput(Output):
         """
         if not self.use_consolidation:
             # Fallback to base class implementation
-            await super().write_batched_dataframe(batched_dataframe)
+            await super()._write_batched_dataframe(batched_dataframe)
             return
 
         try:
@@ -186,12 +548,13 @@ class ParquetOutput(Output):
             await self._cleanup_temp_folders()  # Cleanup on error
             raise
 
-    async def write_daft_dataframe(
+    async def _write_daft_dataframe(
         self,
         dataframe: "daft.DataFrame",  # noqa: F821
         partition_cols: Optional[List] = None,
-        write_mode: Union[WriteMode, str] = WriteMode.APPEND,
+        write_mode: Union[WriteMode, str] = WriteMode.APPEND.value,
         morsel_size: int = 100_000,
+        **kwargs,
     ):
         """Write a daft DataFrame to Parquet files and upload to object store.
 
@@ -234,7 +597,7 @@ class ParquetOutput(Output):
             ):
                 # Daft automatically handles file splitting and naming
                 result = dataframe.write_parquet(
-                    root_dir=self.output_path,
+                    root_dir=self.path,
                     write_mode=write_mode.value,
                     partition_cols=partition_cols,
                 )
@@ -267,11 +630,11 @@ class ParquetOutput(Output):
                 # Delete the directory from object store
                 try:
                     await ObjectStore.delete_prefix(
-                        prefix=get_object_store_prefix(self.output_path)
+                        prefix=get_object_store_prefix(self.path)
                     )
                 except FileNotFoundError as e:
                     logger.info(
-                        f"No files found under prefix {get_object_store_prefix(self.output_path)}: {str(e)}"
+                        f"No files found under prefix {get_object_store_prefix(self.path)}: {str(e)}"
                     )
             for path in file_paths:
                 if ENABLE_ATLAN_UPLOAD:
@@ -311,20 +674,24 @@ class ParquetOutput(Output):
         Returns:
             str: The full path of the output file.
         """
-        return self.output_path
+        return self.path
 
     # Consolidation helper methods
 
     def _get_temp_folder_path(self, folder_index: int) -> str:
         """Generate temp folder path consistent with existing structure."""
-        temp_base_path = os.path.join(self.output_path, "temp_accumulation")
+        temp_base_path = os.path.join(self.path, "temp_accumulation")
         return os.path.join(temp_base_path, f"folder-{folder_index}")
 
     def _get_consolidated_file_path(self, folder_index: int, chunk_part: int) -> str:
         """Generate final consolidated file path using existing path_gen logic."""
         return os.path.join(
-            self.output_path,
-            self.path_gen(chunk_count=folder_index, chunk_part=chunk_part),
+            self.path,
+            path_gen(
+                chunk_count=folder_index,
+                chunk_part=chunk_part,
+                extension=self.extension,
+            ),
         )
 
     async def _accumulate_dataframe(self, dataframe: "pd.DataFrame"):
@@ -374,14 +741,14 @@ class ParquetOutput(Output):
             [
                 f
                 for f in os.listdir(self.current_temp_folder_path)
-                if f.endswith(".parquet")
+                if f.endswith(self.extension)
             ]
         )
-        chunk_file_name = f"chunk-{existing_files}.parquet"
+        chunk_file_name = f"chunk-{existing_files}{self.extension}"
         chunk_file_path = os.path.join(self.current_temp_folder_path, chunk_file_name)
 
         # Write chunk using existing write_chunk method
-        await self.write_chunk(chunk, chunk_file_path)
+        await self._write_chunk(chunk, chunk_file_path)
 
     async def _consolidate_current_folder(self):
         """Consolidate current temp folder using Daft."""
@@ -392,7 +759,7 @@ class ParquetOutput(Output):
             import daft
 
             # Read all parquet files in temp folder
-            pattern = os.path.join(self.current_temp_folder_path, "*.parquet")
+            pattern = os.path.join(self.current_temp_folder_path, f"*{self.extension}")
             daft_df = daft.read_parquet(pattern)
             partitions = 0
 
@@ -408,7 +775,7 @@ class ParquetOutput(Output):
                 result_dict = result.to_pydict()
                 partitions = len(result_dict["path"])
                 for i, file_path in enumerate(result_dict["path"]):
-                    if file_path.endswith(".parquet"):
+                    if file_path.endswith(self.extension):
                         consolidated_file_path = self._get_consolidated_file_path(
                             folder_index=self.chunk_count,
                             chunk_part=i,
@@ -462,7 +829,7 @@ class ParquetOutput(Output):
                     shutil.rmtree(temp_folder, ignore_errors=True)
 
             # Clean up base temp directory if it exists and is empty
-            temp_base_path = os.path.join(self.output_path, "temp_accumulation")
+            temp_base_path = os.path.join(self.path, "temp_accumulation")
             if os.path.exists(temp_base_path) and not os.listdir(temp_base_path):
                 os.rmdir(temp_base_path)
 
@@ -475,7 +842,7 @@ class ParquetOutput(Output):
         except Exception as e:
             logger.warning(f"Error cleaning up temp folders: {str(e)}")
 
-    async def write_chunk(self, chunk: "pd.DataFrame", file_name: str):
+    async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
         """Write a chunk to a Parquet file.
 
         This method writes a chunk to a Parquet file and uploads the file to the object store.
