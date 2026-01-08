@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.outputs.json import JsonOutput
+from application_sdk.io.json import JsonFileWriter
 from application_sdk.test_utils.hypothesis.strategies.outputs.json_output import (
     chunk_size_strategy,
     dataframe_strategy,
@@ -31,25 +31,20 @@ def base_output_path(tmp_path_factory: pytest.TempPathFactory) -> str:
 async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
     # Create a safe output path by joining base_output_path with config's output_path
     safe_path = str(Path(base_output_path) / config["output_path"])
-    json_output = JsonOutput(  # type: ignore
-        output_path=safe_path,
-        output_suffix=config["output_suffix"],
-        output_prefix=config["output_prefix"],
+    json_output = JsonFileWriter(  # type: ignore
+        path=safe_path,
         chunk_size=config["chunk_size"],
     )
 
-    assert json_output.output_path.endswith(config["output_suffix"])
-    assert json_output.output_prefix == config["output_prefix"]
+    assert json_output.path == safe_path
     assert json_output.chunk_size == config["chunk_size"]
-    assert os.path.exists(json_output.output_path)
+    assert os.path.exists(json_output.path)
 
 
 @pytest.mark.asyncio
-async def test_write_dataframe_empty(base_output_path: str) -> None:
-    json_output = JsonOutput(  # type: ignore
-        output_suffix="tests/raw",
-        output_path=base_output_path,
-        output_prefix="test_prefix",
+async def test_write_empty(base_output_path: str) -> None:
+    json_output = JsonFileWriter(  # type: ignore
+        path=os.path.join(base_output_path, "tests", "raw"),
         chunk_size=100000,
         typename=None,
         chunk_count=0,
@@ -57,7 +52,7 @@ async def test_write_dataframe_empty(base_output_path: str) -> None:
         chunk_start=None,
     )
     dataframe = pd.DataFrame()
-    await json_output.write_dataframe(dataframe)
+    await json_output.write(dataframe)
     assert json_output.chunk_count == 0
     assert json_output.total_record_count == 0
 
@@ -68,16 +63,12 @@ async def test_write_dataframe_empty(base_output_path: str) -> None:
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(df=dataframe_strategy())  # type: ignore
 @pytest.mark.asyncio
-async def test_write_dataframe_single_chunk(
-    base_output_path: str, df: pd.DataFrame
-) -> None:
+async def test_write_single_chunk(base_output_path: str, df: pd.DataFrame) -> None:
     with patch(
         "application_sdk.services.objectstore.ObjectStore.upload_file"
     ) as mock_push:
-        json_output = JsonOutput(  # type: ignore
-            output_suffix="tests/raw",
-            output_path=base_output_path,
-            output_prefix="test_prefix",
+        json_output = JsonFileWriter(  # type: ignore
+            path=os.path.join(base_output_path, "tests", "raw"),
             chunk_size=len(df)
             + 1,  # Ensure single chunk by making chunk size larger than df
             typename=None,
@@ -85,12 +76,12 @@ async def test_write_dataframe_single_chunk(
             total_record_count=0,
             chunk_start=None,
         )
-        await json_output.write_dataframe(df)
+        await json_output.write(df)
 
         assert json_output.chunk_count == (1 if not df.empty else 0)
         assert json_output.total_record_count == len(df)
         if not df.empty:
-            assert os.path.exists(f"{json_output.output_path}/1.json")
+            assert os.path.exists(f"{json_output.path}/1.json")
             mock_push.assert_called_once()
         else:
             mock_push.assert_not_called()
@@ -102,23 +93,21 @@ async def test_write_dataframe_single_chunk(
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(df=dataframe_strategy(), chunk_size=chunk_size_strategy)  # type: ignore
 @pytest.mark.asyncio
-async def test_write_dataframe_multiple_chunks(
+async def test_write_multiple_chunks(
     base_output_path: str, df: pd.DataFrame, chunk_size: int
 ) -> None:
     with patch(
         "application_sdk.services.objectstore.ObjectStore.upload_file"
     ) as mock_push:
-        json_output = JsonOutput(  # type: ignore
-            output_suffix="tests/raw",
-            output_path=base_output_path,
-            output_prefix="test_prefix",
+        json_output = JsonFileWriter(  # type: ignore
+            path=os.path.join(base_output_path, "tests", "raw"),
             chunk_size=chunk_size,
             typename=None,
             chunk_count=0,
             total_record_count=0,
             chunk_start=None,
         )
-        await json_output.write_dataframe(df)
+        await json_output.write(df)
 
         expected_chunks = (
             (len(df) + chunk_size - 1) // chunk_size if not df.empty else 0
@@ -126,7 +115,7 @@ async def test_write_dataframe_multiple_chunks(
 
         # Check if the files are created on the path json_output.output_path
         for i in range(1, expected_chunks + 1):
-            assert os.path.exists(f"{json_output.output_path}/{i}.json")
+            assert os.path.exists(f"{json_output.path}/{i}.json")
 
         assert json_output.chunk_count == expected_chunks
         assert json_output.total_record_count == len(df)
@@ -134,11 +123,9 @@ async def test_write_dataframe_multiple_chunks(
 
 
 @pytest.mark.asyncio
-async def test_write_dataframe_error(base_output_path: str) -> None:
-    json_output = JsonOutput(  # type: ignore
-        output_suffix="tests/raw",
-        output_path=base_output_path,
-        output_prefix="test_prefix",
+async def test_write_error(base_output_path: str) -> None:
+    json_output = JsonFileWriter(  # type: ignore
+        path=os.path.join(base_output_path, "tests", "raw"),
         chunk_size=100000,
         typename=None,
         chunk_count=0,
@@ -146,8 +133,8 @@ async def test_write_dataframe_error(base_output_path: str) -> None:
         chunk_start=None,
     )
     invalid_df = "not_a_dataframe"
-    with pytest.raises(AttributeError, match="'str' object has no attribute"):
-        await json_output.write_dataframe(invalid_df)  # type: ignore
+    with pytest.raises(TypeError, match="Unsupported data type: str"):
+        await json_output.write(invalid_df)  # type: ignore
     # Verify counts remain unchanged after error
     assert json_output.chunk_count == 0
     assert json_output.total_record_count == 0

@@ -26,18 +26,18 @@ from application_sdk.constants import (
     WORKFLOW_PORT,
     WORKFLOW_TLS_ENABLED,
 )
-from application_sdk.events.models import (
-    ApplicationEventNames,
-    Event,
-    EventTypes,
-    WorkerTokenRefreshEventData,
-)
 from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
 from application_sdk.interceptors.correlation_context import (
     CorrelationContextInterceptor,
 )
 from application_sdk.interceptors.events import EventInterceptor, publish_event
 from application_sdk.interceptors.lock import RedisLockInterceptor
+from application_sdk.interceptors.models import (
+    ApplicationEventNames,
+    Event,
+    EventTypes,
+    WorkerTokenRefreshEventData,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.eventstore import EventStore
 from application_sdk.services.secretstore import SecretStore
