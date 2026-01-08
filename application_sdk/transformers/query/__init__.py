@@ -220,9 +220,9 @@ class QueryBasedTransformer(TransformerInterface):
 
         # Handle columns at this level
         if "columns" in level:
-            logger.info(f"Processing columns at level: {level['columns']}")
+            logger.debug(f"Processing columns at level: {level['columns']}")
             for full_col, suffix in level["columns"]:
-                logger.info(f"Processing column: {full_col} -> {suffix}")
+                logger.debug(f"Processing column: {full_col} -> {suffix}")
                 field = daft.col(full_col).alias(suffix)
                 struct_fields.append(field)
                 # Add to non_null check by negating is_null()
@@ -231,7 +231,7 @@ class QueryBasedTransformer(TransformerInterface):
         # Handle nested levels
         for component, sub_level in level.items():
             if component != "columns":  # Skip the columns key
-                logger.info(f"Processing nested component: {component}")
+                logger.debug(f"Processing nested component: {component}")
                 nested_struct = self._build_struct(sub_level, component)
                 if nested_struct is not None:
                     struct_fields.append(nested_struct)
@@ -240,7 +240,7 @@ class QueryBasedTransformer(TransformerInterface):
 
         # Only create a struct if we have fields
         if struct_fields:
-            logger.info(f"Creating struct with {len(struct_fields)} fields")
+            logger.debug(f"Creating struct with {len(struct_fields)} fields")
             # Create the struct first
             struct = daft.struct(*struct_fields)
 
@@ -334,12 +334,12 @@ class QueryBasedTransformer(TransformerInterface):
             for col in standalone_columns:
                 new_columns.append(daft.col(col))
 
-            logger.info(f"path_groups: {path_groups}")
-            logger.info(f"standalone_columns: {standalone_columns}")
+            logger.debug(f"path_groups: {path_groups}")
+            logger.debug(f"standalone_columns: {standalone_columns}")
 
             # Build nested structs starting from the root level
             for prefix, level in path_groups.items():
-                logger.info(f"Building struct for prefix: {prefix}, level: {level}")
+                logger.debug(f"Building struct for prefix: {prefix}, level: {level}")
                 struct_expr = self._build_struct(level, prefix)
                 new_columns.append(struct_expr)
 

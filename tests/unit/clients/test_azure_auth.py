@@ -164,3 +164,23 @@ class TestAzureAuthProvider:
         except Exception as e:
             # If it fails, it should be due to actual credential validation, not missing keys
             assert "Missing required credential keys" not in str(e)
+
+    @pytest.mark.asyncio
+    async def test_extra_fields_ignored(self, auth_provider):
+        """Test that extra fields (like storage_account_name, network_config) are ignored by Pydantic validation."""
+        credentials = {
+            "tenant_id": "test_tenant_id",
+            "client_id": "test_client_id",
+            "client_secret": "test_client_secret",
+            "storage_account_name": "test_storage_account",
+            "network_config": {"some": "config"},
+            "azure_tenant_id": "another_tenant_id",  # This should be ignored, not validated
+        }
+
+        # This should not raise an error about extra fields
+        try:
+            await auth_provider._create_service_principal_credential(credentials)
+        except Exception as e:
+            # If it fails, it should be due to actual credential validation, not extra fields
+            assert "Extra inputs are not permitted" not in str(e)
+            assert "Missing required credential keys" not in str(e)

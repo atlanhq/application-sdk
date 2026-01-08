@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.clients.azure.client import (
-    AZURE_MANAGEMENT_API_ENDPOINT,
     AzureClient,
     HealthStatus,
     ServiceHealth,

@@ -29,10 +29,6 @@ Example:
     ...     print(f"{service_name}: {service_health.status}")
     ...     if service_health.error:
     ...         print(f"  Error: {service_health.error}")
-    >>>
-    >>> # Get service-specific clients
-    >>> blob_service = client.get_service("blob")
-    >>> container_client = blob_service.get_container_client("my-container")
 """
 
 import asyncio
@@ -51,8 +47,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
-# Azure Management API endpoint for token acquisition
-AZURE_MANAGEMENT_API_ENDPOINT = "https://management.azure.com/.default"
+from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 
 
 class ServiceHealth(BaseModel):
@@ -150,20 +145,16 @@ class AzureClient(ClientInterface):
                 )
             else:
                 # If credentials are already resolved (direct format), use them as-is
-                # For direct credentials, we need to check if they need resolution
+                # Check if credentials appear to need resolution but no credential_guid provided
                 if (
                     "secret-path" in self.credentials
                     or "credentialSource" in self.credentials
                 ):
-                    # Credentials need resolution - this is a complex case
-                    # For now, assume credentials are already resolved if no credential_guid
                     logger.warning(
                         "Credentials appear to need resolution but no credential_guid provided. Using as-is."
                     )
-                    self.resolved_credentials = self.credentials
-                else:
-                    # Credentials are already in the correct format
-                    self.resolved_credentials = self.credentials
+                # Credentials are already in the correct format
+                self.resolved_credentials = self.credentials
 
             # Create Azure credential using Service Principal authentication
             self.credential = await self.auth_provider.create_credential(
@@ -227,23 +218,6 @@ class AzureClient(ClientInterface):
         except Exception as e:
             logger.error(f"Error closing Azure client: {str(e)}")
 
-    async def get_service_client(self, service_type: str) -> Any:
-        """
-        Get a service client by type.
-
-        Args:
-            service_type (str): Type of service client to retrieve.
-                Currently no services are supported.
-
-        Returns:
-            Any: The requested service client.
-
-        Raises:
-            ClientError: If service_type is not supported or client creation fails.
-        """
-        raise ClientError(
-            f"{ClientError.REQUEST_VALIDATION_ERROR}: Unsupported service type: {service_type}"
-        )
 
     async def health_check(self) -> HealthStatus:
         """

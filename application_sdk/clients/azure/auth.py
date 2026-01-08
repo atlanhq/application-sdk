@@ -62,12 +62,50 @@ from typing import Any, Dict, Optional
 from azure.core.credentials import TokenCredential
 from azure.core.exceptions import ClientAuthenticationError
 from azure.identity import ClientSecretCredential
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.common.error_codes import CommonError
 from application_sdk.common.utils import run_sync
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+class ServicePrincipalCredentials(BaseModel):
+    """
+    Pydantic model for Azure Service Principal credentials.
+
+    Supports both snake_case and camelCase field names through field aliases.
+    All fields are required for service principal authentication.
+
+    Attributes:
+        tenant_id: Azure tenant ID (also accepts 'tenantId').
+        client_id: Azure client ID (also accepts 'clientId').
+        client_secret: Azure client secret (also accepts 'clientSecret').
+    """
+
+    tenant_id: str = Field(
+        ...,
+        alias="tenantId",
+        description="Azure tenant ID for service principal authentication",
+    )
+    client_id: str = Field(
+        ...,
+        alias="clientId",
+        description="Azure client ID for service principal authentication",
+    )
+    client_secret: str = Field(
+        ...,
+        alias="clientSecret",
+        description="Azure client secret for service principal authentication",
+    )
+
+    model_config = ConfigDict(
+        populate_by_name=True,  # Allow both field name and alias
+        extra="ignore",  # Ignore additional fields (Azure client may need extra fields like storage_account_name, network_config, etc.)
+        validate_assignment=True,  # Validate on assignment
+    )
 
 
 class AzureAuthProvider:
@@ -150,7 +188,7 @@ class AzureAuthProvider:
             ClientSecretCredential: Service principal credential.
 
         Raises:
-            CommonError: If required credentials are missing.
+            CommonError: If required credentials are missing or invalid.
         """
         if not credentials:
             raise CommonError(
@@ -158,41 +196,61 @@ class AzureAuthProvider:
                 "Credentials required for service principal authentication"
             )
 
-        tenant_id = credentials.get("tenant_id") or credentials.get("tenantId")
-        client_id = credentials.get("client_id") or credentials.get("clientId")
-        client_secret = credentials.get("client_secret") or credentials.get(
-            "clientSecret"
-        )
+        try:
+            # Validate credentials using Pydantic model
+            validated_credentials = ServicePrincipalCredentials(**credentials)
+        except ValidationError as e:
+            # Extract missing fields from validation errors
+            # Map both field names and aliases to the canonical field name
+            field_name_mapping = {
+                "tenant_id": "tenant_id",
+                "tenantId": "tenant_id",
+                "client_id": "client_id",
+                "clientId": "client_id",
+                "client_secret": "client_secret",
+                "clientSecret": "client_secret",
+            }
+            missing_fields = []
+            seen_fields = set()
+            for error in e.errors():
+                if error["type"] == "missing":
+                    field_name = error["loc"][0]
+                    # Map to canonical field name (handles both field name and alias)
+                    canonical_name = field_name_mapping.get(field_name, field_name)
+                    if canonical_name not in seen_fields:
+                        missing_fields.append(canonical_name)
+                        seen_fields.add(canonical_name)
 
-        # Check which specific keys are missing and provide detailed error message
-        missing_keys = []
-        if not tenant_id:
-            missing_keys.append("tenant_id")
-        if not client_id:
-            missing_keys.append("client_id")
-        if not client_secret:
-            missing_keys.append("client_secret")
+            if missing_fields:
+                error_message = (
+                    f"Missing required credential keys: {', '.join(missing_fields)}. "
+                    "All of tenant_id, client_id, and client_secret are required for "
+                    "service principal authentication"
+                )
+            else:
+                # Handle other validation errors (type errors, etc.)
+                error_details = "; ".join(
+                    [
+                        f"{'.'.join(str(loc) for loc in err['loc'])}: {err['msg']}"
+                        for err in e.errors()
+                    ]
+                )
+                error_message = f"Invalid credential parameters: {error_details}"
 
-        if missing_keys:
+            logger.error(f"Azure credential validation failed: {error_message}")
             raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: "
-                f"Missing required credential keys: {', '.join(missing_keys)}. "
-                "All of tenant_id, client_id, and client_secret are required for "
-                "service principal authentication"
+                f"{CommonError.CREDENTIALS_PARSE_ERROR}: {error_message}"
             )
 
-        logger.debug(f"Creating service principal credential for tenant: {tenant_id}")
-
-        # Ensure all values are strings
-        tenant_id_str = str(tenant_id) if tenant_id else ""
-        client_id_str = str(client_id) if client_id else ""
-        client_secret_str = str(client_secret) if client_secret else ""
+        logger.debug(
+            f"Creating service principal credential for tenant: {validated_credentials.tenant_id}"
+        )
 
         try:
             return await run_sync(ClientSecretCredential)(
-                tenant_id_str,
-                client_id_str,
-                client_secret_str,
+                validated_credentials.tenant_id,
+                validated_credentials.client_id,
+                validated_credentials.client_secret,
             )
         except ValueError as e:
             logger.error(f"Invalid Azure credential parameters: {str(e)}")
@@ -228,7 +286,7 @@ class AzureAuthProvider:
 
             # Try to get a token for Azure Management API
             token = await run_sync(credential.get_token)(
-                "https://management.azure.com/.default"
+                AZURE_MANAGEMENT_API_ENDPOINT
             )
 
             if token and hasattr(token, "token"):
