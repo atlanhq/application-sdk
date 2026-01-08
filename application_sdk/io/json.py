@@ -27,9 +27,36 @@ activity.logger = logger
 
 
 class JsonFileReader(Reader):
-    """
-    JSON File Reader class to read data from JSON files using daft and pandas.
+    """JSON File Reader class to read data from JSON files using daft and pandas.
+
     Supports reading both single files and directories containing multiple JSON files.
+    Follows Python's file I/O pattern with read/close semantics and supports context managers.
+
+    Attributes:
+        path (str): Path to JSON file or directory containing JSON files.
+        chunk_size (int): Number of rows per batch.
+        file_names (Optional[List[str]]): List of specific file names to read.
+        dataframe_type (DataframeType): Type of dataframe to return (pandas or daft).
+        cleanup_on_close (bool): Whether to clean up downloaded temp files on close.
+
+    Example:
+        Using context manager (recommended)::
+
+            async with JsonFileReader(path="/data/input") as reader:
+                df = await reader.read()
+            # close() called automatically, temp files cleaned up
+
+        Reading in batches::
+
+            async with JsonFileReader(path="/data/input", chunk_size=50000) as reader:
+                async for batch in reader.read_batches():
+                    process(batch)
+
+        Using close() explicitly::
+
+            reader = JsonFileReader(path="/data/input")
+            df = await reader.read()
+            await reader.close()  # Clean up downloaded temp files
     """
 
     def __init__(
@@ -38,6 +65,7 @@ class JsonFileReader(Reader):
         file_names: Optional[List[str]] = None,
         chunk_size: Optional[int] = 100000,
         dataframe_type: DataframeType = DataframeType.pandas,
+        cleanup_on_close: bool = True,
     ):
         """Initialize the JsonInput class.
 
@@ -48,6 +76,8 @@ class JsonFileReader(Reader):
                 Wildcards are not supported.
             file_names (Optional[List[str]]): List of specific file names to read. Defaults to None.
             chunk_size (int): Number of rows per batch. Defaults to 100000.
+            dataframe_type (DataframeType): Type of dataframe to read. Defaults to DataframeType.pandas.
+            cleanup_on_close (bool): Whether to clean up downloaded temp files on close. Defaults to True.
 
         Raises:
             ValueError: When path is not provided or when single file path is combined with file_names
@@ -65,12 +95,22 @@ class JsonFileReader(Reader):
         self.chunk_size = chunk_size
         self.file_names = file_names
         self.dataframe_type = dataframe_type
+        self.cleanup_on_close = cleanup_on_close
+        self._is_closed = False
+        self._downloaded_files: List[str] = []
 
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
+        """Read the data from the JSON files and return as a single DataFrame.
+
+        Returns:
+            Union[pd.DataFrame, daft.DataFrame]: Combined dataframe from JSON files.
+
+        Raises:
+            ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
-        Method to read the data from the json files in the path
-        and return as a single combined pandas dataframe
-        """
+        if self._is_closed:
+            raise ValueError("Cannot read from a closed reader")
+
         if self.dataframe_type == DataframeType.pandas:
             return await self._get_dataframe()
         elif self.dataframe_type == DataframeType.daft:
@@ -84,10 +124,18 @@ class JsonFileReader(Reader):
         AsyncIterator["pd.DataFrame"],
         AsyncIterator["daft.DataFrame"],
     ]:
+        """Read the data from the JSON files and return as batched DataFrames.
+
+        Returns:
+            Union[AsyncIterator[pd.DataFrame], AsyncIterator[daft.DataFrame]]:
+                Async iterator of DataFrames.
+
+        Raises:
+            ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
-        Method to read the data from the json files in the path
-        and return as a batched pandas dataframe
-        """
+        if self._is_closed:
+            raise ValueError("Cannot read from a closed reader")
+
         if self.dataframe_type == DataframeType.pandas:
             return self._get_batched_dataframe()
         elif self.dataframe_type == DataframeType.daft:
@@ -98,10 +146,7 @@ class JsonFileReader(Reader):
     async def _get_batched_dataframe(
         self,
     ) -> AsyncIterator["pd.DataFrame"]:
-        """
-        Method to read the data from the json files in the path
-        and return as a batched pandas dataframe
-        """
+        """Read the data from the JSON files and return as a batched pandas dataframe."""
         try:
             import pandas as pd
 
@@ -109,6 +154,8 @@ class JsonFileReader(Reader):
             json_files = await download_files(
                 self.path, self.extension, self.file_names
             )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(json_files)
             logger.info(f"Reading {len(json_files)} JSON files in batches")
 
             for json_file in json_files:
@@ -124,10 +171,7 @@ class JsonFileReader(Reader):
             raise
 
     async def _get_dataframe(self) -> "pd.DataFrame":
-        """
-        Method to read the data from the json files in the path
-        and return as a single combined pandas dataframe
-        """
+        """Read the data from the JSON files and return as a single pandas dataframe."""
         try:
             import pandas as pd
 
@@ -135,6 +179,8 @@ class JsonFileReader(Reader):
             json_files = await download_files(
                 self.path, self.extension, self.file_names
             )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(json_files)
             logger.info(f"Reading {len(json_files)} JSON files as pandas dataframe")
 
             return pd.concat(
@@ -149,10 +195,7 @@ class JsonFileReader(Reader):
     async def _get_batched_daft_dataframe(
         self,
     ) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
-        """
-        Method to read the data from the json files in the path
-        and return as a batched daft dataframe
-        """
+        """Read the data from the JSON files and return as a batched daft dataframe."""
         try:
             import daft
 
@@ -160,6 +203,8 @@ class JsonFileReader(Reader):
             json_files = await download_files(
                 self.path, self.extension, self.file_names
             )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(json_files)
             logger.info(f"Reading {len(json_files)} JSON files as daft batches")
 
             # Yield each discovered file as separate batch with chunking
@@ -170,10 +215,7 @@ class JsonFileReader(Reader):
             raise
 
     async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
-        """
-        Method to read the data from the json files in the path
-        and return as a single combined daft dataframe
-        """
+        """Read the data from the JSON files and return as a single daft dataframe."""
         try:
             import daft
 
@@ -181,6 +223,8 @@ class JsonFileReader(Reader):
             json_files = await download_files(
                 self.path, self.extension, self.file_names
             )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(json_files)
             logger.info(f"Reading {len(json_files)} JSON files with daft")
 
             # Use the discovered/downloaded files directly
