@@ -49,9 +49,104 @@ if TYPE_CHECKING:
 
 
 class Reader(ABC):
+    """Abstract base class for reader data sources.
+
+    This class defines the interface for reader handlers that can read data
+    from various sources in different formats. Follows Python's file I/O
+    pattern with read/close semantics and supports context managers.
+
+    Attributes:
+        path (str): Path where the reader will read from.
+        _is_closed (bool): Whether the reader has been closed.
+        _downloaded_files (List[str]): List of downloaded temporary files to clean up.
+        cleanup_on_close (bool): Whether to clean up downloaded temp files on close.
+
+    Example:
+        Using close() explicitly::
+
+            reader = ParquetFileReader(path="/data/input")
+            df = await reader.read()
+            await reader.close()  # Cleans up any downloaded temp files
+
+        Using context manager (recommended)::
+
+            async with ParquetFileReader(path="/data/input") as reader:
+                df = await reader.read()
+            # close() called automatically
+
+        Reading in batches with context manager::
+
+            async with JsonFileReader(path="/data/input") as reader:
+                async for batch in reader.read_batches():
+                    process(batch)
+            # close() called automatically
     """
-    Abstract base class for reader data sources.
-    """
+
+    path: str
+    _is_closed: bool = False
+    _downloaded_files: List[str] = []
+    cleanup_on_close: bool = True
+
+    async def __aenter__(self) -> "Reader":
+        """Enter the async context manager.
+
+        Returns:
+            Reader: The reader instance.
+        """
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit the async context manager, closing the reader.
+
+        Args:
+            exc_type: Exception type if an exception was raised.
+            exc_val: Exception value if an exception was raised.
+            exc_tb: Exception traceback if an exception was raised.
+        """
+        await self.close()
+
+    async def close(self) -> None:
+        """Close the reader and clean up any downloaded temporary files.
+
+        This method cleans up any temporary files that were downloaded from
+        the object store during read operations. Calling close() multiple
+        times is safe (subsequent calls are no-ops).
+
+        Note:
+            Set ``cleanup_on_close=False`` during initialization to retain
+            downloaded files after closing.
+
+        Example::
+
+            reader = ParquetFileReader(path="/data/input")
+            df = await reader.read()
+            await reader.close()  # Cleans up temp files
+        """
+        if self._is_closed:
+            return
+
+        if self.cleanup_on_close and self._downloaded_files:
+            await self._cleanup_downloaded_files()
+
+        self._is_closed = True
+
+    async def _cleanup_downloaded_files(self) -> None:
+        """Clean up downloaded temporary files.
+
+        Override this method in subclasses for custom cleanup behavior.
+        """
+        import shutil
+
+        for file_path in self._downloaded_files:
+            try:
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path, ignore_errors=True)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
+
+        self._downloaded_files.clear()
 
     @abstractmethod
     def read_batches(
@@ -62,27 +157,27 @@ class Reader(ABC):
         Iterator["daft.DataFrame"],
         AsyncIterator["daft.DataFrame"],
     ]:
-        """
-        Get an iterator of batched pandas DataFrames.
+        """Get an iterator of batched pandas DataFrames.
 
         Returns:
             Iterator["pd.DataFrame"]: An iterator of batched pandas DataFrames.
 
         Raises:
             NotImplementedError: If the method is not implemented.
+            ValueError: If the reader has been closed.
         """
         raise NotImplementedError
 
     @abstractmethod
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
-        """
-        Get a single pandas or daft DataFrame.
+        """Get a single pandas or daft DataFrame.
 
         Returns:
             Union["pd.DataFrame", "daft.DataFrame"]: A pandas or daft DataFrame.
 
         Raises:
             NotImplementedError: If the method is not implemented.
+            ValueError: If the reader has been closed.
         """
         raise NotImplementedError
 
