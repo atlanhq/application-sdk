@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -143,3 +144,22 @@ async def test_worker_start_with_workflow_client_error(
 
     with pytest.raises(Exception, match="Connection failed"):
         await worker.start(daemon=False)
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Windows-specific event loop policy test",
+)
+def test_windows_event_loop_policy():
+    """Test that WindowsSelectorEventLoopPolicy is set on Windows platform.
+
+    This test verifies that the module-level code in worker.py correctly
+    sets the WindowsSelectorEventLoopPolicy when running on Windows.
+    """
+    # Get the current event loop policy
+    current_policy = asyncio.get_event_loop_policy()
+
+    # Verify it's WindowsSelectorEventLoopPolicy
+    assert isinstance(
+        current_policy, asyncio.WindowsSelectorEventLoopPolicy
+    ), f"Expected WindowsSelectorEventLoopPolicy, got {type(current_policy)}"
