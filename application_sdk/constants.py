@@ -278,6 +278,9 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
+#: Windows extended-length path prefix
+WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
+
 
 # Disable Analytics Configuration for DAFT
 os.environ["DO_NOT_TRACK"] = "true"
