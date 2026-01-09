@@ -1,0 +1,41 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+spec:
+  type: pubsub.in-memory
+  version: v1
+# Bulk subscribe for in-memory pubsub has a batch size of 1 as it is not supported.
+## Use the below component for Kafka. Kafka supports bulk subscribe.
+# apiVersion: dapr.io/v1alpha1
+# kind: Component
+# metadata:
+#   name: pubsub
+# spec:
+#   type: pubsub.kafka
+#   version: v1
+#   metadata:
+#   # Kafka broker configuration
+#   - name: brokers
+#     value: "localhost:9092"
+
+#   # Consumer configuration
+#   - name: consumerGroup
+#     value: "message-processor"
+
+#   - name: clientId
+#     value: "message-processor-client"
+
+#   # Session timeout
+#   - name: sessionTimeout
+#     value: "600s"
+
+#   - name: authType
+#     value: "none"
+
+#   # - name: bulkSubscribe
+#   #   value: "true"
+#   # - name: maxMessagesCount
+#   #   value: "10"
+#   # - name: maxAwaitDurationMs
+#   #   value: "1000"
