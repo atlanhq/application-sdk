@@ -566,8 +566,11 @@ class TestDaprSubscriptionEndpointGeneration:
         subscriptions = await self.app.get_dapr_subscriptions()
 
         assert len(subscriptions) == 1
-        # bulkSubscribe should NOT be in the output when enabled=False
-        assert "bulkSubscribe" not in subscriptions[0]
+        # bulkSubscribe should be included even when enabled=False
+        assert "bulkSubscribe" in subscriptions[0]
+        assert subscriptions[0]["bulkSubscribe"]["enabled"] is False
+        assert subscriptions[0]["bulkSubscribe"]["maxMessagesCount"] == 100
+        assert subscriptions[0]["bulkSubscribe"]["maxAwaitDurationMs"] == 40
 
     @pytest.mark.asyncio
     async def test_dapr_subscriptions_with_dead_letter_topic(self):
