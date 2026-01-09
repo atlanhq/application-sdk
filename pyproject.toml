@@ -59,7 +59,7 @@ iam_auth = [
 ]
 tests = [
     "pytest-order>=1.3.0,<1.4.0",
-    "pandera[io]>=0.23.1,<0.28.0",
+    "pandera[io]>=0.23.1,<0.29.0",
     "pandas>=2.2.3,<2.4.0",
 ]
 scale_data_generator = [
