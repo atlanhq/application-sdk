@@ -210,7 +210,7 @@ class APIServer(ServerInterface):
         - Workflow router (/workflows/v1)
         - Pubsub router (/dapr)
         - Events router (/events/v1)
-        - Messaging router (/subscriptions/v1)
+        - Subscription router (/subscriptions/v1)
         """
         # Register all routes first
         self.register_routes()
@@ -221,7 +221,7 @@ class APIServer(ServerInterface):
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
-        # Register messaging routes from subscriptions with message_handler callbacks
+        # Register subscription routes from subscriptions with handler callbacks
         subscription_router = APIRouter()
         for subscription in self.subscriptions:
             subscription_router.add_api_route(
