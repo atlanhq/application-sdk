@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -60,6 +61,7 @@ class BaseSQLMetadataExtractionActivitiesState(ActivitiesState):
     sql_client: Optional[BaseSQLClient] = None
     handler: Optional[BaseSQLHandler] = None
     transformer: Optional[TransformerInterface] = None
+    last_updated_timestamp: Optional[datetime] = None
 
 
 class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
@@ -149,13 +151,30 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             workflow_args (Dict[str, Any]): Arguments passed to the workflow.
+
+        Note:
+            This method creates and configures the new SQL client before closing
+            the old one to ensure state is never left with a closed client if
+            initialization fails. The timestamp is only updated after the new
+            client is successfully created and assigned.
         """
         workflow_id = get_workflow_id()
         if not self._state.get(workflow_id):
             self._state[workflow_id] = BaseSQLMetadataExtractionActivitiesState()
 
-        await super()._set_state(workflow_args)
+        existing_state = self._state[workflow_id]
 
+        # Update workflow_args early, but preserve old timestamp until new client is ready
+        # This ensures that if initialization fails, the state can still be refreshed
+        existing_state.workflow_args = workflow_args
+
+        # Store reference to old client for cleanup after new client is ready
+        old_sql_client = None
+        if existing_state and existing_state.sql_client is not None:
+            old_sql_client = existing_state.sql_client
+
+        # Create and configure new client BEFORE closing old one
+        # This ensures state is never left with a closed client if initialization fails
         sql_client = self.sql_client_class()
 
         # Load credentials BEFORE creating handler to avoid race condition
@@ -165,10 +184,29 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             )
             await sql_client.load(credentials)
 
-        # Assign sql_client and handler to state AFTER credentials are loaded
+        # Only after new client is successfully created and configured,
+        # close old client and assign new one to state
+        if old_sql_client is not None:
+            try:
+                await old_sql_client.close()
+                logger.debug(
+                    f"Closed existing SQL client for workflow {workflow_id} during state refresh"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to close existing SQL client for workflow {workflow_id}: {e}",
+                    exc_info=True,
+                )
+                # Continue even if close fails - new client is already ready
+
+        # Assign sql_client and handler to state AFTER new client is ready
         self._state[workflow_id].sql_client = sql_client
         handler = self.handler_class(sql_client)
         self._state[workflow_id].handler = handler
+        # Update timestamp only after successful client creation and assignment
+        # This ensures that if initialization fails, the old timestamp remains
+        # and the state can be refreshed again immediately
+        self._state[workflow_id].last_updated_timestamp = datetime.now()
 
         # Create transformer with required parameters from ApplicationConstants
         transformer_params = {

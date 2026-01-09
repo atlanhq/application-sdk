@@ -540,3 +540,218 @@ async def test_read_batches_no_input_prefix(monkeypatch) -> None:
     assert call_log == [
         {"path": ["/data/file1.parquet", "/data/file2.parquet"]},
     ]
+
+
+# ---------------------------------------------------------------------------
+# Context Manager and Close Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_context_manager_calls_close(monkeypatch) -> None:
+    """Verify that using async with calls close() on exit."""
+    _install_dummy_pandas(monkeypatch)
+
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return [path]
+
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
+
+    path = "/data/test.parquet"
+
+    async with ParquetFileReader(
+        path=path, dataframe_type=DataframeType.pandas
+    ) as reader:
+        await reader.read()
+        assert not reader._is_closed
+
+    # After exiting context, reader should be closed
+    assert reader._is_closed
+
+
+@pytest.mark.asyncio
+async def test_close_is_idempotent() -> None:
+    """Verify that calling close() multiple times is safe."""
+    path = "/data/test.parquet"
+    reader = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
+
+    # Close multiple times - should not raise
+    await reader.close()
+    assert reader._is_closed
+
+    await reader.close()  # Should be a no-op
+    assert reader._is_closed
+
+    await reader.close()  # Should still be a no-op
+    assert reader._is_closed
+
+
+@pytest.mark.asyncio
+async def test_read_after_close_raises_error(monkeypatch) -> None:
+    """Verify that reading after close raises ValueError."""
+    _install_dummy_pandas(monkeypatch)
+
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return [path]
+
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
+
+    path = "/data/test.parquet"
+    reader = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
+
+    # Read should work before close
+    await reader.read()
+
+    # Close the reader
+    await reader.close()
+
+    # Read should raise after close
+    with pytest.raises(ValueError, match="Cannot read from a closed reader"):
+        await reader.read()
+
+
+@pytest.mark.asyncio
+async def test_read_batches_after_close_raises_error() -> None:
+    """Verify that read_batches after close raises ValueError."""
+    path = "/data/test.parquet"
+    reader = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
+
+    # Close the reader
+    await reader.close()
+
+    # read_batches should raise after close
+    with pytest.raises(ValueError, match="Cannot read from a closed reader"):
+        reader.read_batches()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_on_close_default_true() -> None:
+    """Verify that cleanup_on_close defaults to True."""
+    path = "/data/test.parquet"
+    reader = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
+
+    assert reader.cleanup_on_close is True
+
+
+@pytest.mark.asyncio
+async def test_cleanup_on_close_false_retains_files(monkeypatch) -> None:
+    """Verify that setting cleanup_on_close=False retains downloaded files."""
+    _install_dummy_pandas(monkeypatch)
+
+    downloaded_files = [
+        "/tmp/downloaded/file1.parquet",
+        "/tmp/downloaded/file2.parquet",
+    ]
+
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return downloaded_files
+
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
+
+    path = "/data"
+    reader = ParquetFileReader(
+        path=path,
+        dataframe_type=DataframeType.pandas,
+        cleanup_on_close=False,
+    )
+
+    # Read to trigger download tracking
+    await reader.read()
+
+    # Verify files are tracked
+    assert reader._downloaded_files == downloaded_files
+
+    # Mock cleanup to track if it's called
+    cleanup_called = False
+
+    async def mock_cleanup():
+        nonlocal cleanup_called
+        cleanup_called = True
+
+    monkeypatch.setattr(reader, "_cleanup_downloaded_files", mock_cleanup)
+
+    # Close should NOT call cleanup when cleanup_on_close=False
+    await reader.close()
+
+    assert not cleanup_called
+    assert reader._is_closed
+
+
+@pytest.mark.asyncio
+async def test_cleanup_on_close_true_cleans_files(monkeypatch) -> None:
+    """Verify that setting cleanup_on_close=True cleans up downloaded files."""
+    _install_dummy_pandas(monkeypatch)
+
+    downloaded_files = [
+        "/tmp/downloaded/file1.parquet",
+        "/tmp/downloaded/file2.parquet",
+    ]
+
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return downloaded_files
+
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
+
+    path = "/data"
+    reader = ParquetFileReader(
+        path=path,
+        dataframe_type=DataframeType.pandas,
+        cleanup_on_close=True,
+    )
+
+    # Read to trigger download tracking
+    await reader.read()
+
+    # Verify files are tracked
+    assert reader._downloaded_files == downloaded_files
+
+    # Mock cleanup to track if it's called
+    cleanup_called = False
+
+    async def mock_cleanup():
+        nonlocal cleanup_called
+        cleanup_called = True
+        reader._downloaded_files.clear()
+
+    monkeypatch.setattr(reader, "_cleanup_downloaded_files", mock_cleanup)
+
+    # Close should call cleanup when cleanup_on_close=True
+    await reader.close()
+
+    assert cleanup_called
+    assert reader._is_closed
+
+
+@pytest.mark.asyncio
+async def test_downloaded_files_tracked_on_read(monkeypatch) -> None:
+    """Verify that downloaded files are tracked when read() is called."""
+    _install_dummy_pandas(monkeypatch)
+
+    downloaded_files = ["/tmp/downloaded/file1.parquet"]
+
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return downloaded_files
+
+    monkeypatch.setattr(
+        "application_sdk.io.parquet.download_files", dummy_download, raising=False
+    )
+
+    path = "/data/test.parquet"
+    reader = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
+
+    # Initially no downloaded files
+    assert reader._downloaded_files == []
+
+    # Read to trigger download
+    await reader.read()
+
+    # Files should now be tracked
+    assert reader._downloaded_files == downloaded_files

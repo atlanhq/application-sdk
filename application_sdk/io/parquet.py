@@ -40,9 +40,37 @@ if TYPE_CHECKING:
 
 
 class ParquetFileReader(Reader):
-    """
-    Parquet File Reader class to read data from Parquet files using daft and pandas.
+    """Parquet File Reader class to read data from Parquet files using daft and pandas.
+
     Supports reading both single files and directories containing multiple parquet files.
+    Follows Python's file I/O pattern with read/close semantics and supports context managers.
+
+    Attributes:
+        path (str): Path to parquet file or directory containing parquet files.
+        chunk_size (int): Number of rows per batch.
+        buffer_size (int): Number of rows per batch for daft.
+        file_names (Optional[List[str]]): List of specific file names to read.
+        dataframe_type (DataframeType): Type of dataframe to return (pandas or daft).
+        cleanup_on_close (bool): Whether to clean up downloaded temp files on close.
+
+    Example:
+        Using context manager (recommended)::
+
+            async with ParquetFileReader(path="/data/input") as reader:
+                df = await reader.read()
+            # close() called automatically, temp files cleaned up
+
+        Reading in batches::
+
+            async with ParquetFileReader(path="/data/input", chunk_size=50000) as reader:
+                async for batch in reader.read_batches():
+                    process(batch)
+
+        Using close() explicitly::
+
+            reader = ParquetFileReader(path="/data/input")
+            df = await reader.read()
+            await reader.close()  # Clean up downloaded temp files
     """
 
     def __init__(
@@ -52,6 +80,7 @@ class ParquetFileReader(Reader):
         buffer_size: Optional[int] = 5000,
         file_names: Optional[List[str]] = None,
         dataframe_type: DataframeType = DataframeType.pandas,
+        cleanup_on_close: bool = True,
     ):
         """Initialize the Parquet input class.
 
@@ -64,6 +93,7 @@ class ParquetFileReader(Reader):
             buffer_size (int): Number of rows per batch. Defaults to 5000.
             file_names (Optional[List[str]]): List of file names to read. Defaults to None.
             dataframe_type (DataframeType): Type of dataframe to read. Defaults to DataframeType.pandas.
+            cleanup_on_close (bool): Whether to clean up downloaded temp files on close. Defaults to True.
 
         Raises:
             ValueError: When path is not provided or when single file path is combined with file_names
@@ -81,12 +111,22 @@ class ParquetFileReader(Reader):
         self.buffer_size = buffer_size
         self.file_names = file_names
         self.dataframe_type = dataframe_type
+        self.cleanup_on_close = cleanup_on_close
+        self._is_closed = False
+        self._downloaded_files: List[str] = []
 
     async def read(self) -> Union["pd.DataFrame", "daft.DataFrame"]:
+        """Read the data from the parquet files and return as a single DataFrame.
+
+        Returns:
+            Union[pd.DataFrame, daft.DataFrame]: Combined dataframe from parquet files.
+
+        Raises:
+            ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
-        Method to read the data from the parquet files in the path
-        and return as a single combined pandas dataframe
-        """
+        if self._is_closed:
+            raise ValueError("Cannot read from a closed reader")
+
         if self.dataframe_type == DataframeType.pandas:
             return await self._get_dataframe()
         elif self.dataframe_type == DataframeType.daft:
@@ -100,10 +140,18 @@ class ParquetFileReader(Reader):
         AsyncIterator["pd.DataFrame"],
         AsyncIterator["daft.DataFrame"],
     ]:
+        """Read the data from the parquet files and return as batched DataFrames.
+
+        Returns:
+            Union[AsyncIterator[pd.DataFrame], AsyncIterator[daft.DataFrame]]:
+                Async iterator of DataFrames.
+
+        Raises:
+            ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
-        Method to read the data from the parquet files in the path
-        and return as a batched pandas dataframe
-        """
+        if self._is_closed:
+            raise ValueError("Cannot read from a closed reader")
+
         if self.dataframe_type == DataframeType.pandas:
             return self._get_batched_dataframe()
         elif self.dataframe_type == DataframeType.daft:
@@ -149,6 +197,8 @@ class ParquetFileReader(Reader):
             parquet_files = await download_files(
                 self.path, PARQUET_FILE_EXTENSION, self.file_names
             )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(parquet_files)
             logger.info(f"Reading {len(parquet_files)} parquet files")
 
             return pd.concat(
@@ -208,6 +258,8 @@ class ParquetFileReader(Reader):
             parquet_files = await download_files(
                 self.path, PARQUET_FILE_EXTENSION, self.file_names
             )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(parquet_files)
             logger.info(f"Reading {len(parquet_files)} parquet files in batches")
 
             # Process each file individually to maintain memory efficiency
@@ -259,6 +311,8 @@ class ParquetFileReader(Reader):
             parquet_files = await download_files(
                 self.path, PARQUET_FILE_EXTENSION, self.file_names
             )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(parquet_files)
             logger.info(f"Reading {len(parquet_files)} parquet files with daft")
 
             # Use the discovered/downloaded files directly
@@ -317,6 +371,8 @@ class ParquetFileReader(Reader):
             parquet_files = await download_files(
                 self.path, PARQUET_FILE_EXTENSION, self.file_names
             )
+            # Track downloaded files for cleanup on close
+            self._downloaded_files.extend(parquet_files)
             logger.info(f"Reading {len(parquet_files)} parquet files as daft batches")
 
             # Create a lazy dataframe without loading data into memory

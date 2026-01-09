@@ -9,6 +9,8 @@ This module provides a standardized way to read data from various sources within
     *   **Key Methods:** Requires subclasses to implement methods for retrieving data as Pandas or Daft DataFrames:
         *   `read()`: Returns a single DataFrame (Pandas or Daft depending on `dataframe_type`).
         *   `read_batches()`: Returns an async iterator of DataFrames for memory-efficient processing.
+        *   `close()`: Cleans up any downloaded temporary files.
+    *   **Context Manager:** Readers support `async with` for automatic cleanup.
     *   **Usage:** Activities instantiate a specific `Reader` subclass and use these methods to retrieve data for processing.
 
 2.  **Concrete Implementations:** The SDK provides several reader classes:
@@ -44,6 +46,46 @@ Reader classes follow a clear naming pattern that indicates what they work with:
   - Automatically download from object store if needed
   - Examples: `ParquetFileReader`, `JsonFileReader`
 
+## Reader API Patterns
+
+Readers follow Python's familiar file I/O pattern with `read()` and `close()` methods:
+
+### Context Manager (Recommended)
+
+Using `async with` ensures the reader is always properly closed and temporary files are cleaned up:
+
+```python
+from application_sdk.io.parquet import ParquetFileReader
+
+async with ParquetFileReader(path="/data/input") as reader:
+    df = await reader.read()
+    # or read in batches
+    async for batch in reader.read_batches():
+        process(batch)
+# close() is called automatically on exit, temp files cleaned up
+```
+
+### Basic Usage with close()
+
+```python
+from application_sdk.io.json import JsonFileReader
+
+reader = JsonFileReader(path="/data/input")
+
+# Read data
+df = await reader.read()
+
+# Clean up downloaded temp files
+await reader.close()
+```
+
+### Key Behaviors
+
+- **Idempotent close()**: Calling `close()` multiple times is safe
+- **Read after close**: Raises `ValueError("Cannot read from a closed reader")`
+- **Temp file cleanup**: Downloaded files are automatically cleaned up on `close()`
+- **Retain temp files**: Set `cleanup_on_close=False` to keep downloaded files
+
 ## Usage Patterns and Examples
 
 Readers are primarily used within **Activities** to fetch data for processing.
@@ -58,18 +100,20 @@ ParquetFileReader(
     path="local/path/to/data",           # Local path where files are or should be
     file_names=["file1.parquet", ...],    # Optional: specific files to read
     chunk_size=100000,                    # Optional: rows per batch
-    dataframe_type=DataframeType.pandas          # or DataframeType.daft
+    dataframe_type=DataframeType.pandas,  # or DataframeType.daft
+    cleanup_on_close=True                 # Optional: clean up temp files on close (default: True)
 )
 
 JsonFileReader(
     path="local/path/to/data",
     file_names=["file1.json", ...],
     chunk_size=100000,
-    dataframe_type=DataframeType.pandas
+    dataframe_type=DataframeType.pandas,
+    cleanup_on_close=True
 )
 ```
 
-**Common Usage in Activities:**
+**Common Usage in Activities (with context manager):**
 
 ```python
 # Within a transform_data Activity method
@@ -86,24 +130,18 @@ async def transform_data(self, workflow_args: Dict[str, Any]):
     # Path where files were written by a previous activity
     local_input_path = f"{output_path}/raw/{typename}"
 
-    # Instantiate ParquetFileReader
-    # If files aren't local, they'll be automatically downloaded from object store
-    parquet_reader = ParquetFileReader(
+    # Use context manager for automatic cleanup
+    async with ParquetFileReader(
         path=local_input_path,
         file_names=file_names,
         dataframe_type=DataframeType.daft  # Use Daft for better performance with large datasets
-    )
-
-    try:
+    ) as parquet_reader:
         # Read data in batches for memory efficiency
         async for batch_df in parquet_reader.read_batches():
             # Process each batch (e.g., transform using state.transformer)
             transformed = await self.transformer.transform(batch_df)
             # Write transformed data...
-
-    except Exception as e:
-        logger.error(f"Error reading data: {e}", exc_info=True)
-        raise
+    # Temp files automatically cleaned up here
 ```
 
 **Reading All Data at Once:**
@@ -113,14 +151,12 @@ async def transform_data(self, workflow_args: Dict[str, Any]):
 from application_sdk.io.json import JsonFileReader
 from application_sdk.io import DataframeType
 
-json_reader = JsonFileReader(
+async with JsonFileReader(
     path="local/data/output",
     dataframe_type=DataframeType.pandas
-)
-
-# Read all data at once
-df = await json_reader.read()
-print(f"Read {len(df)} records")
+) as json_reader:
+    df = await json_reader.read()
+    print(f"Read {len(df)} records")
 ```
 
 ## Advanced Features
@@ -181,9 +217,11 @@ daft_reader = JsonFileReader(
 
 The readers module provides convenient classes for reading data from diverse sources (Parquet, JSON). Key features include:
 
+- **Context manager support** - use `async with` for automatic resource cleanup
 - **Automatic object store downloads** - no manual file management needed
 - **Memory-efficient batched reading** - process large datasets without loading everything into memory
 - **Flexible DataFrame support** - choose Pandas or Daft based on your needs
+- **Automatic temp file cleanup** - downloaded files are cleaned up when the reader is closed
 - **Transparent caching** - downloaded files are cached locally for performance
 
 These readers integrate seamlessly with the SDK's activity patterns and work hand-in-hand with Writers for complete data pipeline workflows.
