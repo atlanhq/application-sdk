@@ -129,6 +129,7 @@ class TestSubscriptionModel:
         assert subscription.component_name == "my-pubsub"
         assert subscription.topic == "orders"
         assert subscription.route == "process-orders"
+        assert subscription.bulk_config is not None
         assert subscription.bulk_config.enabled is True
         assert subscription.bulk_config.max_messages_count == 200
         assert subscription.dead_letter_topic == "orders-dlq"
