@@ -47,7 +47,7 @@ class PreflightCheckRequest(BaseModel):
     )
 
     class Config:
-        json_schema_extra = {
+        schema_extra = {
             "example": {
                 "credentials": {
                     "authType": "basic",
@@ -73,7 +73,7 @@ class PreflightCheckResponse(BaseModel):
     data: Dict[str, Any] = Field(..., description="Response data")
 
     class Config:
-        json_schema_extra = {
+        schema_extra = {
             "example": {
                 "success": True,
                 "data": {
@@ -90,7 +90,7 @@ class WorkflowRequest(RootModel[Dict[str, Any]]):
     )
 
     class Config:
-        json_schema_extra = {
+        schema_extra = {
             "example": {
                 "miner_args": {},
                 "credentials": {
@@ -139,7 +139,7 @@ class WorkflowResponse(BaseModel):
     data: WorkflowData = Field(..., description="Details about the workflow and run")
 
     class Config:
-        json_schema_extra = {
+        schema_extra = {
             "example": {
                 "success": True,
                 "message": "Workflow started successfully",
@@ -178,7 +178,7 @@ class WorkflowConfigResponse(BaseModel):
     data: Dict[str, Any] = Field(..., description="Workflow configuration")
 
     class Config:
-        json_schema_extra = {
+        schema_extra = {
             "example": {
                 "success": True,
                 "message": "Workflow configuration fetched successfully",
@@ -205,7 +205,7 @@ class ConfigMapResponse(BaseModel):
     data: Dict[str, Any] = Field(..., description="Configuration map object")
 
     class Config:
-        json_schema_extra = {
+        schema_extra = {
             "example": {
                 "success": True,
                 "message": "Configuration map fetched successfully",
