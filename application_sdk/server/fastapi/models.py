@@ -47,7 +47,7 @@ class PreflightCheckRequest(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "credentials": {
                     "authType": "basic",
@@ -73,7 +73,7 @@ class PreflightCheckResponse(BaseModel):
     data: Dict[str, Any] = Field(..., description="Response data")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "success": True,
                 "data": {
@@ -90,7 +90,7 @@ class WorkflowRequest(RootModel[Dict[str, Any]]):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "miner_args": {},
                 "credentials": {
@@ -139,7 +139,7 @@ class WorkflowResponse(BaseModel):
     data: WorkflowData = Field(..., description="Details about the workflow and run")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "success": True,
                 "message": "Workflow started successfully",
@@ -178,7 +178,7 @@ class WorkflowConfigResponse(BaseModel):
     data: Dict[str, Any] = Field(..., description="Workflow configuration")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "success": True,
                 "message": "Workflow configuration fetched successfully",
@@ -205,7 +205,7 @@ class ConfigMapResponse(BaseModel):
     data: Dict[str, Any] = Field(..., description="Configuration map object")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "success": True,
                 "message": "Configuration map fetched successfully",
@@ -242,31 +242,41 @@ class EventWorkflowTrigger(WorkflowTrigger):
         return True
 
 
-class BulkSubscribe(BaseModel):
-    enabled: bool = False
-    maxMessagesCount: int = 100
-    maxAwaitDurationMs: int = 40
-
-
-class PubSubSubscription(BaseModel):
-    """PubSub subscription configuration for Dapr messaging.
+class SubscriptionBulkConfig(BaseModel):
+    """Subscription bulk configuration for Dapr messaging.
 
     Attributes:
-        pubsub_component_name: Name of the Dapr pubsub component
+        enabled: Whether bulk subscribe is enabled
+        max_messages_count: Maximum number of messages to receive in a batch
+        max_await_duration_ms: Maximum time to wait for messages in milliseconds
+    """
+
+    enabled: bool = False
+    max_messages_count: int = Field(default=100, serialization_alias="maxMessagesCount")
+    max_await_duration_ms: int = Field(
+        default=40, serialization_alias="maxAwaitDurationMs"
+    )
+
+
+class Subscription(BaseModel):
+    """Subscription configuration for Dapr messaging.
+
+    Attributes:
+        component_name: Name of the Dapr pubsub component
         topic: Topic to subscribe to
         route: Route path for the message handler endpoint
-        message_handler: Required callback function to handle incoming messages
-        bulk_subscribe: Optional bulk subscribe configuration
+        handler: Required callback function to handle incoming messages
+        bulk_config: Optional bulk subscribe configuration
         dead_letter_topic: Optional dead letter topic for failed messages
     """
 
     model_config = {"arbitrary_types_allowed": True}
 
-    pubsub_component_name: str
+    component_name: str
     topic: str
     route: str
-    message_handler: Union[
+    handler: Union[
         Callable[[Any], Any], Callable[[Any], Coroutine[Any, Any, Any]]
     ]  # Required callback function (sync or async)
-    bulk_subscribe: Optional[BulkSubscribe] = None
+    bulk_config: Optional[SubscriptionBulkConfig] = None
     dead_letter_topic: Optional[str] = None

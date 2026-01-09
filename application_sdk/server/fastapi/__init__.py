@@ -42,7 +42,7 @@ from application_sdk.server.fastapi.models import (
     HttpWorkflowTrigger,
     PreflightCheckRequest,
     PreflightCheckResponse,
-    PubSubSubscription,
+    Subscription,
     TestAuthRequest,
     TestAuthResponse,
     WorkflowConfigRequest,
@@ -91,15 +91,15 @@ class APIServer(ServerInterface):
     workflow_router: APIRouter
     dapr_router: APIRouter
     events_router: APIRouter
-    messaging_router: APIRouter
+    subscription_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
     duckdb_ui: DuckDBUI
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
-    # List of PubSub subscriptions to be registered
-    messaging_subscriptions: List[PubSubSubscription] = []
+    # List of subscriptions to be registered
+    subscriptions: List[Subscription] = []
 
     frontend_assets_path: str = "frontend/static"
 
@@ -116,7 +116,7 @@ class APIServer(ServerInterface):
         frontend_templates_path: str = "frontend/templates",
         ui_enabled: bool = True,
         has_configmap: bool = False,
-        messaging_subscriptions: List[PubSubSubscription] = [],
+        subscriptions: List[Subscription] = [],
     ):
         """Initialize the FastAPI application.
 
@@ -143,8 +143,7 @@ class APIServer(ServerInterface):
         self.workflow_router = APIRouter()
         self.dapr_router = APIRouter()
         self.events_router = APIRouter()
-        if len(messaging_subscriptions) > 0:
-            self.messaging_subscriptions = messaging_subscriptions
+        self.subscriptions = subscriptions
         # Set up the application
         error_handler = internal_server_error_handler  # Store as local variable
         self.app.add_exception_handler(
@@ -223,15 +222,14 @@ class APIServer(ServerInterface):
         self.app.include_router(self.events_router, prefix="/events/v1")
 
         # Register messaging routes from subscriptions with message_handler callbacks
-        if len(self.messaging_subscriptions) > 0:
-            messaging_router = APIRouter()
-            for subscription in self.messaging_subscriptions:
-                messaging_router.add_api_route(
-                    f"/{subscription.route}",
-                    subscription.message_handler,
-                    methods=["POST"],
-                )
-            self.app.include_router(messaging_router, prefix="/subscriptions/v1")
+        subscription_router = APIRouter()
+        for subscription in self.subscriptions:
+            subscription_router.add_api_route(
+                f"/{subscription.route}",
+                subscription.handler,
+                methods=["POST"],
+            )
+        self.app.include_router(subscription_router, prefix="/subscriptions/v1")
 
     def fallback_home(self, request: Request) -> HTMLResponse:
         return self.templates.TemplateResponse(
@@ -450,24 +448,19 @@ class APIServer(ServerInterface):
         """
 
         subscriptions: List[dict[str, Any]] = []
-        if self.messaging_subscriptions:
-            for subscription in self.messaging_subscriptions:
-                subscription_dict: dict[str, Any] = {
-                    "pubsubname": subscription.pubsub_component_name,
-                    "topic": subscription.topic,
-                    "route": f"/subscriptions/v1/{subscription.route}",
-                }
-                if subscription.bulk_subscribe and subscription.bulk_subscribe.enabled:
-                    subscription_dict["bulkSubscribe"] = {
-                        "enabled": subscription.bulk_subscribe.enabled,
-                        "maxMessagesCount": subscription.bulk_subscribe.maxMessagesCount,
-                        "maxAwaitDurationMs": subscription.bulk_subscribe.maxAwaitDurationMs,
-                    }
-                if subscription.dead_letter_topic:
-                    subscription_dict["deadLetterTopic"] = (
-                        subscription.dead_letter_topic
-                    )
-                subscriptions.append(subscription_dict)
+        for subscription in self.subscriptions:
+            subscription_dict: dict[str, Any] = {
+                "pubsubname": subscription.component_name,
+                "topic": subscription.topic,
+                "route": f"/subscriptions/v1/{subscription.route}",
+            }
+            if subscription.bulk_config and subscription.bulk_config.enabled:
+                subscription_dict["bulkSubscribe"] = subscription.bulk_config.model_dump(
+                    by_alias=True
+                )
+            if subscription.dead_letter_topic:
+                subscription_dict["deadLetterTopic"] = subscription.dead_letter_topic
+            subscriptions.append(subscription_dict)
         for event_trigger in self.event_triggers:
             filters = [
                 f"({event_filter.path} {event_filter.operator} '{event_filter.value}')"

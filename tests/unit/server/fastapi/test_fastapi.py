@@ -14,8 +14,8 @@ from application_sdk.server.fastapi import (
     PreflightCheckResponse,
 )
 from application_sdk.server.fastapi.models import (
-    BulkSubscribe,
-    PubSubSubscription,
+    Subscription,
+    SubscriptionBulkConfig,
 )
 from application_sdk.test_utils.hypothesis.strategies.server.fastapi import (
     payload_strategy,
@@ -27,148 +27,148 @@ class SampleWorkflow(WorkflowInterface):
     pass
 
 
-class TestPubSubSubscriptionModel:
-    """Test suite for PubSubSubscription model validation."""
+class TestSubscriptionModel:
+    """Test suite for Subscription model validation."""
 
-    def test_pubsub_subscription_with_required_fields(self):
-        """Test PubSubSubscription creation with all required fields."""
+    def test_subscription_with_required_fields(self):
+        """Test Subscription creation with all required fields."""
 
         def sync_handler(message: Dict[str, Any]) -> dict:
             return {"status": "processed"}
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="test-route",
-            message_handler=sync_handler,
+            handler=sync_handler,
         )
 
-        assert subscription.pubsub_component_name == "messaging"
+        assert subscription.component_name == "messaging"
         assert subscription.topic == "test-topic"
         assert subscription.route == "test-route"
-        assert subscription.message_handler == sync_handler
-        assert subscription.bulk_subscribe is None
+        assert subscription.handler == sync_handler
+        assert subscription.bulk_config is None
         assert subscription.dead_letter_topic is None
 
-    def test_pubsub_subscription_with_async_handler(self):
-        """Test PubSubSubscription creation with an async message handler."""
+    def test_subscription_with_async_handler(self):
+        """Test Subscription creation with an async message handler."""
 
         async def async_handler(message: Dict[str, Any]) -> dict:
             return {"status": "processed"}
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="test-route",
-            message_handler=async_handler,
+            handler=async_handler,
         )
 
-        assert subscription.message_handler == async_handler
+        assert subscription.handler == async_handler
 
-    def test_pubsub_subscription_with_bulk_subscribe(self):
-        """Test PubSubSubscription creation with bulk subscribe configuration."""
+    def test_subscription_with_bulk_config(self):
+        """Test Subscription creation with bulk configuration."""
 
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "processed"}
 
-        bulk_config = BulkSubscribe(
+        bulk_config = SubscriptionBulkConfig(
             enabled=True,
-            maxMessagesCount=50,
-            maxAwaitDurationMs=100,
+            max_messages_count=50,
+            max_await_duration_ms=100,
         )
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="test-route",
-            message_handler=handler,
-            bulk_subscribe=bulk_config,
+            handler=handler,
+            bulk_config=bulk_config,
         )
 
-        assert subscription.bulk_subscribe is not None
-        assert subscription.bulk_subscribe.enabled is True
-        assert subscription.bulk_subscribe.maxMessagesCount == 50
-        assert subscription.bulk_subscribe.maxAwaitDurationMs == 100
+        assert subscription.bulk_config is not None
+        assert subscription.bulk_config.enabled is True
+        assert subscription.bulk_config.max_messages_count == 50
+        assert subscription.bulk_config.max_await_duration_ms == 100
 
-    def test_pubsub_subscription_with_dead_letter_topic(self):
-        """Test PubSubSubscription creation with dead letter topic."""
+    def test_subscription_with_dead_letter_topic(self):
+        """Test Subscription creation with dead letter topic."""
 
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "processed"}
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="test-route",
-            message_handler=handler,
+            handler=handler,
             dead_letter_topic="test-dlq",
         )
 
         assert subscription.dead_letter_topic == "test-dlq"
 
-    def test_pubsub_subscription_with_all_optional_fields(self):
-        """Test PubSubSubscription creation with all optional fields configured."""
+    def test_subscription_with_all_optional_fields(self):
+        """Test Subscription creation with all optional fields configured."""
 
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "processed"}
 
-        bulk_config = BulkSubscribe(
+        bulk_config = SubscriptionBulkConfig(
             enabled=True,
-            maxMessagesCount=200,
-            maxAwaitDurationMs=50,
+            max_messages_count=200,
+            max_await_duration_ms=50,
         )
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="my-pubsub",
+        subscription = Subscription(
+            component_name="my-pubsub",
             topic="orders",
             route="process-orders",
-            message_handler=handler,
-            bulk_subscribe=bulk_config,
+            handler=handler,
+            bulk_config=bulk_config,
             dead_letter_topic="orders-dlq",
         )
 
-        assert subscription.pubsub_component_name == "my-pubsub"
+        assert subscription.component_name == "my-pubsub"
         assert subscription.topic == "orders"
         assert subscription.route == "process-orders"
-        assert subscription.bulk_subscribe.enabled is True
-        assert subscription.bulk_subscribe.maxMessagesCount == 200
+        assert subscription.bulk_config.enabled is True
+        assert subscription.bulk_config.max_messages_count == 200
         assert subscription.dead_letter_topic == "orders-dlq"
 
-    def test_pubsub_subscription_missing_required_field(self):
-        """Test PubSubSubscription validation fails when required fields are missing."""
+    def test_subscription_missing_required_field(self):
+        """Test Subscription validation fails when required fields are missing."""
 
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "processed"}
 
         with pytest.raises(ValidationError) as exc_info:
-            PubSubSubscription(
-                pubsub_component_name="messaging",
+            Subscription(
+                component_name="messaging",
                 topic="test-topic",
                 # Missing route
-                message_handler=handler,
+                handler=handler,
             )
 
         assert "route" in str(exc_info.value)
 
-    def test_bulk_subscribe_defaults(self):
-        """Test BulkSubscribe model default values."""
-        bulk_config = BulkSubscribe()
+    def test_subscription_bulk_config_defaults(self):
+        """Test SubscriptionBulkConfig model default values."""
+        bulk_config = SubscriptionBulkConfig()
 
         assert bulk_config.enabled is False
-        assert bulk_config.maxMessagesCount == 100
-        assert bulk_config.maxAwaitDurationMs == 40
+        assert bulk_config.max_messages_count == 100
+        assert bulk_config.max_await_duration_ms == 40
 
-    def test_bulk_subscribe_with_custom_values(self):
-        """Test BulkSubscribe model with custom values."""
-        bulk_config = BulkSubscribe(
+    def test_subscription_bulk_config_with_custom_values(self):
+        """Test SubscriptionBulkConfig model with custom values."""
+        bulk_config = SubscriptionBulkConfig(
             enabled=True,
-            maxMessagesCount=500,
-            maxAwaitDurationMs=200,
+            max_messages_count=500,
+            max_await_duration_ms=200,
         )
 
         assert bulk_config.enabled is True
-        assert bulk_config.maxMessagesCount == 500
-        assert bulk_config.maxAwaitDurationMs == 200
+        assert bulk_config.max_messages_count == 500
+        assert bulk_config.max_await_duration_ms == 200
 
 
 class TestServer:
@@ -358,14 +358,14 @@ class TestMessagingRouterRegistration:
         def sync_message_handler(message: Dict[str, Any]) -> dict:
             return {"status": "processed", "data": message}
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="process-message",
-            message_handler=sync_message_handler,
+            handler=sync_message_handler,
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.register_routers()
 
         # Verify the route is registered
@@ -387,14 +387,14 @@ class TestMessagingRouterRegistration:
         async def async_message_handler(message: Dict[str, Any]) -> dict:
             return {"status": "async_processed", "data": message}
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="async-process",
-            message_handler=async_message_handler,
+            handler=async_message_handler,
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.register_routers()
 
         transport = ASGITransport(app=self.app.app)
@@ -419,21 +419,21 @@ class TestMessagingRouterRegistration:
             return {"handler": "two"}
 
         subscriptions = [
-            PubSubSubscription(
-                pubsub_component_name="messaging",
+            Subscription(
+                component_name="messaging",
                 topic="topic-one",
                 route="route-one",
-                message_handler=handler_one,
+                handler=handler_one,
             ),
-            PubSubSubscription(
-                pubsub_component_name="messaging",
+            Subscription(
+                component_name="messaging",
                 topic="topic-two",
                 route="route-two",
-                message_handler=handler_two,
+                handler=handler_two,
             ),
         ]
 
-        self.app.messaging_subscriptions = subscriptions
+        self.app.subscriptions = subscriptions
         self.app.register_routers()
 
         transport = ASGITransport(app=self.app.app)
@@ -457,7 +457,7 @@ class TestMessagingRouterRegistration:
     @pytest.mark.asyncio
     async def test_messaging_router_not_registered_when_no_subscriptions(self):
         """Test that no messaging routes are registered when subscriptions list is empty."""
-        self.app.messaging_subscriptions = []
+        self.app.subscriptions = []
         self.app.register_routers()
 
         transport = ASGITransport(app=self.app.app)
@@ -488,14 +488,14 @@ class TestDaprSubscriptionEndpointGeneration:
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "ok"}
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="my-pubsub",
+        subscription = Subscription(
+            component_name="my-pubsub",
             topic="my-topic",
             route="handle-message",
-            message_handler=handler,
+            handler=handler,
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.event_triggers = []
 
         subscriptions = await self.app.get_dapr_subscriptions()
@@ -514,21 +514,21 @@ class TestDaprSubscriptionEndpointGeneration:
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "ok"}
 
-        bulk_config = BulkSubscribe(
+        bulk_config = SubscriptionBulkConfig(
             enabled=True,
-            maxMessagesCount=250,
-            maxAwaitDurationMs=75,
+            max_messages_count=250,
+            max_await_duration_ms=75,
         )
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="bulk-topic",
             route="bulk-handler",
-            message_handler=handler,
-            bulk_subscribe=bulk_config,
+            handler=handler,
+            bulk_config=bulk_config,
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.event_triggers = []
 
         subscriptions = await self.app.get_dapr_subscriptions()
@@ -546,21 +546,21 @@ class TestDaprSubscriptionEndpointGeneration:
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "ok"}
 
-        bulk_config = BulkSubscribe(
+        bulk_config = SubscriptionBulkConfig(
             enabled=False,
-            maxMessagesCount=100,
-            maxAwaitDurationMs=40,
+            max_messages_count=100,
+            max_await_duration_ms=40,
         )
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="topic",
             route="handler",
-            message_handler=handler,
-            bulk_subscribe=bulk_config,
+            handler=handler,
+            bulk_config=bulk_config,
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.event_triggers = []
 
         subscriptions = await self.app.get_dapr_subscriptions()
@@ -576,15 +576,15 @@ class TestDaprSubscriptionEndpointGeneration:
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "ok"}
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="main-topic",
             route="main-handler",
-            message_handler=handler,
+            handler=handler,
             dead_letter_topic="main-topic-dlq",
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.event_triggers = []
 
         subscriptions = await self.app.get_dapr_subscriptions()
@@ -600,22 +600,22 @@ class TestDaprSubscriptionEndpointGeneration:
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "ok"}
 
-        bulk_config = BulkSubscribe(
+        bulk_config = SubscriptionBulkConfig(
             enabled=True,
-            maxMessagesCount=500,
-            maxAwaitDurationMs=150,
+            max_messages_count=500,
+            max_await_duration_ms=150,
         )
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="kafka-pubsub",
+        subscription = Subscription(
+            component_name="kafka-pubsub",
             topic="orders-topic",
             route="process-orders",
-            message_handler=handler,
-            bulk_subscribe=bulk_config,
+            handler=handler,
+            bulk_config=bulk_config,
             dead_letter_topic="orders-dlq",
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.event_triggers = []
 
         subscriptions = await self.app.get_dapr_subscriptions()
@@ -641,22 +641,22 @@ class TestDaprSubscriptionEndpointGeneration:
             return {"status": "two"}
 
         subscriptions_list = [
-            PubSubSubscription(
-                pubsub_component_name="pubsub-a",
+            Subscription(
+                component_name="pubsub-a",
                 topic="topic-a",
                 route="handler-a",
-                message_handler=handler_one,
+                handler=handler_one,
             ),
-            PubSubSubscription(
-                pubsub_component_name="pubsub-b",
+            Subscription(
+                component_name="pubsub-b",
                 topic="topic-b",
                 route="handler-b",
-                message_handler=handler_two,
+                handler=handler_two,
                 dead_letter_topic="topic-b-dlq",
             ),
         ]
 
-        self.app.messaging_subscriptions = subscriptions_list
+        self.app.subscriptions = subscriptions_list
         self.app.event_triggers = []
 
         subscriptions = await self.app.get_dapr_subscriptions()
@@ -681,15 +681,15 @@ class TestDaprSubscriptionEndpointGeneration:
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "ok"}
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="test-pubsub",
+        subscription = Subscription(
+            component_name="test-pubsub",
             topic="test-topic",
             route="test-handler",
-            message_handler=handler,
-            bulk_subscribe=BulkSubscribe(enabled=True, maxMessagesCount=100),
+            handler=handler,
+            bulk_config=SubscriptionBulkConfig(enabled=True, max_messages_count=100),
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.event_triggers = []
         self.app.register_routers()
 
@@ -724,14 +724,14 @@ class TestMessageHandlerCallbackInvocation:
             received_data.append(message)
             return {"received": True}
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="sync-route",
-            message_handler=sync_handler,
+            handler=sync_handler,
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.register_routers()
 
         test_payload = {"message": "hello", "value": 123}
@@ -758,14 +758,14 @@ class TestMessageHandlerCallbackInvocation:
             received_data.append(message)
             return {"async_received": True}
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="async-route",
-            message_handler=async_handler,
+            handler=async_handler,
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.register_routers()
 
         test_payload = {"message": "async_hello", "value": 456}
@@ -792,14 +792,14 @@ class TestMessageHandlerCallbackInvocation:
             call_count[0] += 1
             return {"call_count": call_count[0]}
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="tracked-route",
-            message_handler=tracked_handler,
+            handler=tracked_handler,
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.register_routers()
 
         transport = ASGITransport(app=self.app.app)
@@ -827,14 +827,14 @@ class TestMessageHandlerCallbackInvocation:
         def error_handler(message: Dict[str, Any]) -> dict:
             raise ValueError("Handler error occurred")
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="error-route",
-            message_handler=error_handler,
+            handler=error_handler,
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.register_routers()
 
         transport = ASGITransport(app=self.app.app, raise_app_exceptions=False)
@@ -854,14 +854,14 @@ class TestMessageHandlerCallbackInvocation:
         async def async_error_handler(message: Dict[str, Any]) -> dict:
             raise RuntimeError("Async handler error occurred")
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="async-error-route",
-            message_handler=async_error_handler,
+            handler=async_error_handler,
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.register_routers()
 
         transport = ASGITransport(app=self.app.app, raise_app_exceptions=False)
@@ -886,14 +886,14 @@ class TestMessageHandlerCallbackInvocation:
                 "metadata": {"source": "test"},
             }
 
-        subscription = PubSubSubscription(
-            pubsub_component_name="messaging",
+        subscription = Subscription(
+            component_name="messaging",
             topic="test-topic",
             route="custom-response-route",
-            message_handler=custom_response_handler,
+            handler=custom_response_handler,
         )
 
-        self.app.messaging_subscriptions = [subscription]
+        self.app.subscriptions = [subscription]
         self.app.register_routers()
 
         transport = ASGITransport(app=self.app.app)
