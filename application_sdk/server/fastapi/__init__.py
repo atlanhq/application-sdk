@@ -225,10 +225,10 @@ class APIServer(ServerInterface):
         subscription_router = APIRouter()
         for subscription in self.subscriptions:
             subscription_router.add_api_route(
-                f"/{subscription.route}",
+                    f"/{subscription.route}",
                 subscription.handler,
-                methods=["POST"],
-            )
+                    methods=["POST"],
+                )
         self.app.include_router(subscription_router, prefix="/subscriptions/v1")
 
     def fallback_home(self, request: Request) -> HTMLResponse:
@@ -449,18 +449,18 @@ class APIServer(ServerInterface):
 
         subscriptions: List[dict[str, Any]] = []
         for subscription in self.subscriptions:
-            subscription_dict: dict[str, Any] = {
+                subscription_dict: dict[str, Any] = {
                 "pubsubname": subscription.component_name,
-                "topic": subscription.topic,
-                "route": f"/subscriptions/v1/{subscription.route}",
-            }
+                    "topic": subscription.topic,
+                    "route": f"/subscriptions/v1/{subscription.route}",
+                }
             if subscription.bulk_config and subscription.bulk_config.enabled:
                 subscription_dict["bulkSubscribe"] = subscription.bulk_config.model_dump(
                     by_alias=True
                 )
-            if subscription.dead_letter_topic:
+                if subscription.dead_letter_topic:
                 subscription_dict["deadLetterTopic"] = subscription.dead_letter_topic
-            subscriptions.append(subscription_dict)
+                subscriptions.append(subscription_dict)
         for event_trigger in self.event_triggers:
             filters = [
                 f"({event_filter.path} {event_filter.operator} '{event_filter.value}')"

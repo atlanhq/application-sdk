@@ -15,7 +15,6 @@ from application_sdk.server.fastapi import (
 )
 from application_sdk.server.fastapi.models import (
     Subscription,
-    SubscriptionBulkConfig,
 )
 from application_sdk.test_utils.hypothesis.strategies.server.fastapi import (
     payload_strategy,
@@ -71,7 +70,7 @@ class TestSubscriptionModel:
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "processed"}
 
-        bulk_config = SubscriptionBulkConfig(
+        bulk_config = Subscription.BulkConfig(
             enabled=True,
             max_messages_count=50,
             max_await_duration_ms=100,
@@ -112,7 +111,7 @@ class TestSubscriptionModel:
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "processed"}
 
-        bulk_config = SubscriptionBulkConfig(
+        bulk_config = Subscription.BulkConfig(
             enabled=True,
             max_messages_count=200,
             max_await_duration_ms=50,
@@ -151,16 +150,16 @@ class TestSubscriptionModel:
         assert "route" in str(exc_info.value)
 
     def test_subscription_bulk_config_defaults(self):
-        """Test SubscriptionBulkConfig model default values."""
-        bulk_config = SubscriptionBulkConfig()
+        """Test Subscription.BulkConfig model default values."""
+        bulk_config = Subscription.BulkConfig()
 
         assert bulk_config.enabled is False
         assert bulk_config.max_messages_count == 100
         assert bulk_config.max_await_duration_ms == 40
 
     def test_subscription_bulk_config_with_custom_values(self):
-        """Test SubscriptionBulkConfig model with custom values."""
-        bulk_config = SubscriptionBulkConfig(
+        """Test Subscription.BulkConfig model with custom values."""
+        bulk_config = Subscription.BulkConfig(
             enabled=True,
             max_messages_count=500,
             max_await_duration_ms=200,
@@ -514,7 +513,7 @@ class TestDaprSubscriptionEndpointGeneration:
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "ok"}
 
-        bulk_config = SubscriptionBulkConfig(
+        bulk_config = Subscription.BulkConfig(
             enabled=True,
             max_messages_count=250,
             max_await_duration_ms=75,
@@ -546,7 +545,7 @@ class TestDaprSubscriptionEndpointGeneration:
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "ok"}
 
-        bulk_config = SubscriptionBulkConfig(
+        bulk_config = Subscription.BulkConfig(
             enabled=False,
             max_messages_count=100,
             max_await_duration_ms=40,
@@ -600,7 +599,7 @@ class TestDaprSubscriptionEndpointGeneration:
         def handler(message: Dict[str, Any]) -> dict:
             return {"status": "ok"}
 
-        bulk_config = SubscriptionBulkConfig(
+        bulk_config = Subscription.BulkConfig(
             enabled=True,
             max_messages_count=500,
             max_await_duration_ms=150,
@@ -686,7 +685,7 @@ class TestDaprSubscriptionEndpointGeneration:
             topic="test-topic",
             route="test-handler",
             handler=handler,
-            bulk_config=SubscriptionBulkConfig(enabled=True, max_messages_count=100),
+            bulk_config=Subscription.BulkConfig(enabled=True, max_messages_count=100),
         )
 
         self.app.subscriptions = [subscription]

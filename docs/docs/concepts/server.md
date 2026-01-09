@@ -33,7 +33,8 @@ This module provides the core server framework for building Atlan applications, 
 6.  **Subscriptions (`application_sdk.server.fastapi.models.py`)**:
     *   **Purpose:** Configure Dapr pub/sub message subscriptions for event-driven processing without Temporal workflows.
         *   `Subscription`: Defines a subscription to a Dapr pubsub topic with a handler callback.
-        *   `SubscriptionBulkConfig`: Optional configuration for bulk message processing.
+        *   `Subscription.BulkConfig`: Nested class for bulk message processing configuration.
+        *   `Subscription.MessageStatus`: Nested enum for handler response status codes (`SUCCESS`, `RETRY`, `DROP`).
 
 ## Usage Patterns
 
@@ -264,7 +265,7 @@ import asyncio
 from typing import Any, Dict
 
 from application_sdk.server.fastapi import APIServer
-from application_sdk.server.fastapi.models import Subscription, SubscriptionBulkConfig
+from application_sdk.server.fastapi.models import Subscription
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -275,8 +276,8 @@ def process_message(message: Dict[str, Any]) -> dict:
     event_data = message.get("data", message)
     logger.info(f"Processing message: {event_data}")
     
-    # Return status: SUCCESS, RETRY, or DROP
-    return {"status": "SUCCESS"}
+    # Return status using Subscription.MessageStatus enum
+    return {"status": Subscription.MessageStatus.SUCCESS}
 
 # Define an async handler for bulk processing
 async def process_bulk_messages(request: Dict[str, Any]) -> dict:
@@ -287,11 +288,11 @@ async def process_bulk_messages(request: Dict[str, Any]) -> dict:
         for entry in request.get("entries", []):
             entry_id = entry.get("entryId", "unknown")
             # Process each entry
-            statuses.append({"entryId": entry_id, "status": "SUCCESS"})
+            statuses.append({"entryId": entry_id, "status": Subscription.MessageStatus.SUCCESS})
         return {"statuses": statuses}
     else:
         # Single message format
-        return {"status": "SUCCESS"}
+        return {"status": Subscription.MessageStatus.SUCCESS}
 
 async def main():
     # Define subscriptions with handler callbacks
@@ -308,7 +309,7 @@ async def main():
         topic="bulk-events-topic",
         route="bulk-events",
         handler=process_bulk_messages,
-        bulk_config=SubscriptionBulkConfig(
+        bulk_config=Subscription.BulkConfig(
             enabled=True,
             max_messages_count=100,      # Max messages per batch
             max_await_duration_ms=1000,  # Max wait time for batch
@@ -330,7 +331,7 @@ This setup:
 *   Registers message handler endpoints at `/subscriptions/v1/{route}`
 *   Configures Dapr subscriptions via `/dapr/subscribe` endpoint
 *   Supports both sync and async handlers
-*   Supports bulk message processing with `SubscriptionBulkConfig`
+*   Supports bulk message processing with `Subscription.BulkConfig`
 *   Supports dead letter topics for failed messages
 
 ## Summary
