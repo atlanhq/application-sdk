@@ -1,7 +1,7 @@
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: subscription
+  name: pubsub
 spec:
   type: pubsub.in-memory
   version: v1
@@ -10,7 +10,7 @@ spec:
 # apiVersion: dapr.io/v1alpha1
 # kind: Component
 # metadata:
-#   name: subscription
+#   name: pubsub
 # spec:
 #   type: pubsub.kafka
 #   version: v1
