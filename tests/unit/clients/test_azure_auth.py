@@ -36,11 +36,9 @@ class TestAzureAuthProvider:
             await auth_provider._create_service_principal_credential(credentials)
 
         error_message = str(exc_info.value)
-        assert "Missing required credential keys: tenant_id" in error_message
-        assert (
-            "All of tenant_id, client_id, and client_secret are required"
-            in error_message
-        )
+        # Pydantic provides clear error messages about missing fields
+        assert "tenant" in error_message.lower() or "tenantId" in error_message
+        assert "Field required" in error_message or "required" in error_message.lower()
 
     @pytest.mark.asyncio
     async def test_missing_client_id(self, auth_provider):
@@ -54,11 +52,9 @@ class TestAzureAuthProvider:
             await auth_provider._create_service_principal_credential(credentials)
 
         error_message = str(exc_info.value)
-        assert "Missing required credential keys: client_id" in error_message
-        assert (
-            "All of tenant_id, client_id, and client_secret are required"
-            in error_message
-        )
+        # Pydantic provides clear error messages about missing fields
+        assert "client" in error_message.lower() or "clientId" in error_message
+        assert "Field required" in error_message or "required" in error_message.lower()
 
     @pytest.mark.asyncio
     async def test_missing_client_secret(self, auth_provider):
@@ -69,11 +65,9 @@ class TestAzureAuthProvider:
             await auth_provider._create_service_principal_credential(credentials)
 
         error_message = str(exc_info.value)
-        assert "Missing required credential keys: client_secret" in error_message
-        assert (
-            "All of tenant_id, client_id, and client_secret are required"
-            in error_message
-        )
+        # Pydantic provides clear error messages about missing fields
+        assert "client_secret" in error_message.lower() or "clientSecret" in error_message
+        assert "Field required" in error_message or "required" in error_message.lower()
 
     @pytest.mark.asyncio
     async def test_missing_multiple_keys(self, auth_provider):
@@ -87,14 +81,9 @@ class TestAzureAuthProvider:
             await auth_provider._create_service_principal_credential(credentials)
 
         error_message = str(exc_info.value)
-        assert (
-            "Missing required credential keys: client_id, client_secret"
-            in error_message
-        )
-        assert (
-            "All of tenant_id, client_id, and client_secret are required"
-            in error_message
-        )
+        # Pydantic provides clear error messages about all missing fields
+        assert "client" in error_message.lower()
+        assert "Field required" in error_message or "required" in error_message.lower()
 
     @pytest.mark.asyncio
     async def test_missing_all_keys(self, auth_provider):

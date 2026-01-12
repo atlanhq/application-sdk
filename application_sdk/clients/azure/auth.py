@@ -154,6 +154,12 @@ class AzureAuthProvider:
                     f"Received: {auth_type}"
                 )
 
+            if not credentials:
+                raise CommonError(
+                    f"{CommonError.CREDENTIALS_PARSE_ERROR}: "
+                    "Credentials required for service principal authentication"
+                )
+
             return await self._create_service_principal_credential(credentials)
 
         except ClientAuthenticationError as e:
@@ -176,13 +182,14 @@ class AzureAuthProvider:
             )
 
     async def _create_service_principal_credential(
-        self, credentials: Optional[Dict[str, Any]]
+        self, credentials: Dict[str, Any]
     ) -> ClientSecretCredential:
         """
         Create service principal credential.
 
         Args:
-            credentials (Optional[Dict[str, Any]]): Service principal credentials.
+            credentials (Dict[str, Any]): Service principal credentials.
+                Must include tenant_id, client_id, and client_secret.
 
         Returns:
             ClientSecretCredential: Service principal credential.
@@ -200,43 +207,15 @@ class AzureAuthProvider:
             # Validate credentials using Pydantic model
             validated_credentials = ServicePrincipalCredentials(**credentials)
         except ValidationError as e:
-            # Extract missing fields from validation errors
-            # Map both field names and aliases to the canonical field name
-            field_name_mapping = {
-                "tenant_id": "tenant_id",
-                "tenantId": "tenant_id",
-                "client_id": "client_id",
-                "clientId": "client_id",
-                "client_secret": "client_secret",
-                "clientSecret": "client_secret",
-            }
-            missing_fields = []
-            seen_fields = set()
-            for error in e.errors():
-                if error["type"] == "missing":
-                    field_name = error["loc"][0]
-                    # Map to canonical field name (handles both field name and alias)
-                    canonical_name = field_name_mapping.get(field_name, field_name)
-                    if canonical_name not in seen_fields:
-                        missing_fields.append(canonical_name)
-                        seen_fields.add(canonical_name)
-
-            if missing_fields:
-                error_message = (
-                    f"Missing required credential keys: {', '.join(missing_fields)}. "
-                    "All of tenant_id, client_id, and client_secret are required for "
-                    "service principal authentication"
-                )
-            else:
-                # Handle other validation errors (type errors, etc.)
-                error_details = "; ".join(
-                    [
-                        f"{'.'.join(str(loc) for loc in err['loc'])}: {err['msg']}"
-                        for err in e.errors()
-                    ]
-                )
-                error_message = f"Invalid credential parameters: {error_details}"
-
+            # Pydantic provides detailed error messages for all validation errors
+            # Format errors into a user-friendly message
+            error_details = "; ".join(
+                [
+                    f"{'.'.join(str(loc) for loc in err['loc'])}: {err['msg']}"
+                    for err in e.errors()
+                ]
+            )
+            error_message = f"Invalid credential parameters: {error_details}"
             logger.error(f"Azure credential validation failed: {error_message}")
             raise CommonError(
                 f"{CommonError.CREDENTIALS_PARSE_ERROR}: {error_message}"
