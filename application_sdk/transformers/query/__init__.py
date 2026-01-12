@@ -298,7 +298,7 @@ class QueryBasedTransformer(TransformerInterface):
         try:
             # Get all column names
             columns = dataframe.column_names
-            logger.debug(f"=== DEBUG: get_grouped_dataframe_by_prefix ===")
+            logger.debug("=== DEBUG: get_grouped_dataframe_by_prefix ===")
             logger.debug(f"Input DataFrame columns: {columns}")
 
             # Group columns by their path components

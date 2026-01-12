@@ -217,9 +217,7 @@ class AzureAuthProvider:
             )
             error_message = f"Invalid credential parameters: {error_details}"
             logger.error(f"Azure credential validation failed: {error_message}")
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: {error_message}"
-            )
+            raise CommonError(f"{CommonError.CREDENTIALS_PARSE_ERROR}: {error_message}")
 
         logger.debug(
             f"Creating service principal credential for tenant: {validated_credentials.tenant_id}"
@@ -264,9 +262,7 @@ class AzureAuthProvider:
             logger.debug("Validating Azure credential")
 
             # Try to get a token for Azure Management API
-            token = await run_sync(credential.get_token)(
-                AZURE_MANAGEMENT_API_ENDPOINT
-            )
+            token = await run_sync(credential.get_token)(AZURE_MANAGEMENT_API_ENDPOINT)
 
             if token and hasattr(token, "token"):
                 logger.debug("Azure credential validation successful")

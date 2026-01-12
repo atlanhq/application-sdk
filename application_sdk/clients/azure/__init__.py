@@ -4,4 +4,3 @@
 AZURE_MANAGEMENT_API_ENDPOINT = "https://management.azure.com/.default"
 
 __all__ = ["AZURE_MANAGEMENT_API_ENDPOINT"]
-

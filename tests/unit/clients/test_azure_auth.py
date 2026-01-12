@@ -66,7 +66,9 @@ class TestAzureAuthProvider:
 
         error_message = str(exc_info.value)
         # Pydantic provides clear error messages about missing fields
-        assert "client_secret" in error_message.lower() or "clientSecret" in error_message
+        assert (
+            "client_secret" in error_message.lower() or "clientSecret" in error_message
+        )
         assert "Field required" in error_message or "required" in error_message.lower()
 
     @pytest.mark.asyncio
