@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 import daft
 import yaml
+from daft.functions import to_struct, when
 from pyatlan.model.enums import AtlanConnectorType
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -242,7 +243,7 @@ class QueryBasedTransformer(TransformerInterface):
         if struct_fields:
             logger.debug(f"Creating struct with {len(struct_fields)} fields")
             # Create the struct first
-            struct = daft.struct(*struct_fields)
+            struct = to_struct(*struct_fields)
 
             # If we have non-null checks, apply them
             if non_null_fields:
@@ -251,8 +252,8 @@ class QueryBasedTransformer(TransformerInterface):
                 for check in non_null_fields[1:]:
                     any_non_null = any_non_null | check
 
-                # Use if_else on the any_non_null Expression
-                return any_non_null.if_else(struct, None).alias(prefix)
+                # Use when().otherwise() for conditional expression (replaces if_else in daft 0.7+)
+                return when(any_non_null, struct).otherwise(None).alias(prefix)
 
             return struct.alias(prefix)
 

@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "2.1.0"
+version = "2.1.1"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -49,7 +49,7 @@ pandas = [
     "pandas>=2.2.3,<2.4.0"
 ]
 daft = [
-    "daft>=0.4.12,<0.8.0",
+    "daft>=0.7.1,<0.8.0",
 ]
 sqlalchemy = [
     "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
