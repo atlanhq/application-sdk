@@ -40,11 +40,11 @@ from azure.core.exceptions import AzureError, ClientAuthenticationError
 from pydantic import BaseModel
 
 from application_sdk.clients import ClientInterface
+from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.clients.azure.auth import AzureAuthProvider
 from application_sdk.common.error_codes import ClientError
 from application_sdk.common.utils import run_sync
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 
 logger = get_logger(__name__)
 
@@ -138,9 +138,9 @@ class AzureClient(ClientInterface):
             # Handle credential resolution
             if "credential_guid" in self.credentials:
                 # If we have a credential_guid, use the async get_credentials function
-                from application_sdk.common.credential_utils import get_credentials
+                from application_sdk.services.secretstore import SecretStore
 
-                self.resolved_credentials = await get_credentials(
+                self.resolved_credentials = await SecretStore.get_credentials(
                     self.credentials["credential_guid"]
                 )
             else:

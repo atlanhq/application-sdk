@@ -67,7 +67,11 @@ class TestAzureClient:
         """Test that the Azure Management API endpoint constant is correctly defined."""
         assert AZURE_MANAGEMENT_API_ENDPOINT == "https://management.azure.com/.default"
         assert AZURE_MANAGEMENT_API_ENDPOINT.startswith("https://")
-        assert "management.azure.com" in AZURE_MANAGEMENT_API_ENDPOINT
+        # Parse URL to securely check hostname (avoids substring matching vulnerability)
+        from urllib.parse import urlparse
+
+        parsed_url = urlparse(AZURE_MANAGEMENT_API_ENDPOINT)
+        assert parsed_url.hostname == "management.azure.com"
 
     @pytest.fixture
     def azure_client(self):
