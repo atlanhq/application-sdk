@@ -40,7 +40,7 @@ class TestSubscriptionModel:
             handler=sync_handler,
         )
 
-        assert subscription.component_name == "messaging"
+        assert subscription.component_name == "pubsub"
         assert subscription.topic == "test-topic"
         assert subscription.route == "test-route"
         assert subscription.handler == sync_handler
