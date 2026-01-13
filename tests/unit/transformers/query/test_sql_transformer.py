@@ -154,6 +154,24 @@ def test_build_struct(sql_transformer):
     assert str(result) == expected_result
 
 
+def test_build_struct_with_none_level(sql_transformer):
+    """Test the _build_struct method raises ValueError when level is None"""
+    with pytest.raises(ValueError, match="level cannot be None in _build_struct"):
+        sql_transformer._build_struct(level=None, prefix="test")
+
+
+def test_build_struct_with_none_prefix(sql_transformer):
+    """Test the _build_struct method raises ValueError when prefix is None"""
+    level = {
+        "columns": [
+            ("attributes.name", "name"),
+            ("attributes.qualifiedName", "qualifiedName"),
+        ],
+    }
+    with pytest.raises(ValueError, match="prefix cannot be None in _build_struct"):
+        sql_transformer._build_struct(level=level, prefix=None)
+
+
 def test_get_grouped_dataframe_by_prefix(sql_transformer):
     """
     Test the get_grouped_dataframe_by_prefix method
