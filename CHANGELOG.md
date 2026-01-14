@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.2.0 (January 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.1.1...v2.2.0
+
+### Features
+
+- added Azure specific client authentication (#619) (by @rupali-atlan in [37b2e19](https://github.com/atlanhq/application-sdk/commit/37b2e19))
+- Using Pubsub for message processors (#898) (by @niteesh-atlan in [f87f583](https://github.com/atlanhq/application-sdk/commit/f87f583))
+
+
 ## v2.1.1 (January 08, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.1.0...v2.1.1
