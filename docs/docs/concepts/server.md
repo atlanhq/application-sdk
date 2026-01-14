@@ -30,6 +30,12 @@ This module provides the core server framework for building Atlan applications, 
 5.  **Models (`application_sdk.server.fastapi.models.py`)**:
     *   **Purpose:** Defines Pydantic models used for request/response validation and serialization for the default API endpoints (e.g., `TestAuthRequest`, `WorkflowResponse`, `PreflightCheckRequest`, `PreflightCheckResponse`).
 
+6.  **Subscriptions (`application_sdk.server.fastapi.models.py`)**:
+    *   **Purpose:** Configure Dapr pub/sub message subscriptions for event-driven processing without Temporal workflows.
+        *   `Subscription`: Defines a subscription to a Dapr pubsub topic with a handler callback.
+        *   `Subscription.BulkConfig`: Nested class for bulk message processing configuration.
+        *   `Subscription.MessageStatus`: Nested enum for handler response status codes (`SUCCESS`, `RETRY`, `DROP`).
+
 ## Usage Patterns
 
 ### 1. Using the Default FastAPI Server
@@ -249,6 +255,85 @@ api_server = APIServer(
 )
 ```
 
+### 4. Using Subscriptions for Message Processing
+
+For event-driven applications that process messages from Dapr pub/sub without Temporal workflows, you can use `Subscription` to define message handlers.
+
+```python
+# In your main server file (e.g., main.py)
+import asyncio
+from typing import Any, Dict
+
+from application_sdk.server.fastapi import APIServer
+from application_sdk.server.fastapi.models import Subscription
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
+# Define a sync message handler
+def process_message(message: Dict[str, Any]) -> dict:
+    """Process a single message from Dapr pubsub."""
+    event_data = message.get("data", message)
+    logger.info(f"Processing message: {event_data}")
+
+    # Return status using Subscription.MessageStatus enum
+    return {"status": Subscription.MessageStatus.SUCCESS}
+
+# Define an async handler for bulk processing
+async def process_bulk_messages(request: Dict[str, Any]) -> dict:
+    """Process messages in bulk from Dapr pubsub."""
+    if "entries" in request:
+        # Bulk format
+        statuses = []
+        for entry in request.get("entries", []):
+            entry_id = entry.get("entryId", "unknown")
+            # Process each entry
+            statuses.append({"entryId": entry_id, "status": Subscription.MessageStatus.SUCCESS})
+        return {"statuses": statuses}
+    else:
+        # Single message format
+        return {"status": Subscription.MessageStatus.SUCCESS}
+
+async def main():
+    # Define subscriptions with handler callbacks
+    subscription = Subscription(
+        component_name="messaging",      # Dapr pubsub component name
+        topic="events-topic",            # Topic to subscribe to
+        route="events-topic",            # Route path for the handler endpoint
+        handler=process_message,         # Callback function (sync or async)
+        dead_letter_topic="events-dlq",  # Optional dead letter topic
+    )
+
+    bulk_subscription = Subscription(
+        component_name="messaging",
+        topic="bulk-events-topic",
+        route="bulk-events",
+        handler=process_bulk_messages,
+        bulk_config=Subscription.BulkConfig(
+            enabled=True,
+            max_messages_count=100,      # Max messages per batch
+            max_await_duration_ms=1000,  # Max wait time for batch
+        ),
+    )
+
+    # Create server with subscriptions (no workflow_client needed)
+    server = APIServer(
+        subscriptions=[subscription, bulk_subscription],
+    )
+
+    await server.start()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+This setup:
+*   Registers message handler endpoints at `/subscriptions/v1/{route}`
+*   Configures Dapr subscriptions via `/dapr/subscribe` endpoint
+*   Supports both sync and async handlers
+*   Supports bulk message processing with `Subscription.BulkConfig`
+*   Supports dead letter topics for failed messages
+
 ## Summary
 
-The `application_sdk.server` module, especially the `fastapi` sub-package, provides a robust foundation for building web servers that interact with Atlan handlers and Temporal workflows. You can use the default `APIServer` for simple cases, extend it with custom routers for specific API needs, and override handler methods to tailor the behavior of standard API endpoints.
+The `application_sdk.server` module, especially the `fastapi` sub-package, provides a robust foundation for building web servers that interact with Atlan handlers and Temporal workflows. You can use the default `APIServer` for simple cases, extend it with custom routers for specific API needs, override handler methods to tailor the behavior of standard API endpoints, and use `Subscription` for event-driven message processing.
