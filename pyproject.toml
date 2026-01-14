@@ -20,7 +20,6 @@ classifiers = [
 ]
 keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
-    "aiohttp>=3.10.0,<3.14.0",
     "opentelemetry-exporter-otlp==1.39.1",
     "psutil>=7.0.0,<7.3.0",
     "fastapi[standard]==0.127.0",
@@ -40,6 +39,9 @@ Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 
 # Optional dependencies for specific functionality - Install using: uv sync --extra workflows
 [project.optional-dependencies]
+rest = [
+    "aiohttp>=3.10.0,<3.14.0",
+]
 workflows = [
     "dapr==1.16.0",
     "temporalio>=1.7.1,<1.22.0",

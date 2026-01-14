@@ -1,11 +1,27 @@
 """OAuth2 token manager with automatic secret store discovery."""
 
 import time
-from typing import Dict, Optional
-
-import aiohttp
+from typing import TYPE_CHECKING, Dict, Optional
 
 from application_sdk.common.error_codes import ClientError
+
+if TYPE_CHECKING:
+    import aiohttp
+
+
+def _get_aiohttp() -> "aiohttp":
+    """Lazy import aiohttp with helpful error message."""
+    try:
+        import aiohttp
+
+        return aiohttp
+    except ImportError:
+        raise ImportError(
+            "aiohttp is required for REST authentication. "
+            "Install it with: pip install 'atlan-application-sdk[rest]'"
+        ) from None
+
+
 from application_sdk.constants import (
     APPLICATION_NAME,
     AUTH_ENABLED,
@@ -94,6 +110,7 @@ class AtlanAuthClient:
         # Refresh token
         logger.info("Refreshing OAuth2 token")
 
+        aiohttp = _get_aiohttp()
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 self.auth_url,
