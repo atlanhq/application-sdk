@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.2.1 (January 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.2.0...v2.2.1
+
+### Bug Fixes
+
+- event loop policy for Windows (#927) (by @sachi-atlan in [9df1513](https://github.com/atlanhq/application-sdk/commit/9df1513))
+
+
 ## v2.2.0 (January 14, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.1.1...v2.2.0
