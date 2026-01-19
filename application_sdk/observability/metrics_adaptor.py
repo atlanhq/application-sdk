@@ -1,10 +1,13 @@
 import asyncio
+import base64
 import logging
 import threading
+from datetime import datetime
 from enum import Enum
 from time import time
 from typing import Any, Dict, Optional
 
+import httpx
 from opentelemetry import metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import MeterProvider
@@ -14,6 +17,7 @@ from pydantic import BaseModel
 
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
+    ENABLE_SEGMENT_METRICS,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
     METRICS_FILE_NAME,
@@ -24,6 +28,8 @@ from application_sdk.constants import (
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     OTEL_RESOURCE_ATTRIBUTES,
     OTEL_WF_NODE_NAME,
+    SEGMENT_API_URL,
+    SEGMENT_WRITE_KEY,
     SERVICE_NAME,
     SERVICE_VERSION,
 )
@@ -141,11 +147,12 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     """A metrics adapter for Atlan that extends AtlanObservability.
 
     This adapter provides functionality for recording, processing, and exporting
-    metrics to various backends including OpenTelemetry and parquet files.
+    metrics to various backends including OpenTelemetry, Segment API, and parquet files.
 
     Features:
     - Metric recording with labels and units
     - OpenTelemetry integration
+    - Segment API integration
     - Periodic metric flushing
     - Console logging
     - Parquet file storage
@@ -160,6 +167,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         - Sets up base observability configuration
         - Configures date-based file settings
         - Initializes OpenTelemetry metrics if enabled
+        - Initializes Segment API client if enabled
         - Starts periodic flush task for metric buffering
         """
         super().__init__(
@@ -171,9 +179,16 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             file_name=METRICS_FILE_NAME,
         )
 
+        # Initialize segment_client attribute (will be set by _setup_segment_client if enabled)
+        self.segment_client = None
+
         # Initialize OpenTelemetry metrics if enabled
         if ENABLE_OTLP_METRICS:
             self._setup_otel_metrics()
+
+        # Initialize Segment client if enabled
+        if ENABLE_SEGMENT_METRICS:
+            self._setup_segment_client()
 
         # Start periodic flush task if not already started
         if not AtlanMetricsAdapter._flush_task_started:
@@ -251,6 +266,36 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         except Exception as e:
             logging.error(f"Failed to setup OTLP metrics: {e}")
 
+    def _setup_segment_client(self):
+        """Set up Segment API client for metrics export.
+
+        This method:
+        - Validates Segment configuration (API URL and write key)
+        - Initializes segment_client attribute (None if no write key)
+        - No longer creates a persistent client (uses synchronous client per request)
+        - Handles errors gracefully if setup fails
+
+        Raises:
+            Exception: If setup fails, logs error and continues without Segment
+        """
+        try:
+            if not SEGMENT_WRITE_KEY:
+                logging.warning(
+                    "SEGMENT_WRITE_KEY not configured - Segment metrics will be disabled"
+                )
+                self.segment_client = None
+                return
+
+            # No longer need persistent client - we use synchronous httpx.Client
+            # in background threads to avoid event loop conflicts
+            # Set to None to indicate Segment is enabled but we use per-request clients
+            self.segment_client = None
+            logging.info("Segment metrics client initialized successfully")
+
+        except Exception as e:
+            logging.error(f"Failed to setup Segment metrics client: {e}")
+            self.segment_client = None
+
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
         """Parse OpenTelemetry resource attributes from environment variable.
 
@@ -319,6 +364,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         This method:
         - Validates the record is a MetricRecord
         - Sends to OpenTelemetry if enabled
+        - Sends to Segment API if enabled
         - Logs to console
         """
         if not isinstance(record, MetricRecord):
@@ -327,6 +373,13 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         # Send to OpenTelemetry if enabled
         if ENABLE_OTLP_METRICS:
             self._send_to_otel(record)
+
+        # Send to Segment if enabled
+        if ENABLE_SEGMENT_METRICS:
+            logging.info(
+                f"📊 Sending metric '{record.name}' to Segment (value={record.value}, labels={record.labels})"
+            )
+            self._send_to_segment(record)
 
         # Log to console
         self._log_to_console(record)
@@ -369,6 +422,131 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 histogram.record(metric_record.value, metric_record.labels)
         except Exception as e:
             logging.error(f"Error sending metric to OpenTelemetry: {e}")
+
+    def _send_to_segment(self, metric_record: MetricRecord):
+        """Send metric to Segment API.
+
+        Args:
+            metric_record (MetricRecord): Metric record to send
+
+        This method:
+        - Creates Segment track event payload
+        - Sends metric to Segment API with proper authentication
+        - Handles errors gracefully
+
+        Raises:
+            Exception: If sending fails, logs error and continues
+        """
+        if not SEGMENT_WRITE_KEY:
+            return
+
+        # Filter out internal metrics to prevent feedback loops and noise
+        # These metrics are generated by the SDK itself for infrastructure monitoring
+        # and should not be sent to Segment for business analytics
+        filtered_metrics = {
+            # Internal I/O metrics
+            "chunks_written",
+            "write_records",
+            "parquet_write_records",
+            "json_write_records",
+            "json_chunks_written",
+            "write_errors",
+            "json_write_errors",
+            # HTTP middleware metrics
+            "http_requests_total",
+            "http_request_duration_seconds",
+        }
+        if metric_record.name in filtered_metrics:
+            # Skip filtered metrics - they create noise and feedback loops
+            return
+
+        try:
+            # Build Segment event payload
+            event_properties = {
+                "value": metric_record.value,
+                "metric_type": metric_record.type.value,
+                **metric_record.labels,
+            }
+
+            # Add optional fields if present
+            if metric_record.description:
+                event_properties["description"] = metric_record.description
+            if metric_record.unit:
+                event_properties["unit"] = metric_record.unit
+
+            payload = {
+                "userId": "atlan.automation",
+                "event": metric_record.name,
+                "properties": event_properties,
+                "timestamp": datetime.fromtimestamp(
+                    metric_record.timestamp
+                ).isoformat(),
+            }
+
+            # Create Basic Auth header
+            segment_write_key_encoded = base64.b64encode(
+                (SEGMENT_WRITE_KEY + ":").encode("ascii")
+            ).decode()
+
+            headers = {
+                "content-type": "application/json",
+                "Authorization": f"Basic {segment_write_key_encoded}",
+            }
+
+            # Send event asynchronously (fire and forget)
+            # Use synchronous httpx.Client in a background thread to avoid
+            # event loop conflicts when called from different contexts
+            def run_in_thread():
+                try:
+                    logging.info(
+                        f"🚀 Sending Segment event '{metric_record.name}' in background thread"
+                    )
+                    self._send_segment_event_sync(payload, headers)
+                    logging.info(
+                        f"✅ Successfully sent Segment event '{metric_record.name}'"
+                    )
+                except Exception as e:
+                    logging.warning(
+                        f"❌ Error in background thread sending metric to Segment: {e}"
+                    )
+
+            threading.Thread(target=run_in_thread, daemon=True).start()
+
+        except Exception as e:
+            logging.error(f"Error sending metric to Segment: {e}")
+
+    def _send_segment_event_sync(
+        self, payload: Dict[str, Any], headers: Dict[str, str]
+    ):
+        """Send Segment event synchronously (called from background thread).
+
+        Args:
+            payload (Dict[str, Any]): Event payload
+            headers (Dict[str, str]): HTTP headers with authentication
+
+        This method:
+        - Makes synchronous HTTP POST request to Segment API
+        - Handles errors gracefully
+        - Uses synchronous httpx.Client to avoid event loop conflicts
+        """
+        if not SEGMENT_WRITE_KEY:
+            return
+
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(SEGMENT_API_URL, json=payload, headers=headers)
+                if response.status_code == 200:
+                    logging.info(
+                        f"✅ Segment API accepted event '{payload.get('event', 'unknown')}' (status=200)"
+                    )
+                else:
+                    logging.warning(
+                        f"Segment API returned status {response.status_code}: {response.text}"
+                    )
+        except httpx.HTTPError as e:
+            logging.warning(f"HTTP error sending metric to Segment: {e}")
+        except Exception as e:
+            logging.warning(f"Unexpected error sending metric to Segment: {e}")
 
     def _log_to_console(self, metric_record: MetricRecord):
         """Log metric to console using the logger.
@@ -428,6 +606,27 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Raises:
             Exception: If recording fails, logs error and continues
         """
+        # Filter out internal I/O metrics to prevent infinite loop
+        # These metrics are generated when writing observability data to Parquet files
+        # If we add them to the buffer, they trigger more writes, which generate more metrics
+        internal_io_metrics = {
+            "chunks_written",
+            "write_records",
+            "parquet_write_records",
+            "json_write_records",
+            "json_chunks_written",
+            "write_errors",
+            "json_write_errors",
+        }
+        if name in internal_io_metrics:
+            # Skip I/O metrics - they would create an infinite loop
+            # (writing metrics → generates I/O metrics → adds to buffer → writes more metrics → ...)
+            logging.debug(f"⏭️  Skipping I/O metric '{name}' to prevent infinite loop")
+            return
+
+        logging.info(
+            f"📝 Recording metric '{name}' (value={value}, type={metric_type.value})"
+        )
         labels.update(get_workflow_context().model_dump())
 
         try:
