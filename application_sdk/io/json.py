@@ -367,11 +367,6 @@ class JsonFileWriter(Writer):
 
         try:
             # chunk_part is initialized in __init__ and must persist across multiple write() calls
-            logger.debug(
-                f"[WRITE START] chunk_count={self.chunk_count}, chunk_part={self.chunk_part}, "
-                f"total_records={self.total_record_count}, buffer_size_bytes={self.current_buffer_size_bytes}"
-            )
-
             buffer = []
             for row in dataframe.iter_rows():
                 self.total_record_count += 1
@@ -391,10 +386,6 @@ class JsonFileWriter(Writer):
 
                 # If the buffer size is reached append to the file and clear the buffer
                 if self.current_buffer_size >= self.buffer_size:
-                    logger.debug(
-                        f"[BUFFER FULL] Flushing {self.current_buffer_size} records to disk. "
-                        f"chunk_part={self.chunk_part}, total_records={self.total_record_count}"
-                    )
                     await self._flush_daft_buffer(buffer, self.chunk_part)
 
                 if self.current_buffer_size_bytes > self.max_file_size_bytes or (
@@ -402,37 +393,13 @@ class JsonFileWriter(Writer):
                     and self.total_record_count % self.chunk_size == 0
                 ):
                     output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
-                    logger.debug(
-                        f"[UPLOAD TRIGGER] bytes={self.current_buffer_size_bytes}, "
-                        f"max_bytes={self.max_file_size_bytes}, total_records={self.total_record_count}, "
-                        f"chunk_size={self.chunk_size}, file={output_file_name}"
-                    )
                     if os.path.exists(output_file_name):
-                        logger.info(
-                            f"[UPLOADING] {output_file_name}, chunk_part={self.chunk_part}"
-                        )
                         await self._upload_file(output_file_name)
                         self.chunk_part += 1
-                        logger.debug(
-                            f"[UPLOAD COMPLETE] New chunk_part={self.chunk_part}"
-                        )
-                    else:
-                        logger.warning(
-                            f"[UPLOAD SKIPPED] File does not exist: {output_file_name}"
-                        )
 
             # Write any remaining rows in the buffer
             if self.current_buffer_size > 0:
-                logger.debug(
-                    f"[WRITE END] Flushing remaining {self.current_buffer_size} records. "
-                    f"chunk_part={self.chunk_part}"
-                )
                 await self._flush_daft_buffer(buffer, self.chunk_part)
-
-            logger.debug(
-                f"[WRITE COMPLETE] total_records={self.total_record_count}, "
-                f"chunk_part={self.chunk_part}, buffer_bytes={self.current_buffer_size_bytes}"
-            )
 
             # Record metrics for successful write
             self.metrics.record_metric(
@@ -490,34 +457,16 @@ class JsonFileWriter(Writer):
 
         Uploads any remaining buffered data to the object store.
         """
-        logger.debug(
-            f"[FINALIZE START] buffer_bytes={self.current_buffer_size_bytes}, "
-            f"chunk_count={self.chunk_count}, chunk_part={self.chunk_part}"
-        )
-
         # Upload the final file if there's remaining buffered data
         if self.current_buffer_size_bytes > 0:
             output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
-            logger.info(
-                f"[FINALIZE UPLOAD] Uploading remaining data: {output_file_name}"
-            )
             if os.path.exists(output_file_name):
+                logger.info(f"Uploading remaining data: {output_file_name}")
                 await self._upload_file(output_file_name)
                 self.chunk_part += 1
-            else:
-                logger.warning(
-                    f"[FINALIZE SKIPPED] File does not exist: {output_file_name}"
-                )
-        else:
-            logger.debug("[FINALIZE] No remaining data to upload")
 
         # If chunk_start is set we don't want to increment the chunk_count
         # Since it should only increment the chunk_part in this case
         if self.chunk_start is None:
             self.chunk_count += 1
         self.partitions.append(self.chunk_part)
-
-        logger.debug(
-            f"[FINALIZE COMPLETE] total_records={self.total_record_count}, "
-            f"chunk_count={self.chunk_count}, partitions={self.partitions}"
-        )
