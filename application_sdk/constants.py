@@ -239,6 +239,16 @@ METRICS_CLEANUP_ENABLED = (
 )
 METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
 
+# Segment Configuration
+#: Segment API URL for sending events. Defaults to https://api.segment.io/v1/track
+SEGMENT_API_URL = os.getenv("SEGMENT_API_URL", "https://api.segment.io/v1/track")
+#: Segment write key for authentication
+SEGMENT_WRITE_KEY = os.getenv("SEGMENT_WRITE_KEY", "")
+#: Whether to enable Segment metrics export
+ENABLE_SEGMENT_METRICS = (
+    os.getenv("ATLAN_ENABLE_SEGMENT_METRICS", "false").lower() == "true"
+)
+
 # Traces Configuration
 ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
 TRACES_BATCH_SIZE = int(os.getenv("ATLAN_TRACES_BATCH_SIZE", "100"))

@@ -218,6 +218,7 @@ mcp = [
 ]
 pandas = [
     { name = "pandas" },
+    { name = "pyarrow" },
 ]
 scale-data-generator = [
     { name = "faker" },
@@ -286,6 +287,7 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'tests'", specifier = ">=2.2.3,<2.4.0" },
     { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = ">=0.23.1,<0.28.0" },
     { name = "psutil", specifier = ">=7.0.0,<7.3.0" },
+    { name = "pyarrow", marker = "extra == 'pandas'", specifier = ">=20.0.0,<23.0.0" },
     { name = "pyarrow", marker = "extra == 'scale-data-generator'", specifier = ">=20.0.0,<23.0.0" },
     { name = "pyatlan", specifier = ">=8.0.2,<8.5.0" },
     { name = "pydantic", specifier = ">=2.10.6,<2.13.0" },
