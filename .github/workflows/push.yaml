@@ -78,4 +78,4 @@ jobs:
 
       - name: Upload Docs to Kryptonite Bucket
         run: |
-          aws s3 sync ./docs/site s3://kryptonite-store/application-sdk/${{ github.head_ref }} --delete
+          aws s3 sync ./site s3://kryptonite-store/application-sdk/${{ github.head_ref }} --delete
