@@ -155,7 +155,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         has_configmap: bool = False,
     ):
         if APPLICATION_MODE == "LOCAL" or APPLICATION_MODE == "WORKER":
-            return await self._start_worker(
+            await self._start_worker(
                 daemon=APPLICATION_MODE
                 == "LOCAL",  # run the worker in daemon mode if the application mode is local
             )
@@ -165,7 +165,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
                 workflow_class=workflow_class,
                 has_configmap=has_configmap,
             )
-            return await self._start_server()
+            await self._start_server()
 
         raise ValueError(f"Invalid application mode: {APPLICATION_MODE}")
 
