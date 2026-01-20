@@ -1,20 +1,26 @@
 """Worker module for managing Temporal workers.
 
 This module provides the Worker class for managing Temporal workflow workers,
-including their initialization, configuration, and execution.
+including their initialization, configuration, and execution with graceful shutdown support.
 """
 
 import asyncio
+import signal
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from typing import Any, List, Optional, Sequence
 
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.constants import DEPLOYMENT_NAME, MAX_CONCURRENT_ACTIVITIES
+from application_sdk.constants import (
+    DEPLOYMENT_NAME,
+    GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
+    MAX_CONCURRENT_ACTIVITIES,
+)
 from application_sdk.interceptors.models import (
     ApplicationEventNames,
     Event,
@@ -46,7 +52,7 @@ class Worker:
     """Worker class for managing Temporal workflow workers.
 
     This class handles the initialization and execution of Temporal workers,
-    including their activities, workflows, and module configurations.
+    including their activities, workflows, module configurations, and graceful shutdown.
 
     Attributes:
         workflow_client: Client for interacting with Temporal.
@@ -55,6 +61,14 @@ class Worker:
         workflow_classes: List of workflow classes.
         passthrough_modules: List of module names to pass through.
         max_concurrent_activities: Maximum number of concurrent activities.
+        graceful_shutdown_timeout: Time to wait for in-flight activities during shutdown.
+
+    Graceful Shutdown:
+        When SIGTERM or SIGINT is received:
+        1. Signal handlers trigger worker.shutdown()
+        2. Worker stops polling for new tasks
+        3. In-flight activities are allowed to complete within graceful_shutdown_timeout
+        4. Worker exits early if all activities complete, or at timeout
 
     Note:
         This class is designed to be thread-safe when running workers in daemon mode.
@@ -74,6 +88,60 @@ class Worker:
 
     default_passthrough_modules = ["application_sdk", "pandas", "os", "app"]
 
+    def _setup_signal_handlers(self) -> None:
+        """Set up SIGTERM and SIGINT handlers for graceful shutdown.
+
+        Signal handlers can only be registered from the main thread.
+        On Windows, signal handling is not supported.
+        """
+        # Signal handlers only work on Unix-like systems
+        if sys.platform in ("win32", "cygwin"):
+            logger.debug("Signal handlers not supported on Windows")
+            return
+
+        # Signal handlers can only be registered from the main thread
+        if threading.current_thread() is not threading.main_thread():
+            logger.debug(
+                "Skipping signal handler registration - not running in main thread"
+            )
+            return
+
+        loop = asyncio.get_running_loop()
+
+        def handle_signal(sig_name: str) -> None:
+            """Handle shutdown signal by triggering worker.shutdown()."""
+            logger.info(
+                f"Received {sig_name}, initiating graceful shutdown "
+                f"(timeout: {self.graceful_shutdown_timeout.total_seconds()}s)"
+            )
+            if self.workflow_worker:
+                asyncio.create_task(self._shutdown_worker())
+
+        try:
+            loop.add_signal_handler(signal.SIGTERM, lambda: handle_signal("SIGTERM"))
+            loop.add_signal_handler(signal.SIGINT, lambda: handle_signal("SIGINT"))
+            logger.debug("Registered SIGTERM and SIGINT handlers")
+        except (ValueError, RuntimeError) as e:
+            logger.warning(f"Could not set up signal handlers: {e}")
+
+    async def _shutdown_worker(self) -> None:
+        """Shutdown the worker gracefully.
+
+        Calls worker.shutdown() which:
+        1. Stops polling for new tasks
+        2. Waits for in-flight activities (up to graceful_shutdown_timeout)
+        3. Returns when done or timeout reached
+        """
+        if not self.workflow_worker:
+            return
+
+        try:
+            logger.info("Stopping polling, waiting for in-flight activities...")
+            await self.workflow_worker.shutdown()
+            logger.info("Worker shutdown complete")
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
+
     def __init__(
         self,
         workflow_client: Optional[WorkflowClient] = None,
@@ -82,6 +150,7 @@ class Worker:
         workflow_classes: Sequence[ClassType] = [],
         max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
         activity_executor: Optional[ThreadPoolExecutor] = None,
+        graceful_shutdown_timeout: Optional[timedelta] = None,
     ):
         """Initialize the Worker.
 
@@ -98,6 +167,8 @@ class Worker:
                 concurrently. Defaults to None (no limit).
             activity_executor: Executor for running activities.
                 Defaults to None (uses a default thread pool executor).
+            graceful_shutdown_timeout: How long the worker will wait for in-flight
+                activities to complete when shutdown is initiated via SIGTERM/SIGINT.
 
         Returns:
             None
@@ -114,6 +185,9 @@ class Worker:
             set(passthrough_modules + self.default_passthrough_modules)
         )
         self.max_concurrent_activities = max_concurrent_activities
+        self.graceful_shutdown_timeout = graceful_shutdown_timeout or timedelta(
+            seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
+        )
 
         self.activity_executor = activity_executor or ThreadPoolExecutor(
             max_workers=max_concurrent_activities or 5,
@@ -156,9 +230,11 @@ class Worker:
             RuntimeError: If worker creation fails.
             ConnectionError: If connection to Temporal server fails.
 
-        Note:
-            When running as a daemon, the worker runs in a separate thread and
-            does not block the main thread.
+        Graceful Shutdown:
+            When SIGTERM/SIGINT is received:
+            1. Worker stops polling for new tasks
+            2. In-flight activities complete within graceful_shutdown_timeout
+            3. Worker exits early if activities finish, or at timeout
         """
         if daemon:
             worker_thread = threading.Thread(
@@ -186,12 +262,21 @@ class Worker:
                 passthrough_modules=self.passthrough_modules,
                 max_concurrent_activities=self.max_concurrent_activities,
                 activity_executor=self.activity_executor,
+                graceful_shutdown_timeout=self.graceful_shutdown_timeout,
             )
+            self.workflow_worker = worker
 
             logger.info(
                 f"Starting worker with task queue: {self.workflow_client.worker_task_queue}"
             )
+
+            # Set up signal handlers and run worker
+            self._setup_signal_handlers()
+
             await worker.run()
+
+            logger.info("Worker stopped")
+
         except Exception as e:
             logger.error(f"Error starting worker: {e}")
             raise e

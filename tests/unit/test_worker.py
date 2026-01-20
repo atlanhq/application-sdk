@@ -1,6 +1,8 @@
 import asyncio
+import signal
 import sys
-from unittest.mock import AsyncMock, Mock
+from datetime import timedelta
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -21,6 +23,8 @@ def mock_workflow_client():
     worker = Mock()
     worker.run = AsyncMock()
     worker.run.return_value = None
+    worker.shutdown = AsyncMock()
+    worker.shutdown.return_value = None
 
     workflow_client.create_worker = Mock()
     workflow_client.create_worker.return_value = worker
@@ -163,3 +167,191 @@ def test_windows_event_loop_policy():
     assert isinstance(
         current_policy, asyncio.WindowsSelectorEventLoopPolicy
     ), f"Expected WindowsSelectorEventLoopPolicy, got {type(current_policy)}"
+
+
+class TestWorkerGracefulShutdown:
+    """Test suite for Worker graceful shutdown functionality."""
+
+    def test_worker_default_graceful_shutdown_timeout(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that worker has default graceful shutdown timeout."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+        # Default should be 2 hours from GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
+        assert worker.graceful_shutdown_timeout == timedelta(hours=2)
+
+    def test_worker_custom_graceful_shutdown_timeout(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that worker accepts custom graceful shutdown timeout."""
+        custom_timeout = timedelta(seconds=60)
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+            graceful_shutdown_timeout=custom_timeout,
+        )
+        assert worker.graceful_shutdown_timeout == custom_timeout
+
+    async def test_worker_passes_graceful_shutdown_timeout_to_create_worker(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that graceful_shutdown_timeout is passed to create_worker."""
+        custom_timeout = timedelta(seconds=45)
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+            graceful_shutdown_timeout=custom_timeout,
+        )
+        await worker.start(daemon=False)
+
+        # Verify graceful_shutdown_timeout was passed to create_worker
+        mock_workflow_client.create_worker.assert_called_once()
+        call_kwargs = mock_workflow_client.create_worker.call_args[1]
+        assert call_kwargs["graceful_shutdown_timeout"] == custom_timeout
+
+    async def test_worker_stores_worker_reference(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that worker stores reference to temporal worker."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+
+        # Initially should be None
+        assert worker.workflow_worker is None
+
+        await worker.start(daemon=False)
+
+        # After start, should have reference to the created worker
+        assert worker.workflow_worker is not None
+
+    async def test_shutdown_worker_calls_worker_shutdown(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that _shutdown_worker calls worker.shutdown()."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+
+        # Set up mock temporal worker
+        mock_temporal_worker = Mock()
+        mock_temporal_worker.shutdown = AsyncMock()
+        worker.workflow_worker = mock_temporal_worker
+
+        await worker._shutdown_worker()
+
+        mock_temporal_worker.shutdown.assert_called_once()
+
+    async def test_shutdown_worker_handles_exception(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that _shutdown_worker handles exceptions gracefully."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+
+        # Set up mock that raises exception
+        mock_temporal_worker = Mock()
+        mock_temporal_worker.shutdown = AsyncMock(
+            side_effect=Exception("Shutdown error")
+        )
+        worker.workflow_worker = mock_temporal_worker
+
+        # Should not raise exception
+        await worker._shutdown_worker()
+
+    async def test_shutdown_worker_noop_when_no_worker(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that _shutdown_worker is a no-op when worker is None."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+
+        # workflow_worker is None by default
+        # Should not raise exception
+        await worker._shutdown_worker()
+
+    @pytest.mark.skipif(
+        sys.platform in ("win32", "cygwin"),
+        reason="Signal handlers not supported on Windows",
+    )
+    async def test_signal_handler_triggers_shutdown_task(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that signal handler creates a task to call _shutdown_worker."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+
+        # Set up a mock temporal worker
+        mock_temporal_worker = Mock()
+        mock_temporal_worker.shutdown = AsyncMock()
+        worker.workflow_worker = mock_temporal_worker
+
+        # Capture the callback registered for SIGTERM
+        captured_callback = None
+        loop = asyncio.get_running_loop()
+
+        def capture_handler(sig, callback):
+            nonlocal captured_callback
+            if sig == signal.SIGTERM:
+                captured_callback = callback
+
+        with patch.object(loop, "add_signal_handler", capture_handler):
+            # Mock main thread check to allow registration
+            with patch("application_sdk.worker.threading") as mock_threading:
+                mock_threading.current_thread.return_value = (
+                    mock_threading.main_thread.return_value
+                )
+                worker._setup_signal_handlers()
+
+        # Verify callback was captured
+        assert captured_callback is not None, "SIGTERM handler was not registered"
+
+        # Simulate signal by calling the captured callback
+        captured_callback()
+
+        # Give the async task time to run
+        await asyncio.sleep(0.1)
+
+        # Verify shutdown was called
+        mock_temporal_worker.shutdown.assert_called_once()
+
+    async def test_graceful_shutdown_timeout_passed_to_temporal_worker(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that graceful_shutdown_timeout is passed all the way to Temporal Worker."""
+        custom_timeout = timedelta(minutes=30)
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+            graceful_shutdown_timeout=custom_timeout,
+        )
+
+        await worker.start(daemon=False)
+
+        # Verify create_worker was called
+        mock_workflow_client.create_worker.assert_called_once()
+
+        # Verify the exact timeout value was passed
+        call_kwargs = mock_workflow_client.create_worker.call_args[1]
+        assert call_kwargs["graceful_shutdown_timeout"] == timedelta(minutes=30)
+        assert call_kwargs["graceful_shutdown_timeout"].total_seconds() == 1800

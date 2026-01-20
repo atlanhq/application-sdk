@@ -135,6 +135,13 @@ START_TO_CLOSE_TIMEOUT = timedelta(
     )  # 2 hours
 )
 
+#: Graceful shutdown timeout for workers
+#: This is the time the worker will wait for in-flight activities to complete
+#: before forcing shutdown when receiving SIGTERM/SIGINT signals.
+GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = int(
+    os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 2 * 60 * 60)  # 2 hours
+)
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
 USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))

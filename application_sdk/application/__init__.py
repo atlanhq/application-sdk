@@ -193,7 +193,7 @@ class BaseApplication:
 
     @deprecated("Use application.start instead")
     async def start_worker(self, daemon: bool = True):
-        return self._start_worker(daemon=daemon)
+        return await self._start_worker(daemon=daemon)
 
     async def _start_worker(self, daemon: bool = True):
         """
@@ -213,7 +213,7 @@ class BaseApplication:
         ui_enabled: bool = True,
         has_configmap: bool = False,
     ):
-        return self._setup_server(
+        return await self._setup_server(
             workflow_class=workflow_class,
             ui_enabled=ui_enabled,
             has_configmap=has_configmap,
@@ -282,7 +282,7 @@ class BaseApplication:
 
     @deprecated("Use application.start instead")
     async def start_server(self):
-        return self._start_server()
+        return await self._start_server()
 
     async def _start_server(self):
         """

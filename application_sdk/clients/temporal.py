@@ -2,6 +2,7 @@ import asyncio
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
@@ -18,6 +19,7 @@ from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
+    GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
     WORKFLOW_HOST,
@@ -355,9 +357,10 @@ class TemporalWorkflowClient(WorkflowClient):
         passthrough_modules: Sequence[str],
         max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
         activity_executor: Optional[ThreadPoolExecutor] = None,
+        graceful_shutdown_timeout: Optional[timedelta] = None,
         auto_start_token_refresh: bool = True,
     ) -> Worker:
-        """Create a Temporal worker with automatic token refresh.
+        """Create a Temporal worker with automatic token refresh and graceful shutdown.
 
         Args:
             activities (Sequence[CallableType]): Activity functions to register.
@@ -365,6 +368,9 @@ class TemporalWorkflowClient(WorkflowClient):
             passthrough_modules (Sequence[str]): Modules to pass through to the sandbox.
             max_concurrent_activities (int | None): Maximum number of concurrent activities.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
+            graceful_shutdown_timeout (Optional[timedelta]): How long the worker will wait
+                for in-flight activities to complete when shutdown is initiated.
+                If None, uses the default from ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS.
             auto_start_token_refresh (bool): Whether to automatically start token refresh.
                 Set to False if you've already started it via load().
         Returns:
@@ -381,6 +387,12 @@ class TemporalWorkflowClient(WorkflowClient):
             activity_executor = ThreadPoolExecutor(
                 max_workers=max_concurrent_activities or 5,
                 thread_name_prefix="activity-pool-",
+            )
+
+        # Set default graceful shutdown timeout if not provided
+        if graceful_shutdown_timeout is None:
+            graceful_shutdown_timeout = timedelta(
+                seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
             )
 
         # Start token refresh if not already started and auth is enabled
@@ -432,6 +444,7 @@ class TemporalWorkflowClient(WorkflowClient):
             ),
             max_concurrent_activities=max_concurrent_activities,
             activity_executor=activity_executor,
+            graceful_shutdown_timeout=graceful_shutdown_timeout,
             interceptors=[
                 CorrelationContextInterceptor(),
                 EventInterceptor(),
