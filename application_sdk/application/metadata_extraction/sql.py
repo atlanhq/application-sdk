@@ -1,10 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Type
 
+from deprecated import deprecated
+
 from application_sdk.application import BaseApplication
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
+from application_sdk.constants import APPLICATION_MODE, MAX_CONCURRENT_ACTIVITIES
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.observability.decorators.observability_decorator import (
     observability,
@@ -146,8 +148,33 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         )
         return workflow_response
 
-    @observability(logger=logger, metrics=metrics, traces=traces)
+    async def start(
+        self,
+        workflow_class: Type = BaseSQLMetadataExtractionWorkflow,
+        ui_enabled: bool = True,
+        has_configmap: bool = False,
+    ):
+        if APPLICATION_MODE == "LOCAL" or APPLICATION_MODE == "WORKER":
+            return await self._start_worker(
+                daemon=APPLICATION_MODE
+                == "LOCAL",  # run the worker in daemon mode if the application mode is local
+            )
+
+        if APPLICATION_MODE == "LOCAL" or APPLICATION_MODE == "SERVER":
+            await self._setup_server(
+                workflow_class=workflow_class,
+                has_configmap=has_configmap,
+            )
+            return await self._start_server()
+
+        raise ValueError(f"Invalid application mode: {APPLICATION_MODE}")
+
+    @deprecated("Use application.start instead")
     async def start_worker(self, daemon: bool = True):
+        return self._start_worker(daemon=daemon)
+
+    @observability(logger=logger, metrics=metrics, traces=traces)
+    async def _start_worker(self, daemon: bool = True):
         """
         Start the worker for the SQL metadata extraction application.
         """
@@ -155,8 +182,20 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             raise ValueError("Worker not initialized")
         await self.worker.start(daemon=daemon)
 
-    @observability(logger=logger, metrics=metrics, traces=traces)
+    @deprecated("Use application.start instead")
     async def setup_server(
+        self,
+        workflow_class: Type = BaseSQLMetadataExtractionWorkflow,
+        ui_enabled: bool = True,
+        has_configmap: bool = False,
+    ):
+        return self._setup_server(
+            workflow_class=workflow_class,
+            has_configmap=has_configmap,
+        )
+
+    @observability(logger=logger, metrics=metrics, traces=traces)
+    async def _setup_server(
         self,
         workflow_class: Type[
             BaseSQLMetadataExtractionWorkflow
