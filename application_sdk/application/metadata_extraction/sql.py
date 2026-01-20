@@ -171,7 +171,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
 
     @deprecated("Use application.start instead")
     async def start_worker(self, daemon: bool = True):
-        return self._start_worker(daemon=daemon)
+        return await self._start_worker(daemon=daemon)
 
     @observability(logger=logger, metrics=metrics, traces=traces)
     async def _start_worker(self, daemon: bool = True):
@@ -189,7 +189,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         ui_enabled: bool = True,
         has_configmap: bool = False,
     ):
-        return self._setup_server(
+        return await self._setup_server(
             workflow_class=workflow_class,
             has_configmap=has_configmap,
         )
