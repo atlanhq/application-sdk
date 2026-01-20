@@ -6,9 +6,9 @@ This document provides comprehensive documentation for all APIs exposed by the A
 
 1. [Server Management APIs](#server-management-apis)
 2. [Workflow Management APIs](#workflow-management-apis)
-3. [Authentication & Metadata APIs](#authentication--metadata-apis)
+3. [Authentication & Metadata APIs](#authentication-metadata-apis)
 4. [Configuration Management APIs](#configuration-management-apis)
-5. [UI & Documentation APIs](#ui--documentation-apis)
+5. [UI & Documentation APIs](#ui-documentation-apis)
 6. [Error Handling](#error-handling)
 
 ---

@@ -288,7 +288,7 @@ The `workflow_args` dictionary is crucial for controlling the workflow's behavio
 *   **`tenant_id`**: Specifies the tenant context.
 *   **Optional**: `workflow_id` for reruns, `cron_schedule` for scheduled execution.
 
-Refer to the [Configuration Guide](./configuration.md) for details on setting these via environment variables.
+Refer to the [Configuration Guide](../configuration.md) for details on setting these via environment variables.
 
 ## Advanced Features
 
@@ -330,4 +330,4 @@ You can extend `BaseSQLClient` to add support for other authentication mechanism
 ## Next Steps
 
 *   Explore the complete [PostgreSQL example application](https://github.com/atlanhq/atlan-postgres-app) for a more production-ready implementation.
-*   Consult the [Configuration Guide](./configuration.md) for managing environment variables.
+*   Consult the [Configuration Guide](../configuration.md) for managing environment variables.
