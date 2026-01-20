@@ -139,7 +139,7 @@ START_TO_CLOSE_TIMEOUT = timedelta(
 #: This is the time the worker will wait for in-flight activities to complete
 #: before forcing shutdown when receiving SIGTERM/SIGINT signals.
 GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = int(
-    os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 12 * 60 * 60)  # 2 hours
+    os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 12 * 60 * 60)  # 12 hours
 )
 
 # SQL Client Constants

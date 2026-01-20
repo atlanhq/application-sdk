@@ -1,7 +1,6 @@
 import asyncio
 import signal
 import sys
-from datetime import timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -172,49 +171,6 @@ def test_windows_event_loop_policy():
 class TestWorkerGracefulShutdown:
     """Test suite for Worker graceful shutdown functionality."""
 
-    def test_worker_default_graceful_shutdown_timeout(
-        self, mock_workflow_client: WorkflowClient
-    ):
-        """Test that worker has default graceful shutdown timeout."""
-        worker = Worker(
-            workflow_client=mock_workflow_client,
-            workflow_activities=[],
-            workflow_classes=[],
-        )
-        # Default should be 2 hours from GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
-        assert worker.graceful_shutdown_timeout == timedelta(hours=2)
-
-    def test_worker_custom_graceful_shutdown_timeout(
-        self, mock_workflow_client: WorkflowClient
-    ):
-        """Test that worker accepts custom graceful shutdown timeout."""
-        custom_timeout = timedelta(seconds=60)
-        worker = Worker(
-            workflow_client=mock_workflow_client,
-            workflow_activities=[],
-            workflow_classes=[],
-            graceful_shutdown_timeout=custom_timeout,
-        )
-        assert worker.graceful_shutdown_timeout == custom_timeout
-
-    async def test_worker_passes_graceful_shutdown_timeout_to_create_worker(
-        self, mock_workflow_client: WorkflowClient
-    ):
-        """Test that graceful_shutdown_timeout is passed to create_worker."""
-        custom_timeout = timedelta(seconds=45)
-        worker = Worker(
-            workflow_client=mock_workflow_client,
-            workflow_activities=[],
-            workflow_classes=[],
-            graceful_shutdown_timeout=custom_timeout,
-        )
-        await worker.start(daemon=False)
-
-        # Verify graceful_shutdown_timeout was passed to create_worker
-        mock_workflow_client.create_worker.assert_called_once()
-        call_kwargs = mock_workflow_client.create_worker.call_args[1]
-        assert call_kwargs["graceful_shutdown_timeout"] == custom_timeout
-
     async def test_worker_stores_worker_reference(
         self, mock_workflow_client: WorkflowClient
     ):
@@ -333,25 +289,3 @@ class TestWorkerGracefulShutdown:
 
         # Verify shutdown was called
         mock_temporal_worker.shutdown.assert_called_once()
-
-    async def test_graceful_shutdown_timeout_passed_to_temporal_worker(
-        self, mock_workflow_client: WorkflowClient
-    ):
-        """Test that graceful_shutdown_timeout is passed all the way to Temporal Worker."""
-        custom_timeout = timedelta(minutes=30)
-        worker = Worker(
-            workflow_client=mock_workflow_client,
-            workflow_activities=[],
-            workflow_classes=[],
-            graceful_shutdown_timeout=custom_timeout,
-        )
-
-        await worker.start(daemon=False)
-
-        # Verify create_worker was called
-        mock_workflow_client.create_worker.assert_called_once()
-
-        # Verify the exact timeout value was passed
-        call_kwargs = mock_workflow_client.create_worker.call_args[1]
-        assert call_kwargs["graceful_shutdown_timeout"] == timedelta(minutes=30)
-        assert call_kwargs["graceful_shutdown_timeout"].total_seconds() == 1800

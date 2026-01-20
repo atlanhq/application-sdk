@@ -118,6 +118,9 @@ class BaseApplication:
         ui_enabled: bool = True,
         has_configmap: bool = False,
     ):
+        if APPLICATION_MODE not in ("LOCAL", "WORKER", "SERVER"):
+            raise ValueError(f"Invalid application mode: {APPLICATION_MODE}")
+
         if APPLICATION_MODE == "LOCAL" or APPLICATION_MODE == "WORKER":
             await self._start_worker(
                 daemon=APPLICATION_MODE
@@ -131,8 +134,6 @@ class BaseApplication:
                 has_configmap=has_configmap,
             )
             await self._start_server()
-
-        raise ValueError(f"Invalid application mode: {APPLICATION_MODE}")
 
     async def setup_workflow(
         self,

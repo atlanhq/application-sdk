@@ -479,11 +479,12 @@ class TestApplicationModeStart:
         app.worker.start.assert_called_once_with(daemon=False)
 
     @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.application.APIServer")
     @patch("application_sdk.application.APPLICATION_MODE", "LOCAL")
     async def test_start_local_mode_starts_worker_daemon(
-        self, mock_get_workflow_client
+        self, mock_api_server, mock_get_workflow_client
     ):
-        """Test that LOCAL mode starts worker with daemon=True."""
+        """Test that LOCAL mode starts worker with daemon=True and also starts server."""
         mock_workflow_client = AsyncMock()
         mock_workflow_client.application_name = "test-app"
         mock_workflow_client.worker_task_queue = "test-app"
@@ -492,14 +493,18 @@ class TestApplicationModeStart:
         mock_workflow_client.port = "7233"
         mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
         mock_get_workflow_client.return_value = mock_workflow_client
+        mock_server_instance = AsyncMock()
+        mock_api_server.return_value = mock_server_instance
 
-        app = BaseApplication("test-app")
+        app = BaseApplication("test-app", handler_class=MockHandlerClass)
         app.worker = AsyncMock()
 
         await app.start(MockWorkflowInterface)
 
         # In LOCAL mode, worker should start with daemon=True (background thread)
         app.worker.start.assert_called_once_with(daemon=True)
+        # In LOCAL mode, server should also be started
+        mock_server_instance.start.assert_called_once()
 
     @patch("application_sdk.application.get_workflow_client")
     @patch("application_sdk.application.APIServer")

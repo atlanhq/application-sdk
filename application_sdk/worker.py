@@ -9,7 +9,6 @@ import signal
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
 from typing import Any, List, Optional, Sequence
 
 from temporalio.types import CallableType, ClassType
@@ -61,7 +60,6 @@ class Worker:
         workflow_classes: List of workflow classes.
         passthrough_modules: List of module names to pass through.
         max_concurrent_activities: Maximum number of concurrent activities.
-        graceful_shutdown_timeout: Time to wait for in-flight activities during shutdown.
 
     Graceful Shutdown:
         When SIGTERM or SIGINT is received:
@@ -112,7 +110,7 @@ class Worker:
             """Handle shutdown signal by triggering worker.shutdown()."""
             logger.info(
                 f"Received {sig_name}, initiating graceful shutdown "
-                f"(timeout: {self.graceful_shutdown_timeout.total_seconds()}s)"
+                f"(timeout: {GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS}s)"
             )
             if self.workflow_worker:
                 asyncio.create_task(self._shutdown_worker())
@@ -150,7 +148,6 @@ class Worker:
         workflow_classes: Sequence[ClassType] = [],
         max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
         activity_executor: Optional[ThreadPoolExecutor] = None,
-        graceful_shutdown_timeout: Optional[timedelta] = None,
     ):
         """Initialize the Worker.
 
@@ -167,8 +164,6 @@ class Worker:
                 concurrently. Defaults to None (no limit).
             activity_executor: Executor for running activities.
                 Defaults to None (uses a default thread pool executor).
-            graceful_shutdown_timeout: How long the worker will wait for in-flight
-                activities to complete when shutdown is initiated via SIGTERM/SIGINT.
 
         Returns:
             None
@@ -185,9 +180,6 @@ class Worker:
             set(passthrough_modules + self.default_passthrough_modules)
         )
         self.max_concurrent_activities = max_concurrent_activities
-        self.graceful_shutdown_timeout = graceful_shutdown_timeout or timedelta(
-            seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
-        )
 
         self.activity_executor = activity_executor or ThreadPoolExecutor(
             max_workers=max_concurrent_activities or 5,
@@ -262,7 +254,6 @@ class Worker:
                 passthrough_modules=self.passthrough_modules,
                 max_concurrent_activities=self.max_concurrent_activities,
                 activity_executor=self.activity_executor,
-                graceful_shutdown_timeout=self.graceful_shutdown_timeout,
             )
             self.workflow_worker = worker
 

@@ -357,7 +357,6 @@ class TemporalWorkflowClient(WorkflowClient):
         passthrough_modules: Sequence[str],
         max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
         activity_executor: Optional[ThreadPoolExecutor] = None,
-        graceful_shutdown_timeout: Optional[timedelta] = None,
         auto_start_token_refresh: bool = True,
     ) -> Worker:
         """Create a Temporal worker with automatic token refresh and graceful shutdown.
@@ -368,9 +367,6 @@ class TemporalWorkflowClient(WorkflowClient):
             passthrough_modules (Sequence[str]): Modules to pass through to the sandbox.
             max_concurrent_activities (int | None): Maximum number of concurrent activities.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
-            graceful_shutdown_timeout (Optional[timedelta]): How long the worker will wait
-                for in-flight activities to complete when shutdown is initiated.
-                If None, uses the default from ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS.
             auto_start_token_refresh (bool): Whether to automatically start token refresh.
                 Set to False if you've already started it via load().
         Returns:
@@ -389,11 +385,8 @@ class TemporalWorkflowClient(WorkflowClient):
                 thread_name_prefix="activity-pool-",
             )
 
-        # Set default graceful shutdown timeout if not provided
-        if graceful_shutdown_timeout is None:
-            graceful_shutdown_timeout = timedelta(
-                seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
-            )
+        # Graceful shutdown timeout is read from environment variable
+        graceful_shutdown_timeout = timedelta(seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
 
         # Start token refresh if not already started and auth is enabled
         if (
