@@ -1,6 +1,6 @@
 # DeepWiki MCP
 
-Use DeepWiki MCP to verify SDK implementation details before answering questions about `atlanhq/application-sdk` or `atlanhq/atlan-python`.
+Use DeepWiki MCP to verify SDK implementation details before answering questions about `atlanhq/application-sdk` or `atlanhq/atlan-python`, even if local code is available.
 
 ## When to Use
 
