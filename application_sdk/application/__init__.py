@@ -1,10 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Type
 
+from typing_extensions import deprecated
+
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.base import BaseClient
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.constants import ENABLE_MCP
+from application_sdk.constants import APPLICATION_MODE, ENABLE_MCP
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.interceptors.models import EventRegistration
 from application_sdk.observability.logger_adaptor import get_logger
@@ -110,6 +112,28 @@ class BaseApplication:
 
         self.event_subscriptions[event_id].workflow_class = workflow_class
 
+    async def start(
+        self,
+        workflow_class: Type[WorkflowInterface],
+        ui_enabled: bool = True,
+        has_configmap: bool = False,
+    ):
+        if APPLICATION_MODE == "LOCAL" or APPLICATION_MODE == "WORKER":
+            return await self._start_worker(
+                daemon=APPLICATION_MODE
+                == "LOCAL",  # run the worker in daemon mode if the application mode is local
+            )
+
+        if APPLICATION_MODE == "LOCAL" or APPLICATION_MODE == "SERVER":
+            await self._setup_server(
+                workflow_class=workflow_class,
+                ui_enabled=ui_enabled,
+                has_configmap=has_configmap,
+            )
+            return await self._start_server()
+
+        raise ValueError(f"Invalid application mode: {APPLICATION_MODE}")
+
     async def setup_workflow(
         self,
         workflow_and_activities_classes: List[
@@ -167,7 +191,11 @@ class BaseApplication:
             raise ValueError("Workflow client not initialized")
         return await self.workflow_client.start_workflow(workflow_args, workflow_class)  # type: ignore
 
+    @deprecated("Use application.start instead")
     async def start_worker(self, daemon: bool = True):
+        return self._start_worker(daemon=daemon)
+
+    async def _start_worker(self, daemon: bool = True):
         """
         Start the worker for the application.
 
@@ -178,7 +206,20 @@ class BaseApplication:
             raise ValueError("Worker not initialized")
         await self.worker.start(daemon=daemon)
 
+    @deprecated("Use application.start instead")
     async def setup_server(
+        self,
+        workflow_class: Type[WorkflowInterface],
+        ui_enabled: bool = True,
+        has_configmap: bool = False,
+    ):
+        return self._setup_server(
+            workflow_class=workflow_class,
+            ui_enabled=ui_enabled,
+            has_configmap=has_configmap,
+        )
+
+    async def _setup_server(
         self,
         workflow_class: Type[WorkflowInterface],
         ui_enabled: bool = True,
@@ -239,7 +280,11 @@ class BaseApplication:
             triggers=[HttpWorkflowTrigger()],
         )
 
+    @deprecated("Use application.start instead")
     async def start_server(self):
+        return self._start_server()
+
+    async def _start_server(self):
         """
         Start the FastAPI server for the application.
 

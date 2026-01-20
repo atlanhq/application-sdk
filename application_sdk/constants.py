@@ -278,6 +278,11 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
+# Application Mode,
+# LOCAL: Run the application in local mode, which will start the worker and the server.
+# WORKER: Run the application in worker mode, which will start the worker only.
+# SERVER: Run the application in server mode, which will start the server only.
+APPLICATION_MODE = os.getenv("APPLICATION_MODE", "LOCAL").upper()
 
 # Disable Analytics Configuration for DAFT
 os.environ["DO_NOT_TRACK"] = "true"
