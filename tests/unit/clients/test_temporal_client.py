@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Any, Dict, Generator
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
@@ -241,10 +242,16 @@ async def test_create_worker_without_client(
     workflow_classes = [MagicMock(), MagicMock()]
     activities = [MagicMock(), MagicMock()]
     passthrough_modules = ["application_sdk", "os"]
+    graceful_timeout = timedelta(seconds=300)
 
     # Run create_worker
     with pytest.raises(ValueError, match="Client is not loaded"):
-        temporal_client.create_worker(activities, workflow_classes, passthrough_modules)
+        temporal_client.create_worker(
+            activities,
+            workflow_classes,
+            passthrough_modules,
+            graceful_shutdown_timeout=graceful_timeout,
+        )
 
 
 @patch("application_sdk.clients.temporal.Worker")
@@ -269,10 +276,14 @@ async def test_create_worker(
     workflow_classes = [MagicMock(), MagicMock()]
     activities = [MagicMock(), MagicMock()]
     passthrough_modules = ["application_sdk", "os"]
+    graceful_timeout = timedelta(seconds=300)
 
     # Run create_worker
     worker = temporal_client.create_worker(
-        activities, workflow_classes, passthrough_modules
+        activities,
+        workflow_classes,
+        passthrough_modules,
+        graceful_shutdown_timeout=graceful_timeout,
     )
 
     expected_activities = list(activities) + [publish_event, cleanup]
@@ -285,7 +296,48 @@ async def test_create_worker(
         interceptors=ANY,
         activity_executor=ANY,
         max_concurrent_activities=ANY,
+        graceful_shutdown_timeout=graceful_timeout,
     )
+
+    assert worker == mock_worker_class.return_value
+
+
+@patch("application_sdk.clients.temporal.Worker")
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_create_worker_with_graceful_shutdown_timeout(
+    mock_connect: AsyncMock,
+    mock_worker_class: MagicMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test creating a worker with graceful_shutdown_timeout parameter."""
+    # Mock the client connection
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    # Run load to connect the client
+    await temporal_client.load()
+
+    # Mock workflow class and activities
+    workflow_classes = [MagicMock()]
+    activities = [MagicMock()]
+    passthrough_modules = ["application_sdk"]
+    graceful_timeout = timedelta(seconds=300)
+
+    # Run create_worker with graceful_shutdown_timeout
+    worker = temporal_client.create_worker(
+        activities,
+        workflow_classes,
+        passthrough_modules,
+        graceful_shutdown_timeout=graceful_timeout,
+    )
+
+    # Verify Worker was called with graceful_shutdown_timeout in kwargs
+    mock_worker_class.assert_called_once()
+    call_kwargs = mock_worker_class.call_args[1]
+    assert call_kwargs["graceful_shutdown_timeout"] == graceful_timeout
 
     assert worker == mock_worker_class.return_value
 

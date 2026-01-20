@@ -134,6 +134,13 @@ START_TO_CLOSE_TIMEOUT = timedelta(
         os.getenv("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 2 * 60 * 60)
     )  # 2 hours
 )
+#: Graceful shutdown timeout for Temporal workers.
+#: This is the time the worker waits for in-flight activities to complete
+#: before forcefully cancelling them. Ensure Kubernetes terminationGracePeriodSeconds
+#: is set to match or exceed this value (default: 2 hours).
+GRACEFUL_SHUTDOWN_TIMEOUT = timedelta(
+    seconds=int(os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 2 * 60 * 60))  # 2 hours
+)
 
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations

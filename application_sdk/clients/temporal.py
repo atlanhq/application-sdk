@@ -2,6 +2,7 @@ import asyncio
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
@@ -18,6 +19,7 @@ from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
+    GRACEFUL_SHUTDOWN_TIMEOUT,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
     WORKFLOW_HOST,
@@ -355,6 +357,8 @@ class TemporalWorkflowClient(WorkflowClient):
         passthrough_modules: Sequence[str],
         max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
         activity_executor: Optional[ThreadPoolExecutor] = None,
+        graceful_shutdown_timeout: timedelta = GRACEFUL_SHUTDOWN_TIMEOUT,
+        *,
         auto_start_token_refresh: bool = True,
     ) -> Worker:
         """Create a Temporal worker with automatic token refresh.
@@ -365,8 +369,12 @@ class TemporalWorkflowClient(WorkflowClient):
             passthrough_modules (Sequence[str]): Modules to pass through to the sandbox.
             max_concurrent_activities (int | None): Maximum number of concurrent activities.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
+            graceful_shutdown_timeout (timedelta): Time to wait for in-flight
+                activities to complete during graceful shutdown.
             auto_start_token_refresh (bool): Whether to automatically start token refresh.
-                Set to False if you've already started it via load().
+                Set to False if you've already started it via load(). This is a
+                keyword-only argument specific to the Temporal implementation.
+
         Returns:
             Worker: The created worker instance.
 
@@ -438,6 +446,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 CleanupInterceptor(),
                 RedisLockInterceptor(activities_dict),
             ],
+            graceful_shutdown_timeout=graceful_shutdown_timeout,
         )
 
     async def get_workflow_run_status(

@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from enum import Enum
 from typing import Any, Dict, Optional, Sequence, Type
 
+from application_sdk.constants import GRACEFUL_SHUTDOWN_TIMEOUT
 from application_sdk.workflows import WorkflowInterface
 
 
@@ -134,6 +136,7 @@ class WorkflowClient(ABC):
         passthrough_modules: Sequence[str],
         max_concurrent_activities: Optional[int] = None,
         activity_executor: Optional[ThreadPoolExecutor] = None,
+        graceful_shutdown_timeout: timedelta = GRACEFUL_SHUTDOWN_TIMEOUT,
     ) -> Any:
         """Create a worker for executing workflow activities.
 
@@ -151,6 +154,8 @@ class WorkflowClient(ABC):
                 of activities that can run concurrently. None means no limit.
                 Defaults to None.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
+            graceful_shutdown_timeout (timedelta): Time to wait for in-flight
+                activities to complete during graceful shutdown.
 
         Returns:
             Any: A worker instance specific to the implementation.
