@@ -148,12 +148,16 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         )
         return workflow_response
 
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def start(
         self,
         workflow_class: Type = BaseSQLMetadataExtractionWorkflow,
         ui_enabled: bool = True,
         has_configmap: bool = False,
     ):
+        if APPLICATION_MODE not in ("LOCAL", "WORKER", "SERVER"):
+            raise ValueError(f"Invalid application mode: {APPLICATION_MODE}")
+
         if APPLICATION_MODE == "LOCAL" or APPLICATION_MODE == "WORKER":
             await self._start_worker(
                 daemon=APPLICATION_MODE
@@ -166,8 +170,6 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
                 has_configmap=has_configmap,
             )
             await self._start_server()
-
-        raise ValueError(f"Invalid application mode: {APPLICATION_MODE}")
 
     @deprecated("Use application.start instead")
     async def start_worker(self, daemon: bool = True):
