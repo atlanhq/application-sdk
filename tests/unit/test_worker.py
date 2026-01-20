@@ -380,7 +380,7 @@ class TestGracefulShutdown:
         self, mock_workflow_client: WorkflowClient
     ):
         """Test that graceful shutdown works correctly in daemon mode.
-        
+
         Key insight: Signal handlers don't exit the main thread, they just set
         a shutdown flag. The main thread continues running (serving requests,
         sleeping, etc.), which gives the daemon worker thread time to complete
@@ -388,7 +388,7 @@ class TestGracefulShutdown:
         """
         # Create a worker with a mock that blocks until shutdown is requested
         shutdown_completed = threading.Event()
-        
+
         async def mock_worker_run():
             """Mock worker.run() that blocks until shutdown is requested."""
             # Wait for shutdown signal
@@ -397,12 +397,12 @@ class TestGracefulShutdown:
             # Simulate graceful shutdown
             await asyncio.sleep(0.1)
             shutdown_completed.set()
-        
+
         mock_worker = Mock()
         mock_worker.run = mock_worker_run
         mock_worker.shutdown = AsyncMock()
         mock_workflow_client.create_worker.return_value = mock_worker
-        
+
         worker = Worker(workflow_client=mock_workflow_client)
 
         # Start in daemon mode (background thread)
@@ -419,22 +419,24 @@ class TestGracefulShutdown:
 
         # Verify shutdown was requested
         assert worker.is_draining is True
-        
+
         # Wait for shutdown to complete (with timeout)
         # In daemon mode, the worker thread performs graceful shutdown
         # while the main thread continues running
-        assert shutdown_completed.wait(timeout=2.0), "Graceful shutdown did not complete"
+        assert shutdown_completed.wait(
+            timeout=2.0
+        ), "Graceful shutdown did not complete"
 
     async def test_non_daemon_mode_graceful_shutdown_works(
         self, mock_workflow_client: WorkflowClient
     ):
         """Test that graceful shutdown works correctly in non-daemon mode.
-        
+
         In non-daemon mode, worker.run() blocks the current thread. When
         shutdown is requested, the worker completes gracefully and returns.
         """
         shutdown_completed = threading.Event()
-        
+
         async def mock_worker_run():
             """Mock worker.run() that blocks until shutdown is requested."""
             # Wait for shutdown signal
@@ -443,28 +445,28 @@ class TestGracefulShutdown:
             # Simulate graceful shutdown
             await asyncio.sleep(0.1)
             shutdown_completed.set()
-        
+
         mock_worker = Mock()
         mock_worker.run = mock_worker_run
         mock_worker.shutdown = AsyncMock()
         mock_workflow_client.create_worker.return_value = mock_worker
-        
+
         worker = Worker(workflow_client=mock_workflow_client)
 
         # Start shutdown in a separate task (simulating signal handler)
         async def trigger_shutdown_after_delay():
             await asyncio.sleep(0.1)
             worker.request_shutdown()
-        
+
         shutdown_task = asyncio.create_task(trigger_shutdown_after_delay())
 
         # Start in non-daemon mode (blocks until shutdown completes)
         await worker.start(daemon=False)
-        
+
         # If we reach here, worker.run() has returned, meaning shutdown completed
         assert worker.is_draining is True
         assert shutdown_completed.is_set()
-        
+
         # Clean up
         await shutdown_task
 
@@ -474,27 +476,27 @@ class TestGracefulShutdown:
         """Test graceful shutdown with a long-running activity in daemon mode."""
         activity_completed = threading.Event()
         shutdown_initiated = threading.Event()
-        
+
         async def mock_worker_run():
             """Mock worker.run() that simulates a long-running activity."""
             # Wait for shutdown signal
             while not worker._shutdown_event.is_set():
                 await asyncio.sleep(0.05)
-            
+
             shutdown_initiated.set()
-            
+
             # Simulate activity taking time to complete
             await asyncio.sleep(0.2)
             activity_completed.set()
-        
+
         mock_worker = Mock()
         mock_worker.run = mock_worker_run
         mock_worker.shutdown = AsyncMock()
         mock_workflow_client.create_worker.return_value = mock_worker
-        
+
         worker = Worker(
             workflow_client=mock_workflow_client,
-            graceful_shutdown_timeout=timedelta(seconds=5)
+            graceful_shutdown_timeout=timedelta(seconds=5),
         )
 
         # Start in daemon mode
@@ -507,10 +509,12 @@ class TestGracefulShutdown:
 
         # Verify shutdown was initiated
         assert shutdown_initiated.wait(timeout=1.0), "Shutdown not initiated"
-        
+
         # Verify activity completes gracefully (not killed immediately)
-        assert activity_completed.wait(timeout=2.0), "Activity was not allowed to complete"
-        
+        assert activity_completed.wait(
+            timeout=2.0
+        ), "Activity was not allowed to complete"
+
         # Verify shutdown took some time (activity was allowed to finish)
         elapsed = asyncio.get_event_loop().time() - start_time
         assert elapsed >= 0.2, "Activity was killed too quickly"
@@ -520,14 +524,16 @@ class TestGracefulShutdown:
     ):
         """Test that signal handler returns immediately without blocking."""
         worker = Worker(workflow_client=mock_workflow_client)
-        
+
         # Measure time taken by request_shutdown (simulating signal handler)
         start_time = asyncio.get_event_loop().time()
         worker.request_shutdown()
         elapsed = asyncio.get_event_loop().time() - start_time
-        
+
         # Signal handler should return almost immediately (< 10ms)
-        assert elapsed < 0.01, f"Signal handler blocked for {elapsed}s (should be < 0.01s)"
-        
+        assert (
+            elapsed < 0.01
+        ), f"Signal handler blocked for {elapsed}s (should be < 0.01s)"
+
         # Verify shutdown flag is set
         assert worker.is_draining is True

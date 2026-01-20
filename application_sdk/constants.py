@@ -139,7 +139,9 @@ START_TO_CLOSE_TIMEOUT = timedelta(
 #: before forcefully cancelling them. Ensure Kubernetes terminationGracePeriodSeconds
 #: is set to match or exceed this value (default: 2 hours).
 GRACEFUL_SHUTDOWN_TIMEOUT = timedelta(
-    seconds=int(os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 2 * 60 * 60))  # 2 hours
+    seconds=int(
+        os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 2 * 60 * 60)
+    )  # 2 hours
 )
 
 # SQL Client Constants

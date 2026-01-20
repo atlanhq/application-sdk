@@ -359,7 +359,7 @@ class Worker:
             - Worker stops polling for new tasks
             - In-flight activities are allowed to complete (up to graceful_shutdown_timeout)
             - Worker exits as soon as all activities complete or timeout is reached
-            
+
             The key insight: Signal handlers don't exit the main thread, they just set
             a flag. This allows graceful shutdown to work even with daemon threads.
         """
