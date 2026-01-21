@@ -460,12 +460,16 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             logger.info(
                 f"Downloading transformed files from S3: {transformed_s3_prefix}"
             )
+
+            # Ensure local directory exists before download
+            transformed_dir = Path(transformed_local_path)
+            transformed_dir.mkdir(parents=True, exist_ok=True)
+
             await ObjectStore.download_prefix(
                 source=transformed_s3_prefix,
+                destination=str(transformed_dir),
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
-
-            transformed_dir = Path(transformed_local_path)
 
             # Step 2: Prepare current-state directory
             s3_prefix = get_persistent_s3_prefix(workflow_args)
