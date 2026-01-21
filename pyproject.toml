@@ -22,7 +22,6 @@ keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
     "aiohttp>=3.10.0,<3.14.0",
     "opentelemetry-exporter-otlp==1.39.1",
-    "psutil>=7.0.0,<7.3.0",
     "fastapi[standard]==0.127.0",
     "pyatlan>=8.0.2,<8.5.0",
     "pydantic>=2.10.6,<2.13.0",
@@ -81,6 +80,10 @@ distributed_lock = [
 
 mcp = [
     "fastmcp>=2.12.3,<2.15.0",
+]
+
+argo = [
+    "psutil>=7.0.0,<7.3.0",
 ]
 
 # Development dependencies - Install using: uv sync --group dev

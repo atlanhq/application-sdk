@@ -909,3 +909,101 @@ class TestMessageHandlerCallbackInvocation:
             assert response_data["status"] == "SUCCESS"
             assert response_data["items_count"] == 42
             assert response_data["metadata"]["source"] == "test"
+
+
+class TestServerHealthEndpoint:
+    """Test suite for server health endpoint without psutil dependency."""
+
+    @pytest.fixture(autouse=True)
+    def setup_method(self):
+        """Setup method that runs before each test method."""
+        self.mock_handler = Mock(spec=HandlerInterface)
+        self.mock_handler.preflight_check = AsyncMock()
+        self.app = APIServer(handler=self.mock_handler)
+        self.app.register_routers()
+
+    @pytest.mark.asyncio
+    async def test_health_endpoint_returns_system_info(self):
+        """Test that health endpoint returns expected system information fields."""
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get("/server/health")
+
+            assert response.status_code == 200
+            data = response.json()
+
+            # Verify all expected fields are present
+            expected_fields = [
+                "platform",
+                "platform_release",
+                "platform_version",
+                "architecture",
+                "hostname",
+                "ip_address",
+                "mac_address",
+                "processor",
+            ]
+            for field in expected_fields:
+                assert field in data, f"Expected field '{field}' not found in health response"
+
+    @pytest.mark.asyncio
+    async def test_health_endpoint_does_not_return_ram(self):
+        """Test that health endpoint no longer returns ram field (psutil removed)."""
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get("/server/health")
+
+            assert response.status_code == 200
+            data = response.json()
+
+            # RAM field should NOT be present (psutil dependency removed)
+            assert "ram" not in data, "Health response should not contain 'ram' field after psutil removal"
+
+    @pytest.mark.asyncio
+    async def test_ready_endpoint_returns_ok(self):
+        """Test that ready endpoint returns ok status."""
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get("/server/ready")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "ok"
+
+
+class TestServerShutdownEndpoint:
+    """Test suite for server shutdown endpoint without psutil dependency."""
+
+    @pytest.fixture(autouse=True)
+    def setup_method(self):
+        """Setup method that runs before each test method."""
+        self.mock_handler = Mock(spec=HandlerInterface)
+        self.mock_handler.preflight_check = AsyncMock()
+        self.app = APIServer(handler=self.mock_handler)
+        self.app.register_routers()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_endpoint_returns_success_response(self):
+        """Test that shutdown endpoint returns success response."""
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.post("/server/shutdown")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            assert data["message"] == "Application shutting down"
+            assert data["force"] is False
+
+    @pytest.mark.asyncio
+    async def test_shutdown_endpoint_with_force_flag(self):
+        """Test that shutdown endpoint handles force flag correctly."""
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.post("/server/shutdown?force=true")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            assert data["force"] is True
+

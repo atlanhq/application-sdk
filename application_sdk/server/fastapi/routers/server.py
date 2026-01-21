@@ -10,12 +10,13 @@ import asyncio
 import os
 import platform
 import re
+import signal
 import socket
+import sys
 import threading
 import time
 import uuid
 
-import psutil
 from fastapi import status
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
@@ -66,7 +67,6 @@ async def health():
         "ip_address": get_ip_address(),
         "mac_address": ":".join(re.findall("..", "%012x" % uuid.getnode())),
         "processor": platform.processor(),
-        "ram": str(round(psutil.virtual_memory().total / (1024.0**3))) + " GB",
     }
     logger.debug("Health check passed")
     return info
@@ -75,10 +75,18 @@ async def health():
 def terminate_process():
     """
     Terminate the process by sending a SIGTERM signal to the parent process.
+    Used by Argo workflows to signal the container to stop.
     """
     time.sleep(1)
-    parent = psutil.Process(psutil.Process(os.getpid()).ppid())
-    parent.terminate()
+    try:
+        if sys.platform == "win32":
+            # Windows doesn't support SIGTERM, use os._exit for immediate termination
+            os._exit(0)
+        else:
+            # Send SIGTERM to parent process (original behavior for Argo compatibility)
+            os.kill(os.getppid(), signal.SIGTERM)
+    except Exception as e:
+        logger.error(f"Failed to terminate process: {e}")
 
 
 @router.post("/shutdown")
