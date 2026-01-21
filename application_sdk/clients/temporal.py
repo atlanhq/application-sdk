@@ -385,9 +385,6 @@ class TemporalWorkflowClient(WorkflowClient):
                 thread_name_prefix="activity-pool-",
             )
 
-        # Graceful shutdown timeout is read from environment variable
-        graceful_shutdown_timeout = timedelta(seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
-
         # Start token refresh if not already started and auth is enabled
         if (
             auto_start_token_refresh
@@ -437,7 +434,9 @@ class TemporalWorkflowClient(WorkflowClient):
             ),
             max_concurrent_activities=max_concurrent_activities,
             activity_executor=activity_executor,
-            graceful_shutdown_timeout=graceful_shutdown_timeout,
+            graceful_shutdown_timeout=timedelta(
+                seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
+            ),
             interceptors=[
                 CorrelationContextInterceptor(),
                 EventInterceptor(),

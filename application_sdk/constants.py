@@ -22,6 +22,7 @@ Note:
 
 import os
 from datetime import timedelta
+from enum import Enum
 
 from dotenv import load_dotenv
 
@@ -136,8 +137,9 @@ START_TO_CLOSE_TIMEOUT = timedelta(
 )
 
 #: Graceful shutdown timeout for workers
-#: This is the time the worker will wait for in-flight activities to complete
+#: This is the maximum time the worker will wait for in-flight activities to complete
 #: before forcing shutdown when receiving SIGTERM/SIGINT signals.
+#: The worker will exit early if all activities complete before this timeout.
 GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = int(
     os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 12 * 60 * 60)  # 12 hours
 )
@@ -285,11 +287,22 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
-# Application Mode,
-# LOCAL: Run the application in local mode, which will start the worker and the server.
-# WORKER: Run the application in worker mode, which will start the worker only.
-# SERVER: Run the application in server mode, which will start the server only.
-APPLICATION_MODE = os.getenv("APPLICATION_MODE", "LOCAL").upper()
+
+class ApplicationMode(str, Enum):
+    """Application execution mode.
+
+    Determines which components of the application are started:
+    - LOCAL: Starts both the worker (daemon mode) and the server. Used for local development.
+    - WORKER: Starts only the worker (non-daemon mode). Used in production for worker pods.
+    - SERVER: Starts only the server. Used in production for API server pods.
+    """
+
+    LOCAL = "LOCAL"
+    WORKER = "WORKER"
+    SERVER = "SERVER"
+
+
+APPLICATION_MODE = ApplicationMode(os.getenv("APPLICATION_MODE", "LOCAL").upper())
 
 # Disable Analytics Configuration for DAFT
 os.environ["DO_NOT_TRACK"] = "true"

@@ -7,6 +7,7 @@ import pytest
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.application import BaseApplication
 from application_sdk.clients.base import BaseClient
+from application_sdk.constants import ApplicationMode
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.server import ServerInterface
 from application_sdk.workflows import WorkflowInterface
@@ -456,7 +457,7 @@ class TestApplicationModeStart:
     """Test cases for split architecture based on APPLICATION_MODE."""
 
     @patch("application_sdk.application.get_workflow_client")
-    @patch("application_sdk.application.APPLICATION_MODE", "WORKER")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.WORKER)
     async def test_start_worker_mode_starts_worker_non_daemon(
         self, mock_get_workflow_client
     ):
@@ -480,7 +481,7 @@ class TestApplicationModeStart:
 
     @patch("application_sdk.application.get_workflow_client")
     @patch("application_sdk.application.APIServer")
-    @patch("application_sdk.application.APPLICATION_MODE", "LOCAL")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.LOCAL)
     async def test_start_local_mode_starts_worker_daemon(
         self, mock_api_server, mock_get_workflow_client
     ):
@@ -508,7 +509,7 @@ class TestApplicationModeStart:
 
     @patch("application_sdk.application.get_workflow_client")
     @patch("application_sdk.application.APIServer")
-    @patch("application_sdk.application.APPLICATION_MODE", "SERVER")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.SERVER)
     async def test_start_server_mode_starts_server(
         self, mock_api_server, mock_get_workflow_client
     ):
@@ -527,19 +528,7 @@ class TestApplicationModeStart:
         mock_server_instance.start.assert_called_once()
 
     @patch("application_sdk.application.get_workflow_client")
-    @patch("application_sdk.application.APPLICATION_MODE", "INVALID_MODE")
-    async def test_start_invalid_mode_raises_error(self, mock_get_workflow_client):
-        """Test that invalid APPLICATION_MODE raises ValueError."""
-        mock_workflow_client = AsyncMock()
-        mock_get_workflow_client.return_value = mock_workflow_client
-
-        app = BaseApplication("test-app")
-
-        with pytest.raises(ValueError, match="Invalid application mode: INVALID_MODE"):
-            await app.start(MockWorkflowInterface)
-
-    @patch("application_sdk.application.get_workflow_client")
-    @patch("application_sdk.application.APPLICATION_MODE", "WORKER")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.WORKER)
     async def test_worker_mode_does_not_start_server(self, mock_get_workflow_client):
         """Test that WORKER mode does not set up or start server."""
         mock_workflow_client = AsyncMock()
@@ -561,7 +550,7 @@ class TestApplicationModeStart:
 
     @patch("application_sdk.application.get_workflow_client")
     @patch("application_sdk.application.APIServer")
-    @patch("application_sdk.application.APPLICATION_MODE", "SERVER")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.SERVER)
     async def test_server_mode_does_not_start_worker(
         self, mock_api_server, mock_get_workflow_client
     ):
@@ -578,3 +567,12 @@ class TestApplicationModeStart:
 
         # Worker should not be started
         app.worker.start.assert_not_called()
+
+
+class TestApplicationModeValidation:
+    """Test cases for APPLICATION_MODE validation."""
+
+    def test_invalid_mode_raises_error(self):
+        """Test that invalid APPLICATION_MODE raises ValueError."""
+        with pytest.raises(ValueError, match="is not a valid ApplicationMode"):
+            ApplicationMode("INVALID_MODE")

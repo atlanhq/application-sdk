@@ -9,6 +9,7 @@ from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
 )
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.constants import ApplicationMode
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.workflows.metadata_extraction.sql import (
@@ -391,12 +392,15 @@ class TestBaseSQLMetadataExtractionApplication:
 
 
 class TestSQLApplicationModeStart:
-    """Test cases for split architecture based on APPLICATION_MODE in SQL application."""
+    """Test cases for split architecture based on APPLICATION_MODE in SQL application.
+
+    Note: BaseSQLMetadataExtractionApplication.start() delegates to BaseApplication.start(),
+    so we need to patch APPLICATION_MODE in the application module where BaseApplication.start()
+    checks the mode.
+    """
 
     @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch(
-        "application_sdk.application.metadata_extraction.sql.APPLICATION_MODE", "WORKER"
-    )
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.WORKER)
     async def test_start_worker_mode_starts_worker_non_daemon(
         self, mock_get_workflow_client
     ):
@@ -421,10 +425,8 @@ class TestSQLApplicationModeStart:
         app.worker.start.assert_called_once_with(daemon=False)
 
     @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
-    @patch(
-        "application_sdk.application.metadata_extraction.sql.APPLICATION_MODE", "LOCAL"
-    )
+    @patch("application_sdk.application.APIServer")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.LOCAL)
     async def test_start_local_mode_starts_worker_daemon(
         self, mock_api_server, mock_get_workflow_client
     ):
@@ -454,9 +456,7 @@ class TestSQLApplicationModeStart:
 
     @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
     @patch("application_sdk.application.metadata_extraction.sql.APIServer")
-    @patch(
-        "application_sdk.application.metadata_extraction.sql.APPLICATION_MODE", "SERVER"
-    )
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.SERVER)
     async def test_start_server_mode_starts_server(
         self, mock_api_server, mock_get_workflow_client
     ):
@@ -477,26 +477,7 @@ class TestSQLApplicationModeStart:
         mock_server_instance.start.assert_called_once()
 
     @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch(
-        "application_sdk.application.metadata_extraction.sql.APPLICATION_MODE",
-        "INVALID_MODE",
-    )
-    async def test_start_invalid_mode_raises_error(self, mock_get_workflow_client):
-        """Test that invalid APPLICATION_MODE raises ValueError."""
-        mock_workflow_client = AsyncMock()
-        mock_get_workflow_client.return_value = mock_workflow_client
-
-        app = BaseSQLMetadataExtractionApplication(
-            "test-app", client_class=MockSQLClient
-        )
-
-        with pytest.raises(ValueError, match="Invalid application mode: INVALID_MODE"):
-            await app.start(MockSQLMetadataExtractionWorkflow)
-
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch(
-        "application_sdk.application.metadata_extraction.sql.APPLICATION_MODE", "WORKER"
-    )
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.WORKER)
     async def test_worker_mode_does_not_start_server(self, mock_get_workflow_client):
         """Test that WORKER mode does not set up or start server."""
         mock_workflow_client = AsyncMock()
@@ -520,9 +501,7 @@ class TestSQLApplicationModeStart:
 
     @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
     @patch("application_sdk.application.metadata_extraction.sql.APIServer")
-    @patch(
-        "application_sdk.application.metadata_extraction.sql.APPLICATION_MODE", "SERVER"
-    )
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.SERVER)
     async def test_server_mode_does_not_start_worker(
         self, mock_api_server, mock_get_workflow_client
     ):

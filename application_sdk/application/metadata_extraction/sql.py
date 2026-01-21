@@ -1,12 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Type
 
-from deprecated import deprecated
+from typing_extensions import deprecated
 
 from application_sdk.application import BaseApplication
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.constants import APPLICATION_MODE, MAX_CONCURRENT_ACTIVITIES
+from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.observability.decorators.observability_decorator import (
     observability,
@@ -155,23 +155,21 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         ui_enabled: bool = True,
         has_configmap: bool = False,
     ):
-        if APPLICATION_MODE not in ("LOCAL", "WORKER", "SERVER"):
-            raise ValueError(f"Invalid application mode: {APPLICATION_MODE}")
+        """Start the SQL metadata extraction application.
 
-        if APPLICATION_MODE == "LOCAL" or APPLICATION_MODE == "WORKER":
-            await self._start_worker(
-                daemon=APPLICATION_MODE
-                == "LOCAL",  # run the worker in daemon mode if the application mode is local
-            )
+        Args:
+            workflow_class: The workflow class to register. Defaults to BaseSQLMetadataExtractionWorkflow.
+            ui_enabled: Whether to enable the UI. Defaults to True.
+            has_configmap: Whether the application has a configmap. Defaults to False.
+        """
+        await super().start(
+            workflow_class=workflow_class,
+            ui_enabled=ui_enabled,
+            has_configmap=has_configmap,
+        )
 
-        if APPLICATION_MODE == "LOCAL" or APPLICATION_MODE == "SERVER":
-            await self._setup_server(
-                workflow_class=workflow_class,
-                has_configmap=has_configmap,
-            )
-            await self._start_server()
-
-    @deprecated("Use application.start instead")
+    @deprecated("Use application.start(). Deprecated since v2.3.0.")
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def start_worker(self, daemon: bool = True):
         return await self._start_worker(daemon=daemon)
 
@@ -184,7 +182,8 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             raise ValueError("Worker not initialized")
         await self.worker.start(daemon=daemon)
 
-    @deprecated("Use application.start instead")
+    @deprecated("Use application.start(). Deprecated since v2.3.0.")
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_server(
         self,
         workflow_class: Type = BaseSQLMetadataExtractionWorkflow,
@@ -193,6 +192,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
     ):
         return await self._setup_server(
             workflow_class=workflow_class,
+            ui_enabled=ui_enabled,
             has_configmap=has_configmap,
         )
 
@@ -202,6 +202,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         workflow_class: Type[
             BaseSQLMetadataExtractionWorkflow
         ] = BaseSQLMetadataExtractionWorkflow,
+        ui_enabled: bool = True,
         has_configmap: bool = False,
     ) -> Any:
         """
@@ -209,6 +210,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
 
         Args:
             workflow_class (Type): Workflow class to register with the server. Defaults to BaseSQLMetadataExtractionWorkflow.
+            ui_enabled (bool): Whether to enable the UI. Defaults to True.
             has_configmap (bool): Whether the application has a configmap. Defaults to False.
 
         Returns:
@@ -221,6 +223,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         self.server = APIServer(
             handler=self.handler_class(sql_client=self.client_class()),
             workflow_client=self.workflow_client,
+            ui_enabled=ui_enabled,
             has_configmap=has_configmap,
         )
 

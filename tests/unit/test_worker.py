@@ -289,3 +289,65 @@ class TestWorkerGracefulShutdown:
 
         # Verify shutdown was called
         mock_temporal_worker.shutdown.assert_called_once()
+
+    @pytest.mark.skipif(
+        sys.platform in ("win32", "cygwin"),
+        reason="Signal handlers not supported on Windows",
+    )
+    async def test_multiple_signals_trigger_only_one_shutdown(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that multiple signals only trigger one shutdown task."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+
+        # Set up a mock temporal worker
+        mock_temporal_worker = Mock()
+        mock_temporal_worker.shutdown = AsyncMock()
+        worker.workflow_worker = mock_temporal_worker
+
+        # Capture the callback registered for SIGTERM
+        captured_callback = None
+        loop = asyncio.get_running_loop()
+
+        def capture_handler(sig, callback):
+            nonlocal captured_callback
+            if sig == signal.SIGTERM:
+                captured_callback = callback
+
+        with patch.object(loop, "add_signal_handler", capture_handler):
+            # Mock main thread check to allow registration
+            with patch("application_sdk.worker.threading") as mock_threading:
+                mock_threading.current_thread.return_value = (
+                    mock_threading.main_thread.return_value
+                )
+                worker._setup_signal_handlers()
+
+        # Verify callback was captured
+        assert captured_callback is not None, "SIGTERM handler was not registered"
+
+        # Simulate multiple signals in quick succession
+        captured_callback()
+        captured_callback()
+        captured_callback()
+
+        # Give the async task time to run
+        await asyncio.sleep(0.1)
+
+        # Verify shutdown was called only once despite multiple signals
+        mock_temporal_worker.shutdown.assert_called_once()
+
+    async def test_shutdown_initiated_flag_initialized(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that _shutdown_initiated flag is initialized to False."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+
+        assert worker._shutdown_initiated is False

@@ -90,11 +90,20 @@ class Worker:
         """Set up SIGTERM and SIGINT handlers for graceful shutdown.
 
         Signal handlers can only be registered from the main thread.
-        On Windows, signal handling is not supported.
+
+        Platform Notes:
+            - Unix/Linux/macOS: Full signal handling support via asyncio event loop.
+            - Windows: Signal handling is not supported. Workers on Windows will not
+              respond to SIGTERM/SIGINT for graceful shutdown. On Windows, the worker
+              will continue running until the process is forcefully terminated.
         """
         # Signal handlers only work on Unix-like systems
         if sys.platform in ("win32", "cygwin"):
-            logger.debug("Signal handlers not supported on Windows")
+            logger.warning(
+                "Signal handlers not supported on Windows. "
+                "Graceful shutdown via SIGTERM/SIGINT is not available. "
+                "For production deployments, use Unix-based systems."
+            )
             return
 
         # Signal handlers can only be registered from the main thread
@@ -107,7 +116,16 @@ class Worker:
         loop = asyncio.get_running_loop()
 
         def handle_signal(sig_name: str) -> None:
-            """Handle shutdown signal by triggering worker.shutdown()."""
+            """Handle shutdown signal by triggering worker.shutdown().
+
+            Uses a flag to prevent multiple shutdown tasks from being created
+            if multiple signals are received in quick succession.
+            """
+            if self._shutdown_initiated:
+                logger.debug(f"Received {sig_name}, but shutdown already in progress")
+                return
+
+            self._shutdown_initiated = True
             logger.info(
                 f"Received {sig_name}, initiating graceful shutdown "
                 f"(timeout: {GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS}s)"
@@ -174,6 +192,7 @@ class Worker:
         """
         self.workflow_client = workflow_client
         self.workflow_worker: Optional[TemporalWorker] = None
+        self._shutdown_initiated = False
         self.workflow_activities = workflow_activities
         self.workflow_classes = workflow_classes
         self.passthrough_modules = list(
