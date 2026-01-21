@@ -392,12 +392,7 @@ class TestBaseSQLMetadataExtractionApplication:
 
 
 class TestSQLApplicationModeStart:
-    """Test cases for split architecture based on APPLICATION_MODE in SQL application.
-
-    Note: BaseSQLMetadataExtractionApplication.start() delegates to BaseApplication.start(),
-    so we need to patch APPLICATION_MODE in the application module where BaseApplication.start()
-    checks the mode.
-    """
+    """Test cases for split architecture based on APPLICATION_MODE in SQL application."""
 
     @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.WORKER)
@@ -425,7 +420,7 @@ class TestSQLApplicationModeStart:
         app.worker.start.assert_called_once_with(daemon=False)
 
     @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch("application_sdk.application.APIServer")
+    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.LOCAL)
     async def test_start_local_mode_starts_worker_daemon(
         self, mock_api_server, mock_get_workflow_client
