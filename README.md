@@ -24,6 +24,33 @@ uv add atlan-application-sdk
 poetry add atlan-application-sdk
 ```
 
+### Installing with Optional Dependencies
+
+The SDK provides modular dependency groups for specific use cases:
+
+```bash
+# For SQL-based workflows (includes daft for transformations)
+pip install atlan-application-sdk[workflows_sql]
+
+# For HTTP/REST-based workflows
+pip install atlan-application-sdk[workflows_http]
+
+# For AWS authentication
+pip install atlan-application-sdk[auth_aws]
+
+# For Azure authentication  
+pip install atlan-application-sdk[auth_azure]
+
+# Combine multiple groups as needed
+pip install atlan-application-sdk[workflows_sql,auth_aws]
+
+# Using uv
+uv add atlan-application-sdk --extra workflows_sql --extra auth_aws
+```
+
+> [!NOTE]
+> Migrating from an older version? See our [Migration Guide](MIGRATION.md) for dependency group name changes.
+
 > [!TIP]
 > **View sample apps built using Application SDK [here](https://github.com/atlanhq/atlan-sample-apps)**
 

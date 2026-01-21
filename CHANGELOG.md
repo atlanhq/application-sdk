@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.3.0 (Upcoming)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.2.0...v0.3.0
+
+### Breaking Changes
+
+- **Dependency Groups Reorganized** (#768): The dependency structure has been completely reorganized for better user experience:
+  - `iam_auth` → `auth_aws` (deprecated alias available until v0.4.0)
+  - `azure` → `auth_azure` (deprecated alias available until v0.4.0)
+  - `workflows` → `workflows_sql` or `workflows_http` (includes `daft` by default)
+  - `test` (dependency-group) → `tests` (consolidated naming)
+  - Added `auth_gcp` placeholder for future Google Cloud support
+  
+  See [MIGRATION.md](MIGRATION.md) for detailed migration instructions.
+
+### Features
+
+- Reorganized dependency groups to be more intuitive and workflow-focused (#768)
+- Included `daft` in workflow groups by default for transformations (#768)
+- Added `auth_gcp` placeholder for future Google Cloud authentication support (#768)
+
+### Documentation
+
+- Added comprehensive [MIGRATION.md](MIGRATION.md) with migration guide for existing users (#768)
+- Updated README.md with installation examples for each dependency group (#768)
+- Updated getting-started.md with new dependency installation options (#768)
+
+---
+
 ## v2.2.0 (January 14, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.1.1...v2.2.0
