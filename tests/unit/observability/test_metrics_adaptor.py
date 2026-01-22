@@ -324,21 +324,33 @@ def test_export_record_with_segment_enabled():
                     "application_sdk.observability.metrics_adaptor.ENABLE_SEGMENT_METRICS",
                     True,
                 ):
-                    adapter = AtlanMetricsAdapter()
-                    record = MetricRecord(
-                        timestamp=datetime.now().timestamp(),
-                        name="test_metric",
-                        value=42.0,
-                        type=MetricType.COUNTER,
-                        labels={"test": "label"},
-                        description="Test metric",
-                        unit="count",
-                    )
-                    with mock.patch.object(adapter, "_send_to_segment") as mock_send:
-                        with mock.patch.object(adapter, "_log_to_console") as mock_log:
-                            adapter.export_record(record)
-                            mock_send.assert_called_once_with(record)
-                            mock_log.assert_called_once_with(record)
+                    # Mock SegmentClient to avoid thread initialization in tests
+                    with mock.patch(
+                        "application_sdk.observability.metrics_adaptor.SegmentClient"
+                    ) as mock_segment_client_class:
+                        mock_segment_client = mock.MagicMock()
+                        mock_segment_client_class.return_value = mock_segment_client
+
+                        adapter = AtlanMetricsAdapter()
+
+                        record = MetricRecord(
+                            timestamp=datetime.now().timestamp(),
+                            name="test_metric",
+                            value=42.0,
+                            type=MetricType.COUNTER,
+                            labels={"test": "label"},
+                            description="Test metric",
+                            unit="count",
+                        )
+                        with mock.patch.object(
+                            adapter, "_send_to_segment"
+                        ) as mock_send:
+                            with mock.patch.object(
+                                adapter, "_log_to_console"
+                            ) as mock_log:
+                                adapter.export_record(record)
+                                mock_send.assert_called_once_with(record)
+                                mock_log.assert_called_once_with(record)
 
 
 def test_export_record_with_segment_disabled():
@@ -362,8 +374,6 @@ def test_export_record_with_segment_disabled():
 
 def test_send_to_segment():
     """Test _send_to_segment() method."""
-    from unittest.mock import AsyncMock, MagicMock
-
     with mock.patch.dict(
         "os.environ",
         {
@@ -379,47 +389,43 @@ def test_send_to_segment():
     ):
         with mock.patch("opentelemetry.metrics.set_meter_provider"):
             with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                adapter = AtlanMetricsAdapter()
+                # Mock the constant since it's evaluated at import time
+                with mock.patch(
+                    "application_sdk.observability.metrics_adaptor.ENABLE_SEGMENT_METRICS",
+                    True,
+                ):
+                    # Mock SegmentClient to avoid thread initialization in tests
+                    with mock.patch(
+                        "application_sdk.observability.metrics_adaptor.SegmentClient"
+                    ) as mock_segment_client_class:
+                        mock_segment_client = mock.MagicMock()
+                        mock_segment_client_class.return_value = mock_segment_client
 
-                # Mock the async client
-                mock_client = AsyncMock()
-                mock_response = MagicMock()
-                mock_response.status_code = 200
-                mock_response.text = "OK"
-                mock_client.post = AsyncMock(return_value=mock_response)
-                adapter.segment_client = mock_client
+                        adapter = AtlanMetricsAdapter()
 
-                record = MetricRecord(
-                    timestamp=datetime.now().timestamp(),
-                    name="test_segment_metric",
-                    value=42.0,
-                    type=MetricType.COUNTER,
-                    labels={"test": "label", "env": "test"},
-                    description="Test Segment metric",
-                    unit="count",
-                )
+                        record = MetricRecord(
+                            timestamp=datetime.now().timestamp(),
+                            name="test_segment_metric",
+                            value=42.0,
+                            type=MetricType.COUNTER,
+                            labels={
+                                "test": "label",
+                                "env": "test",
+                                "send_to_segment": "true",
+                            },
+                            description="Test Segment metric",
+                            unit="count",
+                        )
 
-                # Mock asyncio.get_event_loop to return a running loop
-                with mock.patch("asyncio.get_event_loop") as mock_loop:
-                    mock_event_loop = MagicMock()
-                    mock_event_loop.is_running.return_value = True
-                    mock_loop.return_value = mock_event_loop
+                        adapter._send_to_segment(record)
 
-                    adapter._send_to_segment(record)
-
-                    # Wait a bit for async task
-                    import time
-
-                    time.sleep(0.1)
-
-                    # Verify the async method was called
-                    # Note: The actual HTTP call happens in a task, so we verify
-                    # that the payload construction worked
-                    assert adapter.segment_client is not None
+                        # Verify send_metric was called on the SegmentClient
+                        mock_segment_client.send_metric.assert_called_once_with(record)
+                        assert adapter.segment_client is not None
 
 
 def test_setup_segment_client_without_key():
-    """Test _setup_segment_client() when write key is missing."""
+    """Test SegmentClient initialization when write key is missing."""
     with mock.patch.dict(
         "os.environ",
         {
@@ -439,10 +445,18 @@ def test_setup_segment_client_without_key():
                     "application_sdk.observability.metrics_adaptor.ENABLE_SEGMENT_METRICS",
                     True,
                 ):
+                    # Patch SEGMENT_WRITE_KEY in both constants (where defined) and segment_client (where imported)
+                    # This ensures the value is properly set even though it's imported at module level
                     with mock.patch(
-                        "application_sdk.observability.metrics_adaptor.SEGMENT_WRITE_KEY",
+                        "application_sdk.constants.SEGMENT_WRITE_KEY",
                         "",
                     ):
-                        adapter = AtlanMetricsAdapter()
-                        # Segment client should not be initialized without write key
-                        assert adapter.segment_client is None
+                        with mock.patch(
+                            "application_sdk.observability.segment_client.SEGMENT_WRITE_KEY",
+                            "",
+                        ):
+                            # Don't mock SegmentClient - let it initialize normally to test real behavior
+                            adapter = AtlanMetricsAdapter()
+                            # Segment client should be created but disabled (enabled=False)
+                            assert adapter.segment_client is not None
+                            assert adapter.segment_client.enabled is False
