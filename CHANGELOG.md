@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.3.0
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.2.0...v2.3.0
+
+### Breaking Changes
+
+- **Removed `psutil` from core dependencies** (#773)
+  - The `/server/health` endpoint no longer returns the `ram` field
+  - `psutil` has been moved to the new `argo` optional dependency group
+  - Install with: `pip install atlan-application-sdk[argo]` if you need psutil functionality
+
+### Bug Fixes
+
+- Improved cross-platform compatibility for process termination in shutdown endpoint (#773)
+
+---
+
 ## v2.2.0 (January 14, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.1.1...v2.2.0
