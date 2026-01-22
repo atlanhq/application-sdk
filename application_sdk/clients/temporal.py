@@ -2,6 +2,7 @@ import asyncio
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
@@ -18,6 +19,7 @@ from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
+    GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
     WORKFLOW_HOST,
@@ -357,7 +359,7 @@ class TemporalWorkflowClient(WorkflowClient):
         activity_executor: Optional[ThreadPoolExecutor] = None,
         auto_start_token_refresh: bool = True,
     ) -> Worker:
-        """Create a Temporal worker with automatic token refresh.
+        """Create a Temporal worker with automatic token refresh and graceful shutdown.
 
         Args:
             activities (Sequence[CallableType]): Activity functions to register.
@@ -432,6 +434,9 @@ class TemporalWorkflowClient(WorkflowClient):
             ),
             max_concurrent_activities=max_concurrent_activities,
             activity_executor=activity_executor,
+            graceful_shutdown_timeout=timedelta(
+                seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
+            ),
             interceptors=[
                 CorrelationContextInterceptor(),
                 EventInterceptor(),
