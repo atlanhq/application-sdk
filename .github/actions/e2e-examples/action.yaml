@@ -89,7 +89,16 @@ runs:
       with:
         version: "0.7.3"
 
-    - name: Install dependencies
+    - name: Validate new dependency groups
+      shell: bash
+      run: |
+        # Validate new groups work in isolation (PR #768)
+        uv sync --extra workflows_sql --group tests --group dev
+        uv sync --extra workflows_http --group tests --group dev
+        uv sync --extra auth_aws --group tests --group dev
+        uv sync --extra auth_azure --group tests --group dev
+
+    - name: Install all dependencies
       shell: bash
       run: uv sync --all-extras --all-groups
 

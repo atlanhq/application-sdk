@@ -50,7 +50,11 @@ After setting up your development environment, you can create your first applica
 
 1. Install project dependencies:
    ```bash
+   # For full development setup with all extras
    uv sync --all-extras --all-groups
+   
+   # Or install specific workflow types for lighter setup
+   uv sync --extra workflows_sql --group dev --group tests
    ```
 
 2. Set up pre-commit hooks:
