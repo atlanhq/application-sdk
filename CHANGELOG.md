@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.3.0 (January 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.2.0...v2.3.0
+
+### Features
+
+- split worker / server and support graceful shutdown (#944) (by @SanilK2108 in [a551e8e](https://github.com/atlanhq/application-sdk/commit/a551e8e))
+
+### Bug Fixes
+
+- event loop policy for Windows (#927) (by @sachi-atlan in [9df1513](https://github.com/atlanhq/application-sdk/commit/9df1513))
+
+
 ## v2.2.0 (January 14, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.1.1...v2.2.0
