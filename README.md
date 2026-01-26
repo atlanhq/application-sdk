@@ -29,8 +29,8 @@ poetry add atlan-application-sdk
 
 ## Getting Started
 
-- Want to develop locally or run examples from this repository? Check out our [Getting Started Guide](docs/docs/guides/getting-started.md) for a step-by-step walkthrough!
-- Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/) folder.
+- Want to develop locally or run examples from this repository? Check out our [Getting Started Guide](docs/guides/getting-started.md) for a step-by-step walkthrough!
+- Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/main/docs/) folder.
 
 ## Contributing
 

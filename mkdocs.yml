@@ -5,6 +5,7 @@ repo_name: application-sdk
 site_description: Docs for application-sdk
 site_author: App Framework Team
 copyright: App Framework Team © 2025
+docs_dir: docs
 
 theme:
   name: material
@@ -71,8 +72,10 @@ nav:
       - Mac: setup/MAC.md
       - Linux: setup/LINUX.md
       - Windows: setup/WINDOWS.md
+      - Troubleshooting: setup/troubleshooting.md
   - Guides:
       # Core concepts
+      - Overview: guides/index.md
       - Getting Started: guides/getting-started.md
       - Architecture: guides/architecture.md
 
@@ -86,6 +89,8 @@ nav:
       - Test Framework: guides/test-framework.md
   - Concepts:
       - Activities: concepts/activities.md
+      - API: concepts/API.md
+      - Atlan Upload: concepts/atlanupload.md
       - Workflows: concepts/workflows.md
       - Server: concepts/server.md
       - Application: concepts/application.md
@@ -94,9 +99,21 @@ nav:
       - Common: concepts/common.md
       - Handlers: concepts/handlers.md
       - Inputs: concepts/inputs.md
+      - MCP: concepts/mcp.md
+      - Output Paths: concepts/output_paths.md
       - Outputs: concepts/outputs.md
+      - Temporal Auth: concepts/temporal_auth.md
       - Worker: concepts/worker.md
       - Example: concepts/application_sql.md
+  - Agent Guides:
+      - Project Structure: agents/project-structure.md
+      - Development Commands: agents/dev-commands.md
+      - Coding Standards: agents/coding-standards.md
+      - Testing: agents/testing.md
+      - Commits and PRs: agents/commits-prs.md
+      - Documentation Updates: agents/docs-updates.md
+      - Code Review: agents/review.md
+      - DeepWiki MCP: agents/deepwiki.md
 
   - Configuration Reference: configuration.md
-  - API Reference: /application-sdk/main/api
+  - API Reference: https://k.atlan.dev/application-sdk/main/api
