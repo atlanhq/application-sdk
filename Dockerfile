@@ -39,6 +39,11 @@ ENV UV_CACHE_DIR=/home/appuser/.cache/uv \
     ATLAN_DAPR_GRPC_PORT=50001 \
     ATLAN_DAPR_METRICS_PORT=3100
 
-# Default command (can be overridden by extending images)
-CMD ["python"]
+# Copy entrypoint script for graceful shutdown handling
+COPY --chown=appuser:appuser entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Entrypoint wraps any command with graceful shutdown handling
+# Apps provide their command via CMD
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
