@@ -45,7 +45,7 @@ dapr run  \
     --dapr-grpc-port $ATLAN_DAPR_GRPC_PORT \
     --metrics-port $ATLAN_DAPR_METRICS_PORT \
     --resources-path /app/components \
-    uv run --no-sync main.py $EXTRA_ARGS &
+    -- uv run --no-sync main.py $EXTRA_ARGS &
 
 CMD_PID=$!
 
