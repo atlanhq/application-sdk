@@ -18,8 +18,8 @@ set -e
 term_handler() {
     echo "[entrypoint] Received SIGTERM, initiating graceful shutdown..."
 
-    # Find uv process first, fallback to python
-    APP_PID=$(ps aux | grep "[u]v run" | awk '{print $1}' | head -1)
+    # Find the Python process
+    APP_PID=$(ps aux | grep "[p]ython.*main.py" | awk '{print $1}' | head -1)
 
     echo "[entrypoint] Forwarding SIGTERM to application (PID: $APP_PID)..."
     kill -TERM "$APP_PID" 2>/dev/null || true
