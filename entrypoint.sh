@@ -20,23 +20,12 @@ term_handler() {
     # Find uv process first, fallback to python
     APP_PID=$(ps aux | grep "[u]v run" | awk '{print $1}' | head -1)
 
-    if [ -z "$APP_PID" ]; then
-        # Fallback: find python process directly
-        APP_PID=$(ps aux | grep "[p]ython.*main.py" | awk '{print $1}' | head -1)
-    fi
+    echo "[entrypoint] Forwarding SIGTERM to application (PID: $APP_PID)..."
+    kill -TERM "$APP_PID" 2>/dev/null || true
 
-    if [ -n "$APP_PID" ]; then
-        echo "[entrypoint] Forwarding SIGTERM to application (PID: $APP_PID)..."
-        kill -TERM "$APP_PID" 2>/dev/null || true
-
-        # Wait for graceful shutdown to complete
-        tail --pid="$APP_PID" -f /dev/null 2>/dev/null || true
-        echo "[entrypoint] Application shutdown complete"
-    else
-        echo "[entrypoint] Warning: Could not find application process"
-        # Wait for the main command to exit on its own
-        wait $CMD_PID 2>/dev/null || true
-    fi
+    # Wait for graceful shutdown to complete
+    tail --pid="$APP_PID" -f /dev/null 2>/dev/null || true
+    echo "[entrypoint] Application shutdown complete"
 
     exit 0
 }
@@ -44,7 +33,20 @@ term_handler() {
 trap term_handler SIGTERM SIGINT
 
 # Run the provided command in background
-"$@" &
+dapr run  \
+    --log-level $DAPR_LOG_LEVEL \
+    --app-id $DAPR_APP_ID \
+    --scheduler-host-address '' \
+    --placement-host-address '' \
+    --max-body-size $DAPR_MAX_BODY_SIZE \
+    --app-port $ATLAN_APP_HTTP_PORT \
+    --dapr-http-port $ATLAN_DAPR_HTTP_PORT \
+    --dapr-grpc-port $ATLAN_DAPR_GRPC_PORT \
+    --metrics-port $ATLAN_DAPR_METRICS_PORT \
+    --resources-path /app/components \
+    uv run --no-sync main.py \
+    $EXTRA_ARGS &
+
 CMD_PID=$!
 
 # Wait for the command
