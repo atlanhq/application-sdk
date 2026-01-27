@@ -1,0 +1,20 @@
+# Repository Guidelines
+
+Atlan Application SDK is a Python library for building applications on the Atlan platform.
+
+Package manager: `uv` (task runner via `poe` in `pyproject.toml`).
+
+Non-standard commands used across the repo:
+- `uv sync --all-extras --all-groups` (full dev/test deps)
+- `uv run poe start-deps` (local Dapr + Temporal)
+- `uv run poe generate-apidocs` (MkDocs + API docs)
+
+Where to look next (progressive disclosure):
+- `docs/agents/project-structure.md` — quick map of key directories.
+- `docs/agents/dev-commands.md` — setup and repeatable workflows.
+- `docs/agents/coding-standards.md` — formatting, logging, exceptions, performance.
+- `docs/agents/testing.md` — test command, coverage config, test layout.
+- `docs/agents/commits-prs.md` — commit format and PR expectations.
+- `docs/agents/docs-updates.md` — which conceptual docs to update with code changes.
+- `docs/agents/review.md` — code review checklist.
+- `docs/agents/deepwiki.md` — DeepWiki MCP setup and when to verify SDK details.
