@@ -8,6 +8,10 @@ Non-standard commands used across the repo:
 - `uv sync --all-extras --all-groups` (full dev/test deps)
 - `uv run poe start-deps` (local Dapr + Temporal)
 - `uv run poe generate-apidocs` (MkDocs + API docs)
+- `uv run pre-commit run --files <file>` (run pre-commit on specific file)
+- `uv run pre-commit run --all-files` (run pre-commit on all files)
+
+**IMPORTANT**: Always run pre-commit checks before committing. CI will fail if pre-commit checks fail.
 
 Where to look next (progressive disclosure):
 - `docs/agents/project-structure.md` — quick map of key directories.
