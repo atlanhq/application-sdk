@@ -1,25 +1,20 @@
 ---
-description:
+description: Update conceptual documentation when SDK code changes to keep docs synchronized with implementation
 globs: application_sdk/**/*.py
 alwaysApply: false
 ---
-Update conceptual documentation when SDK code changes.
-  A file within the Application SDK has been modified: `{trigger_file_path}`.
+# Documentation Updates
 
-  **Action Required:** Please review the changes in this file and update the corresponding conceptual documentation under `docs/docs/concepts/` to ensure it accurately reflects the current code. Keeping documentation synchronized with the code is crucial for maintainability.
+When modifying SDK code, update corresponding conceptual documentation under `docs/concepts/` to reflect changes.
 
-  **Module to Concept Doc Mapping:**
-  *   `application_sdk/application/**` -> `docs/docs/concepts/application.md` (Covers both simple and specialized workflow applications. The `BaseApplication` class is the generic entry point for all workflow-driven applications.)
-  *   `application_sdk/server/**` -> `docs/docs/concepts/server.md` (Covers server abstractions, FastAPI integration, and API endpoint patterns.)
-  *   `application_sdk/handlers/**` -> `docs/docs/concepts/handlers.md` (Covers handler interfaces and custom handler logic.)
-  *   `application_sdk/clients/**` -> `docs/docs/concepts/clients.md` (Covers client interfaces, SQL clients, and connection management.)
-  *   `application_sdk/activities/**` -> `docs/docs/concepts/activities.md` (Covers activity interfaces and activity patterns.)
-  *   `application_sdk/common/**` or `application_sdk/constants.py` -> `docs/docs/concepts/common.md` (Covers shared utilities, logging, and constants.)
-  *   `application_sdk/inputs/**` -> `docs/docs/concepts/inputs.md` (Covers input abstractions and input handling.)
-  *   `application_sdk/outputs/**` -> `docs/docs/concepts/outputs.md` (Covers output abstractions and output handling.)
-  *   `application_sdk/transformers/**` -> `docs/docs/concepts/transformers.md` (Covers transformer interfaces and entity mapping.)
-  *   `application_sdk/workflows/**` -> `docs/docs/concepts/workflows.md` (Covers workflow interfaces, workflow patterns, and orchestration.)
-  *   `application_sdk/worker.py` -> `docs/docs/concepts/worker.md` (Covers worker orchestration and Temporal worker management.)
-  *   `docs/docs/concepts/application_sql.md` -> Specialized SQL workflow application patterns and examples.
-
-  *(Note: Carefully examine the code changes to determine the exact impact and which documentation file(s) require updates. For application changes, review both simple and specialized application patterns.)*
+**Module to Concept Doc Mapping:**
+*   `application_sdk/application/**` -> `docs/concepts/application.md`
+*   `application_sdk/server/**` -> `docs/concepts/server.md`
+*   `application_sdk/handlers/**` -> `docs/concepts/handlers.md`
+*   `application_sdk/clients/**` -> `docs/concepts/clients.md`
+*   `application_sdk/activities/**` -> `docs/concepts/activities.md`
+*   `application_sdk/common/**` or `application_sdk/constants.py` -> `docs/concepts/common.md`
+*   `application_sdk/io/**` -> `docs/concepts/inputs.md` (for readers) AND `docs/concepts/outputs.md` (for writers)
+*   `application_sdk/transformers/**` -> `docs/concepts/transformers.md`
+*   `application_sdk/workflows/**` -> `docs/concepts/workflows.md`
+*   `application_sdk/worker.py` -> `docs/concepts/worker.md`

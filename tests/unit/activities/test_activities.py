@@ -299,3 +299,68 @@ class TestMockActivities:
         state = await mock_activities._get_state(workflow_args)
         assert state.handler is not None
         assert isinstance(state.handler, MockHandler)
+
+
+class MockActivitiesImplementation(ActivitiesInterface):
+    """Minimal concrete implementation for testing base methods."""
+
+    pass
+
+
+class TestActivitiesInterfaceErrorHandling:
+    """Test error handling in ActivitiesInterface."""
+
+    @pytest.fixture
+    def activities(self):
+        return MockActivitiesImplementation()
+
+    @patch("application_sdk.activities.get_workflow_id")
+    async def test_get_state_cleans_up_on_general_exception(
+        self, mock_get_workflow_id, activities
+    ):
+        """Test that _get_state cleans up state if _set_state raises a general Exception."""
+        workflow_id = "wf-1"
+        mock_get_workflow_id.return_value = workflow_id
+
+        # Simulate the state being "dirty" (entry created) before _set_state fails.
+        async def set_state_side_effect(workflow_args):
+            activities._state[workflow_id] = ActivitiesState()
+            raise Exception("DB Connection Failed")
+
+        with patch.object(
+            activities, "_set_state", side_effect=set_state_side_effect
+        ) as mock_set_state:
+            # Ensure state is empty initially
+            assert workflow_id not in activities._state
+
+            # Call _get_state, expect exception re-raised
+            with pytest.raises(Exception, match="DB Connection Failed"):
+                await activities._get_state({})
+
+            # Verify state was cleaned up (entry removed)
+            assert workflow_id not in activities._state
+            mock_set_state.assert_called_once()
+
+    @patch("application_sdk.activities.get_workflow_id")
+    async def test_get_state_cleans_up_on_orchestrator_error(
+        self, mock_get_workflow_id, activities
+    ):
+        """Test that _get_state cleans up state if _set_state raises OrchestratorError."""
+        workflow_id = "wf-2"
+        mock_get_workflow_id.return_value = workflow_id
+
+        from application_sdk.common.error_codes import OrchestratorError
+
+        async def set_state_side_effect(workflow_args):
+            activities._state[workflow_id] = ActivitiesState()
+            raise OrchestratorError(
+                OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
+                "Orchestrator Fail",
+            )
+
+        with patch.object(activities, "_set_state", side_effect=set_state_side_effect):
+            with pytest.raises(Exception) as excinfo:
+                await activities._get_state({})
+
+            assert isinstance(excinfo.value, OrchestratorError)
+            assert workflow_id not in activities._state

@@ -285,6 +285,7 @@ async def test_create_worker(
         interceptors=ANY,
         activity_executor=ANY,
         max_concurrent_activities=ANY,
+        graceful_shutdown_timeout=ANY,
     )
 
     assert worker == mock_worker_class.return_value

@@ -1,13 +1,20 @@
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Type
 
+from typing_extensions import deprecated
+
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.base import BaseClient
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.constants import ENABLE_MCP
-from application_sdk.events.models import EventRegistration
+from application_sdk.constants import APPLICATION_MODE, ENABLE_MCP, ApplicationMode
 from application_sdk.handlers.base import BaseHandler
+from application_sdk.interceptors.models import EventRegistration
+from application_sdk.observability.decorators.observability_decorator import (
+    observability,
+)
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import get_metrics
+from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.server.fastapi.models import EventWorkflowTrigger
@@ -15,6 +22,8 @@ from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
+metrics = get_metrics()
+traces = get_traces()
 
 
 class BaseApplication:
@@ -110,6 +119,40 @@ class BaseApplication:
 
         self.event_subscriptions[event_id].workflow_class = workflow_class
 
+    async def start(
+        self,
+        workflow_class: Type[WorkflowInterface],
+        ui_enabled: bool = True,
+        has_configmap: bool = False,
+    ):
+        """Start the application based on the configured APPLICATION_MODE.
+
+        Args:
+            workflow_class: The workflow class to register with the server.
+            ui_enabled: Whether to enable the UI. Defaults to True.
+            has_configmap: Whether the application has a configmap. Defaults to False.
+
+        Behavior based on APPLICATION_MODE:
+            - LOCAL: Starts worker in daemon mode and server (for local development)
+            - WORKER: Starts only the worker in non-daemon mode (for production worker pods)
+            - SERVER: Starts only the server (for production API server pods)
+
+        Raises:
+            ValueError: If APPLICATION_MODE is not a valid ApplicationMode value.
+        """
+        if APPLICATION_MODE in (ApplicationMode.LOCAL, ApplicationMode.WORKER):
+            await self._start_worker(
+                daemon=APPLICATION_MODE == ApplicationMode.LOCAL,
+            )
+
+        if APPLICATION_MODE in (ApplicationMode.LOCAL, ApplicationMode.SERVER):
+            await self._setup_server(
+                workflow_class=workflow_class,
+                ui_enabled=ui_enabled,
+                has_configmap=has_configmap,
+            )
+            await self._start_server()
+
     async def setup_workflow(
         self,
         workflow_and_activities_classes: List[
@@ -167,7 +210,12 @@ class BaseApplication:
             raise ValueError("Workflow client not initialized")
         return await self.workflow_client.start_workflow(workflow_args, workflow_class)  # type: ignore
 
+    @deprecated("Use application.start(). Deprecated since v2.3.0.")
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def start_worker(self, daemon: bool = True):
+        return await self._start_worker(daemon=daemon)
+
+    async def _start_worker(self, daemon: bool = True):
         """
         Start the worker for the application.
 
@@ -178,7 +226,21 @@ class BaseApplication:
             raise ValueError("Worker not initialized")
         await self.worker.start(daemon=daemon)
 
+    @deprecated("Use application.start(). Deprecated since v2.3.0.")
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_server(
+        self,
+        workflow_class: Type[WorkflowInterface],
+        ui_enabled: bool = True,
+        has_configmap: bool = False,
+    ):
+        return await self._setup_server(
+            workflow_class=workflow_class,
+            ui_enabled=ui_enabled,
+            has_configmap=has_configmap,
+        )
+
+    async def _setup_server(
         self,
         workflow_class: Type[WorkflowInterface],
         ui_enabled: bool = True,
@@ -239,7 +301,12 @@ class BaseApplication:
             triggers=[HttpWorkflowTrigger()],
         )
 
+    @deprecated("Use application.start(). Deprecated since v2.3.0.")
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def start_server(self):
+        return await self._start_server()
+
+    async def _start_server(self):
         """
         Start the FastAPI server for the application.
 

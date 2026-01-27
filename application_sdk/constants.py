@@ -22,6 +22,7 @@ Note:
 
 import os
 from datetime import timedelta
+from enum import Enum
 
 from dotenv import load_dotenv
 
@@ -135,6 +136,14 @@ START_TO_CLOSE_TIMEOUT = timedelta(
     )  # 2 hours
 )
 
+#: Graceful shutdown timeout for workers
+#: This is the maximum time the worker will wait for in-flight activities to complete
+#: before forcing shutdown when receiving SIGTERM/SIGINT signals.
+#: The worker will exit early if all activities complete before this timeout.
+GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = int(
+    os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 12 * 60 * 60)  # 12 hours
+)
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
 USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
@@ -244,7 +253,7 @@ TRACES_FILE_NAME = "traces.parquet"
 
 # Dapr Sink Configuration
 ENABLE_OBSERVABILITY_DAPR_SINK = (
-    os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false").lower() == "true"
+    os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true").lower() == "true"
 )
 
 # atlan_client configuration (non ATLAN_ prefix are rooted in pyatlan SDK, to be revisited)
@@ -278,6 +287,22 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
+
+class ApplicationMode(str, Enum):
+    """Application execution mode.
+
+    Determines which components of the application are started:
+    - LOCAL: Starts both the worker (daemon mode) and the server. Used for local development.
+    - WORKER: Starts only the worker (non-daemon mode). Used in production for worker pods.
+    - SERVER: Starts only the server. Used in production for API server pods.
+    """
+
+    LOCAL = "LOCAL"
+    WORKER = "WORKER"
+    SERVER = "SERVER"
+
+
+APPLICATION_MODE = ApplicationMode(os.getenv("APPLICATION_MODE", "LOCAL").upper())
 
 # Disable Analytics Configuration for DAFT
 os.environ["DO_NOT_TRACK"] = "true"

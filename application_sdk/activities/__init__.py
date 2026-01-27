@@ -15,6 +15,7 @@ Example:
 
 import os
 from abc import ABC
+from datetime import datetime, timedelta
 from typing import Any, Dict, Generic, Optional, TypeVar
 
 from pydantic import BaseModel
@@ -62,6 +63,7 @@ class ActivitiesState(BaseModel, Generic[HandlerType]):
     model_config = {"arbitrary_types_allowed": True}
     handler: Optional[HandlerType] = None
     workflow_args: Optional[Dict[str, Any]] = None
+    last_updated_timestamp: Optional[datetime] = None
 
 
 ActivitiesStateType = TypeVar("ActivitiesStateType", bound=ActivitiesState)
@@ -113,12 +115,15 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
         Note:
             The workflow ID is automatically retrieved from the current activity context.
             If no state exists for the current workflow, a new one will be created.
+            This method also updates the last_updated_timestamp to enable time-based
+            state refresh functionality.
         """
         workflow_id = get_workflow_id()
         if not self._state.get(workflow_id):
             self._state[workflow_id] = ActivitiesState()
 
         self._state[workflow_id].workflow_args = workflow_args
+        self._state[workflow_id].last_updated_timestamp = datetime.now()
 
     async def _get_state(self, workflow_args: Dict[str, Any]) -> ActivitiesStateType:
         """Retrieve the state for the current workflow.
@@ -142,6 +147,15 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             workflow_id = get_workflow_id()
             if workflow_id not in self._state:
                 await self._set_state(workflow_args)
+
+            else:
+                current_timestamp = datetime.now()
+                # if difference of current_timestamp and last_updated_timestamp is greater than 15 minutes, then again _set_state
+                last_updated = self._state[workflow_id].last_updated_timestamp
+                if last_updated and current_timestamp - last_updated > timedelta(
+                    minutes=15
+                ):
+                    await self._set_state(workflow_args)
             return self._state[workflow_id]
         except OrchestratorError as e:
             logger.error(
@@ -149,6 +163,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                 error_code=OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
                 exc_info=e,
             )
+            await self._clean_state()
+            raise
+        except Exception as err:
+            logger.error(f"Error getting state: {str(err)}", exc_info=err)
             await self._clean_state()
             raise
 
@@ -202,6 +220,12 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             )
             workflow_args["workflow_id"] = workflow_id
             workflow_args["workflow_run_id"] = get_workflow_run_id()
+
+            # Preserve atlan- prefixed keys from workflow_config for logging context
+            for key, value in workflow_config.items():
+                if key.startswith("atlan-") and value:
+                    workflow_args[key] = str(value)
+
             return workflow_args
 
         except Exception as e:

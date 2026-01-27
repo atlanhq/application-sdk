@@ -1,5 +1,121 @@
 # Changelog
 
+## v2.3.0 (January 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.2.0...v2.3.0
+
+### Features
+
+- split worker / server and support graceful shutdown (#944) (by @SanilK2108 in [a551e8e](https://github.com/atlanhq/application-sdk/commit/a551e8e))
+
+### Bug Fixes
+
+- event loop policy for Windows (#927) (by @sachi-atlan in [9df1513](https://github.com/atlanhq/application-sdk/commit/9df1513))
+
+
+## v2.2.0 (January 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.1.1...v2.2.0
+
+### Features
+
+- added Azure specific client authentication (#619) (by @rupali-atlan in [37b2e19](https://github.com/atlanhq/application-sdk/commit/37b2e19))
+- Using Pubsub for message processors (#898) (by @niteesh-atlan in [f87f583](https://github.com/atlanhq/application-sdk/commit/f87f583))
+
+
+## v2.1.1 (January 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.1.0...v2.1.1
+
+### Bug Fixes
+
+- daft struct error (#931) (by @OnkarVO7 in [d64e60b](https://github.com/atlanhq/application-sdk/commit/d64e60b))
+- time based state refresh for each activity (#796) (by @abhishekagrawal-atlan in [3563595](https://github.com/atlanhq/application-sdk/commit/3563595))
+
+
+## v2.1.0 (January 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.0.0...v2.1.0
+
+### Features
+
+- improving the getting started guide (#929) (by @vaibhavatlan in [e04762b](https://github.com/atlanhq/application-sdk/commit/e04762b))
+- add context manager and close() support to Reader classes (#930) (by @inishchith in [c589342](https://github.com/atlanhq/application-sdk/commit/c589342))
+
+### Bug Fixes
+
+- removed logs to avoid infinite logging (#928) (by @sachi-atlan in [5710532](https://github.com/atlanhq/application-sdk/commit/5710532))
+
+
+## v2.0.0 (December 26, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.1.1...v2.0.0
+
+### Bug Fixes
+
+- clean up unnecessary logs (#911) (by @nishantmunjal7 in [d2e2ee7](https://github.com/atlanhq/application-sdk/commit/d2e2ee7))
+
+
+## v1.1.1 (December 17, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.1.0...v1.1.1
+
+### Bug Fixes
+
+- pushing logs to atlan-objectstore (#894) (by @Garavitey in [76fec72](https://github.com/atlanhq/application-sdk/commit/76fec72))
+- windows path normalization for prefix download (#895) (by @inishchith in [df99afe](https://github.com/atlanhq/application-sdk/commit/df99afe))
+
+
+## v1.1.0 (December 12, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.4...v1.1.0
+
+### Features
+
+- Add Atlan Attributes to Temporal Runs (#880) (by @saig214 in [8a85a24](https://github.com/atlanhq/application-sdk/commit/8a85a24))
+
+
+## v1.0.4 (December 11, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.3...v1.0.4
+
+### Bug Fixes
+
+- add automatic gRPC message size limit handling for large file uploads (#878) (by @SanilK2108 in [4d76838](https://github.com/atlanhq/application-sdk/commit/4d76838))
+
+
+## v1.0.3 (December 09, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.2...v1.0.3
+
+### Bug Fixes
+
+- handle Azure Blob and GCP response formats in list_files method in objectstore service (#875) (by @hamza-atlan in [19d26a3](https://github.com/atlanhq/application-sdk/commit/19d26a3))
+- error handling on connection failures (#877) (by @sachi-atlan in [8108186](https://github.com/atlanhq/application-sdk/commit/8108186))
+
+
+## v1.0.2 (December 09, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.1...v1.0.2
+
+### Bug Fixes
+
+- release version bump (#871) (by @inishchith in [0cf4305](https://github.com/atlanhq/application-sdk/commit/0cf4305))
+
+
+## v1.0.1 (December 05, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.0...v1.0.1
+
+### Features
+
+- Expose accumulated metrics (#813) (by @saig214 in [095a386](https://github.com/atlanhq/application-sdk/commit/095a386))
+
+### Bug Fixes
+
+- breaking changes induced in opentelemetry 1.39.0 release (#834) (by @abhishekagrawal-atlan in [bc6359b](https://github.com/atlanhq/application-sdk/commit/bc6359b))
+
+
 ## v1.0.0 (November 21, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc63...v1.0.0

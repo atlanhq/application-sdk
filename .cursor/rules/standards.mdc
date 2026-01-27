@@ -1,6 +1,6 @@
 ---
-description:
-globs:
+description: Core development standards including code formatting, documentation, testing, logging, exception handling, and performance
+globs: application_sdk/**/*.py
 alwaysApply: true
 ---
 # Development Standards
@@ -24,8 +24,8 @@ This document outlines the development standards for the Application SDK, includ
     - Use Google-style docstrings
     - Include type information in docstrings
     - Document all public APIs
-    - Build docs using `uv sync --all-extras --all-groups && uv run poe generate-apidocs`
-    - Docs must go under ./docs/docs
+    - Build docs using `uv sync --group docs --all-extras && uv run poe generate-apidocs`
+    - Docs must go under ./docs
 
 - **Single Responsibility**
     - Each function should do exactly one thing
@@ -57,6 +57,12 @@ This document outlines the development standards for the Application SDK, includ
 
 - **Logging Standards**
     - logging standards are defined in [logging.mdc](mdc:.cursor/rules/logging.mdc)
+
+- **Exception Handling**
+    - exception handling standards are defined in [exception-handling.mdc](mdc:.cursor/rules/exception-handling.mdc)
+
+- **Performance Standards**
+    - performance standards are defined in [performance.mdc](mdc:.cursor/rules/performance.mdc)
 
 ## Security, Performance, and Resource Management
 

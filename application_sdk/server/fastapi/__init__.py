@@ -42,6 +42,7 @@ from application_sdk.server.fastapi.models import (
     HttpWorkflowTrigger,
     PreflightCheckRequest,
     PreflightCheckResponse,
+    Subscription,
     TestAuthRequest,
     TestAuthResponse,
     WorkflowConfigRequest,
@@ -90,12 +91,15 @@ class APIServer(ServerInterface):
     workflow_router: APIRouter
     dapr_router: APIRouter
     events_router: APIRouter
+    subscription_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
     duckdb_ui: DuckDBUI
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
+    # List of subscriptions to be registered
+    subscriptions: List[Subscription] = []
 
     frontend_assets_path: str = "frontend/static"
 
@@ -112,6 +116,7 @@ class APIServer(ServerInterface):
         frontend_templates_path: str = "frontend/templates",
         ui_enabled: bool = True,
         has_configmap: bool = False,
+        subscriptions: List[Subscription] = [],
     ):
         """Initialize the FastAPI application.
 
@@ -138,7 +143,7 @@ class APIServer(ServerInterface):
         self.workflow_router = APIRouter()
         self.dapr_router = APIRouter()
         self.events_router = APIRouter()
-
+        self.subscriptions = subscriptions
         # Set up the application
         error_handler = internal_server_error_handler  # Store as local variable
         self.app.add_exception_handler(
@@ -205,6 +210,7 @@ class APIServer(ServerInterface):
         - Workflow router (/workflows/v1)
         - Pubsub router (/dapr)
         - Events router (/events/v1)
+        - Subscription router (/subscriptions/v1)
         """
         # Register all routes first
         self.register_routes()
@@ -214,6 +220,16 @@ class APIServer(ServerInterface):
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
+
+        # Register subscription routes from subscriptions with handler callbacks
+        subscription_router = APIRouter()
+        for subscription in self.subscriptions:
+            subscription_router.add_api_route(
+                f"/{subscription.route}",
+                subscription.handler,
+                methods=["POST"],
+            )
+        self.app.include_router(subscription_router, prefix="/subscriptions/v1")
 
     def fallback_home(self, request: Request) -> HTMLResponse:
         return self.templates.TemplateResponse(
@@ -432,6 +448,19 @@ class APIServer(ServerInterface):
         """
 
         subscriptions: List[dict[str, Any]] = []
+        for subscription in self.subscriptions:
+            subscription_dict: dict[str, Any] = {
+                "pubsubname": subscription.component_name,
+                "topic": subscription.topic,
+                "route": f"/subscriptions/v1/{subscription.route}",
+            }
+            if subscription.bulk_config:
+                subscription_dict["bulkSubscribe"] = (
+                    subscription.bulk_config.model_dump(by_alias=True)
+                )
+            if subscription.dead_letter_topic:
+                subscription_dict["deadLetterTopic"] = subscription.dead_letter_topic
+            subscriptions.append(subscription_dict)
         for event_trigger in self.event_triggers:
             filters = [
                 f"({event_filter.path} {event_filter.operator} '{event_filter.value}')"
