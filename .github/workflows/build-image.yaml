@@ -7,6 +7,7 @@ on:
       - fix/graceful-shutdown-sigterm-forward
     paths:
       - 'Dockerfile'
+      - 'entrypoint.sh'
 
 permissions:
   contents: read
