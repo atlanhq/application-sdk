@@ -1,4 +1,5 @@
 #!/bin/sh
+# Graceful shutdown entrypoint for Atlan Application SDK containers
 set -e
 
 # =============================================================================

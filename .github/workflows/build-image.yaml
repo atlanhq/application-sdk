@@ -1,6 +1,7 @@
 name: Application SDK Docker Image
 
 on:
+  workflow_dispatch:  # Allow manual triggering
   push:
     branches:
       - main
