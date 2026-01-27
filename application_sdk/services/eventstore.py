@@ -5,6 +5,7 @@ to a pub/sub system with automatic fallback to HTTP binding.
 """
 
 import json
+import time
 from datetime import datetime
 
 from dapr import clients
@@ -15,12 +16,31 @@ from application_sdk.constants import (
     DAPR_BINDING_OPERATION_CREATE,
     EVENT_STORE_NAME,
 )
-from application_sdk.interceptors.models import Event, EventMetadata, WorkflowStates
+from application_sdk.constants import ENABLE_SEGMENT_METRICS
+from application_sdk.interceptors.models import (
+    ApplicationEventNames,
+    Event,
+    EventMetadata,
+    WorkflowStates,
+)
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import (
+    MetricRecord,
+    MetricType,
+    get_metrics,
+)
 from application_sdk.services._utils import is_component_registered
 
 logger = get_logger(__name__)
 activity.logger = logger
+
+# Lifecycle event names that should be sent to Segment
+LIFECYCLE_EVENTS = {
+    ApplicationEventNames.WORKFLOW_START.value,
+    ApplicationEventNames.WORKFLOW_END.value,
+    ApplicationEventNames.ACTIVITY_START.value,
+    ApplicationEventNames.ACTIVITY_END.value,
+}
 
 
 class EventStore:
@@ -90,6 +110,94 @@ class EventStore:
         return event
 
     @classmethod
+    def _send_lifecycle_event_to_segment(cls, event: Event) -> None:
+        """Send lifecycle event to Segment if enabled.
+
+        Args:
+            event (Event): The lifecycle event to send to Segment
+        """
+        if not ENABLE_SEGMENT_METRICS:
+            return
+
+        # Only send lifecycle events to Segment
+        if event.event_name not in LIFECYCLE_EVENTS:
+            return
+
+        try:
+            metrics = get_metrics()
+            if not metrics.segment_client or not metrics.segment_client.enabled:
+                return
+
+            # Map event names to Segment event names
+            segment_event_name_map = {
+                ApplicationEventNames.WORKFLOW_START.value: "workflow_started",
+                ApplicationEventNames.WORKFLOW_END.value: "workflow_completed",
+                ApplicationEventNames.ACTIVITY_START.value: "activity_started",
+                ApplicationEventNames.ACTIVITY_END.value: "activity_ended",
+            }
+
+            segment_event_name = segment_event_name_map.get(
+                event.event_name, event.event_name
+            )
+
+            # Build labels from event metadata
+            labels = {
+                "send_to_segment": "true",
+            }
+
+            # Add workflow context if available
+            if event.metadata.workflow_id:
+                labels["workflow_id"] = event.metadata.workflow_id
+            if event.metadata.workflow_run_id:
+                labels["workflow_run_id"] = event.metadata.workflow_run_id
+            if event.metadata.workflow_type:
+                labels["workflow_type"] = event.metadata.workflow_type
+            if event.metadata.workflow_state:
+                labels["workflow_state"] = event.metadata.workflow_state
+
+            # Add activity context if available
+            if event.metadata.activity_id:
+                labels["activity_id"] = event.metadata.activity_id
+            if event.metadata.activity_type:
+                labels["activity_type"] = event.metadata.activity_type
+            if event.metadata.attempt is not None:
+                labels["attempt"] = str(event.metadata.attempt)
+
+            # Add application context
+            if event.metadata.application_name:
+                labels["application_name"] = event.metadata.application_name
+
+            # Add any additional data from event.data
+            if event.data:
+                for key, value in event.data.items():
+                    if isinstance(value, (str, int, float, bool)):
+                        labels[str(key)] = str(value)
+
+            # Create metric record for Segment
+            # Convert timestamp from milliseconds to seconds if needed
+            # (timestamps > 1e10 are likely in milliseconds)
+            timestamp = (
+                event.metadata.created_timestamp / 1000.0
+                if event.metadata.created_timestamp and event.metadata.created_timestamp > 1e10
+                else (event.metadata.created_timestamp if event.metadata.created_timestamp else time.time())
+            )
+
+            metric_record = MetricRecord(
+                timestamp=timestamp,
+                name=segment_event_name,
+                value=1.0,
+                type=MetricType.COUNTER,
+                labels=labels,
+                description=f"Lifecycle event: {segment_event_name}",
+            )
+
+            # Send to Segment
+            metrics.segment_client.send_metric(metric_record)
+        except Exception as e:
+            # Don't fail event publishing if Segment sending fails
+            logger.debug(f"Failed to send lifecycle event to Segment: {e}")
+
+    @classmethod
     async def publish_event(cls, event: Event):
         """Publish event with automatic metadata enrichment and authentication.
 
@@ -142,6 +250,9 @@ class EventStore:
             return
         try:
             event = cls.enrich_event_metadata(event)
+
+            # Send lifecycle events to Segment (non-blocking)
+            cls._send_lifecycle_event_to_segment(event)
 
             payload = json.dumps(event.model_dump(mode="json"))
 
