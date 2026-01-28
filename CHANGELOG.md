@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.3.1 (January 28, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.0...v2.3.1
+
+### Bug Fixes
+
+- add entrypoint wrapper for SIGTERM forward (#950) (by @anuj-atlan in [7c0b517](https://github.com/atlanhq/application-sdk/commit/7c0b517))
+
+
 ## v2.3.0 (January 22, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.2.0...v2.3.0

@@ -1,11 +1,14 @@
 name: Application SDK Docker Image
 
 on:
+  workflow_dispatch:  # Allow manual triggering
   push:
     branches:
       - main
     paths:
-      - "Dockerfile"
+
+      - 'Dockerfile'
+      - 'entrypoint.sh'
 
 permissions:
   contents: read

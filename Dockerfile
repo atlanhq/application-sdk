@@ -37,8 +37,14 @@ ENV UV_CACHE_DIR=/home/appuser/.cache/uv \
     XDG_CACHE_HOME=/home/appuser/.cache \
     ATLAN_DAPR_HTTP_PORT=3500 \
     ATLAN_DAPR_GRPC_PORT=50001 \
-    ATLAN_DAPR_METRICS_PORT=3100
+    ATLAN_DAPR_METRICS_PORT=3100 \
+    DAPR_LOG_LEVEL=info \
+    DAPR_APP_ID=app \
+    DAPR_MAX_BODY_SIZE="1024Mi"
 
-# Default command (can be overridden by extending images)
-CMD ["python"]
+# Copy entrypoint script for graceful shutdown handling
+COPY --chown=appuser:appuser entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["sh", "/usr/local/bin/entrypoint.sh"]
 
