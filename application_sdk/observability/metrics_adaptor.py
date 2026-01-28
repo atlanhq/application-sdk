@@ -1,7 +1,7 @@
 import asyncio
+import atexit
 import logging
 import threading
-from enum import Enum
 from time import time
 from typing import Any, Dict, Optional
 
@@ -10,10 +10,10 @@ from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExp
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
-from pydantic import BaseModel
 
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
+    ENABLE_SEGMENT_METRICS,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
     METRICS_FILE_NAME,
@@ -24,128 +24,37 @@ from application_sdk.constants import (
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     OTEL_RESOURCE_ATTRIBUTES,
     OTEL_WF_NODE_NAME,
+    SEGMENT_API_URL,
+    SEGMENT_BATCH_SIZE,
+    SEGMENT_BATCH_TIMEOUT_SECONDS,
+    SEGMENT_DEFAULT_USER_ID,
+    SEGMENT_WRITE_KEY,
     SERVICE_NAME,
     SERVICE_VERSION,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.models import MetricRecord, MetricType
 from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.segment_client import SegmentClient
 from application_sdk.observability.utils import (
     get_observability_dir,
     get_workflow_context,
 )
 
-
-class MetricType(Enum):
-    """Enum for metric types."""
-
-    COUNTER = "counter"
-    GAUGE = "gauge"
-    HISTOGRAM = "histogram"
-
-
-class MetricRecord(BaseModel):
-    """A Pydantic model representing a metric record in the system.
-
-    This model defines the structure for metric data with fields for timestamp,
-    name, value, type, labels, and optional description and unit.
-
-    Attributes:
-        timestamp (float): Unix timestamp when the metric was recorded
-        name (str): Name of the metric
-        value (float): Numeric value of the metric
-        type (str): Type of metric (counter, gauge, or histogram)
-        labels (Dict[str, str]): Key-value pairs for metric dimensions
-        description (Optional[str]): Optional description of the metric
-        unit (Optional[str]): Optional unit of measurement
-    """
-
-    timestamp: float
-    name: str
-    value: float
-    type: MetricType  # counter, gauge, histogram
-    labels: Dict[str, str]
-    description: Optional[str] = None
-    unit: Optional[str] = None
-
-    class Config:
-        """Configuration for the MetricRecord Pydantic model.
-
-        Provides custom parsing logic to ensure consistent data types and structure
-        for metric records, including validation and type conversion for all fields.
-        """
-
-        @classmethod
-        def parse_obj(cls, obj):
-            if isinstance(obj, dict):
-                # Ensure labels is a dictionary with consistent structure
-                if "labels" in obj:
-                    # Create a new labels dict with only the expected fields
-                    new_labels = {}
-                    expected_fields = [
-                        "database",
-                        "status",
-                        "type",
-                        "mode",
-                        "workflow_id",
-                        "workflow_type",
-                    ]
-
-                    # Copy only the expected fields if they exist
-                    for field in expected_fields:
-                        if field in obj["labels"]:
-                            new_labels[field] = str(obj["labels"][field])
-
-                    obj["labels"] = new_labels
-
-                # Ensure value is float
-                if "value" in obj:
-                    try:
-                        obj["value"] = float(obj["value"])
-                    except (ValueError, TypeError):
-                        obj["value"] = 0.0
-
-                # Ensure timestamp is float
-                if "timestamp" in obj:
-                    try:
-                        obj["timestamp"] = float(obj["timestamp"])
-                    except (ValueError, TypeError):
-                        obj["timestamp"] = time()
-
-                # Ensure type is MetricType
-                if "type" in obj:
-                    try:
-                        obj["type"] = MetricType(obj["type"])
-                    except ValueError:
-                        obj["type"] = MetricType.COUNTER
-
-                # Ensure name is string
-                if "name" in obj:
-                    obj["name"] = str(obj["name"])
-
-                # Ensure description is string or None
-                if "description" in obj:
-                    obj["description"] = (
-                        str(obj["description"])
-                        if obj["description"] is not None
-                        else None
-                    )
-
-                # Ensure unit is string or None
-                if "unit" in obj:
-                    obj["unit"] = str(obj["unit"]) if obj["unit"] is not None else None
-
-            return super().parse_obj(obj)
+# MetricRecord and MetricType are imported from models.py to avoid circular dependencies
+logger = get_logger(__name__)
 
 
 class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     """A metrics adapter for Atlan that extends AtlanObservability.
 
     This adapter provides functionality for recording, processing, and exporting
-    metrics to various backends including OpenTelemetry and parquet files.
+    metrics to various backends including OpenTelemetry, Segment API, and parquet files.
 
     Features:
     - Metric recording with labels and units
     - OpenTelemetry integration
+    - Segment API integration
     - Periodic metric flushing
     - Console logging
     - Parquet file storage
@@ -160,6 +69,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         - Sets up base observability configuration
         - Configures date-based file settings
         - Initializes OpenTelemetry metrics if enabled
+        - Initializes Segment API client if enabled
         - Starts periodic flush task for metric buffering
         """
         super().__init__(
@@ -174,6 +84,18 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         # Initialize OpenTelemetry metrics if enabled
         if ENABLE_OTLP_METRICS:
             self._setup_otel_metrics()
+
+        # Initialize Segment client (it handles enable/disable internally)
+        self.segment_client = SegmentClient(
+            enabled=ENABLE_SEGMENT_METRICS,
+            write_key=SEGMENT_WRITE_KEY,
+            api_url=SEGMENT_API_URL,
+            default_user_id=SEGMENT_DEFAULT_USER_ID,
+            batch_size=SEGMENT_BATCH_SIZE,
+            batch_timeout_seconds=SEGMENT_BATCH_TIMEOUT_SECONDS,
+        )
+        # Register cleanup handler to close SegmentClient on shutdown
+        atexit.register(self.segment_client.close)
 
         # Start periodic flush task if not already started
         if not AtlanMetricsAdapter._flush_task_started:
@@ -319,6 +241,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         This method:
         - Validates the record is a MetricRecord
         - Sends to OpenTelemetry if enabled
+        - Sends to Segment API if enabled
         - Logs to console
         """
         if not isinstance(record, MetricRecord):
@@ -327,6 +250,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         # Send to OpenTelemetry if enabled
         if ENABLE_OTLP_METRICS:
             self._send_to_otel(record)
+
+        # Send to Segment (client handles enable/disable internally)
+        self.segment_client.send_metric(record)
 
         # Log to console
         self._log_to_console(record)
