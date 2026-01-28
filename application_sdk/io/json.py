@@ -366,9 +366,7 @@ class JsonFileWriter(Writer):
             ]
 
         try:
-            if self.chunk_start is None:
-                self.chunk_part = 0
-
+            # chunk_part is initialized in __init__ and must persist across multiple write() calls
             buffer = []
             for row in dataframe.iter_rows():
                 self.total_record_count += 1
@@ -463,6 +461,7 @@ class JsonFileWriter(Writer):
         if self.current_buffer_size_bytes > 0:
             output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
             if os.path.exists(output_file_name):
+                logger.info(f"Uploading remaining data: {output_file_name}")
                 await self._upload_file(output_file_name)
                 self.chunk_part += 1
 
