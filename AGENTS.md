@@ -14,6 +14,10 @@ Non-standard commands used across the repo:
 
 **IMPORTANT**: Always run pre-commit checks before committing. CI will fail if pre-commit checks fail.
 
+**Commit Rules**:
+- Never add Co-Authored-By lines to commits
+- Follow Conventional Commits format from `.cursor/rules/commits.mdc`
+
 Where to look next (progressive disclosure):
 
 - `docs/agents/project-structure.md` — quick map of key directories.
