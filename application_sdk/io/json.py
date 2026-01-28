@@ -403,6 +403,13 @@ class JsonFileWriter(Writer):
             if self.current_buffer_size > 0:
                 await self._flush_daft_buffer(buffer, self.chunk_part)
 
+            # Upload the final file (matching pandas behavior)
+            if self.current_buffer_size_bytes > 0:
+                output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
+                if os.path.exists(output_file_name):
+                    await self._upload_file(output_file_name)
+                    self.chunk_part += 1
+
             # Record metrics for successful write
             self.metrics.record_metric(
                 name="json_write_records",
@@ -411,6 +418,11 @@ class JsonFileWriter(Writer):
                 labels={"type": "daft"},
                 description="Number of records written to JSON files from daft DataFrame",
             )
+
+            # Increment chunk_count and record partitions (matching pandas behavior)
+            if self.chunk_start is None:
+                self.chunk_count += 1
+            self.partitions.append(self.chunk_part)
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(
