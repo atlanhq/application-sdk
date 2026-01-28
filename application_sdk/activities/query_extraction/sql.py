@@ -13,6 +13,7 @@ from application_sdk.activities.common.utils import (
     get_workflow_id,
 )
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.handlers import HandlerInterface
 from application_sdk.handlers.sql import BaseSQLHandler
@@ -412,7 +413,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         # find the last marker from the parallel_markers
         last_marker = parallel_markers[-1]["end"]
-        with open(marker_file_path, "w") as f:
+        with SafeFileOps.open(marker_file_path, "w") as f:
             f.write(last_marker)
 
         logger.info(f"Last marker: {last_marker}")
@@ -453,10 +454,10 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             )
 
             logger.info(f"Marker file downloaded to {marker_file_path}")
-            if not os.path.exists(marker_file_path):
+            if not SafeFileOps.exists(marker_file_path):
                 logger.warning(f"Marker file does not exist at {marker_file_path}")
                 return None
-            with open(marker_file_path, "r") as f:
+            with SafeFileOps.open(marker_file_path, "r") as f:
                 current_marker = f.read()
             logger.info(f"Current marker: {current_marker}")
             return int(current_marker)
@@ -519,8 +520,8 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         # Write the results to a metadata file
         output_path = os.path.join(workflow_args["output_path"], "raw", "query")
         metadata_file_path = os.path.join(output_path, "metadata.json.ignore")
-        os.makedirs(os.path.dirname(metadata_file_path), exist_ok=True)
-        with open(metadata_file_path, "w") as f:
+        SafeFileOps.makedirs(os.path.dirname(metadata_file_path), exist_ok=True)
+        with SafeFileOps.open(metadata_file_path, "w") as f:
             f.write(json.dumps(parallel_markers))
 
         await ObjectStore.upload_file(
