@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.3.2 (January 28, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.1...v2.3.2
+
+### Bug Fixes
+
+- update codeowner (#954) (by @OnkarVO7 in [3a29977](https://github.com/atlanhq/application-sdk/commit/3a29977))
+
+
 ## v2.3.1 (January 28, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.0...v2.3.1
