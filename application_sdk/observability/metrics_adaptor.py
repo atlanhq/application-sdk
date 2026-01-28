@@ -2,7 +2,6 @@ import asyncio
 import atexit
 import logging
 import threading
-from enum import Enum
 from time import time
 from typing import Any, Dict, Optional
 
@@ -11,7 +10,6 @@ from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExp
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
-from pydantic import BaseModel
 
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
@@ -26,10 +24,16 @@ from application_sdk.constants import (
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     OTEL_RESOURCE_ATTRIBUTES,
     OTEL_WF_NODE_NAME,
+    SEGMENT_API_URL,
+    SEGMENT_BATCH_SIZE,
+    SEGMENT_BATCH_TIMEOUT_SECONDS,
+    SEGMENT_DEFAULT_USER_ID,
+    SEGMENT_WRITE_KEY,
     SERVICE_NAME,
     SERVICE_VERSION,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.models import MetricRecord, MetricType
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.segment_client import SegmentClient
 from application_sdk.observability.utils import (
@@ -37,107 +41,8 @@ from application_sdk.observability.utils import (
     get_workflow_context,
 )
 
-
-class MetricType(Enum):
-    """Enum for metric types."""
-
-    COUNTER = "counter"
-    GAUGE = "gauge"
-    HISTOGRAM = "histogram"
-
-
-class MetricRecord(BaseModel):
-    """A Pydantic model representing a metric record in the system.
-
-    This model defines the structure for metric data with fields for timestamp,
-    name, value, type, labels, and optional description and unit.
-
-    Attributes:
-        timestamp (float): Unix timestamp when the metric was recorded
-        name (str): Name of the metric
-        value (float): Numeric value of the metric
-        type (str): Type of metric (counter, gauge, or histogram)
-        labels (Dict[str, str]): Key-value pairs for metric dimensions
-        description (Optional[str]): Optional description of the metric
-        unit (Optional[str]): Optional unit of measurement
-    """
-
-    timestamp: float
-    name: str
-    value: float
-    type: MetricType  # counter, gauge, histogram
-    labels: Dict[str, str]
-    description: Optional[str] = None
-    unit: Optional[str] = None
-
-    class Config:
-        """Configuration for the MetricRecord Pydantic model.
-
-        Provides custom parsing logic to ensure consistent data types and structure
-        for metric records, including validation and type conversion for all fields.
-        """
-
-        @classmethod
-        def parse_obj(cls, obj):
-            if isinstance(obj, dict):
-                # Ensure labels is a dictionary with consistent structure
-                if "labels" in obj:
-                    # Create a new labels dict with only the expected fields
-                    new_labels = {}
-                    expected_fields = [
-                        "database",
-                        "status",
-                        "type",
-                        "mode",
-                        "workflow_id",
-                        "workflow_type",
-                    ]
-
-                    # Copy only the expected fields if they exist
-                    for field in expected_fields:
-                        if field in obj["labels"]:
-                            new_labels[field] = str(obj["labels"][field])
-
-                    obj["labels"] = new_labels
-
-                # Ensure value is float
-                if "value" in obj:
-                    try:
-                        obj["value"] = float(obj["value"])
-                    except (ValueError, TypeError):
-                        obj["value"] = 0.0
-
-                # Ensure timestamp is float
-                if "timestamp" in obj:
-                    try:
-                        obj["timestamp"] = float(obj["timestamp"])
-                    except (ValueError, TypeError):
-                        obj["timestamp"] = time()
-
-                # Ensure type is MetricType
-                if "type" in obj:
-                    try:
-                        obj["type"] = MetricType(obj["type"])
-                    except ValueError:
-                        obj["type"] = MetricType.COUNTER
-
-                # Ensure name is string
-                if "name" in obj:
-                    obj["name"] = str(obj["name"])
-
-                # Ensure description is string or None
-                if "description" in obj:
-                    obj["description"] = (
-                        str(obj["description"])
-                        if obj["description"] is not None
-                        else None
-                    )
-
-                # Ensure unit is string or None
-                if "unit" in obj:
-                    obj["unit"] = str(obj["unit"]) if obj["unit"] is not None else None
-
-            return super().parse_obj(obj)
+# MetricRecord and MetricType are imported from models.py to avoid circular dependencies
+logger = get_logger(__name__)
 
 
 class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
@@ -180,13 +85,17 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         if ENABLE_OTLP_METRICS:
             self._setup_otel_metrics()
 
-        # Initialize Segment client if enabled
-        if ENABLE_SEGMENT_METRICS:
-            self.segment_client = SegmentClient()
-            # Register cleanup handler to close SegmentClient on shutdown
-            atexit.register(self._cleanup_segment_client)
-        else:
-            self.segment_client = None
+        # Initialize Segment client (it handles enable/disable internally)
+        self.segment_client = SegmentClient(
+            enabled=ENABLE_SEGMENT_METRICS,
+            write_key=SEGMENT_WRITE_KEY,
+            api_url=SEGMENT_API_URL,
+            default_user_id=SEGMENT_DEFAULT_USER_ID,
+            batch_size=SEGMENT_BATCH_SIZE,
+            batch_timeout_seconds=SEGMENT_BATCH_TIMEOUT_SECONDS,
+        )
+        # Register cleanup handler to close SegmentClient on shutdown
+        atexit.register(self.segment_client.close)
 
         # Start periodic flush task if not already started
         if not AtlanMetricsAdapter._flush_task_started:
@@ -342,9 +251,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         if ENABLE_OTLP_METRICS:
             self._send_to_otel(record)
 
-        # Send to Segment if enabled
-        if ENABLE_SEGMENT_METRICS:
-            self._send_to_segment(record)
+        # Send to Segment (client handles enable/disable internally)
+        self.segment_client.send_metric(record)
 
         # Log to console
         self._log_to_console(record)
@@ -387,31 +295,6 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 histogram.record(metric_record.value, metric_record.labels)
         except Exception as e:
             logging.error(f"Error sending metric to OpenTelemetry: {e}")
-
-    def _send_to_segment(self, metric_record: MetricRecord):
-        """Send metric to Segment API.
-
-        Args:
-            metric_record (MetricRecord): Metric record to send
-
-        This method delegates to the SegmentClient which handles:
-        - Allow list filtering (determined from metric properties)
-        - Queue-based async sending
-        - Error handling
-
-        Raises:
-            Exception: If sending fails, logs error and continues
-        """
-        if not self.segment_client:
-            return
-
-        try:
-            # Send via SegmentClient (handles filtering and async queue)
-            # SegmentClient accepts MetricRecord directly
-            self.segment_client.send_metric(metric_record)
-
-        except Exception as e:
-            logging.error(f"Error sending metric to Segment: {e}")
 
     def _log_to_console(self, metric_record: MetricRecord):
         """Log metric to console using the logger.
@@ -490,21 +373,6 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
 
         except Exception as e:
             logging.error(f"Error recording metric: {e}")
-
-    def _cleanup_segment_client(self):
-        """Cleanup SegmentClient resources on shutdown.
-
-        This method:
-        - Closes the SegmentClient's httpx client
-        - Stops the worker thread gracefully
-        - Ensures no resource leaks on application termination
-        """
-        if self.segment_client:
-            try:
-                self.segment_client.close()
-                logging.debug("SegmentClient closed successfully")
-            except Exception as e:
-                logging.warning(f"Error closing SegmentClient: {e}")
 
 
 # Create a singleton instance of the metrics adapter

@@ -12,10 +12,10 @@ from dapr import clients
 from temporalio import activity, workflow
 
 from application_sdk.constants import (
-    APPLICATION_NAME,
     APP_TENANT_ID,
+    APPLICATION_NAME,
     DAPR_BINDING_OPERATION_CREATE,
-    ENABLE_SEGMENT_METRICS,
+    DOMAIN_NAME,
     EVENT_STORE_NAME,
 )
 from application_sdk.interceptors.models import (
@@ -117,17 +117,12 @@ class EventStore:
         Args:
             event (Event): The lifecycle event to send to Segment
         """
-        if not ENABLE_SEGMENT_METRICS:
-            return
-
         # Only send lifecycle events to Segment
         if event.event_name not in LIFECYCLE_EVENTS:
             return
 
         try:
             metrics = get_metrics()
-            if not metrics.segment_client or not metrics.segment_client.enabled:
-                return
 
             # Map event names to Segment event names
             segment_event_name_map = {
@@ -169,6 +164,7 @@ class EventStore:
                 labels["application_name"] = event.metadata.application_name
 
             labels["tenant_id"] = APP_TENANT_ID
+            labels["domain_name"] = DOMAIN_NAME
 
             # Add any additional data from event.data
             if event.data:

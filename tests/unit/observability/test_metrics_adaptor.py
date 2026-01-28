@@ -9,10 +9,9 @@ from hypothesis import strategies as st
 
 from application_sdk.observability.metrics_adaptor import (
     AtlanMetricsAdapter,
-    MetricRecord,
-    MetricType,
     get_metrics,
 )
+from application_sdk.observability.models import MetricRecord, MetricType
 
 
 @pytest.fixture
@@ -308,8 +307,8 @@ def test_export_record_with_segment_enabled():
         "os.environ",
         {
             "ATLAN_ENABLE_SEGMENT_METRICS": "true",
-            "SEGMENT_WRITE_KEY": "test_key",
-            "SEGMENT_API_URL": "https://api.segment.io/v1/track",
+            "ATLAN_SEGMENT_WRITE_KEY": "test_key",
+            "ATLAN_SEGMENT_API_URL": "https://api.segment.io/v1/batch",
             "METRICS_BATCH_SIZE": "100",
             "METRICS_FLUSH_INTERVAL_SECONDS": "1",
             "METRICS_RETENTION_DAYS": "7",
@@ -319,44 +318,39 @@ def test_export_record_with_segment_enabled():
     ):
         with mock.patch("opentelemetry.metrics.set_meter_provider"):
             with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                # Mock the constant since it's evaluated at import time
+                # Mock SegmentClient to avoid thread initialization in tests
                 with mock.patch(
-                    "application_sdk.observability.metrics_adaptor.ENABLE_SEGMENT_METRICS",
-                    True,
-                ):
-                    # Mock SegmentClient to avoid thread initialization in tests
-                    with mock.patch(
-                        "application_sdk.observability.metrics_adaptor.SegmentClient"
-                    ) as mock_segment_client_class:
-                        mock_segment_client = mock.MagicMock()
-                        mock_segment_client_class.return_value = mock_segment_client
+                    "application_sdk.observability.metrics_adaptor.SegmentClient"
+                ) as mock_segment_client_class:
+                    mock_segment_client = mock.MagicMock()
+                    mock_segment_client_class.return_value = mock_segment_client
 
-                        adapter = AtlanMetricsAdapter()
+                    adapter = AtlanMetricsAdapter()
 
-                        record = MetricRecord(
-                            timestamp=datetime.now().timestamp(),
-                            name="test_metric",
-                            value=42.0,
-                            type=MetricType.COUNTER,
-                            labels={"test": "label"},
-                            description="Test metric",
-                            unit="count",
-                        )
-                        with mock.patch.object(
-                            adapter, "_send_to_segment"
-                        ) as mock_send:
-                            with mock.patch.object(
-                                adapter, "_log_to_console"
-                            ) as mock_log:
-                                adapter.export_record(record)
-                                mock_send.assert_called_once_with(record)
-                                mock_log.assert_called_once_with(record)
+                    record = MetricRecord(
+                        timestamp=datetime.now().timestamp(),
+                        name="test_metric",
+                        value=42.0,
+                        type=MetricType.COUNTER,
+                        labels={"test": "label"},
+                        description="Test metric",
+                        unit="count",
+                    )
+                    with mock.patch.object(
+                        adapter.segment_client, "send_metric"
+                    ) as mock_send:
+                        with mock.patch.object(adapter, "_log_to_console") as mock_log:
+                            adapter.export_record(record)
+                            mock_send.assert_called_once_with(record)
+                            mock_log.assert_called_once_with(record)
 
 
 def test_export_record_with_segment_disabled():
     """Test export_record() method when Segment is disabled."""
     with create_metrics_adapter() as metrics_adapter:
-        with mock.patch.object(metrics_adapter, "_send_to_segment") as mock_send:
+        with mock.patch.object(
+            metrics_adapter.segment_client, "send_metric"
+        ) as mock_send:
             with mock.patch.object(metrics_adapter, "_log_to_console") as mock_log:
                 record = MetricRecord(
                     timestamp=datetime.now().timestamp(),
@@ -368,18 +362,19 @@ def test_export_record_with_segment_disabled():
                     unit="count",
                 )
                 metrics_adapter.export_record(record)
-                mock_send.assert_not_called()
+                # _send_to_segment is always called, but SegmentClient handles enable/disable
+                mock_send.assert_called_once_with(record)
                 mock_log.assert_called_once_with(record)
 
 
 def test_send_to_segment():
-    """Test _send_to_segment() method."""
+    """Test segment_client.send_metric() method."""
     with mock.patch.dict(
         "os.environ",
         {
             "ATLAN_ENABLE_SEGMENT_METRICS": "true",
-            "SEGMENT_WRITE_KEY": "test_key",
-            "SEGMENT_API_URL": "https://api.segment.io/v1/track",
+            "ATLAN_SEGMENT_WRITE_KEY": "test_key",
+            "ATLAN_SEGMENT_API_URL": "https://api.segment.io/v1/batch",
             "METRICS_BATCH_SIZE": "100",
             "METRICS_FLUSH_INTERVAL_SECONDS": "1",
             "METRICS_RETENTION_DAYS": "7",
@@ -389,39 +384,35 @@ def test_send_to_segment():
     ):
         with mock.patch("opentelemetry.metrics.set_meter_provider"):
             with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                # Mock the constant since it's evaluated at import time
+                # Mock SegmentClient to avoid thread initialization in tests
                 with mock.patch(
-                    "application_sdk.observability.metrics_adaptor.ENABLE_SEGMENT_METRICS",
-                    True,
-                ):
-                    # Mock SegmentClient to avoid thread initialization in tests
-                    with mock.patch(
-                        "application_sdk.observability.metrics_adaptor.SegmentClient"
-                    ) as mock_segment_client_class:
-                        mock_segment_client = mock.MagicMock()
-                        mock_segment_client_class.return_value = mock_segment_client
+                    "application_sdk.observability.metrics_adaptor.SegmentClient"
+                ) as mock_segment_client_class:
+                    mock_segment_client = mock.MagicMock()
+                    mock_segment_client_class.return_value = mock_segment_client
 
-                        adapter = AtlanMetricsAdapter()
+                    adapter = AtlanMetricsAdapter()
 
-                        record = MetricRecord(
-                            timestamp=datetime.now().timestamp(),
-                            name="test_segment_metric",
-                            value=42.0,
-                            type=MetricType.COUNTER,
-                            labels={
-                                "test": "label",
-                                "env": "test",
-                                "send_to_segment": "true",
-                            },
-                            description="Test Segment metric",
-                            unit="count",
-                        )
+                    record = MetricRecord(
+                        timestamp=datetime.now().timestamp(),
+                        name="test_segment_metric",
+                        value=42.0,
+                        type=MetricType.COUNTER,
+                        labels={
+                            "test": "label",
+                            "env": "test",
+                            "send_to_segment": "true",
+                        },
+                        description="Test Segment metric",
+                        unit="count",
+                    )
 
-                        adapter._send_to_segment(record)
+                    # Call segment_client.send_metric directly (since _send_to_segment was removed)
+                    adapter.segment_client.send_metric(record)
 
-                        # Verify send_metric was called on the SegmentClient
-                        mock_segment_client.send_metric.assert_called_once_with(record)
-                        assert adapter.segment_client is not None
+                    # Verify send_metric was called on the SegmentClient
+                    mock_segment_client.send_metric.assert_called_once_with(record)
+                    assert adapter.segment_client is not None
 
 
 def test_setup_segment_client_without_key():
@@ -430,7 +421,7 @@ def test_setup_segment_client_without_key():
         "os.environ",
         {
             "ATLAN_ENABLE_SEGMENT_METRICS": "true",
-            "SEGMENT_WRITE_KEY": "",  # Empty key
+            "ATLAN_SEGMENT_WRITE_KEY": "",  # Empty key
             "METRICS_BATCH_SIZE": "100",
             "METRICS_FLUSH_INTERVAL_SECONDS": "1",
             "METRICS_RETENTION_DAYS": "7",
@@ -440,23 +431,18 @@ def test_setup_segment_client_without_key():
     ):
         with mock.patch("opentelemetry.metrics.set_meter_provider"):
             with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                # Mock the constant since it's evaluated at import time
+                # Patch SEGMENT_WRITE_KEY in both constants (where defined) and segment_client (where imported)
+                # This ensures the value is properly set even though it's imported at module level
                 with mock.patch(
-                    "application_sdk.observability.metrics_adaptor.ENABLE_SEGMENT_METRICS",
-                    True,
+                    "application_sdk.constants.SEGMENT_WRITE_KEY",
+                    "",
                 ):
-                    # Patch SEGMENT_WRITE_KEY in both constants (where defined) and segment_client (where imported)
-                    # This ensures the value is properly set even though it's imported at module level
                     with mock.patch(
-                        "application_sdk.constants.SEGMENT_WRITE_KEY",
+                        "application_sdk.observability.segment_client.SEGMENT_WRITE_KEY",
                         "",
                     ):
-                        with mock.patch(
-                            "application_sdk.observability.segment_client.SEGMENT_WRITE_KEY",
-                            "",
-                        ):
-                            # Don't mock SegmentClient - let it initialize normally to test real behavior
-                            adapter = AtlanMetricsAdapter()
-                            # Segment client should be created but disabled (enabled=False)
-                            assert adapter.segment_client is not None
-                            assert adapter.segment_client.enabled is False
+                        # Don't mock SegmentClient - let it initialize normally to test real behavior
+                        adapter = AtlanMetricsAdapter()
+                        # Segment client should be created but disabled (enabled=False)
+                        assert adapter.segment_client is not None
+                        assert adapter.segment_client.enabled is False
