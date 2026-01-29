@@ -1,0 +1,44 @@
+name: Snyk Dependency Scan
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main, develop]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  snyk-scan:
+    name: Snyk Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Generate requirements.txt from uv.lock
+        run: |
+          uv export --all-extras --no-hashes > requirements.txt
+          echo "Generated requirements.txt with $(wc -l < requirements.txt) lines"
+
+      - name: Run Snyk to check for vulnerabilities
+        uses: snyk/actions/python@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
+        with:
+          args: --file=requirements.txt --severity-threshold=high --skip-unresolved
+
+      # Only monitor on main branch (sends to Snyk dashboard)
+      - name: Monitor with Snyk (main only)
+        if: github.ref == 'refs/heads/main'
+        uses: snyk/actions/python@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
+        with:
+          command: monitor
+          args: --file=requirements.txt --skip-unresolved
