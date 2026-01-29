@@ -168,9 +168,10 @@ logging.basicConfig(
     level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[InterceptHandler()]
 )
 
-DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span"]
+DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span", "httpx"]
 
 # Configure external dependency loggers to reduce noise
+# Set httpx to WARNING to reduce verbose HTTP request logs (200 OK messages)
 for logger_name in DEPENDENCY_LOGGERS:
     logging.getLogger(logger_name).setLevel(logging.WARNING)
 
