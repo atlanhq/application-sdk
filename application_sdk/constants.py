@@ -42,6 +42,8 @@ APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0"))
 APP_PORT = int(os.getenv("ATLAN_APP_HTTP_PORT", "8000"))
 #: Tenant ID for multi-tenant applications
 APP_TENANT_ID = os.getenv("ATLAN_TENANT_ID", "default")
+# Domain Name of the tenant
+DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
 #: Host address for the application's dashboard
 APP_DASHBOARD_HOST = str(os.getenv("ATLAN_APP_DASHBOARD_HOST", "localhost"))
 #: Port number for the application's dashboard
@@ -238,6 +240,24 @@ METRICS_CLEANUP_ENABLED = (
     os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
 )
 METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
+
+# Segment Configuration
+#: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
+SEGMENT_API_URL = os.getenv("ATLAN_SEGMENT_API_URL", "https://api.segment.io/v1/batch")
+#: Segment write key for authentication
+SEGMENT_WRITE_KEY = os.getenv("ATLAN_SEGMENT_WRITE_KEY", "")
+#: Whether to enable Segment metrics export
+ENABLE_SEGMENT_METRICS = (
+    os.getenv("ATLAN_ENABLE_SEGMENT_METRICS", "false").lower() == "true"
+)
+#: Default user ID for Segment events
+SEGMENT_DEFAULT_USER_ID = "atlan.automation"
+#: Maximum batch size for Segment events
+SEGMENT_BATCH_SIZE = int(os.getenv("ATLAN_SEGMENT_BATCH_SIZE", "100"))
+#: Maximum time to wait before sending a batch (in seconds)
+SEGMENT_BATCH_TIMEOUT_SECONDS = float(
+    os.getenv("ATLAN_SEGMENT_BATCH_TIMEOUT_SECONDS", "10.0")
+)
 
 # Traces Configuration
 ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
