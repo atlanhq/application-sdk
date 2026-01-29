@@ -46,8 +46,7 @@ workflows = [
     "orjson>=3.10.18,<3.12.0",
 ]
 pandas = [
-    "pandas>=2.2.3,<2.4.0",
-    "pyarrow>=20.0.0,<23.0.0",  # Required for parquet file support in observability
+    "pandas>=2.2.3,<2.4.0"
 ]
 daft = [
     "daft>=0.7.1,<0.8.0",
