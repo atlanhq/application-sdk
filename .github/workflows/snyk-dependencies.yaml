@@ -23,22 +23,28 @@ jobs:
 
       - name: Generate requirements.txt from uv.lock
         run: |
-          uv export --all-extras --no-hashes > requirements.txt
-          echo "Generated requirements.txt with $(wc -l < requirements.txt) lines"
+          mkdir -p /tmp/snyk-scan
+          uv export --all-extras --no-hashes > /tmp/snyk-scan/requirements.txt
+          echo "Generated requirements.txt with $(wc -l < /tmp/snyk-scan/requirements.txt) lines"
+          echo "--- Checking key package versions ---"
+          grep -E "^(cryptography|urllib3)==" /tmp/snyk-scan/requirements.txt || true
 
+      - name: Install Snyk CLI
+        uses: snyk/actions/setup@master
+
+      # Run from temp dir to avoid Snyk detecting pyproject.toml
       - name: Run Snyk to check for vulnerabilities
-        uses: snyk/actions/python@master
+        working-directory: /tmp/snyk-scan
+        run: snyk test --file=requirements.txt --package-manager=pip --severity-threshold=high --skip-unresolved
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
-        with:
-          args: --file=requirements.txt --severity-threshold=high --skip-unresolved
+          SNYK_API: 'https://api.us.snyk.io'
 
       # Only monitor on main branch (sends to Snyk dashboard)
       - name: Monitor with Snyk (main only)
         if: github.ref == 'refs/heads/main'
-        uses: snyk/actions/python@master
+        working-directory: /tmp/snyk-scan
+        run: snyk monitor --file=requirements.txt --package-manager=pip --skip-unresolved
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
-        with:
-          command: monitor
-          args: --file=requirements.txt --skip-unresolved
+          SNYK_API: 'https://api.us.snyk.io'
