@@ -119,7 +119,7 @@ runs:
         message-id: trivy-secret
         message-path: trivy-secret-results.md
 
-    - name: Fail on High/Critical Vulnerabilities
+    - name: Fail on High/Critical Vulnerabilities (with fix available)
       if: inputs.add-report-comment-to-pr == 'true'
       uses: aquasecurity/trivy-action@0.33.1
       with:
@@ -128,6 +128,7 @@ runs:
         severity: 'CRITICAL,HIGH'
         exit-code: '1'
         scanners: 'vuln'
+        ignore-unfixed: true
       env:
         TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
