@@ -15,7 +15,7 @@ tables that exist now but weren't in previous state (e.g., due to filter changes
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Optional, Set
+from typing import Callable, Optional, Set
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.common.incremental.models import (
@@ -178,6 +178,7 @@ def _get_next_chunk_index(dest_dir: Path) -> int:
             idx = int(f.stem.split("-")[-1])
             indices.append(idx)
         except (ValueError, IndexError):
+            # Skip files with non-standard naming (e.g., "chunk-foo.json")
             pass
 
     return max(indices) + 1 if indices else 0

@@ -85,8 +85,8 @@ class WorkflowMetadata(BaseModel):
     incremental_extraction: bool = Field(
         default=False, alias="incremental-extraction"
     )
-    column_batch_size: int = Field(default=25000, alias="column-batch-size")
-    column_chunk_size: int = Field(default=100000, alias="column-chunk-size")
+    column_batch_size: int = Field(default=25000, alias="column-batch-size", gt=0)
+    column_chunk_size: int = Field(default=100000, alias="column-chunk-size", gt=0)
     system_schema_name: str = Field(default="SYS", alias="system-schema-name")
 
     # Marker timestamp adjustment settings

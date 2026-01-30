@@ -30,7 +30,7 @@ import shutil
 from abc import abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, cast
+from typing import Any, Dict, Optional, Set, cast
 
 from temporalio import activity
 
@@ -691,7 +691,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         logger.info("Base prepare_column_extraction_queries - no queries generated")
         return {
             "queries": [],
-            "count": 0,
+            "total_batches": 0,
             "changed_tables": 0,
             "backfill_tables": 0,
             "total_tables": 0,

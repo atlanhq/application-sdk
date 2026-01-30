@@ -67,7 +67,6 @@ def merge_ancestral_columns(
     Returns:
         Tuple of (MergeResult with counts, Set of tables with extracted columns)
     """
-    result = MergeResult()
     tables_with_extracted_columns: Set[str] = set()
 
     new_column_dir = new_state_dir.joinpath("column")
@@ -91,15 +90,15 @@ def merge_ancestral_columns(
         logger.info(
             f"Processing {len(current_json_files)} column files from {current_column_dir}"
         )
-        tables_with_cols = get_table_qns_from_columns(current_column_dir, conn=conn)
-        if tables_with_cols is None:
+        tables_with_columns = get_table_qns_from_columns(current_column_dir, conn=conn)
+        if tables_with_columns is None:
             raise RuntimeError(
                 f"Failed to determine tables with columns from {current_column_dir}. "
                 f"Found {len(current_json_files)} JSON files but couldn't parse table references. "
-                f"Check logs for 'get_table_qns_from_columns' for details. "
+                f"Check logs for '{get_table_qns_from_columns.__name__}' for details. "
                 f"This would cause duplicate columns in the merged state."
             )
-        tables_with_extracted_columns = tables_with_cols
+        tables_with_extracted_columns = tables_with_columns
         logger.info(
             f"Found {len(tables_with_extracted_columns)} tables with extracted columns"
         )
