@@ -32,7 +32,7 @@ authlib==1.6.6
     # via
     #   fastmcp
     #   pyatlan
-azure-core==1.37.0
+azure-core==1.38.0
     # via
     #   azure-identity
     #   azure-storage-blob
@@ -444,7 +444,7 @@ python-dotenv==1.2.1
     #   uvicorn
 python-json-logger==4.0.0
     # via pydocket
-python-multipart==0.0.21
+python-multipart==0.0.22
     # via
     #   fastapi
     #   mcp
