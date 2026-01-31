@@ -1,0 +1,110 @@
+name: Scheduled Harbor Image Scan
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  security-events: write
+
+jobs:
+  scan-harbor-image:
+    name: Scan Harbor Image
+    runs-on: ubuntu-latest
+    env:
+      HARBOR_IMAGE: registry.atlan.com/public/test:latest
+    steps:
+      - name: Run Trivy Scan
+        id: trivy_scan
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ env.HARBOR_IMAGE }}
+          format: 'json'
+          output: 'trivy-results.json'
+          severity: 'CRITICAL,HIGH'
+          scanners: 'vuln'
+          ignore-unfixed: true
+
+      - name: Parse Trivy Results
+        id: parse_trivy
+        shell: bash
+        run: |
+          CRITICAL_COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-results.json)
+          HIGH_COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-results.json)
+          echo "critical-count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+          echo "high-count=$HIGH_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Run Snyk Scan
+        id: snyk_scan
+        continue-on-error: true
+        uses: snyk/actions/docker@0.4.0
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN_BU_APPS }}
+          SNYK_API: 'https://api.us.snyk.io'
+        with:
+          image: ${{ env.HARBOR_IMAGE }}
+          args: --severity-threshold=high
+
+      - name: Run Grype Scan
+        id: grype_scan
+        continue-on-error: true
+        shell: bash
+        run: |
+          grype "${HARBOR_IMAGE}" --only-fixed --fail-on high
+
+      - name: Generate scan summary
+        shell: bash
+        run: |
+          echo "## Harbor Image Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Image: $HARBOR_IMAGE" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scanner | HIGH | CRITICAL |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ${{ steps.parse_trivy.outputs.high-count }} | ${{ steps.parse_trivy.outputs.critical-count }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create issue if Trivy finds vulnerabilities
+        if: steps.parse_trivy.outputs.critical-count != '0' || steps.parse_trivy.outputs.high-count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '🚨 Security: Vulnerabilities detected in Harbor image';
+            const body = `## Harbor Image Vulnerability Alert
+
+            Trivy detected **HIGH/CRITICAL vulnerabilities** in the Harbor image.
+
+            - **Image:** ${process.env.HARBOR_IMAGE}
+            - **HIGH:** ${{ steps.parse_trivy.outputs.high-count }}
+            - **CRITICAL:** ${{ steps.parse_trivy.outputs.critical-count }}
+            - **Scan date:** ${new Date().toISOString().split('T')[0]}
+
+            ### Next steps
+            1. Review Trivy results in the workflow summary.
+            2. Confirm if issues are isolated to Dapr CLI or upstream dependencies.
+            3. Plan a patched release if needed.
+
+            /cc @atlanhq/builder-experience
+            `;
+
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security,harbor-image-scan'
+            });
+
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['security', 'harbor-image-scan', 'priority:high']
+              });
+              console.log('Created new security issue');
+            } else {
+              console.log('Security issue already exists, skipping creation');
+            }
