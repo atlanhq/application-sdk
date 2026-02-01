@@ -1,13 +1,14 @@
 FROM cgr.dev/atlan.com/app-framework-golden:3.13.11
 
-# Dapr version argument
-ARG DAPR_VERSION=1.16.5
+# Dapr version arguments
+ARG DAPR_CLI_VERSION=1.16.5
+ARG DAPR_RUNTIME_VERSION=1.16.8
 
 # Switch to root for installation
 USER root
 
 # Install Dapr CLI (latest version for apps to use)
-RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s ${DAPR_VERSION}
+RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s ${DAPR_CLI_VERSION}
 
 
 # Create appuser (standardized user for all apps)
@@ -27,7 +28,7 @@ USER appuser
 WORKDIR /app
 
 # Initialize Dapr (slim mode) for apps
-RUN dapr init --slim --runtime-version=${DAPR_VERSION}
+RUN dapr init --slim --runtime-version=${DAPR_RUNTIME_VERSION}
 
 # Remove dashboard, placement, and scheduler from Dapr - not needed and have vulnerabilities
 RUN rm -f /home/appuser/.dapr/bin/dashboard /home/appuser/.dapr/bin/placement /home/appuser/.dapr/bin/scheduler 2>/dev/null || true
@@ -47,4 +48,3 @@ COPY --chown=appuser:appuser entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["sh", "/usr/local/bin/entrypoint.sh"]
-
