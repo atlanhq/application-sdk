@@ -42,6 +42,9 @@ docker pull registry.atlan.com/public/application-sdk:main-latest
 
 # Versioned image
 docker pull registry.atlan.com/public/application-sdk:main-2.3.1
+
+# Commit-specific image
+docker pull registry.atlan.com/public/application-sdk:sha-49c027f
 ```
 
 ## Contributing
