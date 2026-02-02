@@ -32,6 +32,21 @@ poetry add atlan-application-sdk
 - Want to develop locally or run examples from this repository? Check out our [Getting Started Guide](docs/guides/getting-started.md) for a step-by-step walkthrough!
 - Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/main/docs/) folder.
 
+## 🐳 Docker
+
+### Pre-built Images (Harbor)
+
+```bash
+# Latest main image
+docker pull registry.atlan.com/public/application-sdk:main-latest
+
+# Versioned image
+docker pull registry.atlan.com/public/application-sdk:main-2.3.1
+
+# Commit-specific image
+docker pull registry.atlan.com/public/application-sdk:sha-49c027f
+```
+
 ## Contributing
 
 - We welcome contributions! Please see our [Contributing Guide](https://github.com/atlanhq/application-sdk/blob/main/CONTRIBUTING.md) for guidelines.

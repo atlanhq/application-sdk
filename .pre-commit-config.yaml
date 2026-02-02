@@ -25,6 +25,14 @@ repos:
       - id: conventional-pre-commit
         stages: [commit-msg]
         args: []
+  - repo: local
+    hooks:
+      - id: sync-requirements-txt
+        name: Sync requirements.txt with uv.lock
+        entry: bash -c 'uv export --all-extras --no-hashes > requirements.txt && git add requirements.txt'
+        language: system
+        files: ^uv\.lock$
+        pass_filenames: false
   - repo: https://github.com/RobertCraigie/pyright-python
     rev: v1.1.393
     hooks:

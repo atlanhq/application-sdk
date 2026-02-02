@@ -310,7 +310,7 @@ runs:
 
     - name: Run Trivy Scan
       id: trivy_scan
-      uses: aquasecurity/trivy-action@0.24.0
+      uses: aquasecurity/trivy-action@0.33.1
       with:
         # UPDATED: Use the single, primary tag from the step above
         image-ref: ${{ steps.extract_tag.outputs.primary_tag }}
