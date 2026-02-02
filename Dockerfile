@@ -11,7 +11,7 @@ USER root
 RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s ${DAPR_CLI_VERSION}
 
 
-# Install Dapr runtime from Chainguard APK
+# Install Dapr runtime from Chainguard APK (0 CVEs vs upstream Dapr releases)
 RUN apk add --no-cache ${DAPR_RUNTIME_PACKAGE}
 
 # Create appuser (standardized user for all apps)
