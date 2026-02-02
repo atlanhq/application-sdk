@@ -31,7 +31,15 @@ USER appuser
 WORKDIR /app
 
 # Ensure Dapr directories exist for components/runtime
-RUN mkdir -p /home/appuser/.dapr/components /home/appuser/.dapr/bin
+RUN mkdir -p /home/appuser/.dapr/components /home/appuser/.dapr/bin && \
+    ln -s /usr/bin/daprd /home/appuser/.dapr/bin/daprd && \
+    cat <<'EOF' > /home/appuser/.dapr/config.yaml
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: daprConfig
+spec: {}
+EOF
 
 # Common environment variables for all apps
 ENV UV_CACHE_DIR=/home/appuser/.cache/uv \
