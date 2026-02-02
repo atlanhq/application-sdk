@@ -238,6 +238,7 @@ workflows = [
     { name = "dapr" },
     { name = "orjson" },
     { name = "temporalio" },
+    { name = "tenacity" },
 ]
 
 [package.dev-dependencies]
@@ -298,6 +299,7 @@ requires-dist = [
     { name = "redis", extras = ["hiredis"], marker = "extra == 'distributed-lock'", specifier = ">=5.2.0,<7.2.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlalchemy'", specifier = ">=2.0.36,<2.1.0" },
     { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.7.1,<1.22.0" },
+    { name = "tenacity", marker = "extra == 'workflows'", specifier = ">=8.0.0,<10.0.0" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0,<0.23.0" },
 ]
 provides-extras = ["workflows", "pandas", "daft", "sqlalchemy", "iam-auth", "azure", "tests", "scale-data-generator", "distributed-lock", "mcp"]

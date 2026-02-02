@@ -44,6 +44,7 @@ workflows = [
     "dapr==1.16.0",
     "temporalio>=1.7.1,<1.22.0",
     "orjson>=3.10.18,<3.12.0",
+    "tenacity>=8.0.0,<10.0.0",
 ]
 pandas = [
     "pandas>=2.2.3,<2.4.0"

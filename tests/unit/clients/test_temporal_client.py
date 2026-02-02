@@ -345,6 +345,101 @@ async def test_get_workflow_run_status_client_not_loaded(
         await temporal_client.get_workflow_run_status("test_workflow_id", "test_run_id")
 
 
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+@patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
+async def test_load_with_retry_success_first_attempt(
+    mock_get_config: AsyncMock,
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test loading succeeds on first attempt without retry."""
+    mock_get_config.return_value = None
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    mock_connect.assert_called_once()
+    assert temporal_client.client == mock_client
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+@patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
+async def test_load_with_retry_success_after_failures(
+    mock_get_config: AsyncMock,
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test loading succeeds after transient failures with retry (using tenacity)."""
+    mock_get_config.return_value = None
+    mock_client = AsyncMock()
+
+    # Fail twice, then succeed
+    mock_connect.side_effect = [
+        Exception("Connection timeout"),
+        Exception("Network error"),
+        mock_client,
+    ]
+
+    # Use max_retries=3 to allow up to 4 attempts (1 initial + 3 retries)
+    await temporal_client.load(max_retries=3)
+
+    # Should have tried 3 times (2 failures + 1 success)
+    assert mock_connect.call_count == 3
+    assert temporal_client.client == mock_client
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+@patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
+async def test_load_with_retry_exhausted(
+    mock_get_config: AsyncMock,
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test loading fails after all retries exhausted (using tenacity)."""
+    mock_get_config.return_value = None
+
+    # Always fail
+    mock_connect.side_effect = Exception("Persistent connection error")
+
+    with pytest.raises(RuntimeError, match="Failed to connect to Temporal server"):
+        await temporal_client.load(max_retries=2)
+
+    # Initial attempt + 2 retries = 3 attempts
+    assert mock_connect.call_count == 3
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+@patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
+async def test_load_with_zero_retries(
+    mock_get_config: AsyncMock,
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test loading with zero retries fails immediately on error."""
+    mock_get_config.return_value = None
+
+    mock_connect.side_effect = Exception("Connection error")
+
+    with pytest.raises(RuntimeError, match="Failed to connect to Temporal server"):
+        await temporal_client.load(max_retries=0)
+
+    # Only 1 attempt with 0 retries
+    assert mock_connect.call_count == 1
+
+
 @patch("application_sdk.clients.temporal.logger")
 @patch("application_sdk.clients.temporal.EventStore.publish_event")
 @patch("application_sdk.clients.temporal.time.time")

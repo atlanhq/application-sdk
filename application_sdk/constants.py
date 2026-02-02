@@ -146,6 +146,13 @@ GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = int(
     os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 12 * 60 * 60)  # 12 hours
 )
 
+#: Maximum number of retry attempts for initial Temporal connection (optional)
+#: This handles transient network errors during startup
+#: Default: 5 retries. Set to 0 to disable retries.
+WORKFLOW_CONNECTION_MAX_RETRIES: int = int(
+    os.getenv("ATLAN_WORKFLOW_CONNECTION_MAX_RETRIES", "5")
+)
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
 USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
