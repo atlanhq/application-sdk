@@ -450,7 +450,7 @@ python-multipart==0.0.22
     #   mcp
 python-slugify==8.0.4
     # via frictionless
-pytokens==0.3.0
+pytokens==0.4.1
     # via black
 pytz==2025.2
     # via
