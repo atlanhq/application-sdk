@@ -336,7 +336,7 @@ packaging==25.0
     #   opentelemetry-instrumentation
     #   pandera
     #   pytest
-pandas==2.3.3
+pandas==3.0.0
     # via atlan-application-sdk
 pandera==0.27.1
     # via atlan-application-sdk
