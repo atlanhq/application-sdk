@@ -1,14 +1,9 @@
 version: 2
 updates:
-  - package-ecosystem: pip
-    directory: "/"
-    schedule:
-      interval: daily
-    open-pull-requests-limit: 100
-    allow:
-      - dependency-type: "all"
+  # pip ecosystem disabled - requirements.txt exists only for Snyk scanning
+  # Dependency management is handled via uv/pyproject.toml
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: daily
+      interval: weekly
