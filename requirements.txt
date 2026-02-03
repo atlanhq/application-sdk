@@ -53,7 +53,7 @@ beartype==0.22.9
     #   py-key-value-shared
 black==25.12.0
     # via pandera
-boto3==1.42.25
+boto3==1.42.40
     # via atlan-application-sdk
 boto3-stubs==1.42.25
 botocore==1.42.25
