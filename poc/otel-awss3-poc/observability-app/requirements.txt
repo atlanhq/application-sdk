@@ -1,0 +1,18 @@
+# FastAPI and ASGI server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# SSE support
+sse-starlette>=1.6.5
+
+# PyIceberg for querying
+pyiceberg>=0.6.0
+
+# PyArrow for data handling
+pyarrow>=14.0.0
+
+# HTTP client for healthchecks
+httpx>=0.26.0
+
+# Pydantic for data validation
+pydantic>=2.5.0
