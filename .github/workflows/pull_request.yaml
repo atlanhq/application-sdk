@@ -14,6 +14,22 @@ permissions:
   actions: write
 
 jobs:
+  # Detect which files changed
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      container: ${{ steps.filter.outputs.container }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            container:
+              - 'Dockerfile'
+              - 'entrypoint.sh'
+
   # Conventional Commits
   commits:
     name: Conventional Commits
@@ -48,6 +64,8 @@ jobs:
 
   trivy-container:
     name: Trivy Container Scan
+    needs: changes
+    if: needs.changes.outputs.container == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
