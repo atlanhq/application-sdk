@@ -198,6 +198,10 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 OTEL_WORKFLOW_LOGS_ENDPOINT: str = os.getenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "")
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether to enable workflow logs export to secondary endpoint (for S3 archival + live streaming)
+ENABLE_WORKFLOW_LOGS_EXPORT: bool = (
+    os.getenv("ENABLE_WORKFLOW_LOGS_EXPORT", "false").lower() == "true"
+)
 
 # OTEL Constants
 #: Node name for workflow telemetry

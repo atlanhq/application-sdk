@@ -18,6 +18,7 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,
+    ENABLE_WORKFLOW_LOGS_EXPORT,
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
     LOG_FILE_NAME,
@@ -361,7 +362,8 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
                 # Secondary exporter for workflow logs (optional dual export)
                 # Sends to tenant-level collector for S3 archival and live streaming
-                if OTEL_WORKFLOW_LOGS_ENDPOINT:
+                # Requires both ENABLE_WORKFLOW_LOGS_EXPORT=true and OTEL_WORKFLOW_LOGS_ENDPOINT set
+                if ENABLE_WORKFLOW_LOGS_EXPORT and OTEL_WORKFLOW_LOGS_ENDPOINT:
                     workflow_logs_exporter = OTLPLogExporter(
                         endpoint=OTEL_WORKFLOW_LOGS_ENDPOINT,
                         timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
