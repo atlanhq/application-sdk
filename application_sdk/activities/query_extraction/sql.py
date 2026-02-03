@@ -34,6 +34,7 @@ from application_sdk.transformers.atlas import AtlasTransformer
 
 logger = get_logger(__name__)
 
+
 class MinerArgs(BaseModel):
     """Arguments for SQL query mining operations.
 
@@ -73,25 +74,29 @@ class MinerArgs(BaseModel):
         cls, value: Optional[str], info: ValidationInfo
     ) -> Optional[str]:
         """Validate that SQL identifiers only contain safe characters."""
-        return validate_identifier(value, info.field_name, allow_empty=True)
+        return validate_identifier(value, info.field_name or "field", allow_empty=True)
 
     @field_validator("timestamp_column")
     @classmethod
     def _validate_timestamp_column(cls, value: str, info: ValidationInfo) -> str:
         """Validate timestamp column identifier."""
-        return validate_identifier(value, info.field_name, allow_empty=False)
+        result = validate_identifier(
+            value, info.field_name or "field", allow_empty=False
+        )
+        assert result is not None  # allow_empty=False guarantees non-None
+        return result
 
     @field_validator("sql_replace_from", "sql_replace_to")
     @classmethod
     def _validate_sql_fragment(cls, value: str, info: ValidationInfo) -> str:
         """Reject SQL fragments containing unsafe tokens."""
-        return validate_sql_fragment(value, info.field_name)
+        return validate_sql_fragment(value, info.field_name or "field")
 
     @field_validator("ranged_sql_start_key", "ranged_sql_end_key")
     @classmethod
     def _validate_placeholder(cls, value: str, info: ValidationInfo) -> str:
         """Validate placeholder tokens used for ranged SQL replacements."""
-        return validate_placeholder(value, info.field_name)
+        return validate_placeholder(value, info.field_name or "field")
 
     @field_validator("chunk_size")
     @classmethod
@@ -247,7 +252,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         )
 
         if start_marker is not None and end_marker is not None:
-            temp_query = temp_query.replace(miner_args.ranged_sql_start_key, start_marker)
+            temp_query = temp_query.replace(
+                miner_args.ranged_sql_start_key, start_marker
+            )
             temp_query = temp_query.replace(miner_args.ranged_sql_end_key, end_marker)
         return temp_query
 
@@ -569,7 +576,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             miner_args.database_name_cleaned,
         )
         require_identifier_if_placeholder(
-            self.fetch_queries_sql, "schema_name_cleaned", miner_args.schema_name_cleaned
+            self.fetch_queries_sql,
+            "schema_name_cleaned",
+            miner_args.schema_name_cleaned,
         )
         require_identifier_if_placeholder(
             self.fetch_queries_sql, "timestamp_column", miner_args.timestamp_column
