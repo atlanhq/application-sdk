@@ -530,7 +530,7 @@ sqlalchemy==2.0.45
     # via
     #   atlan-application-sdk
     #   duckdb-engine
-sse-starlette==3.1.2
+sse-starlette==3.2.0
     # via mcp
 starlette==0.50.0
     # via
