@@ -338,7 +338,7 @@ packaging==25.0
     #   pytest
 pandas==2.3.3
     # via atlan-application-sdk
-pandera==0.27.1
+pandera==0.29.0
     # via atlan-application-sdk
 pastel==0.2.1
     # via poethepoet
