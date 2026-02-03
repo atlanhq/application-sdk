@@ -374,7 +374,7 @@ protobuf==6.33.5
     #   grpcio-status
     #   opentelemetry-proto
     #   temporalio
-psutil==7.2.1
+psutil==7.2.2
     # via atlan-application-sdk
 py-key-value-aio==0.3.0
     # via
