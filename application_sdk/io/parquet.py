@@ -1,6 +1,5 @@
 import inspect
 import os
-import shutil
 from typing import (
     TYPE_CHECKING,
     AsyncGenerator,
@@ -15,6 +14,7 @@ from typing import (
 from temporalio import activity
 
 from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
     DAPR_MAX_GRPC_MESSAGE_LENGTH,
     ENABLE_ATLAN_UPLOAD,
@@ -494,7 +494,7 @@ class ParquetFileWriter(Writer):
         # Create output directory
         if self.typename:
             self.path = os.path.join(self.path, self.typename)
-        os.makedirs(self.path, exist_ok=True)
+        SafeFileOps.makedirs(self.path, exist_ok=True)
 
     async def _write_batched_dataframe(
         self,
@@ -729,7 +729,7 @@ class ParquetFileWriter(Writer):
         )
 
         # Create the directory
-        os.makedirs(self.current_temp_folder_path, exist_ok=True)
+        SafeFileOps.makedirs(self.current_temp_folder_path, exist_ok=True)
 
     async def _write_chunk_to_temp_folder(self, chunk: "pd.DataFrame"):
         """Write a chunk to the current temp folder."""
@@ -740,7 +740,7 @@ class ParquetFileWriter(Writer):
         existing_files = len(
             [
                 f
-                for f in os.listdir(self.current_temp_folder_path)
+                for f in SafeFileOps.listdir(self.current_temp_folder_path)
                 if f.endswith(self.extension)
             ]
         )
@@ -780,7 +780,7 @@ class ParquetFileWriter(Writer):
                             folder_index=self.chunk_count,
                             chunk_part=i,
                         )
-                        os.rename(file_path, consolidated_file_path)
+                        SafeFileOps.rename(file_path, consolidated_file_path)
 
                         # Upload consolidated file to object store
                         await ObjectStore.upload_file(
@@ -789,7 +789,7 @@ class ParquetFileWriter(Writer):
                         )
 
                 # Clean up temp consolidated dir
-                shutil.rmtree(temp_consolidated_dir, ignore_errors=True)
+                SafeFileOps.rmtree(temp_consolidated_dir, ignore_errors=True)
 
             # Update statistics
             self.chunk_count += 1
@@ -825,13 +825,15 @@ class ParquetFileWriter(Writer):
             # Clean up all temp folders
             for folder_index in self.temp_folders_created:
                 temp_folder = self._get_temp_folder_path(folder_index)
-                if os.path.exists(temp_folder):
-                    shutil.rmtree(temp_folder, ignore_errors=True)
+                if SafeFileOps.exists(temp_folder):
+                    SafeFileOps.rmtree(temp_folder, ignore_errors=True)
 
             # Clean up base temp directory if it exists and is empty
             temp_base_path = os.path.join(self.path, "temp_accumulation")
-            if os.path.exists(temp_base_path) and not os.listdir(temp_base_path):
-                os.rmdir(temp_base_path)
+            if SafeFileOps.exists(temp_base_path) and not SafeFileOps.listdir(
+                temp_base_path
+            ):
+                SafeFileOps.rmdir(temp_base_path)
 
             # Reset state
             self.temp_folders_created.clear()
