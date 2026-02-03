@@ -130,7 +130,7 @@ email-validator==2.3.0
     #   pydantic
 exceptiongroup==1.3.1
     # via fastmcp
-faker==39.0.0
+faker==40.1.2
     # via atlan-application-sdk
 fakeredis==2.33.0
     # via pydocket
