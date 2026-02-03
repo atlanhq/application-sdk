@@ -191,7 +191,7 @@ httpx-retries==0.4.5
 httpx-sse==0.4.3
     # via mcp
 hypothesis==6.148.13
-identify==2.6.15
+identify==2.6.16
     # via pre-commit
 idna==3.11
     # via
