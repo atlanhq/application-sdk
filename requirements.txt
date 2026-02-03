@@ -134,7 +134,7 @@ faker==39.0.0
     # via atlan-application-sdk
 fakeredis==2.33.0
     # via pydocket
-fastapi==0.127.0
+fastapi==0.128.0
     # via atlan-application-sdk
 fastapi-cli==0.0.20
     # via fastapi
