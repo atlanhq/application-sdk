@@ -253,7 +253,7 @@ marko==2.2.2
     # via frictionless
 markupsafe==3.0.3
     # via jinja2
-mcp==1.25.0
+mcp==1.26.0
     # via fastmcp
 mdurl==0.1.2
     # via markdown-it-py
