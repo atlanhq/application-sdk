@@ -46,6 +46,18 @@ jobs:
         with:
           add-report-comment-to-pr: "true"
 
+  trivy-container:
+    name: Trivy Container Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: "./.github/actions/trivy-container"
+        with:
+          chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
+          chainguard-password: ${{ secrets.CHAINGUARD_PASSWORD }}
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          fail-on-vulns: 'true'
+
   # Testing
   unit:
     name: Unit Tests

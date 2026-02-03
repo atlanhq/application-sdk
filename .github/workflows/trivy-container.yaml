@@ -7,12 +7,21 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
+      CHAINGUARD_USERNAME:
+        required: true
+      CHAINGUARD_PASSWORD:
+        required: true
 
     inputs:
       skip-files:
         description: "Comma-separated list of files or directories to be skipped"
         required: false
         type: string
+      fail-on-vulns:
+        description: "Whether to fail if HIGH/CRITICAL vulnerabilities with fixes are found"
+        required: false
+        type: string
+        default: 'true'
 
 permissions:
   contents: read
@@ -29,4 +38,8 @@ jobs:
 
       - uses: "atlanhq/application-sdk/.github/actions/trivy-container@main"
         with:
+          chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
+          chainguard-password: ${{ secrets.CHAINGUARD_PASSWORD }}
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          skip-files: ${{ inputs.skip-files }}
+          fail-on-vulns: ${{ inputs.fail-on-vulns }}
