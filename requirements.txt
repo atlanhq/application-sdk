@@ -532,7 +532,7 @@ sqlalchemy==2.0.45
     #   duckdb-engine
 sse-starlette==3.1.2
     # via mcp
-starlette==0.50.0
+starlette==0.52.1
     # via
     #   fastapi
     #   mcp
