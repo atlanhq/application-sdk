@@ -178,6 +178,10 @@ precision = 2
 
 [tool.uv]
 default-groups = ["dev", "test"]
+constraint-dependencies = [
+    "python-multipart>=0.0.22",  # CVE-2026-24486
+    "protobuf>=6.33.5",          # CVE-2026-0994
+]
 
 # Uncomment the following section in case you want to publish to testpypi
 # [[tool.uv.index]]

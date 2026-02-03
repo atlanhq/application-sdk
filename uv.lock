@@ -7,6 +7,12 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 
+[manifest]
+constraints = [
+    { name = "protobuf", specifier = ">=6.33.5" },
+    { name = "python-multipart", specifier = ">=0.0.22" },
+]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
