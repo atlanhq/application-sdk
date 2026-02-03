@@ -146,7 +146,7 @@ fastmcp==2.14.2
     # via atlan-application-sdk
 filelock==3.20.3
     # via virtualenv
-frictionless==4.40.8
+frictionless==5.18.1
     # via pandera
 frozenlist==1.8.0
     # via
