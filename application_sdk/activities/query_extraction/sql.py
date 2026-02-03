@@ -1,6 +1,5 @@
 import json
 import os
-import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Type
 
@@ -8,6 +7,14 @@ from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
+from application_sdk.activities.common.sql_validation import (
+    require_identifier_if_placeholder,
+    validate_identifier,
+    validate_marker_value,
+    validate_placeholder,
+    validate_range_placeholders,
+    validate_sql_fragment,
+)
 from application_sdk.activities.common.utils import (
     auto_heartbeater,
     get_object_store_prefix,
@@ -26,11 +33,6 @@ from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
 logger = get_logger(__name__)
-
-SAFE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
-SAFE_PLACEHOLDER_PATTERN = re.compile(r"^[\[\]{}A-Za-z0-9_]+$")
-UNSAFE_SQL_FRAGMENT_PATTERN = re.compile(r"(;|--|/\*|\*/)")
-
 
 class MinerArgs(BaseModel):
     """Arguments for SQL query mining operations.
@@ -71,37 +73,25 @@ class MinerArgs(BaseModel):
         cls, value: Optional[str], info: ValidationInfo
     ) -> Optional[str]:
         """Validate that SQL identifiers only contain safe characters."""
-        if value is None or value == "":
-            return value
-        if not SAFE_IDENTIFIER_PATTERN.match(value):
-            raise ValueError(f"Invalid {info.field_name} value: {value}")
-        return value
+        return validate_identifier(value, info.field_name, allow_empty=True)
 
     @field_validator("timestamp_column")
     @classmethod
     def _validate_timestamp_column(cls, value: str, info: ValidationInfo) -> str:
         """Validate timestamp column identifier."""
-        if not SAFE_IDENTIFIER_PATTERN.match(value):
-            raise ValueError(f"Invalid {info.field_name} value: {value}")
-        return value
+        return validate_identifier(value, info.field_name, allow_empty=False)
 
     @field_validator("sql_replace_from", "sql_replace_to")
     @classmethod
     def _validate_sql_fragment(cls, value: str, info: ValidationInfo) -> str:
         """Reject SQL fragments containing unsafe tokens."""
-        if not value or not value.strip():
-            raise ValueError(f"{info.field_name} cannot be empty")
-        if UNSAFE_SQL_FRAGMENT_PATTERN.search(value):
-            raise ValueError(f"{info.field_name} contains unsafe SQL tokens")
-        return value
+        return validate_sql_fragment(value, info.field_name)
 
     @field_validator("ranged_sql_start_key", "ranged_sql_end_key")
     @classmethod
     def _validate_placeholder(cls, value: str, info: ValidationInfo) -> str:
         """Validate placeholder tokens used for ranged SQL replacements."""
-        if not SAFE_PLACEHOLDER_PATTERN.match(value):
-            raise ValueError(f"Invalid {info.field_name} value: {value}")
-        return value
+        return validate_placeholder(value, info.field_name)
 
     @field_validator("chunk_size")
     @classmethod
@@ -212,14 +202,34 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             workflow_args (Dict[str, Any]): The workflow arguments.
         """
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
-        self._validate_required_identifiers(query, miner_args)
-        start_marker = self._validate_marker_value(
-            workflow_args.get("start_marker"), "start_marker"
+        require_identifier_if_placeholder(
+            query, "database_name_cleaned", miner_args.database_name_cleaned
         )
-        end_marker = self._validate_marker_value(
-            workflow_args.get("end_marker"), "end_marker"
+        require_identifier_if_placeholder(
+            query, "schema_name_cleaned", miner_args.schema_name_cleaned
         )
-        self._validate_range_placeholders(query, miner_args)
+        require_identifier_if_placeholder(
+            query, "timestamp_column", miner_args.timestamp_column
+        )
+        validate_range_placeholders(
+            query,
+            miner_args.sql_replace_from,
+            miner_args.sql_replace_to,
+            miner_args.ranged_sql_start_key,
+            miner_args.ranged_sql_end_key,
+        )
+        start_marker: Optional[str] = None
+        end_marker: Optional[str] = None
+        uses_replace = "{sql_replace_from}" in query or (
+            miner_args.sql_replace_from and miner_args.sql_replace_from in query
+        )
+        if uses_replace:
+            start_marker = validate_marker_value(
+                workflow_args.get("start_marker"), "start_marker"
+            )
+            end_marker = validate_marker_value(
+                workflow_args.get("end_marker"), "end_marker"
+            )
 
         temp_query = query.format(
             miner_start_time_epoch=miner_args.miner_start_time_epoch,
@@ -236,46 +246,10 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             miner_args.sql_replace_from, miner_args.sql_replace_to
         )
 
-        temp_query = temp_query.replace(miner_args.ranged_sql_start_key, start_marker)
-        temp_query = temp_query.replace(miner_args.ranged_sql_end_key, end_marker)
+        if start_marker is not None and end_marker is not None:
+            temp_query = temp_query.replace(miner_args.ranged_sql_start_key, start_marker)
+            temp_query = temp_query.replace(miner_args.ranged_sql_end_key, end_marker)
         return temp_query
-
-    def _validate_marker_value(self, value: Any, field_name: str) -> str:
-        """Validate that marker values are numeric strings."""
-        if value is None:
-            raise ValueError(f"{field_name} is required")
-        marker_value = str(value)
-        if not marker_value.isdigit():
-            raise ValueError(f"{field_name} must be a numeric value")
-        return marker_value
-
-    def _validate_range_placeholders(self, query: str, miner_args: MinerArgs) -> None:
-        """Ensure sql_replace_to includes both range placeholders when replacement is used."""
-        if miner_args.sql_replace_from and miner_args.sql_replace_from in query:
-            if miner_args.ranged_sql_start_key not in miner_args.sql_replace_to:
-                raise ValueError("sql_replace_to must include ranged_sql_start_key")
-            if miner_args.ranged_sql_end_key not in miner_args.sql_replace_to:
-                raise ValueError("sql_replace_to must include ranged_sql_end_key")
-
-    def _validate_required_identifiers(self, query: str, miner_args: MinerArgs) -> None:
-        """Validate identifiers only if their placeholders are present in the query."""
-        self._require_identifier(
-            query, "database_name_cleaned", miner_args.database_name_cleaned
-        )
-        self._require_identifier(
-            query, "schema_name_cleaned", miner_args.schema_name_cleaned
-        )
-        self._require_identifier(query, "timestamp_column", miner_args.timestamp_column)
-
-    def _require_identifier(
-        self, query: str, placeholder: str, value: Optional[str]
-    ) -> None:
-        if f"{{{placeholder}}}" not in query:
-            return
-        if value is None or value == "":
-            raise ValueError(f"{placeholder} is required for query formatting")
-        if not SAFE_IDENTIFIER_PATTERN.match(value):
-            raise ValueError(f"Invalid {placeholder} value: {value}")
 
     @activity.defn
     @auto_heartbeater
@@ -589,8 +563,24 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         sql_client = state.sql_client
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
-        self._validate_required_identifiers(self.fetch_queries_sql, miner_args)
-        self._validate_range_placeholders(self.fetch_queries_sql, miner_args)
+        require_identifier_if_placeholder(
+            self.fetch_queries_sql,
+            "database_name_cleaned",
+            miner_args.database_name_cleaned,
+        )
+        require_identifier_if_placeholder(
+            self.fetch_queries_sql, "schema_name_cleaned", miner_args.schema_name_cleaned
+        )
+        require_identifier_if_placeholder(
+            self.fetch_queries_sql, "timestamp_column", miner_args.timestamp_column
+        )
+        validate_range_placeholders(
+            self.fetch_queries_sql,
+            miner_args.sql_replace_from,
+            miner_args.sql_replace_to,
+            miner_args.ranged_sql_start_key,
+            miner_args.ranged_sql_end_key,
+        )
 
         current_marker = await self.read_marker(workflow_args)
         if current_marker:
