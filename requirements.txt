@@ -514,7 +514,7 @@ s3transfer==0.16.0
     # via boto3
 secretstorage==3.5.0 ; sys_platform == 'linux'
     # via keyring
-sentry-sdk==2.49.0
+sentry-sdk==2.51.0
     # via fastapi-cloud-cli
 shellingham==1.5.4
     # via typer
