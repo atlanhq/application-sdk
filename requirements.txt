@@ -106,7 +106,7 @@ cyclopts==4.4.4
     # via fastmcp
 daft==0.7.1
     # via atlan-application-sdk
-dapr==1.16.0
+dapr==1.16.1
     # via atlan-application-sdk
 diskcache==5.6.3
     # via py-key-value-aio
