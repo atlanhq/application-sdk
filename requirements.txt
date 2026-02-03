@@ -500,7 +500,7 @@ rich==14.2.0
     #   typer
 rich-rst==1.3.2
     # via cyclopts
-rich-toolkit==0.17.1
+rich-toolkit==0.18.1
     # via
     #   fastapi-cli
     #   fastapi-cloud-cli
