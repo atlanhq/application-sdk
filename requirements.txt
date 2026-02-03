@@ -557,7 +557,7 @@ typer==0.21.1
     #   fastapi-cloud-cli
     #   frictionless
     #   pydocket
-types-awscrt==0.31.0
+types-awscrt==0.31.1
     # via botocore-stubs
 types-protobuf==6.32.1.20251210
     # via temporalio
