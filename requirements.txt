@@ -357,7 +357,7 @@ platformdirs==4.5.1
     #   virtualenv
 pluggy==1.6.0
     # via pytest
-poethepoet==0.39.0
+poethepoet==0.40.0
 pre-commit==4.5.1
 prometheus-client==0.23.1
     # via
