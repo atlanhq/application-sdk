@@ -43,12 +43,18 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          username: $GITHUB_ACTOR
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
+      - name: Build and push docker image to GHCR
+        uses: ./.github/actions/secure-build-push-apps
         with:
+          branch: ${{ github.ref_name }}
+          snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
+          snyk-ghcr-integration-id: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
+          snyk-docker-integration-id: ${{ secrets.SNYK_DOCKER_INTEGRATION_ID }}
+          snyk-integration-id: ${{ secrets.SNYK_INTEGRATION_ID }}
+          snyk-org-id: ${{ secrets.SNYK_ORG_ID }}
           context: poc/otel-awss3-poc/observability-app
           file: poc/otel-awss3-poc/observability-app/Dockerfile
           push: true
@@ -56,5 +62,4 @@ jobs:
           tags: |
             ghcr.io/atlanhq/temp-workflow-logs-observability-app:latest
             ghcr.io/atlanhq/temp-workflow-logs-observability-app:${{ needs.prepare.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=min
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
