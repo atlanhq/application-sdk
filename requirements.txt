@@ -325,7 +325,7 @@ opentelemetry-semantic-conventions==0.60b1
     # via
     #   opentelemetry-instrumentation
     #   opentelemetry-sdk
-orjson==3.11.5
+orjson==3.11.7
     # via atlan-application-sdk
 packaging==25.0
     # via
