@@ -327,7 +327,7 @@ opentelemetry-semantic-conventions==0.60b1
     #   opentelemetry-sdk
 orjson==3.11.5
     # via atlan-application-sdk
-packaging==25.0
+packaging==26.0
     # via
     #   black
     #   daft
