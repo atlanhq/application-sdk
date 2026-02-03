@@ -118,7 +118,7 @@ docstring-parser==0.17.0
     # via cyclopts
 docutils==0.22.4
     # via rich-rst
-duckdb==1.4.3
+duckdb==1.4.4
     # via
     #   atlan-application-sdk
     #   duckdb-engine
