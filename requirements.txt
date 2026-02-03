@@ -490,7 +490,7 @@ requests==2.32.5
     #   opentelemetry-exporter-otlp-proto-http
 rfc3986==2.0.0
     # via frictionless
-rich==14.2.0
+rich==14.3.2
     # via
     #   cyclopts
     #   fastmcp
