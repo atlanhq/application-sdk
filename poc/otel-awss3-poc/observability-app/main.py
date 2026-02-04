@@ -33,6 +33,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -58,6 +59,15 @@ app = FastAPI(
     title="Workflow Logs Observability",
     description="Live streaming and historical query service for workflow logs",
     version="1.0.0",
+)
+
+# CORS middleware for browser access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Active subscribers per workflow_id
