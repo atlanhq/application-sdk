@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       container: ${{ steps.filter.outputs.container }}
+      code: ${{ steps.filter.outputs.code }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -29,6 +30,12 @@ jobs:
             container:
               - 'Dockerfile'
               - 'entrypoint.sh'
+            code:
+              - 'application_sdk/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'examples/**'
 
   # Conventional Commits
   commits:
@@ -44,6 +51,8 @@ jobs:
 
   docstr:
     name: Docstring Coverage
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -55,6 +64,8 @@ jobs:
   # Security Checks
   trivy:
     name: Trivy Code Scan
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -79,6 +90,8 @@ jobs:
   # Testing
   unit:
     name: Unit Tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -194,7 +207,8 @@ jobs:
   # E2E Tests: This step is run for each app in the matrix
   e2e-apps:
     name: E2E (Apps)
-    needs: matrix-builder
+    needs: [changes, matrix-builder]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -210,6 +224,8 @@ jobs:
   # Documentation
   docs:
     name: Docs
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
