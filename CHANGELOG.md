@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.4.0 (February 4, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.1...v2.4.0
+
+### Features
+
+- Added support for sending telemetry events to Segment (#943) (by @Lalit3716-atlan in [2454b55](https://github.com/atlanhq/application-sdk/commit/2454b55))
+
+### Bug Fixes
+
+- update transitive deps for security vulnerabilities (#1007) (by @stefan-atlan in [73a8d2c](https://github.com/atlanhq/application-sdk/commit/73a8d2c))
+- path limit extended for windows OS (#918) (by @sachi-atlan in [de33724](https://github.com/atlanhq/application-sdk/commit/de33724))
+- upgrade Dapr to 1.16.5 (#956) (by @fyzanshaik-atlan in [004a63a](https://github.com/atlanhq/application-sdk/commit/004a63a))
+- align daft writer behavior with pandas to prevent data loss (#953) (by @fyzanshaik-atlan in [1a73d02](https://github.com/atlanhq/application-sdk/commit/1a73d02))
+
+
 ## v2.3.1 (January 28, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.0...v2.3.1
