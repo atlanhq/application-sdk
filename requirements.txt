@@ -190,7 +190,7 @@ httpx-retries==0.4.5
     # via pyatlan
 httpx-sse==0.4.3
     # via mcp
-hypothesis==6.148.13
+hypothesis==6.151.5
 identify==2.6.15
     # via pre-commit
 idna==3.11
