@@ -541,7 +541,7 @@ stringcase==1.2.0
     # via frictionless
 tabulate==0.9.0
     # via frictionless
-temporalio==1.21.1
+temporalio==1.22.0
     # via atlan-application-sdk
 tenacity==9.1.2
     # via pyatlan
