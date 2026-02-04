@@ -142,7 +142,7 @@ fastapi-cloud-cli==0.9.0
     # via fastapi-cli
 fastar==0.8.0
     # via fastapi-cloud-cli
-fastmcp==2.14.2
+fastmcp==2.14.5
     # via atlan-application-sdk
 filelock==3.20.3
     # via virtualenv
