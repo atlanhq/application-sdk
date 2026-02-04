@@ -616,7 +616,9 @@ async def list_stored_workflows(
         raise HTTPException(status_code=503, detail="Iceberg not configured")
 
     try:
-        # Scan for distinct trace_ids and application_names
+        import pyarrow.compute as pc
+
+        # Scan for trace_ids and application_names
         scan = table.scan(
             selected_fields=("trace_id", "application_name"),
         )
@@ -625,26 +627,23 @@ async def list_stored_workflows(
         if len(arrow_table) == 0:
             return {"workflows": [], "count": 0, "source": "iceberg"}
 
-        # Get unique combinations using pandas
-        df = arrow_table.to_pandas()
+        # Get columns as Python lists
+        trace_ids = arrow_table.column("trace_id").to_pylist()
+        app_names = arrow_table.column("application_name").to_pylist()
 
-        # Filter by application_name if provided
-        if application_name:
-            df = df[df["application_name"] == application_name]
-
-        # Get unique trace_ids with their app names
-        unique_workflows = (
-            df.groupby("trace_id").agg({"application_name": "first"}).reset_index()
-        )
-
-        # Limit results
-        unique_workflows = unique_workflows.head(limit)
+        # Build unique trace_id -> app_name mapping
+        seen: Dict[str, str] = {}
+        for tid, app in zip(trace_ids, app_names):
+            if tid and tid not in seen:
+                # Filter by application_name if provided
+                if application_name and app != application_name:
+                    continue
+                seen[tid] = app or "unknown"
+                if len(seen) >= limit:
+                    break
 
         workflows = []
-        for _, row in unique_workflows.iterrows():
-            trace_id = row["trace_id"]
-            app_name = row["application_name"]
-
+        for trace_id, app_name in seen.items():
             # Extract connector from trace_id (atlan-{connector}-...)
             parts = trace_id.split("-") if trace_id else []
             connector = parts[1] if len(parts) > 1 else "unknown"
