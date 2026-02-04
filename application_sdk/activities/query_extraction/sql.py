@@ -7,10 +7,11 @@ from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
+from application_sdk.activities.common.sql_models import MinerConfig, SQLDialect
 from application_sdk.activities.common.sql_validation import (
     require_identifier_if_placeholder,
     validate_identifier,
-    validate_marker_value,
+    validate_numeric_value,
     validate_placeholder,
     validate_range_placeholders,
     validate_sql_fragment,
@@ -202,61 +203,110 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     def get_formatted_query(self, query: str, workflow_args: Dict[str, Any]) -> str:
         """Formats the query with the workflow arguments.
 
+        Supports both the new MinerConfig format and the legacy MinerArgs format.
+        When using MinerConfig, the query is formatted using validated identifiers
+        and structured range expressions for improved security.
+
         Args:
-            query (str): The query to format.
-            workflow_args (Dict[str, Any]): The workflow arguments.
+            query (str): The query template to format.
+            workflow_args (Dict[str, Any]): The workflow arguments containing either:
+                - "miner_config": New MinerConfig object or dict (preferred)
+                - "miner_args": Legacy dictionary format (deprecated)
+
+        Returns:
+            str: The formatted SQL query string.
         """
-        miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
-        require_identifier_if_placeholder(
-            query, "database_name_cleaned", miner_args.database_name_cleaned
-        )
-        require_identifier_if_placeholder(
-            query, "schema_name_cleaned", miner_args.schema_name_cleaned
-        )
-        require_identifier_if_placeholder(
-            query, "timestamp_column", miner_args.timestamp_column
-        )
-        validate_range_placeholders(
-            query,
-            miner_args.sql_replace_from,
-            miner_args.sql_replace_to,
-            miner_args.ranged_sql_start_key,
-            miner_args.ranged_sql_end_key,
-        )
-        start_marker: Optional[str] = None
-        end_marker: Optional[str] = None
-        uses_replace = "{sql_replace_from}" in query or (
-            miner_args.sql_replace_from and miner_args.sql_replace_from in query
-        )
-        if uses_replace:
-            start_marker = validate_marker_value(
-                workflow_args.get("start_marker"), "start_marker"
+        # Check for new MinerConfig format first
+        if "miner_config" in workflow_args:
+            config = workflow_args["miner_config"]
+            if isinstance(config, dict):
+                config = MinerConfig(**config)
+            return self._format_with_miner_config(query, config, workflow_args)
+
+        # Fall back to legacy MinerArgs format
+        return self._format_with_legacy_args(query, workflow_args)
+
+    def _format_with_miner_config(
+        self,
+        query: str,
+        config: MinerConfig,
+        workflow_args: Dict[str, Any],
+    ) -> str:
+        """Format query using the new MinerConfig model.
+
+        Args:
+            query: The query template to format.
+            config: The MinerConfig instance.
+            workflow_args: The workflow arguments.
+
+        Returns:
+            The formatted SQL query string.
+        """
+        dialect = self._detect_dialect()
+
+        # Validate and extract markers if present
+        start_marker: Optional[int] = None
+        end_marker: Optional[int] = None
+
+        if workflow_args.get("start_marker") is not None:
+            start_marker = validate_numeric_value(
+                workflow_args["start_marker"], "start_marker"
             )
-            end_marker = validate_marker_value(
-                workflow_args.get("end_marker"), "end_marker"
+        if workflow_args.get("end_marker") is not None:
+            end_marker = validate_numeric_value(
+                workflow_args["end_marker"], "end_marker"
             )
 
-        temp_query = query.format(
-            miner_start_time_epoch=miner_args.miner_start_time_epoch,
-            database_name_cleaned=miner_args.database_name_cleaned,
-            schema_name_cleaned=miner_args.schema_name_cleaned,
-            timestamp_column=miner_args.timestamp_column,
-            chunk_size=miner_args.chunk_size,
-            current_marker=miner_args.current_marker,
-            sql_replace_from=miner_args.sql_replace_from,
-            sql_replace_to=miner_args.sql_replace_to,
+        return config.format_query(
+            template=query,
+            dialect=dialect,
+            start_marker=start_marker,
+            end_marker=end_marker,
         )
 
-        temp_query = temp_query.replace(
-            miner_args.sql_replace_from, miner_args.sql_replace_to
-        )
+    def _format_with_legacy_args(
+        self, query: str, workflow_args: Dict[str, Any]
+    ) -> str:
+        """Format query using legacy MinerArgs (backward compatibility).
 
-        if start_marker is not None and end_marker is not None:
-            temp_query = temp_query.replace(
-                miner_args.ranged_sql_start_key, start_marker
-            )
-            temp_query = temp_query.replace(miner_args.ranged_sql_end_key, end_marker)
-        return temp_query
+        This method emits a deprecation warning and converts the legacy
+        format to the new MinerConfig internally.
+
+        Args:
+            query: The query template to format.
+            workflow_args: The workflow arguments with miner_args.
+
+        Returns:
+            The formatted SQL query string.
+        """
+        miner_args_dict = workflow_args.get("miner_args", {})
+
+        # Convert to MinerConfig (emits deprecation warning)
+        config = MinerConfig.from_legacy_miner_args(miner_args_dict)
+
+        return self._format_with_miner_config(query, config, workflow_args)
+
+    def _detect_dialect(self) -> SQLDialect:
+        """Detect SQL dialect from the client class.
+
+        Returns:
+            The detected SQLDialect, defaulting to GENERIC.
+        """
+        # Try to detect from client class name
+        client_class_name = self.sql_client_class.__name__.lower()
+
+        if "redshift" in client_class_name:
+            return SQLDialect.REDSHIFT
+        elif "snowflake" in client_class_name:
+            return SQLDialect.SNOWFLAKE
+        elif "postgres" in client_class_name or "pg" in client_class_name:
+            return SQLDialect.POSTGRES
+        elif "bigquery" in client_class_name or "bq" in client_class_name:
+            return SQLDialect.BIGQUERY
+        elif "mysql" in client_class_name:
+            return SQLDialect.MYSQL
+
+        return SQLDialect.GENERIC
 
     @activity.defn
     @auto_heartbeater
