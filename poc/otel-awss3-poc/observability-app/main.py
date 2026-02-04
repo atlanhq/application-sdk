@@ -572,7 +572,7 @@ async def list_workflows(
     Workflow names follow pattern: atlan-{connector}-{id}-{suffix}
     e.g., atlan-mssql-1766579479-w8gkk
     """
-    client = get_atlas_client()
+    client = await get_atlas_client()
     if not client:
         raise HTTPException(
             status_code=503,
@@ -670,8 +670,6 @@ async def list_stored_workflows(
         raise HTTPException(status_code=503, detail="Iceberg not configured")
 
     try:
-        import pyarrow.compute as pc
-
         # Scan for trace_ids and application_names
         scan = table.scan(
             selected_fields=("trace_id", "application_name"),
