@@ -47,7 +47,12 @@ NAMESPACE = os.environ.get("NAMESPACE", "Workflow_Log_Test")
 
 # Atlas configuration for workflow discovery
 ATLAS_URL = os.environ.get("ATLAS_URL", "")
-ATLAS_TOKEN = os.environ.get("ATLAS_TOKEN", "")
+ATLAS_TOKEN = os.environ.get("ATLAS_TOKEN", "")  # Static token (optional)
+
+# Keycloak OAuth configuration (preferred over static token)
+KEYCLOAK_TOKEN_URL = os.environ.get("KEYCLOAK_TOKEN_URL", "")
+KEYCLOAK_CLIENT_ID = os.environ.get("KEYCLOAK_CLIENT_ID", "")
+KEYCLOAK_CLIENT_SECRET = os.environ.get("KEYCLOAK_CLIENT_SECRET", "")
 
 app = FastAPI(
     title="Workflow Logs Observability",
@@ -63,17 +68,66 @@ active_workflows: Dict[str, float] = {}  # workflow_id -> last_seen_timestamp
 
 # Atlas client (lazy init)
 _atlas_client: Optional[httpx.AsyncClient] = None
+_atlas_token_cache: Dict[str, Any] = {"token": None, "expires_at": 0}
 
 
-def get_atlas_client() -> Optional[httpx.AsyncClient]:
-    """Get Atlas client (lazy initialization)."""
+async def get_keycloak_token() -> Optional[str]:
+    """Get OAuth token from Keycloak using client credentials flow."""
+    if not all([KEYCLOAK_TOKEN_URL, KEYCLOAK_CLIENT_ID, KEYCLOAK_CLIENT_SECRET]):
+        return None
+
+    # Check cache
+    if _atlas_token_cache["token"] and time.time() < _atlas_token_cache["expires_at"]:
+        return _atlas_token_cache["token"]
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                KEYCLOAK_TOKEN_URL,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": KEYCLOAK_CLIENT_ID,
+                    "client_secret": KEYCLOAK_CLIENT_SECRET,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Cache token with buffer before expiry
+            token = data.get("access_token")
+            expires_in = data.get("expires_in", 300)
+            _atlas_token_cache["token"] = token
+            _atlas_token_cache["expires_at"] = time.time() + expires_in - 30
+
+            return token
+    except Exception as e:
+        print(f"Failed to get Keycloak token: {e}")
+        return None
+
+
+async def get_atlas_client() -> Optional[httpx.AsyncClient]:
+    """Get Atlas client with valid token (lazy initialization)."""
     global _atlas_client
-    if _atlas_client is None and ATLAS_URL and ATLAS_TOKEN:
+
+    if not ATLAS_URL:
+        return None
+
+    # Get token (prefer Keycloak, fallback to static)
+    token = await get_keycloak_token() if KEYCLOAK_TOKEN_URL else ATLAS_TOKEN
+    if not token:
+        return None
+
+    # Create or update client with current token
+    if _atlas_client is None:
         _atlas_client = httpx.AsyncClient(
             base_url=ATLAS_URL,
-            headers={"Authorization": f"Bearer {ATLAS_TOKEN}"},
             timeout=30.0,
         )
+
+    # Update authorization header with current token
+    _atlas_client.headers["Authorization"] = f"Bearer {token}"
     return _atlas_client
 
 

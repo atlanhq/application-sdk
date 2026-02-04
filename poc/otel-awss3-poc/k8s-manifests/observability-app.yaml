@@ -57,17 +57,21 @@ spec:
         - name: NAMESPACE
           value: "Workflow_Log_Test"
         # Atlas configuration for workflow discovery
-        # Get these from existing tenant deployments (e.g., admission-controller)
         - name: ATLAS_URL
           value: "http://atlas-service-atlas.atlas.svc.cluster.local"
-        - name: ATLAS_TOKEN
-          value: "REPLACE_WITH_ATLAS_TOKEN"
-        # Or use a secret:
-        # - name: ATLAS_TOKEN
-        #   valueFrom:
-        #     secretKeyRef:
-        #       name: atlas-credentials
-        #       key: token
+        # Keycloak OAuth (same as admission-controller)
+        - name: KEYCLOAK_TOKEN_URL
+          value: "http://keycloak-http.keycloak.svc.cluster.local/auth/realms/default/protocol/openid-connect/token"
+        - name: KEYCLOAK_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: argo-client-creds
+              key: login
+        - name: KEYCLOAK_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: argo-client-creds
+              key: password
         resources:
           requests:
             cpu: 100m
