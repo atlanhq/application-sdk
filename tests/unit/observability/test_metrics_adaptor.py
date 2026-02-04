@@ -301,12 +301,14 @@ def test_get_metrics():
     assert isinstance(metrics1, AtlanMetricsAdapter)
 
 
-def test_export_record_with_segment_enabled():
-    """Test export_record() method when Segment is enabled."""
+def test_export_record_with_segment_write_key():
+    """Test export_record() sends to Segment when write key is present.
+
+    Segment is automatically enabled when ATLAN_SEGMENT_WRITE_KEY is set.
+    """
     with mock.patch.dict(
         "os.environ",
         {
-            "ATLAN_ENABLE_SEGMENT_METRICS": "true",
             "ATLAN_SEGMENT_WRITE_KEY": "test_key",
             "ATLAN_SEGMENT_API_URL": "https://api.segment.io/v1/batch",
             "METRICS_BATCH_SIZE": "100",
@@ -318,7 +320,6 @@ def test_export_record_with_segment_enabled():
     ):
         with mock.patch("opentelemetry.metrics.set_meter_provider"):
             with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                # Mock SegmentClient to avoid thread initialization in tests
                 with mock.patch(
                     "application_sdk.observability.metrics_adaptor.SegmentClient"
                 ) as mock_segment_client_class:
@@ -345,8 +346,12 @@ def test_export_record_with_segment_enabled():
                             mock_log.assert_called_once_with(record)
 
 
-def test_export_record_with_segment_disabled():
-    """Test export_record() method when Segment is disabled."""
+def test_export_record_without_segment_write_key():
+    """Test export_record() when Segment write key is not set.
+
+    When no write key is provided, the Segment client is disabled but
+    send_metric is still called (the client handles the no-op internally).
+    """
     with create_metrics_adapter() as metrics_adapter:
         with mock.patch.object(
             metrics_adapter.segment_client, "send_metric"
@@ -362,19 +367,20 @@ def test_export_record_with_segment_disabled():
                     unit="count",
                 )
                 metrics_adapter.export_record(record)
-                # _send_to_segment is always called, but SegmentClient handles enable/disable
                 mock_send.assert_called_once_with(record)
                 mock_log.assert_called_once_with(record)
 
 
-def test_send_to_segment():
-    """Test segment_client.send_metric() method."""
+def test_segment_client_disabled_without_write_key():
+    """Test SegmentClient is disabled when write key is not provided.
+
+    The presence of the write key determines whether the client is enabled.
+    No separate boolean flag is needed.
+    """
     with mock.patch.dict(
         "os.environ",
         {
-            "ATLAN_ENABLE_SEGMENT_METRICS": "true",
-            "ATLAN_SEGMENT_WRITE_KEY": "test_key",
-            "ATLAN_SEGMENT_API_URL": "https://api.segment.io/v1/batch",
+            "ATLAN_SEGMENT_WRITE_KEY": "",
             "METRICS_BATCH_SIZE": "100",
             "METRICS_FLUSH_INTERVAL_SECONDS": "1",
             "METRICS_RETENTION_DAYS": "7",
@@ -384,55 +390,6 @@ def test_send_to_segment():
     ):
         with mock.patch("opentelemetry.metrics.set_meter_provider"):
             with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                # Mock SegmentClient to avoid thread initialization in tests
-                with mock.patch(
-                    "application_sdk.observability.metrics_adaptor.SegmentClient"
-                ) as mock_segment_client_class:
-                    mock_segment_client = mock.MagicMock()
-                    mock_segment_client_class.return_value = mock_segment_client
-
-                    adapter = AtlanMetricsAdapter()
-
-                    record = MetricRecord(
-                        timestamp=datetime.now().timestamp(),
-                        name="test_segment_metric",
-                        value=42.0,
-                        type=MetricType.COUNTER,
-                        labels={
-                            "test": "label",
-                            "env": "test",
-                            "send_to_segment": "true",
-                        },
-                        description="Test Segment metric",
-                        unit="count",
-                    )
-
-                    # Call segment_client.send_metric directly (since _send_to_segment was removed)
-                    adapter.segment_client.send_metric(record)
-
-                    # Verify send_metric was called on the SegmentClient
-                    mock_segment_client.send_metric.assert_called_once_with(record)
-                    assert adapter.segment_client is not None
-
-
-def test_setup_segment_client_without_key():
-    """Test SegmentClient initialization when write key is missing."""
-    with mock.patch.dict(
-        "os.environ",
-        {
-            "ATLAN_ENABLE_SEGMENT_METRICS": "true",
-            "ATLAN_SEGMENT_WRITE_KEY": "",  # Empty key
-            "METRICS_BATCH_SIZE": "100",
-            "METRICS_FLUSH_INTERVAL_SECONDS": "1",
-            "METRICS_RETENTION_DAYS": "7",
-            "METRICS_CLEANUP_ENABLED": "true",
-            "METRICS_FILE_NAME": "metrics.parquet",
-        },
-    ):
-        with mock.patch("opentelemetry.metrics.set_meter_provider"):
-            with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                # Patch SEGMENT_WRITE_KEY in both constants (where defined) and segment_client (where imported)
-                # This ensures the value is properly set even though it's imported at module level
                 with mock.patch(
                     "application_sdk.constants.SEGMENT_WRITE_KEY",
                     "",
@@ -441,8 +398,6 @@ def test_setup_segment_client_without_key():
                         "application_sdk.observability.segment_client.SEGMENT_WRITE_KEY",
                         "",
                     ):
-                        # Don't mock SegmentClient - let it initialize normally to test real behavior
                         adapter = AtlanMetricsAdapter()
-                        # Segment client should be created but disabled (enabled=False)
                         assert adapter.segment_client is not None
                         assert adapter.segment_client.enabled is False
