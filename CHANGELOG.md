@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.3.2 (February 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.1...v2.3.2
+
+### Bug Fixes
+
+- update codeowner (#954) (by @OnkarVO7 in [3a29977](https://github.com/atlanhq/application-sdk/commit/3a29977))
+- align daft writer behavior with pandas to prevent data loss (BLDX-305) (#953) (by @fyzanshaik-atlan in [1a73d02](https://github.com/atlanhq/application-sdk/commit/1a73d02))
+- tune dependabot settings to reduce noise (#1008) (by @fyzanshaik-atlan in [50e09ac](https://github.com/atlanhq/application-sdk/commit/50e09ac))
+
+
 ## v2.3.1 (January 28, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.0...v2.3.1
