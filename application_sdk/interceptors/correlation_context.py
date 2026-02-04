@@ -77,15 +77,8 @@ class CorrelationContextWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         super().init(context_outbound)
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
-        """Execute workflow and extract atlan-* fields and trace_id from arguments.
-
-        If no trace_id is provided in workflow config, automatically uses the
-        Temporal workflow_id as the trace_id for log correlation.
-        """
+        """Execute workflow and extract atlan-* fields and trace_id from arguments."""
         try:
-            # Get workflow_id from Temporal workflow info (available in sandbox)
-            workflow_id = workflow.info().workflow_id
-
             if input.args and len(input.args) > 0:
                 workflow_config = input.args[0]
                 if isinstance(workflow_config, dict):
@@ -99,11 +92,8 @@ class CorrelationContextWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     trace_id = workflow_config.get("trace_id", "")
                     if trace_id:
                         self.correlation_data["trace_id"] = str(trace_id)
-            # Auto-generate trace_id from workflow_id if not provided
-            if "trace_id" not in self.correlation_data and workflow_id:
-                self.correlation_data["trace_id"] = workflow_id
-            if self.correlation_data:
-                correlation_context.set(self.correlation_data)
+                    if self.correlation_data:
+                        correlation_context.set(self.correlation_data)
         except Exception as e:
             logger.warning(f"Failed to extract correlation context from args: {e}")
 
