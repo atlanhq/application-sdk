@@ -244,12 +244,8 @@ METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
 # Segment Configuration
 #: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
 SEGMENT_API_URL = os.getenv("ATLAN_SEGMENT_API_URL", "https://api.segment.io/v1/batch")
-#: Segment write key for authentication
+#: Segment write key for authentication. If set, Segment metrics are automatically enabled.
 SEGMENT_WRITE_KEY = os.getenv("ATLAN_SEGMENT_WRITE_KEY", "")
-#: Whether to enable Segment metrics export
-ENABLE_SEGMENT_METRICS = (
-    os.getenv("ATLAN_ENABLE_SEGMENT_METRICS", "false").lower() == "true"
-)
 #: Default user ID for Segment events
 SEGMENT_DEFAULT_USER_ID = "atlan.automation"
 #: Maximum batch size for Segment events

@@ -87,6 +87,10 @@ class SegmentClient:
     This client uses an asyncio queue to batch and send metrics to Segment API
     asynchronously, avoiding blocking operations and thread creation overhead.
 
+    The client is automatically enabled when a valid write key is provided.
+    No separate boolean flag is needed - the presence of the key determines
+    whether events are sent.
+
     Attributes:
         enabled (bool): Whether Segment client is enabled (has valid write key)
         _queue (asyncio.Queue): Queue for pending metric events
@@ -96,7 +100,6 @@ class SegmentClient:
 
     def __init__(
         self,
-        enabled: bool,
         write_key: str = "",
         api_url: str = "",
         default_user_id: str = "",
@@ -105,15 +108,16 @@ class SegmentClient:
     ):
         """Initialize Segment client.
 
+        The client is automatically enabled if a valid write key is provided.
+        No separate enabled flag is needed.
+
         Args:
-            enabled: Whether Segment metrics are enabled
             write_key: Segment write key for authentication (defaults to SEGMENT_WRITE_KEY)
             api_url: Segment API URL (defaults to SEGMENT_API_URL)
             default_user_id: Default user ID for events (defaults to SEGMENT_DEFAULT_USER_ID)
             batch_size: Maximum number of events per batch (defaults to SEGMENT_BATCH_SIZE)
             batch_timeout_seconds: Max seconds to wait before sending batch (defaults to SEGMENT_BATCH_TIMEOUT_SECONDS)
         """
-        self.enabled = enabled
         self._write_key = write_key or SEGMENT_WRITE_KEY
         self._api_url = api_url or SEGMENT_API_URL
         self._default_user_id = default_user_id or SEGMENT_DEFAULT_USER_ID
@@ -128,11 +132,13 @@ class SegmentClient:
         self._worker_thread: Optional[threading.Thread] = None
         self._initialized_event = threading.Event()
 
-        if not self.enabled or not self._write_key:
+        # Enable client if write key is present
+        self.enabled = bool(self._write_key)
+
+        if not self.enabled:
             logging.warning(
                 "Segment write key not configured - Segment metrics will be disabled"
             )
-            self.enabled = False
             return
 
         # Start background thread with event loop for async operations
