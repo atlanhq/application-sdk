@@ -53,14 +53,14 @@ beartype==0.22.9
     #   py-key-value-shared
 black==25.12.0
     # via pandera
-boto3==1.42.25
+boto3==1.42.41
     # via atlan-application-sdk
-boto3-stubs==1.42.25
-botocore==1.42.25
+boto3-stubs==1.42.41
+botocore==1.42.41
     # via
     #   boto3
     #   s3transfer
-botocore-stubs==1.42.25
+botocore-stubs==1.42.41
     # via boto3-stubs
 cachetools==6.2.4
     # via py-key-value-aio
@@ -93,8 +93,8 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   pytest
     #   tqdm
     #   uvicorn
-coverage==7.13.1
-cryptography==46.0.3
+coverage==7.13.3
+cryptography==46.0.4
     # via
     #   authlib
     #   azure-identity
@@ -102,11 +102,11 @@ cryptography==46.0.3
     #   msal
     #   pyjwt
     #   secretstorage
-cyclopts==4.4.4
+cyclopts==4.5.1
     # via fastmcp
-daft==0.7.1
+daft==0.7.2
     # via atlan-application-sdk
-dapr==1.16.0
+dapr==1.16.1
     # via atlan-application-sdk
 diskcache==5.6.3
     # via py-key-value-aio
@@ -118,7 +118,7 @@ docstring-parser==0.17.0
     # via cyclopts
 docutils==0.22.4
     # via rich-rst
-duckdb==1.4.3
+duckdb==1.4.4
     # via
     #   atlan-application-sdk
     #   duckdb-engine
@@ -134,15 +134,15 @@ faker==39.0.0
     # via atlan-application-sdk
 fakeredis==2.33.0
     # via pydocket
-fastapi==0.127.0
+fastapi==0.128.0
     # via atlan-application-sdk
 fastapi-cli==0.0.20
     # via fastapi
-fastapi-cloud-cli==0.9.0
+fastapi-cloud-cli==0.11.0
     # via fastapi-cli
 fastar==0.8.0
     # via fastapi-cloud-cli
-fastmcp==2.14.2
+fastmcp==2.14.5
     # via atlan-application-sdk
 filelock==3.20.3
     # via virtualenv
@@ -159,7 +159,7 @@ googleapis-common-protos==1.72.0
     #   grpcio-status
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
-greenlet==3.3.0
+greenlet==3.3.1
     # via sqlalchemy
 grpcio==1.76.0
     # via
@@ -190,8 +190,8 @@ httpx-retries==0.4.5
     # via pyatlan
 httpx-sse==0.4.3
     # via mcp
-hypothesis==6.148.13
-identify==2.6.15
+hypothesis==6.151.5
+identify==2.6.16
     # via pre-commit
 idna==3.11
     # via
@@ -214,7 +214,7 @@ isodate==0.7.2
 isort==5.13.2
 jaraco-classes==3.4.0
     # via keyring
-jaraco-context==6.0.2
+jaraco-context==6.1.0
     # via keyring
 jaraco-functools==4.4.0
     # via keyring
@@ -227,7 +227,7 @@ jinja2==3.1.6
     #   fastapi
     #   frictionless
     #   pyatlan
-jmespath==1.0.1
+jmespath==1.1.0
     # via
     #   boto3
     #   botocore
@@ -253,7 +253,7 @@ marko==2.2.2
     # via frictionless
 markupsafe==3.0.3
     # via jinja2
-mcp==1.25.0
+mcp==1.26.0
     # via fastmcp
 mdurl==0.1.2
     # via markdown-it-py
@@ -268,7 +268,7 @@ msal==1.34.0
     #   msal-extensions
 msal-extensions==1.3.1
     # via azure-identity
-multidict==6.7.0
+multidict==6.7.1
     # via
     #   aiohttp
     #   yarl
@@ -282,7 +282,7 @@ nexus-rpc==1.3.0
     # via temporalio
 nodeenv==1.10.0
     # via pre-commit
-numpy==2.4.1
+numpy==2.4.2
     # via
     #   atlan-application-sdk
     #   pandas
@@ -325,7 +325,7 @@ opentelemetry-semantic-conventions==0.60b1
     # via
     #   opentelemetry-instrumentation
     #   opentelemetry-sdk
-orjson==3.11.5
+orjson==3.11.7
     # via atlan-application-sdk
 packaging==25.0
     # via
@@ -338,13 +338,13 @@ packaging==25.0
     #   pytest
 pandas==2.3.3
     # via atlan-application-sdk
-pandera==0.27.1
+pandera==0.29.0
     # via atlan-application-sdk
 pastel==0.2.1
     # via poethepoet
 pathable==0.4.4
     # via jsonschema-path
-pathspec==1.0.3
+pathspec==1.0.4
     # via black
 pathvalidate==3.3.1
     # via py-key-value-aio
@@ -357,9 +357,9 @@ platformdirs==4.5.1
     #   virtualenv
 pluggy==1.6.0
     # via pytest
-poethepoet==0.39.0
+poethepoet==0.40.0
 pre-commit==4.5.1
-prometheus-client==0.23.1
+prometheus-client==0.24.1
     # via
     #   opentelemetry-exporter-prometheus
     #   pydocket
@@ -374,7 +374,7 @@ protobuf==6.33.5
     #   grpcio-status
     #   opentelemetry-proto
     #   temporalio
-psutil==7.2.1
+psutil==7.2.2
     # via atlan-application-sdk
 py-key-value-aio==0.3.0
     # via
@@ -386,7 +386,7 @@ pyarrow==22.0.0
     # via
     #   atlan-application-sdk
     #   daft
-pyatlan==8.4.5
+pyatlan==8.5.1
     # via atlan-application-sdk
 pycparser==2.23 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
@@ -410,13 +410,13 @@ pydantic-settings==2.12.0
     # via
     #   fastapi
     #   mcp
-pydocket==0.16.6
+pydocket==0.17.5
     # via fastmcp
 pygments==2.19.2
     # via
     #   pytest
     #   rich
-pyjwt==2.10.1
+pyjwt==2.11.0
     # via
     #   mcp
     #   msal
@@ -450,7 +450,7 @@ python-multipart==0.0.22
     #   mcp
 python-slugify==8.0.4
     # via frictionless
-pytokens==0.3.0
+pytokens==0.4.1
     # via black
 pytz==2025.2
     # via
@@ -476,7 +476,7 @@ redis==7.1.0
     #   fakeredis
     #   py-key-value-aio
     #   pydocket
-referencing==0.36.2
+referencing==0.37.0
     # via
     #   jsonschema
     #   jsonschema-path
@@ -490,7 +490,7 @@ requests==2.32.5
     #   opentelemetry-exporter-otlp-proto-http
 rfc3986==2.0.0
     # via frictionless
-rich==14.2.0
+rich==14.3.2
     # via
     #   cyclopts
     #   fastmcp
@@ -500,7 +500,7 @@ rich==14.2.0
     #   typer
 rich-rst==1.3.2
     # via cyclopts
-rich-toolkit==0.17.1
+rich-toolkit==0.18.1
     # via
     #   fastapi-cli
     #   fastapi-cloud-cli
@@ -514,7 +514,7 @@ s3transfer==0.16.0
     # via boto3
 secretstorage==3.5.0 ; sys_platform == 'linux'
     # via keyring
-sentry-sdk==2.49.0
+sentry-sdk==2.51.0
     # via fastapi-cloud-cli
 shellingham==1.5.4
     # via typer
@@ -526,13 +526,13 @@ sortedcontainers==2.4.0
     # via
     #   fakeredis
     #   hypothesis
-sqlalchemy==2.0.45
+sqlalchemy==2.0.46
     # via
     #   atlan-application-sdk
     #   duckdb-engine
-sse-starlette==3.1.2
+sse-starlette==3.2.0
     # via mcp
-starlette==0.50.0
+starlette==0.52.1
     # via
     #   fastapi
     #   mcp
@@ -541,13 +541,13 @@ stringcase==1.2.0
     # via frictionless
 tabulate==0.9.0
     # via frictionless
-temporalio==1.21.1
+temporalio==1.22.0
     # via atlan-application-sdk
 tenacity==9.1.2
     # via pyatlan
 text-unidecode==1.3
     # via python-slugify
-tqdm==4.67.1
+tqdm==4.67.3
     # via daft
 typeguard==4.4.4
     # via pandera
@@ -557,7 +557,7 @@ typer==0.21.1
     #   fastapi-cloud-cli
     #   frictionless
     #   pydocket
-types-awscrt==0.31.0
+types-awscrt==0.31.1
     # via botocore-stubs
 types-protobuf==6.32.1.20251210
     # via temporalio
