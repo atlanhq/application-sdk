@@ -11,11 +11,15 @@ Endpoints:
 - GET /sse/logs?trace_id=xxx: Server-Sent Events for live log streaming
 - GET /api/logs?trace_id=xxx&application_name=yyy: Query logs from Iceberg
 - GET /api/traces: List recently seen trace IDs
+- GET /api/workflows: List workflows from Atlas (AppWorkflowRun entities)
+- GET /api/workflows/stored: List workflows with stored logs in Iceberg
 - GET /health: Health check
 
 Filters:
 - trace_id: Filter by trace/workflow ID
 - application_name: Filter by application (e.g., 'mssql', 'postgres')
+- connector: Filter by connector type (e.g., 'mssql', 'snowflake')
+- status: Filter by workflow status (e.g., 'running', 'succeeded', 'failed')
 """
 
 import asyncio
@@ -27,6 +31,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -40,6 +45,10 @@ CATALOG_NAME = os.environ.get("CATALOG_NAME", "context_store")
 WAREHOUSE_NAME = os.environ.get("WAREHOUSE_NAME", "context_store")
 NAMESPACE = os.environ.get("NAMESPACE", "Workflow_Log_Test")
 
+# Atlas configuration for workflow discovery
+ATLAS_URL = os.environ.get("ATLAS_URL", "")
+ATLAS_TOKEN = os.environ.get("ATLAS_TOKEN", "")
+
 app = FastAPI(
     title="Workflow Logs Observability",
     description="Live streaming and historical query service for workflow logs",
@@ -51,6 +60,21 @@ app = FastAPI(
 subscribers: Dict[str, Set[asyncio.Queue]] = defaultdict(set)
 # Track which workflows have been seen (for /api/workflows)
 active_workflows: Dict[str, float] = {}  # workflow_id -> last_seen_timestamp
+
+# Atlas client (lazy init)
+_atlas_client: Optional[httpx.AsyncClient] = None
+
+
+def get_atlas_client() -> Optional[httpx.AsyncClient]:
+    """Get Atlas client (lazy initialization)."""
+    global _atlas_client
+    if _atlas_client is None and ATLAS_URL and ATLAS_TOKEN:
+        _atlas_client = httpx.AsyncClient(
+            base_url=ATLAS_URL,
+            headers={"Authorization": f"Bearer {ATLAS_TOKEN}"},
+            timeout=30.0,
+        )
+    return _atlas_client
 
 
 # ============================================
@@ -475,6 +499,168 @@ async def list_traces():
             del active_workflows[trace_id]
 
     return {"traces": traces}
+
+
+@app.get("/api/workflows")
+async def list_workflows(
+    connector: Optional[str] = Query(
+        None, description="Filter by connector: mssql, snowflake, postgres, etc."
+    ),
+    status: Optional[str] = Query(
+        None, description="Filter by status: running, succeeded, failed"
+    ),
+    limit: int = Query(100, description="Max results"),
+):
+    """
+    List workflows from Atlas (AppWorkflowRun entities).
+
+    Returns workflow metadata for discovery before log querying.
+    Workflow names follow pattern: atlan-{connector}-{id}-{suffix}
+    e.g., atlan-mssql-1766579479-w8gkk
+    """
+    client = get_atlas_client()
+    if not client:
+        raise HTTPException(
+            status_code=503,
+            detail="Atlas not configured. Set ATLAS_URL and ATLAS_TOKEN.",
+        )
+
+    # Build DSL query (following frontend pattern)
+    must_clauses: List[Dict[str, Any]] = [
+        {"term": {"__typeName.keyword": "AppWorkflowRun"}}
+    ]
+
+    # Filter by status if provided
+    if status:
+        must_clauses.append({"term": {"appWorkflowRunStatus": status}})
+
+    # Filter by connector using wildcard on qualifiedName
+    # Pattern: atlan-{connector}-*
+    if connector:
+        must_clauses.append({"wildcard": {"qualifiedName": f"atlan-{connector}-*"}})
+
+    request_body = {
+        "dsl": {
+            "from": 0,
+            "size": limit,
+            "query": {"bool": {"must": must_clauses}},
+            "sort": [{"__modificationTimestamp": {"order": "desc"}}],
+        },
+        "attributes": [
+            "qualifiedName",
+            "name",
+            "appWorkflowRunLabel",
+            "appWorkflowRunStatus",
+            "appWorkflowRunStartedAt",
+            "appWorkflowRunCompletedAt",
+        ],
+        "includeRelationshipAttributes": False,
+    }
+
+    try:
+        response = await client.post("/api/meta/search/indexsearch", json=request_body)
+        response.raise_for_status()
+        data = response.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"Atlas query failed: {e.response.text}",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Atlas query failed: {e}")
+
+    # Transform response
+    workflows = []
+    for entity in data.get("entities", []):
+        attrs = entity.get("attributes", {})
+        qualified_name = attrs.get("qualifiedName", "")
+
+        # Extract connector from qualifiedName (atlan-{connector}-...)
+        parts = qualified_name.split("-")
+        extracted_connector = parts[1] if len(parts) > 1 else "unknown"
+
+        workflows.append(
+            {
+                "qualified_name": qualified_name,
+                "name": attrs.get("name", qualified_name),
+                "connector": extracted_connector,
+                "status": attrs.get("appWorkflowRunStatus"),
+                "label": attrs.get("appWorkflowRunLabel"),
+                "started_at": attrs.get("appWorkflowRunStartedAt"),
+                "completed_at": attrs.get("appWorkflowRunCompletedAt"),
+            }
+        )
+
+    return {
+        "workflows": workflows,
+        "count": len(workflows),
+        "total": data.get("approximateCount", len(workflows)),
+    }
+
+
+@app.get("/api/workflows/stored")
+async def list_stored_workflows(
+    application_name: Optional[str] = Query(
+        None, description="Filter by application name"
+    ),
+    limit: int = Query(100, description="Max results"),
+):
+    """
+    List workflows that have logs stored in MDLH (Iceberg).
+
+    Returns distinct trace_ids and application_names from the workflow_logs table.
+    Use this to discover what historical data is available.
+    """
+    table = get_iceberg_table()
+    if table is None:
+        raise HTTPException(status_code=503, detail="Iceberg not configured")
+
+    try:
+        # Scan for distinct trace_ids and application_names
+        scan = table.scan(
+            selected_fields=("trace_id", "application_name"),
+        )
+        arrow_table = scan.to_arrow()
+
+        if len(arrow_table) == 0:
+            return {"workflows": [], "count": 0, "source": "iceberg"}
+
+        # Get unique combinations using pandas
+        df = arrow_table.to_pandas()
+
+        # Filter by application_name if provided
+        if application_name:
+            df = df[df["application_name"] == application_name]
+
+        # Get unique trace_ids with their app names
+        unique_workflows = (
+            df.groupby("trace_id").agg({"application_name": "first"}).reset_index()
+        )
+
+        # Limit results
+        unique_workflows = unique_workflows.head(limit)
+
+        workflows = []
+        for _, row in unique_workflows.iterrows():
+            trace_id = row["trace_id"]
+            app_name = row["application_name"]
+
+            # Extract connector from trace_id (atlan-{connector}-...)
+            parts = trace_id.split("-") if trace_id else []
+            connector = parts[1] if len(parts) > 1 else "unknown"
+
+            workflows.append(
+                {
+                    "trace_id": trace_id,
+                    "application_name": app_name,
+                    "connector": connector,
+                }
+            )
+
+        return {"workflows": workflows, "count": len(workflows), "source": "iceberg"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Iceberg query failed: {e}")
 
 
 if __name__ == "__main__":

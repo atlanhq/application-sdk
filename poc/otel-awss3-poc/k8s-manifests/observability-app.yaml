@@ -1,0 +1,109 @@
+# Observability App - FastAPI service for workflow log streaming and Iceberg querying
+# BLDX-361: POC for workflow log observability
+#
+# Endpoints:
+# - POST /v1/logs: OTLP log receiver (from collector)
+# - GET /sse/logs?trace_id=xxx: Server-Sent Events for live streaming
+# - GET /api/logs?trace_id=xxx: Query logs from Iceberg
+# - GET /api/workflows: List workflows from Atlas (AppWorkflowRun entities)
+# - GET /api/workflows/stored: List workflows with stored logs in Iceberg
+#
+# IMPORTANT: Update the env vars for your tenant's Polaris and Atlas config before applying!
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: observability-app
+  namespace: platform-temporal
+  labels:
+    app: observability-app
+    component: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: observability-app
+  template:
+    metadata:
+      labels:
+        app: observability-app
+    spec:
+      containers:
+      - name: app
+        image: ghcr.io/atlanhq/temp-workflow-logs-observability-app:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: PORT
+          value: "8080"
+        # Polaris/Iceberg configuration
+        # IMPORTANT: Get these values from existing tenant deployments (e.g., context-store)
+        - name: POLARIS_CATALOG_URI
+          value: "REPLACE_WITH_POLARIS_URI"
+        - name: POLARIS_CRED
+          value: "REPLACE_WITH_POLARIS_CRED"
+        # Or use a secret:
+        # - name: POLARIS_CRED
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: polaris-credentials
+        #       key: credential
+        - name: CATALOG_NAME
+          value: "context_store"
+        - name: WAREHOUSE_NAME
+          value: "context_store"
+        - name: NAMESPACE
+          value: "Workflow_Log_Test"
+        # Atlas configuration for workflow discovery
+        # Get these from existing tenant deployments (e.g., admission-controller)
+        - name: ATLAS_URL
+          value: "http://atlas-service-atlas.atlas.svc.cluster.local"
+        - name: ATLAS_TOKEN
+          value: "REPLACE_WITH_ATLAS_TOKEN"
+        # Or use a secret:
+        # - name: ATLAS_TOKEN
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: atlas-credentials
+        #       key: token
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      imagePullSecrets:
+      - name: github-docker-registry
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: observability-app
+  namespace: platform-temporal
+  labels:
+    app: observability-app
+    component: observability
+spec:
+  selector:
+    app: observability-app
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
