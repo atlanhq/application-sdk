@@ -20,7 +20,7 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
@@ -30,7 +30,7 @@ jobs:
     name: E2E (Examples)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: "./.github/actions/e2e-examples"
         with:
           operating-system: ubuntu-latest
@@ -48,7 +48,7 @@ jobs:
       matrix:
         repo_name: ["atlan-postgres-app"]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: "./.github/actions/e2e-apps"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
@@ -60,7 +60,7 @@ jobs:
     name: Docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: "./.github/actions/setup-deps"
       - name: Install graphviz
         run: |
