@@ -20,6 +20,7 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
+    ENABLE_TEST_APIS,
     EVENT_STORE_NAME,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
@@ -45,6 +46,9 @@ from application_sdk.server.fastapi.models import (
     Subscription,
     TestAuthRequest,
     TestAuthResponse,
+    TestDataCleanupRequest,
+    TestDataGenerateRequest,
+    TestDataJobResponse,
     WorkflowConfigRequest,
     WorkflowConfigResponse,
     WorkflowData,
@@ -92,6 +96,7 @@ class APIServer(ServerInterface):
     dapr_router: APIRouter
     events_router: APIRouter
     subscription_router: APIRouter
+    test_data_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
     duckdb_ui: DuckDBUI
@@ -143,6 +148,7 @@ class APIServer(ServerInterface):
         self.workflow_router = APIRouter()
         self.dapr_router = APIRouter()
         self.events_router = APIRouter()
+        self.test_data_router = APIRouter()
         self.subscriptions = subscriptions
         # Set up the application
         error_handler = internal_server_error_handler  # Store as local variable
@@ -220,6 +226,11 @@ class APIServer(ServerInterface):
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
+
+        # Include test data router only if ENABLE_TEST_APIS is true
+        if ENABLE_TEST_APIS:
+            self.app.include_router(self.test_data_router, prefix="/test-data/v1")
+            logger.info("Test data APIs enabled at /test-data/v1")
 
         # Register subscription routes from subscriptions with handler callbacks
         subscription_router = APIRouter()
@@ -430,6 +441,22 @@ class APIServer(ServerInterface):
             response_model=EventWorkflowResponse,
         )
 
+        # Register test data routes only if ENABLE_TEST_APIS is true
+        if ENABLE_TEST_APIS:
+            self.test_data_router.add_api_route(
+                "/generate",
+                self.generate_test_data,
+                methods=["POST"],
+                response_model=TestDataJobResponse,
+            )
+
+            self.test_data_router.add_api_route(
+                "/cleanup",
+                self.cleanup_test_data,
+                methods=["POST"],
+                response_model=TestDataJobResponse,
+            )
+
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
         self.app.get("/")(self.frontend_home)
@@ -497,6 +524,40 @@ class APIServer(ServerInterface):
                 run_id="",
             ),
             status=EventWorkflowResponse.Status.DROP,
+        )
+
+    async def generate_test_data(
+        self, body: TestDataGenerateRequest
+    ) -> TestDataJobResponse:
+        """Generate test data endpoint - dummy implementation."""
+        import uuid
+        from datetime import datetime
+
+        workflow_id = body.workflow_id or f"test-data-gen-{uuid.uuid4()}"
+        return TestDataJobResponse(
+            job_id=workflow_id,
+            workflow_id=workflow_id,
+            run_id="dummy-run-id",
+            status="NOT_IMPLEMENTED",
+            operation="generate",
+            created_at=datetime.utcnow().isoformat(),
+        )
+
+    async def cleanup_test_data(
+        self, body: TestDataCleanupRequest
+    ) -> TestDataJobResponse:
+        """Cleanup test data endpoint - dummy implementation."""
+        import uuid
+        from datetime import datetime
+
+        workflow_id = body.workflow_id or f"test-data-cleanup-{uuid.uuid4()}"
+        return TestDataJobResponse(
+            job_id=workflow_id,
+            workflow_id=workflow_id,
+            run_id="dummy-run-id",
+            status="NOT_IMPLEMENTED",
+            operation="cleanup",
+            created_at=datetime.utcnow().isoformat(),
         )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:

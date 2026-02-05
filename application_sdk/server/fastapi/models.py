@@ -301,3 +301,30 @@ class Subscription(BaseModel):
     ]  # Required callback function (sync or async)
     bulk_config: Optional[BulkConfig] = None
     dead_letter_topic: Optional[str] = None
+
+
+class TestDataGenerateRequest(BaseModel):
+    workflow_id: Optional[str] = Field(
+        None, description="Optional workflow ID for the test data generation job"
+    )
+    config: Dict[str, Any] = Field(
+        default_factory=dict, description="Configuration for test data generation"
+    )
+
+
+class TestDataCleanupRequest(BaseModel):
+    workflow_id: Optional[str] = Field(
+        None, description="Optional workflow ID for the test data cleanup job"
+    )
+    config: Dict[str, Any] = Field(
+        default_factory=dict, description="Configuration for test data cleanup"
+    )
+
+
+class TestDataJobResponse(BaseModel):
+    job_id: str = Field(..., description="Unique identifier for the job")
+    workflow_id: str = Field(..., description="Workflow ID associated with the job")
+    run_id: str = Field(..., description="Run ID associated with the job")
+    status: str = Field(..., description="Current status of the job")
+    operation: str = Field(..., description="Operation type (generate or cleanup)")
+    created_at: str = Field(..., description="Timestamp when the job was created")

@@ -307,6 +307,11 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
+# Test APIs Configuration
+#: Flag to enable test data management APIs (generate/cleanup endpoints).
+#: Should only be enabled in test/benchmark environments, NOT in production.
+ENABLE_TEST_APIS = os.getenv("ENABLE_TEST_APIS", "false").lower() == "true"
+
 
 class ApplicationMode(str, Enum):
     """Application execution mode.
