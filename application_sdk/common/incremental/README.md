@@ -201,10 +201,6 @@ This enables efficient publishing where only changes are processed.
 | `DUCKDB_COMMON_TEMP_FOLDER` | Temp folder for DuckDB files | `/tmp/incremental_duckdb` |
 | `DUCKDB_DEFAULT_MEMORY_LIMIT` | DuckDB memory limit | `2GB` |
 
-## Testing
-
-See `tests/unit/common/test_incremental_*.py` for unit tests of the utilities.
-
 ## Related Files
 
 - `application_sdk/activities/metadata_extraction/incremental.py` - Incremental activities
