@@ -45,6 +45,20 @@ from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
 )
 from application_sdk.common.incremental.models import EntityType
+from application_sdk.common.incremental.storage.duckdb_utils import (
+    DuckDBConnectionManager,
+)
+from application_sdk.common.incremental.state.table_scope import (
+    get_current_table_scope,
+    get_scope_length,
+    close_scope,
+)
+from application_sdk.common.incremental.state.ancestral_merge import (
+    merge_ancestral_columns,
+)
+from application_sdk.common.incremental.state.incremental_diff import (
+    create_incremental_diff,
+)
 
 logger = get_logger(__name__)
 
@@ -333,22 +347,6 @@ async def create_current_state_snapshot(
         ... )
         >>> print(f"Created {result.total_files} files")
     """
-    # Import here to avoid circular dependency
-    from application_sdk.common.incremental.storage.duckdb_utils import (
-        DuckDBConnectionManager,
-    )
-    from application_sdk.common.incremental.table_scope import (
-        get_current_table_scope,
-        get_scope_length,
-        close_scope,
-    )
-    from application_sdk.common.incremental.ancestral_merge import (
-        merge_ancestral_columns,
-    )
-    from application_sdk.common.incremental.incremental_diff import (
-        create_incremental_diff,
-    )
-
     current_state_s3_prefix = f"{s3_prefix}/current-state"
     table_scope = None
     diff_result = None

@@ -23,7 +23,7 @@ from application_sdk.common.incremental.models import (
     TableScope,
     MergeResult,
 )
-from application_sdk.common.incremental.table_scope import (
+from application_sdk.common.incremental.state.table_scope import (
     get_table_qns_from_columns,
     iter_scope_table_qns,
 )

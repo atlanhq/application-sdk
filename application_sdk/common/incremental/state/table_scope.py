@@ -27,6 +27,7 @@ from application_sdk.common.incremental.storage.duckdb_utils import (
     managed_duckdb_connection,
     json_scan,
     escape_sql_string,
+    get_parent_table_qn_expr,
 )
 from application_sdk.common.incremental.storage.rocksdb_utils import close_states_db
 
@@ -221,10 +222,6 @@ def get_table_qns_from_columns(
 
     try:
         with managed_duckdb_connection(conn) as active_conn:
-            from application_sdk.common.incremental.storage.duckdb_utils import (
-                get_parent_table_qn_expr,
-            )
-
             json_scan_sql = json_scan(json_files)
             table_qn_expr = get_parent_table_qn_expr()
 

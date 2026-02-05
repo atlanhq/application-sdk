@@ -23,7 +23,7 @@ from application_sdk.common.incremental.models import (
     TableScope,
     IncrementalDiffResult,
 )
-from application_sdk.common.incremental.table_scope import (
+from application_sdk.common.incremental.state.table_scope import (
     iter_scope_table_qns,
     get_table_state,
 )

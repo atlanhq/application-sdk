@@ -61,7 +61,7 @@ from application_sdk.common.incremental.state.state_writer import (
     cleanup_previous_state,
     create_current_state_snapshot,
 )
-from application_sdk.common.incremental.state.marker import (
+from application_sdk.common.incremental.marker import (
     fetch_marker_from_storage,
     persist_marker_to_storage,
     create_next_marker,

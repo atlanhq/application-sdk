@@ -6,7 +6,7 @@ This directory contains the core utilities for incremental SQL metadata extracti
 
 The incremental extraction framework enables efficient metadata extraction by:
 1. Tracking changes via marker timestamps
-2. Extracting only modified tables/columns instead of full extractions
+2. Extracting only modified assets instead of full extractions
 3. Preserving ancestral state for unchanged entities
 4. Generating incremental diffs for efficient publishing
 
@@ -28,7 +28,7 @@ The incremental extraction framework enables efficient metadata extraction by:
 │   │ Fetch DBs    │───▶│ Fetch Schemas   │───▶│ Fetch Tables   │     │
 │   └──────────────┘    └─────────────────┘    └────────────────┘     │
 │                                                                      │
-│   Phase 3: Incremental Columns                                       │
+│   Phase 3: Incremental Extraction (Will be implemented for other asset types soon)                                       │
 │   ┌──────────────────┐    ┌─────────────────────────────────────┐   │
 │   │ Prepare Column   │───▶│ Execute Column Batches (parallel)   │   │
 │   │ Queries          │    │ - Changed tables: Fresh extraction  │   │
@@ -51,13 +51,13 @@ application_sdk/common/incremental/
 ├── README.md                  # This file
 ├── models.py                  # Pydantic models for workflow args and metadata
 ├── helpers.py                 # S3 path management, file utilities
-├── table_scope.py             # Table scope detection and state management
-├── ancestral_merge.py         # Column merging for unchanged tables
-├── incremental_diff.py        # Diff generation for changed entities
-├── state/                     # State management (marker + current state)
-│   ├── marker.py              # Marker timestamp fetch/persist helpers
+├── marker.py                  # Marker timestamp fetch/persist helpers
+├── state/                     # State management (current state + processing)
 │   ├── state_reader.py        # Download current state from S3
-│   └── state_writer.py        # Create and upload current state snapshot
+│   ├── state_writer.py        # Create and upload current state snapshot
+│   ├── table_scope.py         # Table scope detection and state management
+│   ├── ancestral_merge.py     # Column merging for unchanged tables
+│   └── incremental_diff.py    # Diff generation for changed entities
 └── storage/                   # Storage backends
     ├── duckdb_utils.py        # DuckDB connection management
     └── rocksdb_utils.py       # RocksDB disk-backed state storage
@@ -65,23 +65,13 @@ application_sdk/common/incremental/
 
 ## File Descriptions
 
-### Core Files
+### Core Files (Parent Directory)
 
 | File | Purpose | Used By |
 |------|---------|---------|
 | `models.py` | Pydantic models for `IncrementalWorkflowArgs`, `EntityType`, `TableScope`, merge results | Activities, workflows |
-| `helpers.py` | S3 path generation, file operations | Activities |
-| `table_scope.py` | Detect table incremental states (CREATED/UPDATED/NO CHANGE) via DuckDB queries | `write_current_state` |
-| `ancestral_merge.py` | Merge current columns with ancestral data for NO CHANGE tables | `write_current_state` |
-| `incremental_diff.py` | Generate folder with only changed assets for efficient publishing | `write_current_state` |
-
-### State Management (state/)
-
-| File | Purpose |
-|------|---------|
-| `marker.py` | Marker timestamp management: fetch from S3, validate, prepone, and persist |
-| `state_reader.py` | Download previous run's current-state snapshot from S3 |
-| `state_writer.py` | Create new current-state snapshot with ancestral merge and upload to S3 |
+| `helpers.py` | S3 path generation, file operations, utility functions | Activities, state modules |
+| `marker.py` | Marker timestamp management: fetch from S3, validate, prepone, and persist | Activities |
 
 #### Key Functions
 
@@ -90,6 +80,18 @@ application_sdk/common/incremental/
 - `persist_marker_to_storage()` - Upload marker after successful extraction
 - `create_next_marker()` - Generate timestamp for current run
 - `process_marker_timestamp()` - Normalize and optionally prepone marker
+
+### State Management (state/)
+
+| File | Purpose |
+|------|---------|
+| `state_reader.py` | Download previous run's current-state snapshot from S3 |
+| `state_writer.py` | Create new current-state snapshot with ancestral merge and upload to S3 |
+| `table_scope.py` | Detect table incremental states (CREATED/UPDATED/NO CHANGE) via DuckDB queries |
+| `ancestral_merge.py` | Merge current columns with ancestral data for NO CHANGE tables |
+| `incremental_diff.py` | Generate folder with only changed assets for efficient publishing |
+
+#### Key Functions
 
 **state_reader.py:**
 - `download_current_state()` - Download current-state folder from S3
@@ -101,6 +103,16 @@ application_sdk/common/incremental/
 - `copy_non_column_entities()` - Copy tables, schemas, databases
 - `upload_current_state()` - Upload final snapshot to S3
 - `cleanup_previous_state()` - Clean up temporary files
+
+**table_scope.py:**
+- `get_current_table_scope()` - Extract table qualified names and incremental states
+- `get_table_qns_from_columns()` - Extract table qualified names from column files
+
+**ancestral_merge.py:**
+- `merge_ancestral_columns()` - Merge current + ancestral columns for new state
+
+**incremental_diff.py:**
+- `create_incremental_diff()` - Create diff folder with only changed entities
 
 ### Storage Backends (storage/)
 
@@ -118,9 +130,10 @@ The marker timestamp tracks when the last successful extraction occurred. It's s
 persistent-artifacts/apps/{app}/connection/{connection_id}/marker.txt
 ```
 
-During extraction, queries use this timestamp to filter for changed tables:
+During extraction, queries use this timestamp to filter for changed assets:
 ```sql
 WHERE last_modified_time > '{marker_timestamp}'
+LABEL: incremental_state = 'CREATED' OR 'UPDATED' OR 'BACKFILL'
 ```
 
 ### Current State
@@ -165,7 +178,7 @@ persistent-artifacts/apps/{app}/connection/{connection_id}/runs/{run_id}/increme
 └── ...
 ```
 
-This enables efficient publishing where only changes are processed.
+Serves as an extra "current-state" sort of snapshot that contains only the changed assets from the current run.
 
 ## Usage
 
@@ -200,8 +213,3 @@ This enables efficient publishing where only changes are processed.
 | `INCREMENTAL_DEFAULT_STATE` | Default state for first run | `NO CHANGE` |
 | `DUCKDB_COMMON_TEMP_FOLDER` | Temp folder for DuckDB files | `/tmp/incremental_duckdb` |
 | `DUCKDB_DEFAULT_MEMORY_LIMIT` | DuckDB memory limit | `2GB` |
-
-## Related Files
-
-- `application_sdk/activities/metadata_extraction/incremental.py` - Incremental activities
-- `application_sdk/workflows/metadata_extraction/incremental_sql.py` - Incremental workflow
