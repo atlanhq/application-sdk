@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Iterator, Optional, Set
 
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.common.incremental.constants import INCREMENTAL_DEFAULT_STATE
+from application_sdk.constants import INCREMENTAL_DEFAULT_STATE
 from application_sdk.common.incremental.models import EntityType, TableScope
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnection,

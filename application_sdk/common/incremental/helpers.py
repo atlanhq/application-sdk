@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,13 +19,11 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
     TEMPORARY_PATH,
-)
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
-from application_sdk.common.incremental.constants import (
     MARKER_TIMESTAMP_FORMAT,
     PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE,
 )
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.objectstore import ObjectStore
 from application_sdk.common.incremental.models import IncrementalWorkflowArgs
 
 logger = get_logger(__name__)
@@ -276,18 +273,6 @@ async def download_s3_prefix_with_structure(
 # =============================================================================
 # File Utilities
 # =============================================================================
-
-
-def generate_random_uuid(length: int = 8) -> str:
-    """Generate a short random UUID string.
-
-    Args:
-        length: Number of hex characters to return (default: 8).
-
-    Returns:
-        A random hex string of the specified length.
-    """
-    return uuid.uuid4().hex[:length]
 
 
 def count_json_files_recursive(directory: Path) -> int:

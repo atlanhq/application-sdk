@@ -31,7 +31,7 @@ from temporalio.common import RetryPolicy
 from application_sdk.activities.metadata_extraction.incremental import (
     IncrementalSQLMetadataExtractionActivities,
 )
-from application_sdk.common.incremental.constants import MAX_CONCURRENT_COLUMN_BATCHES
+from application_sdk.constants import MAX_CONCURRENT_COLUMN_BATCHES
 from application_sdk.common.incremental.models import IncrementalWorkflowArgs
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.workflows.metadata_extraction.sql import (

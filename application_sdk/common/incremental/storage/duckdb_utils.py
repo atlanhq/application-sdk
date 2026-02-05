@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Generator, List, Optional, Union
 
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.common.incremental.constants import (
+from application_sdk.constants import (
     DUCKDB_COMMON_TEMP_FOLDER,
     DUCKDB_DEFAULT_MEMORY_LIMIT,
 )

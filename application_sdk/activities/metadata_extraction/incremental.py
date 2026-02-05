@@ -43,7 +43,11 @@ from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
     BaseSQLMetadataExtractionActivitiesState,
 )
-from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
+from application_sdk.constants import (
+    UPSTREAM_OBJECT_STORE_NAME,
+    MARKER_TIMESTAMP_FORMAT,
+    INCREMENTAL_DIFF_SUBPATH_TEMPLATE,
+)
 from application_sdk.io.json import JsonFileWriter
 from application_sdk.io.parquet import ParquetFileReader
 from application_sdk.io import DataframeType
@@ -57,13 +61,10 @@ from application_sdk.common.incremental.models import (
     EntityType,
     IncrementalWorkflowArgs,
 )
-from application_sdk.common.incremental.constants import (
-    MARKER_TIMESTAMP_FORMAT,
-    INCREMENTAL_DIFF_SUBPATH_TEMPLATE,
-)
 from application_sdk.common.incremental.helpers import (
     get_persistent_s3_prefix,
     get_persistent_artifacts_path,
+    get_object_store_prefix,
     normalize_marker_timestamp,
     prepone_marker_timestamp,
     download_marker_from_s3,
@@ -82,6 +83,17 @@ from application_sdk.common.incremental.table_scope import (
 )
 from application_sdk.common.incremental.ancestral_merge import merge_ancestral_columns
 from application_sdk.common.incremental.incremental_diff import create_incremental_diff
+
+# State management helpers (modular helpers for read/write current state)
+from application_sdk.common.incremental.state.state_reader import download_current_state
+from application_sdk.common.incremental.state.state_writer import (
+    download_transformed_data,
+    prepare_previous_state,
+    copy_non_column_entities,
+    upload_current_state,
+    cleanup_previous_state,
+    prepare_current_state_directory,
+)
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -356,56 +368,34 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
     ) -> Dict[str, Any]:
         """Download current-state folder from S3.
 
-        S3 Path: persistent-artifacts/apps/{application_name}/connection/{connection_id}/current-state/
+        Downloads the previous run's current-state snapshot, which is used for:
+        1. Comparing with current extraction to detect changed tables
+        2. Providing ancestral column data for unchanged tables
+
+        S3 Path: persistent-artifacts/apps/{app}/connection/{connection_id}/current-state/
 
         Args:
             workflow_args: Dictionary containing workflow configuration.
 
         Returns:
-            Updated workflow_args with current_state metadata.
+            Updated workflow_args with current_state metadata including:
+            - current_state_path: Local path to downloaded state
+            - current_state_available: Whether state was found
+            - current_state_s3_prefix: S3 location of state
+            - current_state_json_count: Number of JSON files
+
+        Note:
+            Uses state_reader.download_current_state() helper for the download logic.
         """
         try:
             args = IncrementalWorkflowArgs.model_validate(workflow_args)
 
-            s3_prefix = get_persistent_s3_prefix(workflow_args)
-            current_state_s3_prefix = f"{s3_prefix}/current-state"
-            current_state_dir = get_persistent_artifacts_path(
-                workflow_args, "current-state"
+            # Use helper function for download logic
+            current_state_dir, current_state_s3_prefix, exists, json_count = (
+                await download_current_state(workflow_args)
             )
 
-            # Ensure local directory exists
-            current_state_dir.mkdir(parents=True, exist_ok=True)
-
-            logger.info(
-                f"Downloading current-state folder from S3: {current_state_s3_prefix}"
-            )
-
-            exists = False
-            json_count = 0
-
-            try:
-                await ObjectStore.download_prefix(
-                    source=current_state_s3_prefix,
-                    destination=str(current_state_dir),
-                    store_name=UPSTREAM_OBJECT_STORE_NAME,
-                )
-
-                json_count = count_json_files_recursive(current_state_dir)
-                exists = json_count > 0
-
-                if exists:
-                    logger.info(
-                        f"Current-state downloaded with {json_count} JSON files"
-                    )
-                else:
-                    logger.info("Current-state downloaded but empty (no JSON files)")
-            except Exception as e:
-                # First run - current-state doesn't exist in S3 yet
-                logger.info(f"Current-state not found in S3 (first run): {e}")
-
-            if not exists:
-                logger.info("Current-state not available (first run or empty)")
-
+            # Update args with downloaded state metadata
             args.metadata.current_state_path = str(current_state_dir)
             args.metadata.current_state_available = exists
             args.metadata.current_state_s3_prefix = current_state_s3_prefix
@@ -430,6 +420,13 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
 
         S3 Path: persistent-artifacts/apps/{app}/connection/{connection_id}/current-state/
 
+        The method uses helper functions from state_writer module for modular operations:
+        - download_transformed_data: Downloads current run's transformed output
+        - prepare_previous_state: Downloads previous state for comparison
+        - copy_non_column_entities: Copies tables, schemas, databases
+        - upload_current_state: Uploads final snapshot to S3
+        - cleanup_previous_state: Cleans up temporary files
+
         Args:
             workflow_args: Workflow arguments containing paths and configuration
 
@@ -449,29 +446,11 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         )
 
         try:
-            output_path_str = str(workflow_args.get("output_path", "")).strip()
-            if not output_path_str:
-                raise FileNotFoundError("No output_path provided in workflow_args")
-
             # Step 1: Download current transformed files from S3
-            transformed_local_path = os.path.join(output_path_str, "transformed")
-            transformed_s3_prefix = get_object_store_prefix(transformed_local_path)
+            output_path_str = str(workflow_args.get("output_path", "")).strip()
+            transformed_dir = await download_transformed_data(output_path_str)
 
-            logger.info(
-                f"Downloading transformed files from S3: {transformed_s3_prefix}"
-            )
-
-            # Ensure local directory exists before download
-            transformed_dir = Path(transformed_local_path)
-            transformed_dir.mkdir(parents=True, exist_ok=True)
-
-            await ObjectStore.download_prefix(
-                source=transformed_s3_prefix,
-                destination=str(transformed_dir),
-                store_name=UPSTREAM_OBJECT_STORE_NAME,
-            )
-
-            # Step 2: Prepare current-state directory
+            # Step 2: Prepare current-state directory path
             s3_prefix = get_persistent_s3_prefix(workflow_args)
             current_state_s3_prefix = f"{s3_prefix}/current-state"
             current_state_dir = get_persistent_artifacts_path(
@@ -479,39 +458,11 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             )
 
             # Step 3: Download previous state to a temporary location
-            previous_state_dir = None
-            if (
-                args.metadata.current_state_available
-                and args.metadata.current_state_path
-            ):
-                previous_state_temp_dir = current_state_dir.parent.joinpath(
-                    f"{current_state_dir.name}.previous"
-                )
-
-                # Clean up any existing temp directory from previous failed runs
-                if previous_state_temp_dir.exists():
-                    shutil.rmtree(previous_state_temp_dir)
-                previous_state_temp_dir.mkdir(parents=True, exist_ok=True)
-
-                # Download previous state from S3 to temporary location
-                logger.info(
-                    f"Downloading previous state from S3: {current_state_s3_prefix}"
-                )
-                try:
-                    await download_s3_prefix_with_structure(
-                        s3_prefix=current_state_s3_prefix,
-                        local_destination=previous_state_temp_dir,
-                    )
-                    previous_state_dir = previous_state_temp_dir
-                    logger.info(
-                        f"Previous state downloaded to temporary location: "
-                        f"{previous_state_temp_dir}"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to download previous state: {e}")
-                    if previous_state_temp_dir.exists():
-                        shutil.rmtree(previous_state_temp_dir)
-                    raise
+            previous_state_dir = await prepare_previous_state(
+                workflow_args=workflow_args,
+                current_state_available=args.metadata.current_state_available,
+                current_state_dir=current_state_dir,
+            )
 
             # Step 4: Create DuckDB connection for all operations
             table_scope = None
@@ -534,25 +485,14 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
                     )
 
                     # Step 6: Clear and recreate current-state directory
-                    if current_state_dir.exists():
-                        shutil.rmtree(current_state_dir)
-                    current_state_dir.mkdir(parents=True, exist_ok=True)
+                    prepare_current_state_directory(current_state_dir)
 
                     # Step 7: Copy non-column entities from current transformed
-                    for entity_type in [
-                        EntityType.TABLE,
-                        EntityType.SCHEMA,
-                        EntityType.DATABASE,
-                    ]:
-                        entity_dir = transformed_dir.joinpath(entity_type.value)
-                        if entity_dir.exists():
-                            dest_dir = current_state_dir.joinpath(entity_type.value)
-                            count = copy_directory_parallel(
-                                entity_dir, dest_dir, max_workers=args.metadata.copy_workers
-                            )
-                            logger.info(
-                                f"Copied {count} {entity_type.value} files to current state"
-                            )
+                    copy_non_column_entities(
+                        transformed_dir=transformed_dir,
+                        current_state_dir=current_state_dir,
+                        copy_workers=args.metadata.copy_workers,
+                    )
 
                     # Step 8: Merge columns (current + ancestral for NO CHANGE tables)
                     merge_result, tables_with_columns = merge_ancestral_columns(
@@ -631,25 +571,13 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
                         close_scope(table_scope)
 
             # Step 10: Clean up temporary previous state directory
-            if previous_state_dir and previous_state_dir.exists():
-                try:
-                    shutil.rmtree(previous_state_dir)
-                    logger.info(
-                        f"Cleaned up temporary previous state directory: "
-                        f"{previous_state_dir}"
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to clean up temporary previous state directory: {e}"
-                    )
+            cleanup_previous_state(previous_state_dir)
 
             # Step 11: Upload current-state to S3 (persistent)
-            await ObjectStore.upload_prefix(
-                source=str(current_state_dir),
-                destination=current_state_s3_prefix,
-                store_name=UPSTREAM_OBJECT_STORE_NAME,
+            current_state_s3_prefix = await upload_current_state(
+                current_state_dir=current_state_dir,
+                workflow_args=workflow_args,
             )
-            logger.info(f"Current-state uploaded to S3: {current_state_s3_prefix}")
 
             args.metadata.current_state_path = str(current_state_dir)
             args.metadata.current_state_files = total_files
@@ -733,11 +661,22 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
     ) -> ActivityStatistics:
         """Transform extracted data to Atlas format.
 
-        Reads from {output_path}/raw/{typename} directory when typename is provided,
-        or {output_path}/raw when file_names filtering is used.
+        This override of the base transform_data is necessary because incremental
+        extraction uses a different directory structure for raw data:
+
+        - When file_names is provided (incremental column batches):
+          Read from {output_path}/raw/ with specific file names
+          e.g., raw/column-batch-0.parquet, raw/column-batch-1.parquet
+
+        - When file_names is None (regular entity transform):
+          Read from {output_path}/raw/{typename}/ directory
+          e.g., raw/table/, raw/schema/, raw/database/
 
         Args:
             workflow_args: Dictionary containing workflow configuration.
+                - file_names: Optional list of specific parquet files to process.
+                              None for full entity type transforms.
+                - typename: Entity type being transformed (table, column, etc.)
 
         Returns:
             Statistics about the transformed data.
@@ -750,6 +689,9 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             self._validate_output_args(workflow_args)
         )
 
+        # Determine input path based on whether specific files are requested:
+        # - file_names provided: Read from raw/ root (for incremental column batches)
+        # - file_names is None: Read from raw/{typename}/ subdirectory (standard flow)
         file_names = workflow_args.get("file_names")
         if file_names:
             raw_input_path = os.path.join(output_path, "raw")
