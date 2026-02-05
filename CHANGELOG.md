@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.3.3 (Unreleased)
+
+### Breaking Changes
+
+- **`[pandas]` extra removed**: `pandas` and `pyarrow` are now core dependencies. Users who specified `atlan-application-sdk[pandas]` should remove the `[pandas]` extra from their dependency specification. This change was made because:
+  - The observability module imports `pandas` at module level, making it effectively required
+  - The observability Dapr sink (enabled by default) writes logs to parquet files, requiring `pyarrow`
+  - This aligns the declared dependencies with actual SDK behavior
+
+### Migration Guide
+
+Before:
+```toml
+dependencies = ["atlan-application-sdk[pandas,tests,workflows]"]
+```
+
+After:
+```toml
+dependencies = ["atlan-application-sdk[tests,workflows]"]
+```
+
 ## v2.3.2 (February 04, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.1...v2.3.2
