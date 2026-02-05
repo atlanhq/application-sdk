@@ -22,6 +22,12 @@ logger = get_logger(__name__)
 activity.logger = logger
 
 
+class PathTraversalError(ValueError):
+    """Raised when a path traversal attempt is detected."""
+
+    pass
+
+
 class StateType(Enum):
     WORKFLOWS = "workflows"
     CREDENTIALS = "credentials"
@@ -55,6 +61,10 @@ def build_state_store_path(id: str, state_type: StateType) -> str:
     Returns:
         str: The constructed state file path.
 
+    Raises:
+        PathTraversalError: If the id contains path traversal sequences that would
+            escape the base directory.
+
     Examples:
         >>> from application_sdk.services.statestore import build_state_store_path, StateType
 
@@ -67,13 +77,31 @@ def build_state_store_path(id: str, state_type: StateType) -> str:
         >>> cred_path = build_state_store_path("db-cred-456", StateType.CREDENTIALS)
         >>> print(cred_path)
         './local/tmp/persistent-artifacts/apps/appName/credentials/db-cred-456/config.json'
+
+        >>> # Path traversal attempt raises error
+        >>> build_state_store_path("../../../etc/passwd", StateType.WORKFLOWS)
+        Traceback (most recent call last):
+            ...
+        PathTraversalError: Invalid state id: path traversal detected
     """
-    return os.path.join(
+    constructed_path = os.path.join(
         TEMPORARY_PATH,
         STATE_STORE_PATH_TEMPLATE.format(
             application_name=APPLICATION_NAME, state_type=state_type.value, id=id
         ),
     )
+
+    base_path = os.path.abspath(TEMPORARY_PATH)
+    resolved_path = os.path.abspath(constructed_path)
+
+    if not resolved_path.startswith(base_path + os.sep) and resolved_path != base_path:
+        logger.warning(
+            f"Path traversal attempt detected in state id: {id!r}",
+            extra={"security_event": "path_traversal_blocked"},
+        )
+        raise PathTraversalError("Invalid state id: path traversal detected")
+
+    return constructed_path
 
 
 class StateStore:
