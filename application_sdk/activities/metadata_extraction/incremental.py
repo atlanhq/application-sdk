@@ -26,73 +26,45 @@ Usage:
 from __future__ import annotations
 
 import os
-import shutil
 from abc import abstractmethod
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, cast
 
 from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.activities.common.utils import (
-    auto_heartbeater,
-    get_object_store_prefix,
-)
+from application_sdk.activities.common.utils import auto_heartbeater
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
     BaseSQLMetadataExtractionActivitiesState,
-)
-from application_sdk.constants import (
-    UPSTREAM_OBJECT_STORE_NAME,
-    MARKER_TIMESTAMP_FORMAT,
-    INCREMENTAL_DIFF_SUBPATH_TEMPLATE,
 )
 from application_sdk.io.json import JsonFileWriter
 from application_sdk.io.parquet import ParquetFileReader
 from application_sdk.io import DataframeType
 from application_sdk.io.utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
 from application_sdk.services.statestore import StateStore, StateType
 
-# Incremental utilities
-from application_sdk.common.incremental.models import (
-    EntityType,
-    IncrementalWorkflowArgs,
-)
+# Incremental models and utilities
+from application_sdk.common.incremental.models import IncrementalWorkflowArgs
 from application_sdk.common.incremental.helpers import (
     get_persistent_s3_prefix,
     get_persistent_artifacts_path,
-    get_object_store_prefix,
-    normalize_marker_timestamp,
-    prepone_marker_timestamp,
-    download_marker_from_s3,
     is_incremental_run,
-    download_s3_prefix_with_structure,
-    count_json_files_recursive,
-    copy_directory_parallel,
 )
-from application_sdk.common.incremental.storage.duckdb_utils import (
-    DuckDBConnectionManager,
-)
-from application_sdk.common.incremental.table_scope import (
-    get_current_table_scope,
-    get_scope_length,
-    close_scope,
-)
-from application_sdk.common.incremental.ancestral_merge import merge_ancestral_columns
-from application_sdk.common.incremental.incremental_diff import create_incremental_diff
 
 # State management helpers (modular helpers for read/write current state)
 from application_sdk.common.incremental.state.state_reader import download_current_state
 from application_sdk.common.incremental.state.state_writer import (
     download_transformed_data,
     prepare_previous_state,
-    copy_non_column_entities,
-    upload_current_state,
     cleanup_previous_state,
-    prepare_current_state_directory,
+    create_current_state_snapshot,
+)
+from application_sdk.common.incremental.state.marker import (
+    fetch_marker_from_storage,
+    persist_marker_to_storage,
+    create_next_marker,
 )
 
 logger = get_logger(__name__)
@@ -243,6 +215,9 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
 
         S3 Path: persistent-artifacts/apps/{application_name}/connection/{connection_id}/marker.txt
 
+        The marker is used to filter extracted data to only include changes since
+        the last successful extraction. Uses helper functions from state.marker module.
+
         Args:
             workflow_args: Dictionary containing workflow configuration.
 
@@ -258,44 +233,15 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             logger.info("Incremental extraction disabled - skipping marker fetch")
             return args.model_dump(by_alias=True, exclude_none=True)
 
-        # Always set next_marker for update_incremental_marker to use
-        next_marker = datetime.now(timezone.utc).strftime(MARKER_TIMESTAMP_FORMAT)
+        # Fetch marker and create next marker using helper
+        marker, next_marker = await fetch_marker_from_storage(
+            workflow_args=workflow_args,
+            prepone_enabled=args.metadata.prepone_marker_timestamp,
+            prepone_hours=args.metadata.prepone_marker_hours,
+        )
+
+        args.metadata.marker_timestamp = marker
         args.metadata.next_marker_timestamp = next_marker
-
-        # Try workflow args first, then S3
-        marker = args.metadata.marker_timestamp
-        if marker:
-            logger.info(f"Using marker from workflow args: {marker}")
-        else:
-            marker = await download_marker_from_s3(workflow_args)
-
-        if not marker:
-            logger.info(f"No marker found - full extraction (next_marker={next_marker})")
-            return args.model_dump(by_alias=True, exclude_none=True)
-
-        # Normalize marker timestamp
-        normalized_marker = normalize_marker_timestamp(marker)
-
-        # Apply preponing if enabled (moves marker back to catch edge cases)
-        if (
-            args.metadata.prepone_marker_timestamp
-            and args.metadata.prepone_marker_hours > 0
-        ):
-            adjusted_marker = prepone_marker_timestamp(
-                normalized_marker, args.metadata.prepone_marker_hours
-            )
-            args.metadata.marker_timestamp = adjusted_marker
-            logger.info(
-                f"Incremental extraction: original_marker={normalized_marker}, "
-                f"adjusted_marker={adjusted_marker} "
-                f"(preponed by {args.metadata.prepone_marker_hours}h), "
-                f"next={next_marker}"
-            )
-        else:
-            args.metadata.marker_timestamp = normalized_marker
-            logger.info(
-                f"Incremental extraction: marker={normalized_marker}, next={next_marker}"
-            )
 
         return args.model_dump(by_alias=True, exclude_none=True)
 
@@ -308,6 +254,9 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
 
         S3 Path: persistent-artifacts/apps/{application_name}/connection/{connection_id}/marker.txt
 
+        This marker will be used by the next incremental run to filter data.
+        Uses helper function from state.marker module.
+
         Args:
             workflow_args: Dictionary containing workflow configuration.
 
@@ -316,9 +265,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         """
         args = IncrementalWorkflowArgs.model_validate(workflow_args)
 
-        should_write_marker = args.metadata.incremental_extraction
-
-        if not should_write_marker:
+        if not args.metadata.incremental_extraction:
             logger.info("Incremental extraction disabled - skipping marker update")
             return {"marker_written": False, "reason": "incremental_disabled"}
 
@@ -329,37 +276,11 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
                 "This should have been set by fetch_incremental_marker activity."
             )
 
-        s3_prefix = get_persistent_s3_prefix(workflow_args)
-        marker_s3_key = f"{s3_prefix}/marker.txt"
-        local_marker_path = get_persistent_artifacts_path(workflow_args, "marker.txt")
-
-        # Ensure local directory exists
-        local_marker_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write marker to local file
-        logger.info(f"Writing marker to local file: {local_marker_path}")
-        local_marker_path.write_text(next_marker_value, encoding="utf-8")
-
-        # Upload marker to S3
-        logger.info(f"Uploading marker to S3: {marker_s3_key}")
-        try:
-            await ObjectStore.upload_file(
-                source=str(local_marker_path),
-                destination=marker_s3_key,
-                store_name=UPSTREAM_OBJECT_STORE_NAME,
-                retain_local_copy=True,
-            )
-            logger.info(f"Marker uploaded to S3: {marker_s3_key} → {next_marker_value}")
-        except Exception as e:
-            logger.error(f"Failed to upload marker to S3: {e}")
-            raise
-
-        return {
-            "marker_written": True,
-            "marker_timestamp": next_marker_value,
-            "local_path": str(local_marker_path),
-            "s3_key": marker_s3_key,
-        }
+        # Persist marker using helper function
+        return await persist_marker_to_storage(
+            workflow_args=workflow_args,
+            marker_value=next_marker_value,
+        )
 
     @activity.defn
     @auto_heartbeater
@@ -420,12 +341,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
 
         S3 Path: persistent-artifacts/apps/{app}/connection/{connection_id}/current-state/
 
-        The method uses helper functions from state_writer module for modular operations:
-        - download_transformed_data: Downloads current run's transformed output
-        - prepare_previous_state: Downloads previous state for comparison
-        - copy_non_column_entities: Copies tables, schemas, databases
-        - upload_current_state: Uploads final snapshot to S3
-        - cleanup_previous_state: Cleans up temporary files
+        Uses create_current_state_snapshot() helper for the complex orchestration logic.
 
         Args:
             workflow_args: Workflow arguments containing paths and configuration
@@ -435,9 +351,6 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         """
         workflow_id = workflow_args.get("workflow_id", "unknown")
         run_id = workflow_args.get("workflow_run_id", "unknown")
-        connection_qn = workflow_args.get("connection", {}).get(
-            "connection_qualified_name", "unknown"
-        )
         args = IncrementalWorkflowArgs.model_validate(workflow_args)
 
         logger.info(
@@ -450,9 +363,8 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             output_path_str = str(workflow_args.get("output_path", "")).strip()
             transformed_dir = await download_transformed_data(output_path_str)
 
-            # Step 2: Prepare current-state directory path
+            # Step 2: Prepare paths
             s3_prefix = get_persistent_s3_prefix(workflow_args)
-            current_state_s3_prefix = f"{s3_prefix}/current-state"
             current_state_dir = get_persistent_artifacts_path(
                 workflow_args, "current-state"
             )
@@ -464,134 +376,33 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
                 current_state_dir=current_state_dir,
             )
 
-            # Step 4: Create DuckDB connection for all operations
-            table_scope = None
-
-            with DuckDBConnectionManager() as conn_manager:
-                conn = conn_manager.connection
-
-                try:
-                    # Step 5: Get table scope (qualified names and incremental states)
-                    table_scope = get_current_table_scope(transformed_dir, conn=conn)
-                    if not table_scope or get_scope_length(table_scope) == 0:
-                        raise FileNotFoundError(
-                            f"No tables found in transformed output: {transformed_dir}. "
-                            "Cannot create current state without table metadata."
-                        )
-
-                    logger.info(
-                        f"Current-state path: {current_state_dir} "
-                        f"(connection: {connection_qn})"
-                    )
-
-                    # Step 6: Clear and recreate current-state directory
-                    prepare_current_state_directory(current_state_dir)
-
-                    # Step 7: Copy non-column entities from current transformed
-                    copy_non_column_entities(
-                        transformed_dir=transformed_dir,
-                        current_state_dir=current_state_dir,
-                        copy_workers=args.metadata.copy_workers,
-                    )
-
-                    # Step 8: Merge columns (current + ancestral for NO CHANGE tables)
-                    merge_result, tables_with_columns = merge_ancestral_columns(
-                        current_transformed_dir=transformed_dir,
-                        previous_state_dir=previous_state_dir,
-                        new_state_dir=current_state_dir,
-                        table_scope=table_scope,
-                        column_chunk_size=args.metadata.column_chunk_size,
-                        conn=conn,
-                    )
-
-                    # Update table_scope with extracted columns info (for logging only)
-                    table_scope.tables_with_extracted_columns = tables_with_columns
-
-                    total_files = count_json_files_recursive(current_state_dir)
-
-                    logger.info(
-                        f"Current-state merge complete: "
-                        f"tables={get_scope_length(table_scope)}, "
-                        f"columns={merge_result.columns_total} "
-                        f"(current={merge_result.columns_from_current}, "
-                        f"ancestral={merge_result.columns_from_ancestral}), "
-                        f"excluded="
-                        f"{merge_result.excluded_already_extracted + merge_result.excluded_table_removed}, "
-                        f"total_files={total_files}"
-                    )
-
-                    # Step 9: Create incremental-diff (only changed assets from this run)
-                    diff_result = None
-                    incremental_diff_dir = None
-                    incremental_diff_s3_prefix = None
-
-                    if previous_state_dir and previous_state_dir.exists():
-                        incremental_diff_subpath = (
-                            INCREMENTAL_DIFF_SUBPATH_TEMPLATE.format(run_id=run_id)
-                        )
-                        incremental_diff_dir = get_persistent_artifacts_path(
-                            workflow_args, incremental_diff_subpath
-                        )
-                        incremental_diff_s3_prefix = (
-                            f"{s3_prefix}/{incremental_diff_subpath}"
-                        )
-
-                        # Clear and recreate incremental-diff directory
-                        if incremental_diff_dir.exists():
-                            shutil.rmtree(incremental_diff_dir)
-
-                        diff_result = create_incremental_diff(
-                            transformed_dir=transformed_dir,
-                            incremental_diff_dir=incremental_diff_dir,
-                            table_scope=table_scope,
-                            previous_state_dir=previous_state_dir,
-                            conn=conn,
-                            copy_workers=args.metadata.copy_workers,
-                            get_backfill_tables_fn=self.get_backfill_tables,
-                        )
-
-                        # Upload incremental-diff to S3 (persistent per-run)
-                        await ObjectStore.upload_prefix(
-                            source=str(incremental_diff_dir),
-                            destination=incremental_diff_s3_prefix,
-                            store_name=UPSTREAM_OBJECT_STORE_NAME,
-                        )
-                        logger.info(
-                            f"Incremental-diff uploaded to S3: {incremental_diff_s3_prefix}"
-                        )
-                    else:
-                        logger.info(
-                            "Skipping incremental-diff creation "
-                            "(first run - no previous state to diff against)"
-                        )
-
-                finally:
-                    # Close the TableScope's disk-backed stores
-                    if table_scope:
-                        close_scope(table_scope)
-
-            # Step 10: Clean up temporary previous state directory
-            cleanup_previous_state(previous_state_dir)
-
-            # Step 11: Upload current-state to S3 (persistent)
-            current_state_s3_prefix = await upload_current_state(
-                current_state_dir=current_state_dir,
+            # Step 4: Create snapshot using orchestration helper
+            # This handles: table scope, directory prep, entity copy, column merge,
+            # incremental diff creation, and S3 upload
+            result = await create_current_state_snapshot(
                 workflow_args=workflow_args,
+                transformed_dir=transformed_dir,
+                previous_state_dir=previous_state_dir,
+                current_state_dir=current_state_dir,
+                s3_prefix=s3_prefix,
+                run_id=run_id,
+                copy_workers=args.metadata.copy_workers,
+                column_chunk_size=args.metadata.column_chunk_size,
+                get_backfill_tables_fn=self.get_backfill_tables,
             )
 
-            args.metadata.current_state_path = str(current_state_dir)
-            args.metadata.current_state_files = total_files
-            args.metadata.current_state_s3_prefix = current_state_s3_prefix
-            if diff_result:
-                args.metadata.incremental_diff_path = (
-                    str(incremental_diff_dir) if incremental_diff_dir else None
-                )
-                args.metadata.incremental_diff_s3_prefix = incremental_diff_s3_prefix
-                args.metadata.incremental_diff_files = diff_result.total_files
-            else:
-                args.metadata.incremental_diff_path = None
-                args.metadata.incremental_diff_s3_prefix = None
-                args.metadata.incremental_diff_files = 0
+            # Step 5: Clean up temporary previous state directory
+            cleanup_previous_state(previous_state_dir)
+
+            # Update metadata with results
+            args.metadata.current_state_path = str(result.current_state_dir)
+            args.metadata.current_state_files = result.total_files
+            args.metadata.current_state_s3_prefix = result.current_state_s3_prefix
+            args.metadata.incremental_diff_path = (
+                str(result.incremental_diff_dir) if result.incremental_diff_dir else None
+            )
+            args.metadata.incremental_diff_s3_prefix = result.incremental_diff_s3_prefix
+            args.metadata.incremental_diff_files = result.incremental_diff_files
 
             return args.model_dump(by_alias=True, exclude_none=True)
 

@@ -50,11 +50,12 @@ The incremental extraction framework enables efficient metadata extraction by:
 application_sdk/common/incremental/
 ├── README.md                  # This file
 ├── models.py                  # Pydantic models for workflow args and metadata
-├── helpers.py                 # S3 path management, marker handling, file utilities
+├── helpers.py                 # S3 path management, file utilities
 ├── table_scope.py             # Table scope detection and state management
 ├── ancestral_merge.py         # Column merging for unchanged tables
 ├── incremental_diff.py        # Diff generation for changed entities
-├── state/                     # State management helpers
+├── state/                     # State management (marker + current state)
+│   ├── marker.py              # Marker timestamp fetch/persist helpers
 │   ├── state_reader.py        # Download current state from S3
 │   └── state_writer.py        # Create and upload current state snapshot
 └── storage/                   # Storage backends
@@ -69,7 +70,7 @@ application_sdk/common/incremental/
 | File | Purpose | Used By |
 |------|---------|---------|
 | `models.py` | Pydantic models for `IncrementalWorkflowArgs`, `EntityType`, `TableScope`, merge results | Activities, workflows |
-| `helpers.py` | S3 path generation, marker timestamp handling, file operations | Activities |
+| `helpers.py` | S3 path generation, file operations | Activities |
 | `table_scope.py` | Detect table incremental states (CREATED/UPDATED/NO CHANGE) via DuckDB queries | `write_current_state` |
 | `ancestral_merge.py` | Merge current columns with ancestral data for NO CHANGE tables | `write_current_state` |
 | `incremental_diff.py` | Generate folder with only changed assets for efficient publishing | `write_current_state` |
@@ -78,8 +79,28 @@ application_sdk/common/incremental/
 
 | File | Purpose |
 |------|---------|
+| `marker.py` | Marker timestamp management: fetch from S3, validate, prepone, and persist |
 | `state_reader.py` | Download previous run's current-state snapshot from S3 |
 | `state_writer.py` | Create new current-state snapshot with ancestral merge and upload to S3 |
+
+#### Key Functions
+
+**marker.py:**
+- `fetch_marker_from_storage()` - Download and process existing marker
+- `persist_marker_to_storage()` - Upload marker after successful extraction
+- `create_next_marker()` - Generate timestamp for current run
+- `process_marker_timestamp()` - Normalize and optionally prepone marker
+
+**state_reader.py:**
+- `download_current_state()` - Download current-state folder from S3
+
+**state_writer.py:**
+- `create_current_state_snapshot()` - High-level orchestrator for state creation
+- `download_transformed_data()` - Download current run's transformed output
+- `prepare_previous_state()` - Download previous state for comparison
+- `copy_non_column_entities()` - Copy tables, schemas, databases
+- `upload_current_state()` - Upload final snapshot to S3
+- `cleanup_previous_state()` - Clean up temporary files
 
 ### Storage Backends (storage/)
 
@@ -94,7 +115,7 @@ application_sdk/common/incremental/
 
 The marker timestamp tracks when the last successful extraction occurred. It's stored in S3 at:
 ```
-persistent-artifacts/apps/{app}/connection/{connection_id}/marker.json
+persistent-artifacts/apps/{app}/connection/{connection_id}/marker.txt
 ```
 
 During extraction, queries use this timestamp to filter for changed tables:
