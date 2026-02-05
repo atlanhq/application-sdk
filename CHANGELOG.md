@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.3.3 (February 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.2...v2.3.3
+
+### Improvements
+
+- refactor(segment): enable Segment based on write key presence (#1027) (by @janakiram-g in [d22e457](https://github.com/atlanhq/application-sdk/commit/d22e457))
+
+### Bug Fixes
+
+- improve dependabot config and skip tests for workflow-only PRs (#1026) (by @fyzanshaik-atlan in [3cf3830](https://github.com/atlanhq/application-sdk/commit/3cf3830))
+
+
 ## v2.3.2 (February 04, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.1...v2.3.2
