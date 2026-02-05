@@ -1,25 +1,17 @@
 # Changelog
 
-## v2.3.3 (Unreleased)
+## v2.3.3 (February 04, 2026)
 
-### Breaking Changes
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.2...v2.3.3
 
-- **`[pandas]` extra removed**: `pandas` and `pyarrow` are now core dependencies. Users who specified `atlan-application-sdk[pandas]` should remove the `[pandas]` extra from their dependency specification. This change was made because:
-  - The observability module imports `pandas` at module level, making it effectively required
-  - The observability Dapr sink (enabled by default) writes logs to parquet files, requiring `pyarrow`
-  - This aligns the declared dependencies with actual SDK behavior
+### Improvements
 
-### Migration Guide
+- refactor(segment): enable Segment based on write key presence (#1027) (by @janakiram-g in [d22e457](https://github.com/atlanhq/application-sdk/commit/d22e457))
 
-Before:
-```toml
-dependencies = ["atlan-application-sdk[pandas,tests,workflows]"]
-```
+### Bug Fixes
 
-After:
-```toml
-dependencies = ["atlan-application-sdk[tests,workflows]"]
-```
+- improve dependabot config and skip tests for workflow-only PRs (#1026) (by @fyzanshaik-atlan in [3cf3830](https://github.com/atlanhq/application-sdk/commit/3cf3830))
+
 
 ## v2.3.2 (February 04, 2026)
 
