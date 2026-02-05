@@ -11,27 +11,10 @@ logger = get_logger(__name__)
 
 
 class MetadataExtractionWorkflow(WorkflowInterface):
-    """Base workflow for metadata extraction.
-
-    This class provides common functionality for all metadata extraction workflows,
-    including the ability to upload extracted data to Atlan storage.
-    """
+    """Base workflow for metadata extraction."""
 
     async def run_exit_activities(self, workflow_args: Dict[str, Any]) -> None:
-        """Run exit activities for the workflow.
-
-        This method handles post-extraction tasks such as uploading data to Atlan
-        storage when ENABLE_ATLAN_UPLOAD is enabled.
-
-        Connectors should call this method at the end of their run() method:
-
-            async def run(self, workflow_config: Dict[str, Any]) -> None:
-                # ... your extraction logic ...
-                await self.run_exit_activities(workflow_args)
-
-        Args:
-            workflow_args: Workflow configuration containing paths and metadata.
-        """
+        """Run the exit activity for the workflow."""
         retry_policy = RetryPolicy(
             maximum_attempts=6,
             backoff_coefficient=2,

@@ -118,19 +118,21 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
         """Upload transformed data to Atlan storage.
 
         This activity uploads the transformed data from object store to Atlan storage
-        (S3 via Dapr). It should be called at the end of a workflow when
-        ENABLE_ATLAN_UPLOAD is set to true.
+        (S3 via Dapr). It only runs if ENABLE_ATLAN_UPLOAD is set to true and the
+        Atlan storage component is available.
 
         Args:
-            workflow_args: Workflow configuration containing paths and metadata.
-                Must include 'output_path' key.
+            workflow_args (Dict[str, Any]): Workflow configuration containing paths and metadata.
 
         Returns:
-            ActivityStatistics: Upload statistics including migrated file count.
+            ActivityStatistics: Upload statistics or skip statistics if upload is disabled.
 
         Raises:
-            ActivityError: If the upload fails with any migration errors.
+            ValueError: If workflow_id or workflow_run_id are missing.
+            ActivityError: If the upload fails with any migration errors when ENABLE_ATLAN_UPLOAD is true.
         """
+        # Upload data from object store to Atlan storage
+        # Use workflow_id/workflow_run_id as the prefix to migrate specific data
         migration_prefix = get_object_store_prefix(workflow_args["output_path"])
         logger.info(
             f"Starting migration from object store with prefix: {migration_prefix}"
@@ -139,6 +141,7 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
             prefix=migration_prefix
         )
 
+        # Log upload statistics
         logger.info(
             f"Atlan upload completed: {upload_stats.migrated_files} files uploaded, "
             f"{upload_stats.failed_migrations} failed"
@@ -149,6 +152,7 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
             for failure in upload_stats.failures:
                 logger.error(f"Upload error: {failure}")
 
+            # Mark activity as failed when there are upload failures
             raise ActivityError(
                 f"{ActivityError.ATLAN_UPLOAD_ERROR}: Atlan upload failed with {len(upload_stats.failures)} errors. "
                 f"Failed migrations: {upload_stats.failed_migrations}, "
