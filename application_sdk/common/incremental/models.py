@@ -25,9 +25,9 @@ from pydantic import BaseModel, Field
 from application_sdk.common.incremental.storage.rocksdb_utils import create_states_db
 
 try:
-    from rocksdict import Rdict
+    from rocksdict import Rdict  # noqa: F401 - used for type hints in table_scope
 except ImportError:
-    Rdict = Any  # type: ignore[misc, assignment]
+    pass
 
 
 class EntityType(str, Enum):
