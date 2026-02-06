@@ -62,9 +62,15 @@ def generate_aws_rds_token_with_iam_role(
         sts_client = client(
             "sts", region_name=region or get_region_name_from_hostname(host)
         )
-        assumed_role = sts_client.assume_role(
-            RoleArn=role_arn, RoleSessionName=session_name, ExternalId=external_id or ""
-        )
+        if external_id and len(external_id.strip()) >= 2:
+            assumed_role = sts_client.assume_role(
+                RoleArn=role_arn, RoleSessionName=session_name, ExternalId=external_id
+            )
+        else:
+            assumed_role = sts_client.assume_role(
+                RoleArn=role_arn, RoleSessionName=session_name
+            )
+        
 
         credentials = assumed_role["Credentials"]
         aws_client = create_aws_client(

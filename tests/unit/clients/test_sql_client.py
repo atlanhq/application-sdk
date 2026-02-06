@@ -518,14 +518,22 @@ def test_get_sqlalchemy_connection_string_basic_auth(sql_client_with_db_config):
 
 
 def test_get_sqlalchemy_connection_string_iam_user(sql_client_with_db_config):
-    """Test connection string generation with IAM user authentication"""
+    """Test connection string generation with IAM user authentication.
+
+    For IAM User auth:
+    - credentials.username = AWS Access Key ID (used for IAM token generation)
+    - extra.username = Database username (used in connection string)
+
+    The fix ensures extra.username takes priority over credentials.username
+    when building the SQLAlchemy connection string.
+    """
     credentials = {
-        "username": "aws_access_key",
+        "username": "aws_access_key",  # AWS Access Key - NOT used in connection string
         "password": "aws_secret_key",
         "host": "rds-instance.region.rds.amazonaws.com",
         "port": 5432,
         "authType": "iam_user",
-        "extra": {"username": "db_user", "database": "test_db"},
+        "extra": {"username": "db_user", "database": "test_db"},  # db_user IS used
     }
     sql_client_with_db_config.credentials = credentials
 
@@ -533,7 +541,8 @@ def test_get_sqlalchemy_connection_string_iam_user(sql_client_with_db_config):
         sql_client_with_db_config, "get_iam_user_token", return_value="iam_token"
     ):
         conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
-        expected = "postgresql+psycopg://aws_access_key:iam_token@rds-instance.region.rds.amazonaws.com:5432/test_db?connect_timeout=5&ssl_mode=None"
+        # FIXED: Now correctly uses db_user (from extra.username) instead of aws_access_key
+        expected = "postgresql+psycopg://db_user:iam_token@rds-instance.region.rds.amazonaws.com:5432/test_db?connect_timeout=5&ssl_mode=None"
         assert conn_str == expected
 
 
