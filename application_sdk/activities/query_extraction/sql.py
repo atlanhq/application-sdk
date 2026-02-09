@@ -283,7 +283,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 new_marker = str(int(timestamp.timestamp() * 1000))
 
                 if last_marker == new_marker:
-                    logger.info("Skipping duplicate start time")
                     record_count += 1
                     continue
 
