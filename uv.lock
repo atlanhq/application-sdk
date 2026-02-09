@@ -224,6 +224,10 @@ iam-auth = [
 mcp = [
     { name = "fastmcp" },
 ]
+pandas = [
+    { name = "pandas" },
+    { name = "pyarrow" },
+]
 scale-data-generator = [
     { name = "faker" },
     { name = "numpy" },
@@ -287,9 +291,11 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp", specifier = "==1.39.1" },
     { name = "orjson", marker = "extra == 'workflows'", specifier = ">=3.10.18,<3.12.0" },
     { name = "pandas", specifier = ">=2.2.3,<2.4.0" },
+    { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3,<2.4.0" },
     { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = ">=0.23.1,<0.28.0" },
     { name = "psutil", specifier = ">=7.0.0,<7.3.0" },
     { name = "pyarrow", specifier = ">=20.0.0,<23.0.0" },
+    { name = "pyarrow", marker = "extra == 'pandas'", specifier = ">=20.0.0,<23.0.0" },
     { name = "pyatlan", specifier = ">=8.0.2,<8.5.0" },
     { name = "pydantic", specifier = ">=2.10.6,<2.13.0" },
     { name = "pytest-order", marker = "extra == 'tests'", specifier = ">=1.3.0,<1.4.0" },
@@ -300,7 +306,7 @@ requires-dist = [
     { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.7.1,<1.22.0" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0,<0.23.0" },
 ]
-provides-extras = ["workflows", "daft", "sqlalchemy", "iam-auth", "azure", "tests", "scale-data-generator", "distributed-lock", "mcp"]
+provides-extras = ["workflows", "pandas", "daft", "sqlalchemy", "iam-auth", "azure", "tests", "scale-data-generator", "distributed-lock", "mcp"]
 
 [package.metadata.requires-dev]
 dev = [
