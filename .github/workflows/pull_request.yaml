@@ -220,7 +220,6 @@ jobs:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
-          use-local-db: ${{ contains(github.event.pull_request.labels.*.name, 'e2e-test-local') && 'true' || 'false' }}
 
   # Documentation
   docs:

@@ -23,10 +23,6 @@ inputs:
   target-branch:
     required: true
     description: The target branch to test.
-  use-local-db:
-    required: false
-    description: Use local containerized database instead of hosted DB for e2e tests.
-    default: "false"
 
 runs:
   using: "composite"
@@ -62,7 +58,6 @@ runs:
         workflow_timeout_seconds: 300
         workflow_job_steps_retry_seconds: 60
         distinct_id: "${{ env.distinct_id }}"
-        workflow_inputs: '{"use-local-db": "${{ inputs.use-local-db }}"}'
 
     - name: Check the test logs using the below run URL
       shell: bash
