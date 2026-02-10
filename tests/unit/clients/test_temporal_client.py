@@ -6,6 +6,7 @@ import pytest
 from application_sdk.clients.temporal import TemporalWorkflowClient
 from application_sdk.interceptors.cleanup import cleanup
 from application_sdk.interceptors.events import publish_event
+from application_sdk.interceptors.pause import PAUSE_SIGNAL, RESUME_SIGNAL
 from application_sdk.workflows import WorkflowInterface
 
 
@@ -329,7 +330,7 @@ async def test_pause_workflow(
     mock_client.get_workflow_handle.assert_called_once_with(
         "test_workflow_id", run_id="test_run_id"
     )
-    mock_handle.signal.assert_called_once_with("pause")
+    mock_handle.signal.assert_called_once_with(PAUSE_SIGNAL)
 
 
 @patch(
@@ -368,7 +369,7 @@ async def test_resume_workflow(
     mock_client.get_workflow_handle.assert_called_once_with(
         "test_workflow_id", run_id="test_run_id"
     )
-    mock_handle.signal.assert_called_once_with("resume")
+    mock_handle.signal.assert_called_once_with(RESUME_SIGNAL)
 
 
 @patch(

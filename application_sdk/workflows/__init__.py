@@ -43,26 +43,21 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
 
     @workflow.signal
     async def pause(self) -> None:
-        """Signal handler to pause the workflow at the next checkpoint."""
+        """Signal handler to pause the workflow.
+
+        Actual pause logic is handled by PauseInterceptor. This method
+        is required for Temporal to register the signal.
+        """
         self._paused = True
-        logger.info("Workflow received pause signal")
 
     @workflow.signal
     async def resume(self) -> None:
-        """Signal handler to resume a paused workflow."""
-        self._paused = False
-        logger.info("Workflow received resume signal")
+        """Signal handler to resume the workflow.
 
-    async def wait_if_paused(self) -> None:
-        """Block workflow execution while paused.
-
-        Call this between activities to create pause checkpoints.
-        Resumes automatically when a resume signal is received.
+        Actual resume logic is handled by PauseInterceptor. This method
+        is required for Temporal to register the signal.
         """
-        if self._paused:
-            logger.info("Workflow is paused, waiting for resume signal")
-            await workflow.wait_condition(lambda: not self._paused)
-            logger.info("Workflow resumed")
+        self._paused = False
 
     @staticmethod
     def get_activities(
@@ -110,7 +105,6 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
         logger.info("Starting workflow execution")
 
         try:
-            await self.wait_if_paused()
             retry_policy = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
 
             await workflow.execute_activity_method(

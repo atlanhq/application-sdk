@@ -40,6 +40,11 @@ from application_sdk.interceptors.models import (
     EventTypes,
     WorkerTokenRefreshEventData,
 )
+from application_sdk.interceptors.pause import (
+    PAUSE_SIGNAL,
+    RESUME_SIGNAL,
+    PauseInterceptor,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.eventstore import EventStore
 from application_sdk.services.secretstore import SecretStore
@@ -367,7 +372,7 @@ class TemporalWorkflowClient(WorkflowClient):
             workflow_handle = self.client.get_workflow_handle(
                 workflow_id, run_id=run_id
             )
-            await workflow_handle.signal("pause")
+            await workflow_handle.signal(PAUSE_SIGNAL)
         except Exception as e:
             logger.error(f"Error pausing workflow {workflow_id} {run_id}: {e}")
             raise Exception(f"Error pausing workflow {workflow_id} {run_id}: {e}")
@@ -389,7 +394,7 @@ class TemporalWorkflowClient(WorkflowClient):
             workflow_handle = self.client.get_workflow_handle(
                 workflow_id, run_id=run_id
             )
-            await workflow_handle.signal("resume")
+            await workflow_handle.signal(RESUME_SIGNAL)
         except Exception as e:
             logger.error(f"Error resuming workflow {workflow_id} {run_id}: {e}")
             raise Exception(f"Error resuming workflow {workflow_id} {run_id}: {e}")
@@ -486,6 +491,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 EventInterceptor(),
                 CleanupInterceptor(),
                 RedisLockInterceptor(activities_dict),
+                PauseInterceptor(),
             ],
         )
 
