@@ -51,10 +51,12 @@ class DataSourceFixture(ABC):
     def get_env_vars(self) -> Dict[str, str]:
         """Return env vars to inject so config.yaml $VAR expansion works.
 
-        Example return: {
-            "E2E_POSTGRES_HOST": "localhost",
-            "E2E_POSTGRES_PORT": "5432",
-        }
+        Example return::
+
+            {
+                "E2E_POSTGRES_HOST": "localhost",
+                "E2E_POSTGRES_PORT": "5432",
+            }
         """
         ...
 
