@@ -410,6 +410,18 @@ class APIServer(ServerInterface):
         )
 
         self.workflow_router.add_api_route(
+            "/pause/{workflow_id}/{run_id:path}",
+            self.pause_workflow,
+            methods=["POST"],
+        )
+
+        self.workflow_router.add_api_route(
+            "/resume/{workflow_id}/{run_id:path}",
+            self.resume_workflow,
+            methods=["POST"],
+        )
+
+        self.workflow_router.add_api_route(
             "/configmap/{config_map_id}",
             self.get_configmap,
             methods=["GET"],
@@ -814,6 +826,88 @@ class APIServer(ServerInterface):
                 metric_type=MetricType.COUNTER,
                 labels={"status": "error"},
                 description="Total number of workflow stop requests",
+            )
+            raise e
+
+    async def pause_workflow(self, workflow_id: str, run_id: str) -> JSONResponse:
+        """Pause a running workflow."""
+        start_time = time.time()
+        metrics = get_metrics()
+
+        try:
+            if not self.workflow_client:
+                raise Exception("Temporal client not initialized")
+
+            await self.workflow_client.pause_workflow(workflow_id, run_id)
+
+            metrics.record_metric(
+                name="workflow_pauses_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "success"},
+                description="Total number of workflow pause requests",
+            )
+
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="workflow_pause_duration_seconds",
+                value=duration,
+                metric_type=MetricType.HISTOGRAM,
+                labels={},
+                description="Workflow pause duration in seconds",
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK, content={"success": True}
+            )
+        except Exception as e:
+            metrics.record_metric(
+                name="workflow_pauses_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "error"},
+                description="Total number of workflow pause requests",
+            )
+            raise e
+
+    async def resume_workflow(self, workflow_id: str, run_id: str) -> JSONResponse:
+        """Resume a paused workflow."""
+        start_time = time.time()
+        metrics = get_metrics()
+
+        try:
+            if not self.workflow_client:
+                raise Exception("Temporal client not initialized")
+
+            await self.workflow_client.resume_workflow(workflow_id, run_id)
+
+            metrics.record_metric(
+                name="workflow_resumes_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "success"},
+                description="Total number of workflow resume requests",
+            )
+
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="workflow_resume_duration_seconds",
+                value=duration,
+                metric_type=MetricType.HISTOGRAM,
+                labels={},
+                description="Workflow resume duration in seconds",
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK, content={"success": True}
+            )
+        except Exception as e:
+            metrics.record_metric(
+                name="workflow_resumes_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "error"},
+                description="Total number of workflow resume requests",
             )
             raise e
 

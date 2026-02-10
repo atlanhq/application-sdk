@@ -310,6 +310,84 @@ def test_get_namespace(temporal_client: TemporalWorkflowClient):
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
+async def test_pause_workflow(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test pausing a workflow sends the pause signal."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    mock_handle = MagicMock()
+    mock_handle.signal = AsyncMock()
+    mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+    await temporal_client.pause_workflow("test_workflow_id", "test_run_id")
+
+    mock_client.get_workflow_handle.assert_called_once_with(
+        "test_workflow_id", run_id="test_run_id"
+    )
+    mock_handle.signal.assert_called_once_with("pause")
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_pause_workflow_client_not_loaded(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test pause_workflow raises ValueError when client is not loaded."""
+    with pytest.raises(ValueError, match="Client is not loaded"):
+        await temporal_client.pause_workflow("test_workflow_id", "test_run_id")
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_resume_workflow(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test resuming a workflow sends the resume signal."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    mock_handle = MagicMock()
+    mock_handle.signal = AsyncMock()
+    mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+    await temporal_client.resume_workflow("test_workflow_id", "test_run_id")
+
+    mock_client.get_workflow_handle.assert_called_once_with(
+        "test_workflow_id", run_id="test_run_id"
+    )
+    mock_handle.signal.assert_called_once_with("resume")
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_resume_workflow_client_not_loaded(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test resume_workflow raises ValueError when client is not loaded."""
+    with pytest.raises(ValueError, match="Client is not loaded"):
+        await temporal_client.resume_workflow("test_workflow_id", "test_run_id")
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
 async def test_get_workflow_run_status_error(
     mock_connect: AsyncMock, temporal_client: TemporalWorkflowClient
 ):

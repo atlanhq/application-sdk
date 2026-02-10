@@ -94,6 +94,39 @@ class WorkflowClient(ABC):
         pass
 
     @abstractmethod
+    async def pause_workflow(self, workflow_id: str, run_id: str) -> None:
+        """Pause a running workflow execution.
+
+        Sends a pause signal to the workflow. The workflow will pause at the
+        next checkpoint (between activities). Can be resumed with resume_workflow().
+
+        Args:
+            workflow_id (str): The ID of the workflow to pause.
+            run_id (str): The specific run ID of the workflow execution.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+            ValueError: If the client is not loaded.
+        """
+        pass
+
+    @abstractmethod
+    async def resume_workflow(self, workflow_id: str, run_id: str) -> None:
+        """Resume a paused workflow execution.
+
+        Sends a resume signal to a previously paused workflow.
+
+        Args:
+            workflow_id (str): The ID of the workflow to resume.
+            run_id (str): The specific run ID of the workflow execution.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+            ValueError: If the client is not loaded.
+        """
+        pass
+
+    @abstractmethod
     async def get_workflow_run_status(
         self,
         workflow_id: str,
