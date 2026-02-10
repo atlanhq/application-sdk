@@ -1,0 +1,35 @@
+{
+  "wf_month_partition": {
+    "config_name": "wf_month_partition",
+    "table_name": "Workflow_Log_Test.workflow_logs_wf_month",
+    "plan_time": 0.4649508794148763,
+    "scan_time": 0.9069015185038248,
+    "sort_time": 0.026984691619873047,
+    "total_time": 1.3988699913024902,
+    "files_scanned": 9,
+    "rows_after_filter": 436985,
+    "rows_returned": 1000
+  },
+  "wf_bucket": {
+    "config_name": "wf_bucket",
+    "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket",
+    "plan_time": 0.3288723627726237,
+    "scan_time": 0.9472103118896484,
+    "sort_time": 0.022108157475789387,
+    "total_time": 1.2982356548309326,
+    "files_scanned": 14,
+    "rows_after_filter": 436985,
+    "rows_returned": 1000
+  },
+  "wf_bucket_month": {
+    "config_name": "wf_bucket_month",
+    "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket_month",
+    "plan_time": 0.3577837149302165,
+    "scan_time": 0.8991143703460693,
+    "sort_time": 0.021480242411295574,
+    "total_time": 1.2784310181935628,
+    "files_scanned": 14,
+    "rows_after_filter": 436985,
+    "rows_returned": 1000
+  }
+}

@@ -1,0 +1,197 @@
+{
+  "salesforce_workflow_only": {
+    "workflow_name": "atlan-salesforce-1671795233-cron-1766791800",
+    "workflow_node": null,
+    "results": {
+      "wf_month_partition": {
+        "config_name": "wf_month_partition",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_month",
+        "plan_time": 0.4509310722351074,
+        "scan_time": 1.0692332585652669,
+        "sort_time": 0.02904534339904785,
+        "total_time": 1.5492641131083171,
+        "files_scanned": 9,
+        "rows_after_filter": 436985,
+        "rows_returned": 1000
+      },
+      "wf_bucket": {
+        "config_name": "wf_bucket",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket",
+        "plan_time": 0.3229391574859619,
+        "scan_time": 0.8923113346099854,
+        "sort_time": 0.026561657587687176,
+        "total_time": 1.2418502966562908,
+        "files_scanned": 14,
+        "rows_after_filter": 436985,
+        "rows_returned": 1000
+      },
+      "wf_bucket_month": {
+        "config_name": "wf_bucket_month",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket_month",
+        "plan_time": 0.38270799318949383,
+        "scan_time": 0.9428115685780843,
+        "sort_time": 0.025775591532389324,
+        "total_time": 1.351330041885376,
+        "files_scanned": 14,
+        "rows_after_filter": 436985,
+        "rows_returned": 1000
+      }
+    }
+  },
+  "salesforce_with_node": {
+    "workflow_name": "atlan-salesforce-1671795233-cron-1766791800",
+    "workflow_node": "atlan-salesforce-1671795233-cron-1766791800(0).run(0)[6].extract(0).describe-reports(1:1)(1)",
+    "results": {
+      "wf_month_partition": {
+        "config_name": "wf_month_partition",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_month",
+        "plan_time": 0.33524370193481445,
+        "scan_time": 0.6632530689239502,
+        "sort_time": 0.004074255625406901,
+        "total_time": 1.0025975704193115,
+        "files_scanned": 9,
+        "rows_after_filter": 111693,
+        "rows_returned": 1000
+      },
+      "wf_bucket": {
+        "config_name": "wf_bucket",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket",
+        "plan_time": 0.31933363278706867,
+        "scan_time": 0.8009883562723795,
+        "sort_time": 0.005448182423909505,
+        "total_time": 1.1258042653401692,
+        "files_scanned": 14,
+        "rows_after_filter": 111693,
+        "rows_returned": 1000
+      },
+      "wf_bucket_month": {
+        "config_name": "wf_bucket_month",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket_month",
+        "plan_time": 0.30660080909729004,
+        "scan_time": 0.7033181190490723,
+        "sort_time": 0.004795074462890625,
+        "total_time": 1.0147486527760823,
+        "files_scanned": 14,
+        "rows_after_filter": 111693,
+        "rows_returned": 1000
+      }
+    }
+  },
+  "analytics_workflow_only": {
+    "workflow_name": "atlan-analytics-cron-1766801400",
+    "workflow_node": null,
+    "results": {
+      "wf_month_partition": {
+        "config_name": "wf_month_partition",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_month",
+        "plan_time": 0.2017540136973063,
+        "scan_time": 0.3680449326833089,
+        "sort_time": 0.0002276897430419922,
+        "total_time": 0.5700533390045166,
+        "files_scanned": 1,
+        "rows_after_filter": 931,
+        "rows_returned": 931
+      },
+      "wf_bucket": {
+        "config_name": "wf_bucket",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket",
+        "plan_time": 0.27361178398132324,
+        "scan_time": 0.476279338200887,
+        "sort_time": 0.00023754437764485678,
+        "total_time": 0.7501475811004639,
+        "files_scanned": 3,
+        "rows_after_filter": 931,
+        "rows_returned": 931
+      },
+      "wf_bucket_month": {
+        "config_name": "wf_bucket_month",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket_month",
+        "plan_time": 0.27271103858947754,
+        "scan_time": 0.41497325897216797,
+        "sort_time": 0.00035373369852701825,
+        "total_time": 0.6880727608998617,
+        "files_scanned": 3,
+        "rows_after_filter": 931,
+        "rows_returned": 931
+      }
+    }
+  },
+  "analytics_with_node": {
+    "workflow_name": "atlan-analytics-cron-1766801400",
+    "workflow_node": "atlan-analytics-cron-1766801400(0).custom-metadata-aggs(0)",
+    "results": {
+      "wf_month_partition": {
+        "config_name": "wf_month_partition",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_month",
+        "plan_time": 0.22781689961751303,
+        "scan_time": 0.43500765164693195,
+        "sort_time": 0.00016220410664876303,
+        "total_time": 0.6636553605397543,
+        "files_scanned": 1,
+        "rows_after_filter": 5,
+        "rows_returned": 5
+      },
+      "wf_bucket": {
+        "config_name": "wf_bucket",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket",
+        "plan_time": 0.3156999746958415,
+        "scan_time": 0.4139033953348796,
+        "sort_time": 0.00018223126729329428,
+        "total_time": 0.7298219203948975,
+        "files_scanned": 3,
+        "rows_after_filter": 5,
+        "rows_returned": 5
+      },
+      "wf_bucket_month": {
+        "config_name": "wf_bucket_month",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket_month",
+        "plan_time": 0.3067760467529297,
+        "scan_time": 0.5075435638427734,
+        "sort_time": 0.0006110668182373047,
+        "total_time": 0.8149840831756592,
+        "files_scanned": 3,
+        "rows_after_filter": 5,
+        "rows_returned": 5
+      }
+    }
+  },
+  "redshift_workflow_only": {
+    "workflow_name": "atlan-redshift-miner-1659011583-cron-1767416400",
+    "workflow_node": null,
+    "results": {
+      "wf_month_partition": {
+        "config_name": "wf_month_partition",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_month",
+        "plan_time": 0.30336499214172363,
+        "scan_time": 0.5037933190663656,
+        "sort_time": 0.00024930636088053387,
+        "total_time": 0.8074421882629395,
+        "files_scanned": 1,
+        "rows_after_filter": 2353,
+        "rows_returned": 1000
+      },
+      "wf_bucket": {
+        "config_name": "wf_bucket",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket",
+        "plan_time": 0.21179072062174478,
+        "scan_time": 0.5524402459462484,
+        "sort_time": 0.0004223187764485677,
+        "total_time": 0.7646800676981608,
+        "files_scanned": 6,
+        "rows_after_filter": 2353,
+        "rows_returned": 1000
+      },
+      "wf_bucket_month": {
+        "config_name": "wf_bucket_month",
+        "table_name": "Workflow_Log_Test.workflow_logs_wf_bucket_month",
+        "plan_time": 0.1945784091949463,
+        "scan_time": 0.4651217460632324,
+        "sort_time": 0.0002827644348144531,
+        "total_time": 0.6600118478139242,
+        "files_scanned": 7,
+        "rows_after_filter": 2353,
+        "rows_returned": 1000
+      }
+    }
+  }
+}
