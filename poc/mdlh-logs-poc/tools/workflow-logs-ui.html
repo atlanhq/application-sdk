@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workflow Logs - Observability Dashboard</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #333;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            color: #00d4ff;
+        }
+
+        .mode-tabs {
+            display: flex;
+            gap: 0;
+            background: #2a2a3e;
+            border-radius: 8px;
+            padding: 4px;
+        }
+
+        .mode-tab {
+            padding: 10px 24px;
+            border: none;
+            background: transparent;
+            color: #888;
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            transition: all 0.2s;
+        }
+
+        .mode-tab.active {
+            background: #00d4ff;
+            color: #1a1a2e;
+            font-weight: 600;
+        }
+
+        .mode-tab:hover:not(.active) {
+            color: #eee;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+            padding: 16px;
+            background: #2a2a3e;
+            border-radius: 8px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        label {
+            font-size: 0.9rem;
+            color: #888;
+            white-space: nowrap;
+        }
+
+        input[type="text"], input[type="number"] {
+            padding: 10px 14px;
+            border: 1px solid #444;
+            border-radius: 6px;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 0.9rem;
+        }
+
+        input[type="text"]:focus, input[type="number"]:focus {
+            outline: none;
+            border-color: #00d4ff;
+        }
+
+        #trace-id { width: 320px; }
+        #application-name { width: 160px; }
+        #endpoint { width: 220px; }
+        #limit { width: 80px; }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+
+        .btn-primary {
+            background: #00d4ff;
+            color: #1a1a2e;
+        }
+
+        .btn-primary:hover {
+            background: #00b8e6;
+        }
+
+        .btn-primary:disabled {
+            background: #444;
+            color: #888;
+            cursor: not-allowed;
+        }
+
+        .btn-danger {
+            background: #ff4757;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #ff3344;
+        }
+
+        .btn-secondary {
+            background: #444;
+            color: #eee;
+        }
+
+        .btn-secondary:hover {
+            background: #555;
+        }
+
+        .status-bar {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 20px;
+            padding: 14px 18px;
+            background: #2a2a3e;
+            border-radius: 8px;
+            font-size: 0.9rem;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #666;
+        }
+
+        .status-dot.connected {
+            background: #2ed573;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.disconnected {
+            background: #ff4757;
+        }
+
+        .status-dot.loading {
+            background: #ffa502;
+            animation: pulse 0.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .log-container {
+            background: #0d0d1a;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 18px;
+            background: #1f1f35;
+            border-bottom: 1px solid #333;
+        }
+
+        .log-header h2 {
+            font-size: 1rem;
+            font-weight: 500;
+        }
+
+        .log-filters {
+            display: flex;
+            gap: 8px;
+        }
+
+        .filter-btn {
+            padding: 6px 14px;
+            font-size: 0.8rem;
+            border-radius: 20px;
+            background: #333;
+            color: #888;
+        }
+
+        .filter-btn.active {
+            background: #00d4ff;
+            color: #1a1a2e;
+        }
+
+        .log-content {
+            height: 550px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.6;
+        }
+
+        .log-entry {
+            padding: 10px 18px;
+            border-bottom: 1px solid #1f1f35;
+            display: flex;
+            gap: 14px;
+            animation: fadeIn 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-3px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .log-entry:hover {
+            background: #1f1f35;
+        }
+
+        .log-time {
+            color: #666;
+            white-space: nowrap;
+            min-width: 180px;
+        }
+
+        .log-level {
+            font-weight: 600;
+            min-width: 70px;
+            text-transform: uppercase;
+        }
+
+        .log-level.debug { color: #888; }
+        .log-level.info { color: #00d4ff; }
+        .log-level.warning { color: #ffa502; }
+        .log-level.error { color: #ff4757; }
+
+        .log-message {
+            flex: 1;
+            word-break: break-word;
+        }
+
+        .log-attrs {
+            color: #666;
+            font-size: 0.8rem;
+            margin-top: 6px;
+        }
+
+        .log-attrs span {
+            margin-right: 16px;
+        }
+
+        .log-attrs .attr-key {
+            color: #888;
+        }
+
+        .log-attrs .attr-value {
+            color: #b8b8d1;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #666;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .stats-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-card {
+            background: #2a2a3e;
+            padding: 18px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.6rem;
+            font-weight: 600;
+            color: #00d4ff;
+        }
+
+        .stat-label {
+            font-size: 0.8rem;
+            color: #888;
+            margin-top: 4px;
+        }
+
+        .panel-hidden {
+            display: none !important;
+        }
+
+        .info-box {
+            margin-top: 20px;
+            padding: 16px;
+            background: #2a2a3e;
+            border-radius: 8px;
+            border-left: 4px solid #00d4ff;
+        }
+
+        .info-box h3 {
+            font-size: 1rem;
+            margin-bottom: 8px;
+            color: #00d4ff;
+        }
+
+        .info-box p {
+            font-size: 0.9rem;
+            color: #888;
+            margin-bottom: 6px;
+        }
+
+        .info-box code {
+            background: #1a1a2e;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            color: #eee;
+        }
+
+        .error-message {
+            padding: 14px 18px;
+            background: rgba(255, 71, 87, 0.1);
+            border: 1px solid #ff4757;
+            border-radius: 8px;
+            color: #ff4757;
+            margin-bottom: 20px;
+        }
+
+        /* Workflow List Styles */
+        .workflow-list {
+            background: #2a2a3e;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+
+        .workflow-list-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 18px;
+            border-bottom: 1px solid #333;
+        }
+
+        .workflow-list-header h3 {
+            font-size: 1rem;
+            font-weight: 500;
+            color: #00d4ff;
+        }
+
+        .workflow-list-header span {
+            font-size: 0.85rem;
+            color: #888;
+        }
+
+        .workflow-items {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .workflow-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 18px;
+            border-bottom: 1px solid #333;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .workflow-item:hover {
+            background: #1f1f35;
+        }
+
+        .workflow-item.selected {
+            background: rgba(0, 212, 255, 0.1);
+            border-left: 3px solid #00d4ff;
+        }
+
+        .workflow-info {
+            flex: 1;
+        }
+
+        .workflow-name {
+            font-family: monospace;
+            font-size: 0.9rem;
+            color: #eee;
+        }
+
+        .workflow-meta {
+            display: flex;
+            gap: 12px;
+            margin-top: 4px;
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        .workflow-status {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .workflow-status.running {
+            background: rgba(255, 165, 2, 0.2);
+            color: #ffa502;
+        }
+
+        .workflow-status.succeeded {
+            background: rgba(46, 213, 115, 0.2);
+            color: #2ed573;
+        }
+
+        .workflow-status.failed {
+            background: rgba(255, 71, 87, 0.2);
+            color: #ff4757;
+        }
+
+        .workflow-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .workflow-actions button {
+            padding: 6px 12px;
+            font-size: 0.8rem;
+        }
+
+        select {
+            padding: 10px 14px;
+            border: 1px solid #444;
+            border-radius: 6px;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: #00d4ff;
+        }
+
+        .empty-workflow-state {
+            padding: 40px;
+            text-align: center;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Workflow Logs Observability</h1>
+            <div class="mode-tabs">
+                <button class="mode-tab active" data-mode="live">Live Stream</button>
+                <button class="mode-tab" data-mode="atlas">Atlas Browser</button>
+                <button class="mode-tab" data-mode="mdlh">MDLH Browser</button>
+                <button class="mode-tab" data-mode="history">Historical Query</button>
+            </div>
+        </header>
+
+        <div id="error-container"></div>
+
+        <!-- Live Stream Controls -->
+        <div id="live-controls" class="controls">
+            <div class="input-group">
+                <label for="endpoint">Backend:</label>
+                <input type="text" id="endpoint" value="http://localhost:8081">
+            </div>
+            <div class="input-group">
+                <label for="trace-id">Trace ID:</label>
+                <input type="text" id="trace-id" placeholder="e.g., atlan-mssql-1766579479-w8gkk">
+            </div>
+            <button id="connect-btn" class="btn-primary">Connect</button>
+            <button id="disconnect-btn" class="btn-danger" style="display: none;">Disconnect</button>
+            <button id="clear-btn" class="btn-secondary">Clear Logs</button>
+        </div>
+
+        <!-- Historical Query Controls -->
+        <div id="history-controls" class="controls panel-hidden">
+            <div class="input-group">
+                <label for="hist-endpoint">Backend:</label>
+                <input type="text" id="hist-endpoint" value="http://localhost:8081">
+            </div>
+            <div class="input-group">
+                <label for="hist-trace-id">Trace ID:</label>
+                <input type="text" id="hist-trace-id" placeholder="e.g., atlan-mssql-1766579479-w8gkk">
+            </div>
+            <div class="input-group">
+                <label for="application-name">App Name:</label>
+                <input type="text" id="application-name" placeholder="e.g., mssql">
+            </div>
+            <div class="input-group">
+                <label for="limit">Limit:</label>
+                <input type="number" id="limit" value="100" min="1" max="1000">
+            </div>
+            <button id="query-btn" class="btn-primary">Query Iceberg</button>
+            <button id="clear-hist-btn" class="btn-secondary">Clear</button>
+        </div>
+
+        <!-- Atlas Browser Controls -->
+        <div id="atlas-controls" class="controls panel-hidden">
+            <div class="input-group">
+                <label for="atlas-endpoint">Backend:</label>
+                <input type="text" id="atlas-endpoint" value="http://localhost:8081">
+            </div>
+            <div class="input-group">
+                <label for="atlas-connector">Connector:</label>
+                <select id="atlas-connector">
+                    <option value="">All Connectors</option>
+                    <option value="mssql">MSSQL</option>
+                    <option value="postgres">PostgreSQL</option>
+                    <option value="snowflake">Snowflake</option>
+                    <option value="databricks">Databricks</option>
+                    <option value="bigquery">BigQuery</option>
+                    <option value="redshift">Redshift</option>
+                </select>
+            </div>
+            <div class="input-group">
+                <label for="atlas-status">Status:</label>
+                <select id="atlas-status">
+                    <option value="">All Statuses</option>
+                    <option value="running">Running</option>
+                    <option value="succeeded">Succeeded</option>
+                    <option value="failed">Failed</option>
+                </select>
+            </div>
+            <button id="atlas-refresh-btn" class="btn-primary">Refresh Workflows</button>
+        </div>
+
+        <!-- Atlas Workflow List -->
+        <div id="atlas-workflow-list" class="workflow-list panel-hidden">
+            <div class="workflow-list-header">
+                <h3>Available Workflows (Atlas)</h3>
+                <span id="atlas-workflow-count">0 workflows</span>
+            </div>
+            <div id="atlas-workflows" class="workflow-items"></div>
+        </div>
+
+        <!-- MDLH Browser Controls -->
+        <div id="mdlh-controls" class="controls panel-hidden">
+            <div class="input-group">
+                <label for="mdlh-endpoint">Backend:</label>
+                <input type="text" id="mdlh-endpoint" value="http://localhost:8081">
+            </div>
+            <div class="input-group">
+                <label for="mdlh-app-filter">App Name:</label>
+                <input type="text" id="mdlh-app-filter" placeholder="Filter by app name">
+            </div>
+            <button id="mdlh-refresh-btn" class="btn-primary">Refresh Stored Workflows</button>
+        </div>
+
+        <!-- MDLH Workflow List -->
+        <div id="mdlh-workflow-list" class="workflow-list panel-hidden">
+            <div class="workflow-list-header">
+                <h3>Stored Workflows (Iceberg)</h3>
+                <span id="mdlh-workflow-count">0 workflows</span>
+            </div>
+            <div id="mdlh-workflows" class="workflow-items"></div>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-item">
+                <div id="status-dot" class="status-dot disconnected"></div>
+                <span id="status-text">Disconnected</span>
+            </div>
+            <div class="status-item">
+                <span>Logs: <strong id="log-count">0</strong></span>
+            </div>
+            <div class="status-item">
+                <span>Last update: <strong id="last-log-time">-</strong></span>
+            </div>
+            <div class="status-item" id="source-info" style="display: none;">
+                <span>Source: <strong id="source-text">-</strong></span>
+            </div>
+        </div>
+
+        <div class="log-container">
+            <div class="log-header">
+                <h2 id="log-title">Log Stream</h2>
+                <div class="log-filters">
+                    <button class="filter-btn active" data-level="all">All</button>
+                    <button class="filter-btn" data-level="debug">Debug</button>
+                    <button class="filter-btn" data-level="info">Info</button>
+                    <button class="filter-btn" data-level="warning">Warning</button>
+                    <button class="filter-btn" data-level="error">Error</button>
+                </div>
+            </div>
+            <div id="log-content" class="log-content">
+                <div class="empty-state">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <p>No logs yet</p>
+                    <p style="font-size: 0.9rem; margin-top: 8px;">Enter a trace ID and connect to stream logs, or query historical data</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-panel">
+            <div class="stat-card">
+                <div class="stat-value" id="stat-debug">0</div>
+                <div class="stat-label">Debug</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-info">0</div>
+                <div class="stat-label">Info</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-warning">0</div>
+                <div class="stat-label">Warning</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-error">0</div>
+                <div class="stat-label">Error</div>
+            </div>
+        </div>
+
+        <div class="info-box">
+            <h3>API Endpoints</h3>
+            <p><code>GET /sse/logs?trace_id=X</code> - Live SSE stream for a workflow</p>
+            <p><code>GET /api/logs?trace_id=X&application_name=Y&limit=N</code> - Query historical logs from Iceberg</p>
+            <p><code>GET /api/workflows?connector=X&status=Y</code> - List workflows from Atlas</p>
+            <p><code>GET /api/workflows/stored?application_name=X</code> - List workflows with stored logs in Iceberg</p>
+            <p><code>GET /api/traces</code> - List recently seen trace IDs</p>
+            <p><code>GET /health</code> - Health check</p>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let eventSource = null;
+        let logs = [];
+        let stats = { debug: 0, info: 0, warning: 0, error: 0 };
+        let currentFilter = 'all';
+        let autoScroll = true;
+        let currentMode = 'live';
+
+        // DOM elements
+        const traceIdInput = document.getElementById('trace-id');
+        const histTraceIdInput = document.getElementById('hist-trace-id');
+        const endpointInput = document.getElementById('endpoint');
+        const histEndpointInput = document.getElementById('hist-endpoint');
+        const applicationNameInput = document.getElementById('application-name');
+        const limitInput = document.getElementById('limit');
+        const connectBtn = document.getElementById('connect-btn');
+        const disconnectBtn = document.getElementById('disconnect-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const queryBtn = document.getElementById('query-btn');
+        const clearHistBtn = document.getElementById('clear-hist-btn');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const logCount = document.getElementById('log-count');
+        const lastLogTime = document.getElementById('last-log-time');
+        const logContent = document.getElementById('log-content');
+        const logTitle = document.getElementById('log-title');
+        const filterBtns = document.querySelectorAll('.filter-btn');
+        const modeTabs = document.querySelectorAll('.mode-tab');
+        const liveControls = document.getElementById('live-controls');
+        const historyControls = document.getElementById('history-controls');
+        const sourceInfo = document.getElementById('source-info');
+        const sourceText = document.getElementById('source-text');
+        const errorContainer = document.getElementById('error-container');
+
+        // Atlas Browser elements
+        const atlasControls = document.getElementById('atlas-controls');
+        const atlasWorkflowList = document.getElementById('atlas-workflow-list');
+        const atlasEndpointInput = document.getElementById('atlas-endpoint');
+        const atlasConnectorSelect = document.getElementById('atlas-connector');
+        const atlasStatusSelect = document.getElementById('atlas-status');
+        const atlasRefreshBtn = document.getElementById('atlas-refresh-btn');
+        const atlasWorkflowsContainer = document.getElementById('atlas-workflows');
+        const atlasWorkflowCount = document.getElementById('atlas-workflow-count');
+
+        // MDLH Browser elements
+        const mdlhControls = document.getElementById('mdlh-controls');
+        const mdlhWorkflowList = document.getElementById('mdlh-workflow-list');
+        const mdlhEndpointInput = document.getElementById('mdlh-endpoint');
+        const mdlhAppFilterInput = document.getElementById('mdlh-app-filter');
+        const mdlhRefreshBtn = document.getElementById('mdlh-refresh-btn');
+        const mdlhWorkflowsContainer = document.getElementById('mdlh-workflows');
+        const mdlhWorkflowCount = document.getElementById('mdlh-workflow-count');
+
+        // Selected workflow state
+        let selectedWorkflow = null;
+
+        // Mode switching
+        modeTabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const mode = tab.dataset.mode;
+                currentMode = mode;
+
+                modeTabs.forEach(t => t.classList.toggle('active', t === tab));
+
+                // Hide all control panels
+                liveControls.classList.add('panel-hidden');
+                historyControls.classList.add('panel-hidden');
+                atlasControls.classList.add('panel-hidden');
+                atlasWorkflowList.classList.add('panel-hidden');
+                mdlhControls.classList.add('panel-hidden');
+                mdlhWorkflowList.classList.add('panel-hidden');
+
+                // Show appropriate panels based on mode
+                if (mode === 'live') {
+                    liveControls.classList.remove('panel-hidden');
+                    logTitle.textContent = 'Log Stream';
+                    sourceInfo.style.display = 'none';
+                } else if (mode === 'atlas') {
+                    atlasControls.classList.remove('panel-hidden');
+                    atlasWorkflowList.classList.remove('panel-hidden');
+                    logTitle.textContent = 'Logs (via Atlas Discovery)';
+                    sourceInfo.style.display = 'flex';
+                    sourceText.textContent = 'atlas';
+                    // Auto-refresh workflows
+                    refreshAtlasWorkflows();
+                } else if (mode === 'mdlh') {
+                    mdlhControls.classList.remove('panel-hidden');
+                    mdlhWorkflowList.classList.remove('panel-hidden');
+                    logTitle.textContent = 'Logs (via MDLH Discovery)';
+                    sourceInfo.style.display = 'flex';
+                    sourceText.textContent = 'iceberg';
+                    // Auto-refresh stored workflows
+                    refreshMdlhWorkflows();
+                } else if (mode === 'history') {
+                    historyControls.classList.remove('panel-hidden');
+                    logTitle.textContent = 'Historical Logs (Iceberg)';
+                    sourceInfo.style.display = 'flex';
+                    sourceText.textContent = 'iceberg';
+                }
+
+                // Disconnect SSE if switching away from live
+                if (mode !== 'live' && eventSource) {
+                    disconnect();
+                }
+            });
+        });
+
+        // Show error
+        function showError(message) {
+            errorContainer.innerHTML = `<div class="error-message">${message}</div>`;
+            setTimeout(() => errorContainer.innerHTML = '', 5000);
+        }
+
+        // Connect to SSE stream
+        function connect() {
+            const traceId = traceIdInput.value.trim();
+            const endpoint = endpointInput.value.trim();
+
+            if (!traceId) {
+                showError('Please enter a trace ID');
+                return;
+            }
+
+            // Use /sse/logs endpoint (observability app's SSE endpoint)
+            const url = `${endpoint}/sse/logs?trace_id=${encodeURIComponent(traceId)}`;
+
+            try {
+                eventSource = new EventSource(url);
+                setStatus('loading', 'Connecting...');
+
+                eventSource.onopen = () => {
+                    setStatus('connected', 'Connected');
+                };
+
+                // Handle 'connected' event
+                eventSource.addEventListener('connected', (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        console.log('Connected:', data);
+                    } catch (e) {
+                        console.log('Connected event:', event.data);
+                    }
+                });
+
+                // Handle 'log' event
+                eventSource.addEventListener('log', (event) => {
+                    try {
+                        const logEntry = JSON.parse(event.data);
+                        addLog(normalizeLog(logEntry));
+                    } catch (e) {
+                        console.error('Failed to parse log entry:', e);
+                    }
+                });
+
+                // Handle 'keepalive' event
+                eventSource.addEventListener('keepalive', (event) => {
+                    // Just update last seen time
+                    lastLogTime.textContent = new Date().toLocaleTimeString();
+                });
+
+                eventSource.onerror = (error) => {
+                    console.error('SSE error:', error);
+                    if (eventSource.readyState === EventSource.CLOSED) {
+                        setStatus('disconnected', 'Disconnected');
+                        showError('Connection closed. Check if the backend is running.');
+                    }
+                };
+
+            } catch (error) {
+                console.error('Failed to connect:', error);
+                showError('Failed to connect: ' + error.message);
+            }
+        }
+
+        // Disconnect from SSE stream
+        function disconnect() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            setStatus('disconnected', 'Disconnected');
+        }
+
+        // Query historical logs from Iceberg
+        async function queryHistory() {
+            const traceId = histTraceIdInput.value.trim();
+            const applicationName = applicationNameInput.value.trim();
+            const endpoint = histEndpointInput.value.trim();
+            const limit = parseInt(limitInput.value) || 100;
+
+            if (!traceId && !applicationName) {
+                showError('Please enter at least a trace ID or application name');
+                return;
+            }
+
+            // Build query params
+            const params = new URLSearchParams();
+            if (traceId) params.append('trace_id', traceId);
+            if (applicationName) params.append('application_name', applicationName);
+            params.append('limit', limit);
+            params.append('source', 'iceberg');
+
+            const url = `${endpoint}/api/logs?${params}`;
+
+            setStatus('loading', 'Querying Iceberg...');
+            queryBtn.disabled = true;
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // Clear and add logs
+                clearLogs();
+
+                if (data.logs && data.logs.length > 0) {
+                    data.logs.forEach(log => addLog(normalizeIcebergLog(log)));
+                    setStatus('connected', `Loaded ${data.count} logs`);
+                } else {
+                    setStatus('disconnected', 'No logs found');
+                }
+
+            } catch (error) {
+                console.error('Query error:', error);
+                showError('Query failed: ' + error.message);
+                setStatus('disconnected', 'Query failed');
+            } finally {
+                queryBtn.disabled = false;
+            }
+        }
+
+        // Normalize SSE log entry
+        function normalizeLog(entry) {
+            return {
+                timestamp: entry.timestamp_iso || entry.timestamp || new Date().toISOString(),
+                level: (entry.level || 'INFO').toLowerCase(),
+                message: entry.message || '',
+                attributes: entry.attributes || {},
+                trace_id: entry.trace_id,
+                application_name: entry.application_name,
+                activity_id: entry.activity_id,
+                run_id: entry.run_id
+            };
+        }
+
+        // Normalize Iceberg log entry
+        function normalizeIcebergLog(entry) {
+            return {
+                timestamp: entry.timestamp || new Date().toISOString(),
+                level: (entry.level || 'INFO').toLowerCase(),
+                message: entry.message || '',
+                attributes: {
+                    logger_name: entry.logger_name,
+                    workflow_name: entry.atlan_argo_workflow_name
+                },
+                trace_id: entry.trace_id,
+                application_name: entry.application_name
+            };
+        }
+
+        // Update status UI
+        function setStatus(state, text) {
+            statusDot.className = 'status-dot ' + state;
+            statusText.textContent = text;
+
+            if (state === 'connected') {
+                connectBtn.style.display = 'none';
+                disconnectBtn.style.display = 'inline-block';
+            } else if (state === 'disconnected') {
+                connectBtn.style.display = 'inline-block';
+                disconnectBtn.style.display = 'none';
+            }
+        }
+
+        // Add a log entry
+        function addLog(entry) {
+            logs.push(entry);
+
+            // Update stats
+            const level = entry.level || 'info';
+            if (stats.hasOwnProperty(level)) {
+                stats[level]++;
+            } else {
+                stats.info++;
+            }
+
+            // Update UI
+            logCount.textContent = logs.length;
+            lastLogTime.textContent = new Date().toLocaleTimeString();
+            updateStats();
+
+            // Render log if matches filter
+            if (currentFilter === 'all' || currentFilter === level) {
+                renderLogEntry(entry);
+            }
+        }
+
+        // Render a single log entry
+        function renderLogEntry(entry) {
+            // Remove empty state if present
+            const emptyState = logContent.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+
+            const level = entry.level || 'info';
+            const time = entry.timestamp || new Date().toISOString();
+            const message = entry.message || JSON.stringify(entry);
+
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            div.dataset.level = level;
+
+            // Build attributes display
+            let attrsHtml = '';
+            const attrs = entry.attributes || {};
+            const importantAttrs = ['trace_id', 'activity_id', 'run_id', 'application_name', 'workflow_name', 'logger_name'];
+            const attrParts = [];
+
+            // Add trace_id from entry level too
+            if (entry.trace_id) {
+                attrParts.push(`<span><span class="attr-key">trace_id:</span> <span class="attr-value">${entry.trace_id}</span></span>`);
+            }
+            if (entry.application_name) {
+                attrParts.push(`<span><span class="attr-key">app:</span> <span class="attr-value">${entry.application_name}</span></span>`);
+            }
+
+            for (const key of importantAttrs) {
+                if (attrs[key] && key !== 'trace_id' && key !== 'application_name') {
+                    attrParts.push(`<span><span class="attr-key">${key}:</span> <span class="attr-value">${attrs[key]}</span></span>`);
+                }
+            }
+
+            if (attrParts.length > 0) {
+                attrsHtml = `<div class="log-attrs">${attrParts.join('')}</div>`;
+            }
+
+            div.innerHTML = `
+                <span class="log-time">${formatTime(time)}</span>
+                <span class="log-level ${level}">${level}</span>
+                <div class="log-message">
+                    ${escapeHtml(message)}
+                    ${attrsHtml}
+                </div>
+            `;
+
+            logContent.appendChild(div);
+
+            // Auto-scroll to bottom
+            if (autoScroll) {
+                logContent.scrollTop = logContent.scrollHeight;
+            }
+        }
+
+        // Format timestamp
+        function formatTime(timestamp) {
+            try {
+                const date = new Date(timestamp);
+                return date.toISOString().replace('T', ' ').substring(0, 23);
+            } catch {
+                return timestamp;
+            }
+        }
+
+        // Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Update stats display
+        function updateStats() {
+            document.getElementById('stat-debug').textContent = stats.debug;
+            document.getElementById('stat-info').textContent = stats.info;
+            document.getElementById('stat-warning').textContent = stats.warning;
+            document.getElementById('stat-error').textContent = stats.error;
+        }
+
+        // Filter logs by level
+        function filterLogs(level) {
+            currentFilter = level;
+
+            filterBtns.forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.level === level);
+            });
+
+            // Re-render logs
+            logContent.innerHTML = '';
+            if (logs.length === 0) {
+                logContent.innerHTML = `
+                    <div class="empty-state">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <p>No logs yet</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const filteredLogs = level === 'all'
+                ? logs
+                : logs.filter(l => l.level === level);
+
+            filteredLogs.forEach(entry => renderLogEntry(entry));
+        }
+
+        // Clear all logs
+        function clearLogs() {
+            logs = [];
+            stats = { debug: 0, info: 0, warning: 0, error: 0 };
+            logCount.textContent = '0';
+            lastLogTime.textContent = '-';
+            updateStats();
+            filterLogs(currentFilter);
+        }
+
+        // =====================================
+        // Atlas Workflow Discovery
+        // =====================================
+        async function refreshAtlasWorkflows() {
+            const endpoint = atlasEndpointInput.value.trim();
+            const connector = atlasConnectorSelect.value;
+            const status = atlasStatusSelect.value;
+
+            atlasRefreshBtn.disabled = true;
+            atlasRefreshBtn.textContent = 'Loading...';
+
+            try {
+                const params = new URLSearchParams();
+                if (connector) params.append('connector', connector);
+                if (status) params.append('status', status);
+                params.append('limit', '100');
+
+                const url = `${endpoint}/api/workflows?${params}`;
+                const response = await fetch(url);
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                renderAtlasWorkflows(data.workflows || []);
+                atlasWorkflowCount.textContent = `${data.count} workflows`;
+
+            } catch (error) {
+                console.error('Atlas query error:', error);
+                showError('Atlas query failed: ' + error.message);
+                atlasWorkflowsContainer.innerHTML = `
+                    <div class="empty-workflow-state">
+                        <p>Failed to load workflows</p>
+                        <p style="font-size: 0.85rem; margin-top: 8px;">${error.message}</p>
+                    </div>
+                `;
+            } finally {
+                atlasRefreshBtn.disabled = false;
+                atlasRefreshBtn.textContent = 'Refresh Workflows';
+            }
+        }
+
+        function renderAtlasWorkflows(workflows) {
+            if (workflows.length === 0) {
+                atlasWorkflowsContainer.innerHTML = `
+                    <div class="empty-workflow-state">
+                        <p>No workflows found</p>
+                        <p style="font-size: 0.85rem; margin-top: 8px;">Try adjusting your filters</p>
+                    </div>
+                `;
+                return;
+            }
+
+            atlasWorkflowsContainer.innerHTML = workflows.map(wf => `
+                <div class="workflow-item" data-trace-id="${wf.qualified_name}">
+                    <div class="workflow-info">
+                        <div class="workflow-name">${wf.qualified_name}</div>
+                        <div class="workflow-meta">
+                            <span>Connector: ${wf.connector}</span>
+                            ${wf.started_at ? `<span>Started: ${formatTime(wf.started_at)}</span>` : ''}
+                        </div>
+                    </div>
+                    ${wf.status ? `<span class="workflow-status ${wf.status}">${wf.status}</span>` : ''}
+                    <div class="workflow-actions">
+                        <button class="btn-primary" onclick="selectWorkflowForStream('${wf.qualified_name}')">Stream</button>
+                        <button class="btn-secondary" onclick="selectWorkflowForQuery('${wf.qualified_name}')">Query</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // =====================================
+        // MDLH Workflow Discovery
+        // =====================================
+        async function refreshMdlhWorkflows() {
+            const endpoint = mdlhEndpointInput.value.trim();
+            const appFilter = mdlhAppFilterInput.value.trim();
+
+            mdlhRefreshBtn.disabled = true;
+            mdlhRefreshBtn.textContent = 'Loading...';
+
+            try {
+                const params = new URLSearchParams();
+                if (appFilter) params.append('application_name', appFilter);
+                params.append('limit', '100');
+
+                const url = `${endpoint}/api/workflows/stored?${params}`;
+                const response = await fetch(url);
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                renderMdlhWorkflows(data.workflows || []);
+                mdlhWorkflowCount.textContent = `${data.count} workflows`;
+
+            } catch (error) {
+                console.error('MDLH query error:', error);
+                showError('MDLH query failed: ' + error.message);
+                mdlhWorkflowsContainer.innerHTML = `
+                    <div class="empty-workflow-state">
+                        <p>Failed to load stored workflows</p>
+                        <p style="font-size: 0.85rem; margin-top: 8px;">${error.message}</p>
+                    </div>
+                `;
+            } finally {
+                mdlhRefreshBtn.disabled = false;
+                mdlhRefreshBtn.textContent = 'Refresh Stored Workflows';
+            }
+        }
+
+        function renderMdlhWorkflows(workflows) {
+            if (workflows.length === 0) {
+                mdlhWorkflowsContainer.innerHTML = `
+                    <div class="empty-workflow-state">
+                        <p>No stored workflows found</p>
+                        <p style="font-size: 0.85rem; margin-top: 8px;">Try running the ingestion script first</p>
+                    </div>
+                `;
+                return;
+            }
+
+            mdlhWorkflowsContainer.innerHTML = workflows.map(wf => `
+                <div class="workflow-item" data-trace-id="${wf.trace_id}">
+                    <div class="workflow-info">
+                        <div class="workflow-name">${wf.trace_id}</div>
+                        <div class="workflow-meta">
+                            <span>App: ${wf.application_name || 'unknown'}</span>
+                            <span>Connector: ${wf.connector}</span>
+                        </div>
+                    </div>
+                    <div class="workflow-actions">
+                        <button class="btn-primary" onclick="selectWorkflowForQuery('${wf.trace_id}')">View Logs</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // =====================================
+        // Workflow Selection Actions
+        // =====================================
+        function selectWorkflowForStream(traceId) {
+            // Switch to live mode and set trace ID
+            traceIdInput.value = traceId;
+            document.querySelector('[data-mode="live"]').click();
+            // Auto-connect
+            connect();
+        }
+
+        function selectWorkflowForQuery(traceId) {
+            // Switch to history mode and set trace ID
+            histTraceIdInput.value = traceId;
+            document.querySelector('[data-mode="history"]').click();
+            // Auto-query
+            queryHistory();
+        }
+
+        // Event listeners
+        connectBtn.addEventListener('click', connect);
+        disconnectBtn.addEventListener('click', disconnect);
+        clearBtn.addEventListener('click', clearLogs);
+        queryBtn.addEventListener('click', queryHistory);
+        clearHistBtn.addEventListener('click', clearLogs);
+
+        // Atlas browser event listeners
+        atlasRefreshBtn.addEventListener('click', refreshAtlasWorkflows);
+        atlasConnectorSelect.addEventListener('change', refreshAtlasWorkflows);
+        atlasStatusSelect.addEventListener('change', refreshAtlasWorkflows);
+
+        // MDLH browser event listeners
+        mdlhRefreshBtn.addEventListener('click', refreshMdlhWorkflows);
+        mdlhAppFilterInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') refreshMdlhWorkflows();
+        });
+
+        filterBtns.forEach(btn => {
+            btn.addEventListener('click', () => filterLogs(btn.dataset.level));
+        });
+
+        // Enter key handlers
+        traceIdInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') connect();
+        });
+
+        histTraceIdInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') queryHistory();
+        });
+
+        applicationNameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') queryHistory();
+        });
+
+        // Scroll detection for auto-scroll
+        logContent.addEventListener('scroll', () => {
+            const isAtBottom = logContent.scrollHeight - logContent.clientHeight <= logContent.scrollTop + 50;
+            autoScroll = isAtBottom;
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                clearLogs();
+            }
+            if (e.key === 'Escape' && eventSource) {
+                disconnect();
+            }
+        });
+
+        // Sync endpoints between all modes
+        function syncEndpoints(newValue) {
+            endpointInput.value = newValue;
+            histEndpointInput.value = newValue;
+            atlasEndpointInput.value = newValue;
+            mdlhEndpointInput.value = newValue;
+        }
+
+        endpointInput.addEventListener('change', () => syncEndpoints(endpointInput.value));
+        histEndpointInput.addEventListener('change', () => syncEndpoints(histEndpointInput.value));
+        atlasEndpointInput.addEventListener('change', () => syncEndpoints(atlasEndpointInput.value));
+        mdlhEndpointInput.addEventListener('change', () => syncEndpoints(mdlhEndpointInput.value));
+    </script>
+</body>
+</html>
