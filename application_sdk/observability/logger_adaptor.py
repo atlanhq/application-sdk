@@ -24,6 +24,7 @@ from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,
+    ENABLE_WORKFLOW_LOGS_EXPORT,
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
     LOG_FILE_NAME,
@@ -37,6 +38,7 @@ from application_sdk.constants import (
     OTEL_QUEUE_SIZE,
     OTEL_RESOURCE_ATTRIBUTES,
     OTEL_WF_NODE_NAME,
+    OTEL_WORKFLOW_LOGS_ENDPOINT,
     SERVICE_NAME,
     SERVICE_VERSION,
     UPSTREAM_OBJECT_STORE_NAME,
@@ -340,6 +342,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 if "service.version" not in resource_attributes:
                     resource_attributes["service.version"] = SERVICE_VERSION
 
+                # Add application name for identifying the app (mssql, postgres, etc.)
+                if "application.name" not in resource_attributes:
+                    resource_attributes["application.name"] = APPLICATION_NAME
+
                 # Add workflow node name if running in Argo
                 if workflow_node_name:
                     resource_attributes["k8s.workflow.node.name"] = workflow_node_name
@@ -348,6 +354,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     resource=Resource.create(resource_attributes)
                 )
 
+                # Primary exporter (existing - sends to DaemonSet/central collector)
                 exporter = OTLPLogExporter(
                     endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
                     timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
@@ -361,6 +368,29 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 )
 
                 self.logger_provider.add_log_record_processor(batch_processor)
+
+                # Secondary exporter for workflow logs (optional dual export)
+                # Sends to tenant-level collector for S3 archival and live streaming
+                # Requires both ENABLE_WORKFLOW_LOGS_EXPORT=true and OTEL_WORKFLOW_LOGS_ENDPOINT set
+                if ENABLE_WORKFLOW_LOGS_EXPORT and OTEL_WORKFLOW_LOGS_ENDPOINT:
+                    workflow_logs_exporter = OTLPLogExporter(
+                        endpoint=OTEL_WORKFLOW_LOGS_ENDPOINT,
+                        timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
+                    )
+
+                    workflow_logs_processor = BatchLogRecordProcessor(
+                        workflow_logs_exporter,
+                        schedule_delay_millis=OTEL_BATCH_DELAY_MS,
+                        max_export_batch_size=OTEL_BATCH_SIZE,
+                        max_queue_size=OTEL_QUEUE_SIZE,
+                    )
+
+                    self.logger_provider.add_log_record_processor(
+                        workflow_logs_processor
+                    )
+                    logging.info(
+                        f"Dual OTEL export enabled: workflow logs also sent to {OTEL_WORKFLOW_LOGS_ENDPOINT}"
+                    )
 
                 # Add OTLP sink
                 self.logger.add(self.otlp_sink, level=SEVERITY_MAPPING[LOG_LEVEL])

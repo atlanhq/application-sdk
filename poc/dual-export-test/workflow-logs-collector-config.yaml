@@ -1,0 +1,61 @@
+# Workflow Logs OTEL Collector Configuration
+# Simulates the tenant-level collector
+# Writes logs to S3 (MinIO) with hive partitions and UUID v7 file names
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 100
+
+  resourcedetection:
+    detectors: [env, system]
+    system:
+      hostname_sources: [os]
+
+exporters:
+  # Archive to S3 (MinIO) with UUID v7 file names (lexicographically sortable)
+  awss3:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: artifacts
+      s3_prefix: apps/workflow-logs
+      # Hive-style time partitions (key=value format for Spark/Trino/Iceberg)
+      s3_partition_format: "year=%Y/month=%m/day=%d/hour=%H"
+      endpoint: http://minio:9000
+      s3_force_path_style: true
+      # UUID v7 for lexicographically sortable file names (time-ordered)
+      unique_key_func_name: uuidv7
+    marshaler: otlp_json
+
+  # Debug exporter for verification
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 100
+
+service:
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: "0.0.0.0"
+                port: 8888
+
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [resourcedetection, batch]
+      exporters: [awss3, debug]
