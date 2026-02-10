@@ -1,0 +1,86 @@
+version: "3.8"
+
+# Dual Export Test Setup
+# Tests the SDK's dual OTEL export functionality:
+# - Primary collector (port 4317): Simulates DaemonSet/central collector
+# - Workflow logs collector (port 5317): Simulates tenant-level collector -> S3
+
+services:
+  # ===========================================
+  # MinIO - S3-compatible object storage
+  # ===========================================
+  minio:
+    image: minio/minio:latest
+    container_name: minio-dual-test
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Create buckets in MinIO
+  createbuckets:
+    image: minio/mc:latest
+    container_name: createbuckets-dual-test
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc mb myminio/artifacts --ignore-existing;
+      mc anonymous set public myminio/artifacts;
+      echo 'Bucket artifacts created';
+      exit 0;
+      "
+
+  # ===========================================
+  # PRIMARY OTEL Collector (simulates DaemonSet)
+  # Port 4317 - Just logs to console (debug exporter)
+  # ===========================================
+  primary-collector:
+    image: otel/opentelemetry-collector-contrib:0.140.0
+    container_name: primary-collector
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./primary-collector-config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC (primary)
+      - "8888:8888"   # Prometheus metrics
+
+  # ===========================================
+  # WORKFLOW LOGS OTEL Collector (tenant-level)
+  # Port 5317 - Writes to S3 (MinIO)
+  # ===========================================
+  workflow-logs-collector:
+    image: otel/opentelemetry-collector-contrib:0.140.0
+    container_name: workflow-logs-collector
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./workflow-logs-collector-config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "5317:4317"   # OTLP gRPC (workflow logs)
+      - "5318:4318"   # OTLP HTTP
+      - "8889:8888"   # Prometheus metrics
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+
+volumes:
+  minio-data:
+
+networks:
+  default:
+    name: dual-export-test-network
