@@ -1,38 +1,54 @@
 """Integration testing framework for Apps-SDK.
 
 This module provides a declarative, data-driven approach to integration testing.
-Developers define test scenarios as data, and the framework handles execution,
-assertion, and reporting.
+Developers define test scenarios as data, and the framework handles everything:
+credential loading, server discovery, test execution, and assertion validation.
 
-Core Concepts:
-- Scenario: A single test case with inputs and expected outputs
-- Lazy Evaluation: Defer computation until test execution
-- Assertion DSL: Higher-order functions for declarative assertions
-- BaseIntegrationTest: The test runner that executes scenarios
+Quick Start (zero boilerplate):
 
-Quick Start:
-    >>> from application_sdk.test_utils.integration import (
-    ...     Scenario, BaseIntegrationTest, lazy, equals, exists
-    ... )
-    >>> 
-    >>> # Define scenarios
-    >>> scenarios = [
-    ...     Scenario(
-    ...         name="auth_valid",
-    ...         api="auth",
-    ...         args=lazy(lambda: {"credentials": {"user": "test"}}),
-    ...         assert_that={"success": equals(True)}
-    ...     ),
-    ... ]
-    >>> 
-    >>> # Create test class
-    >>> class MyConnectorTest(BaseIntegrationTest):
-    ...     scenarios = scenarios
-    ...     server_host = "http://localhost:8000"
+    1. Set environment variables in .env:
+        ATLAN_APPLICATION_NAME=postgres
+        E2E_POSTGRES_USERNAME=user
+        E2E_POSTGRES_PASSWORD=pass
+        E2E_POSTGRES_HOST=localhost
+        E2E_POSTGRES_PORT=5432
+
+    2. Define scenarios and a test class:
+
+        >>> from application_sdk.test_utils.integration import (
+        ...     Scenario, BaseIntegrationTest, equals, exists, is_true, is_dict
+        ... )
+        >>>
+        >>> class TestMyConnector(BaseIntegrationTest):
+        ...     scenarios = [
+        ...         Scenario(
+        ...             name="auth_works",
+        ...             api="auth",
+        ...             assert_that={"success": equals(True)},
+        ...         ),
+        ...         Scenario(
+        ...             name="auth_fails",
+        ...             api="auth",
+        ...             credentials={"username": "bad", "password": "wrong"},
+        ...             assert_that={"success": equals(False)},
+        ...         ),
+        ...         Scenario(
+        ...             name="preflight_works",
+        ...             api="preflight",
+        ...             metadata={"include-filter": '{"^mydb$": ["^public$"]}'},
+        ...             assert_that={"success": equals(True), "data": is_dict()},
+        ...         ),
+        ...     ]
+
+    3. Run: pytest tests/integration/ -v
+
+    That's it! Credentials are auto-loaded from E2E_* env vars.
+    Server URL is auto-discovered from ATLAN_APP_HTTP_HOST/PORT.
+    Each scenario becomes its own pytest test.
 
 Supported APIs:
 - auth: Test authentication (/workflows/v1/auth)
-- preflight: Preflight checks (/workflows/v1/check)  
+- preflight: Preflight checks (/workflows/v1/check)
 - workflow: Start workflow (/workflows/v1/{endpoint})
 
 For detailed documentation, see:

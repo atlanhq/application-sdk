@@ -6,7 +6,7 @@ in a declarative, data-driven manner.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 
 class APIType(Enum):
@@ -52,36 +52,56 @@ LazyValue = Any  # Will be Lazy type from lazy.py
 class Scenario:
     """Represents a single integration test scenario.
 
-    A scenario defines:
-    - What API to test (auth, preflight, workflow)
-    - What inputs to provide (can be lazy-evaluated)
-    - What outputs to expect (using assertion predicates)
+    A scenario defines what API to test and what to assert on the response.
+    Credentials, metadata, and connection are auto-loaded from environment
+    variables unless explicitly overridden.
+
+    Simplified Usage (recommended):
+        >>> Scenario(
+        ...     name="auth_works",
+        ...     api="auth",
+        ...     assert_that={"success": equals(True)},
+        ... )
+        # Credentials auto-loaded from E2E_{APP_NAME}_* env vars
+
+    Override credentials for negative tests:
+        >>> Scenario(
+        ...     name="auth_fails",
+        ...     api="auth",
+        ...     credentials={"username": "bad", "password": "wrong"},
+        ...     assert_that={"success": equals(False)},
+        ... )
+
+    Override metadata for preflight:
+        >>> Scenario(
+        ...     name="preflight_custom",
+        ...     api="preflight",
+        ...     metadata={"include-filter": '{"^mydb$": ["^public$"]}'},
+        ...     assert_that={"success": equals(True)},
+        ... )
 
     Attributes:
         name: Unique identifier for the scenario.
         api: The API type to test ("auth", "preflight", "workflow").
-        args: Input arguments for the API call. Can be a dict or Lazy wrapper.
         assert_that: Dictionary mapping response paths to assertion predicates.
+        credentials: Optional credentials override. If not provided, auto-loaded from env.
+        metadata: Optional metadata override. If not provided, uses class defaults.
+        connection: Optional connection override. If not provided, uses class defaults.
+        args: Full args override for backward compatibility. Takes precedence over
+              credentials/metadata/connection if provided.
         endpoint: Optional override for the workflow endpoint (dynamic).
         description: Optional human-readable description of what this tests.
         skip: If True, this scenario will be skipped during test execution.
         skip_reason: Reason for skipping (shown in test output).
-
-    Example:
-        >>> from application_sdk.test_utils.integration import Scenario, equals, lazy
-        >>> scenario = Scenario(
-        ...     name="auth_valid_credentials",
-        ...     api="auth",
-        ...     args=lazy(lambda: {"credentials": load_creds()}),
-        ...     assert_that={"success": equals(True)},
-        ...     description="Test authentication with valid credentials"
-        ... )
     """
 
     name: str
     api: str
-    args: Union[Dict[str, Any], LazyValue]
     assert_that: Dict[str, Predicate]
+    credentials: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+    connection: Optional[Dict[str, Any]] = None
+    args: Optional[Union[Dict[str, Any], LazyValue]] = None
     endpoint: Optional[str] = None
     description: str = ""
     skip: bool = False
@@ -107,12 +127,13 @@ class Scenario:
 
     @property
     def api_type(self) -> APIType:
-        """Get the API type as an enum value.
-
-        Returns:
-            APIType: The API type enum.
-        """
+        """Get the API type as an enum value."""
         return APIType.from_string(self.api)
+
+    @property
+    def uses_default_credentials(self) -> bool:
+        """Check if this scenario uses default (auto-loaded) credentials."""
+        return self.credentials is None and self.args is None
 
 
 @dataclass
@@ -123,7 +144,7 @@ class ScenarioResult:
         scenario: The scenario that was executed.
         success: Whether all assertions passed.
         response: The raw API response.
-        assertion_results: Dictionary mapping assertion paths to pass/fail status.
+        assertion_results: Dictionary mapping assertion paths to pass/fail details.
         error: Exception if the scenario failed unexpectedly.
         duration_ms: Time taken to execute the scenario in milliseconds.
     """
@@ -131,7 +152,7 @@ class ScenarioResult:
     scenario: Scenario
     success: bool
     response: Optional[Dict[str, Any]] = None
-    assertion_results: Dict[str, bool] = field(default_factory=dict)
+    assertion_results: Dict[str, Any] = field(default_factory=dict)
     error: Optional[Exception] = None
     duration_ms: float = 0.0
 
@@ -142,6 +163,6 @@ class ScenarioResult:
         if not self.success and self.error:
             msg += f" - Error: {self.error}"
         elif not self.success:
-            failed = [k for k, v in self.assertion_results.items() if not v]
+            failed = [k for k, v in self.assertion_results.items() if not v.get("passed", False)]
             msg += f" - Failed assertions: {failed}"
         return msg

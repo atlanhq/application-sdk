@@ -176,6 +176,29 @@ class IntegrationTestClient:
         try:
             response = requests.get(url, timeout=self.timeout)
             return self._handle_response(response)
+        except requests.ConnectionError as e:
+            logger.error(f"GET request failed - cannot connect to {url}: {e}")
+            return {
+                "success": False,
+                "error": {
+                    "code": "CONNECTION_FAILED",
+                    "message": (
+                        f"Cannot connect to server at {self.host}. "
+                        f"Is the application running? Start it with: uv run python main.py"
+                    ),
+                    "details": str(e),
+                },
+            }
+        except requests.Timeout as e:
+            logger.error(f"GET request timed out after {self.timeout}s: {e}")
+            return {
+                "success": False,
+                "error": {
+                    "code": "REQUEST_TIMEOUT",
+                    "message": f"Request to {url} timed out after {self.timeout}s",
+                    "details": str(e),
+                },
+            }
         except requests.RequestException as e:
             logger.error(f"GET request failed: {e}")
             return {
@@ -205,6 +228,29 @@ class IntegrationTestClient:
         try:
             response = requests.post(url, json=data, timeout=self.timeout)
             return self._handle_response(response)
+        except requests.ConnectionError as e:
+            logger.error(f"POST request failed - cannot connect to {url}: {e}")
+            return {
+                "success": False,
+                "error": {
+                    "code": "CONNECTION_FAILED",
+                    "message": (
+                        f"Cannot connect to server at {self.host}. "
+                        f"Is the application running? Start it with: uv run python main.py"
+                    ),
+                    "details": str(e),
+                },
+            }
+        except requests.Timeout as e:
+            logger.error(f"POST request timed out after {self.timeout}s: {e}")
+            return {
+                "success": False,
+                "error": {
+                    "code": "REQUEST_TIMEOUT",
+                    "message": f"Request to {url} timed out after {self.timeout}s",
+                    "details": str(e),
+                },
+            }
         except requests.RequestException as e:
             logger.error(f"POST request failed: {e}")
             return {

@@ -5,35 +5,36 @@ and validates assertions. It integrates with pytest for test discovery
 and execution.
 
 Key Features:
-- Declarative scenario execution
-- Lazy evaluation of arguments
-- Assertion validation using DSL predicates
-- Nested path access for response validation
-- Detailed error reporting
+- Auto-discovers credentials from E2E_* environment variables
+- Auto-generates individual pytest test methods per scenario
+- Server health check before tests run
+- Rich assertion error messages showing actual vs expected
+- Declarative scenario execution with no boilerplate
 
-Example:
+Example (simplified - no helper functions needed):
     >>> from application_sdk.test_utils.integration import (
-    ...     BaseIntegrationTest, Scenario, equals, lazy
+    ...     BaseIntegrationTest, Scenario, equals
     ... )
-    >>> 
+    >>>
     >>> scenarios = [
     ...     Scenario(
     ...         name="auth_valid",
     ...         api="auth",
-    ...         args=lazy(lambda: {"credentials": load_creds()}),
     ...         assert_that={"success": equals(True)}
     ...     )
     ... ]
-    >>> 
+    >>>
     >>> class MyConnectorTest(BaseIntegrationTest):
     ...     scenarios = scenarios
-    ...     server_host = "http://localhost:8000"
+    ...     # Credentials auto-loaded from E2E_{APP_NAME}_* env vars
 """
 
+import os
 import time
 from typing import Any, Dict, List, Optional, Type
 
 import pytest
+import requests as http_requests
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -43,62 +44,192 @@ from .models import Scenario, ScenarioResult
 
 logger = get_logger(__name__)
 
+# Sentinel value to distinguish "not provided" from None
+_NOT_PROVIDED = object()
+
+
+def _auto_discover_credentials() -> Dict[str, Any]:
+    """Auto-discover credentials from E2E_* environment variables.
+
+    Reads ATLAN_APPLICATION_NAME to determine the app name, then
+    finds all E2E_{APP_NAME}_* env vars and builds a credentials dict.
+
+    For example, with ATLAN_APPLICATION_NAME=postgres:
+      E2E_POSTGRES_USERNAME=user  -> {"username": "user"}
+      E2E_POSTGRES_PASSWORD=pass  -> {"password": "pass"}
+      E2E_POSTGRES_HOST=host      -> {"host": "host"}
+      E2E_POSTGRES_PORT=5432      -> {"port": 5432}
+      E2E_POSTGRES_DATABASE=mydb  -> {"database": "mydb"}
+
+    Returns:
+        Dict[str, Any]: Auto-discovered credentials from env vars.
+    """
+    app_name = os.getenv("ATLAN_APPLICATION_NAME", "").upper()
+    if not app_name:
+        logger.warning(
+            "ATLAN_APPLICATION_NAME not set. Cannot auto-discover credentials. "
+            "Set it in your .env file or environment."
+        )
+        return {}
+
+    prefix = f"E2E_{app_name}_"
+    credentials = {}
+
+    for key, value in os.environ.items():
+        if key.startswith(prefix):
+            field_name = key[len(prefix):].lower()
+            # Auto-convert numeric values (e.g., port)
+            if value.isdigit():
+                value = int(value)
+            credentials[field_name] = value
+
+    if credentials:
+        logger.info(
+            f"Auto-discovered {len(credentials)} credential fields "
+            f"from E2E_{app_name}_* env vars: {list(credentials.keys())}"
+        )
+    else:
+        logger.warning(
+            f"No E2E_{app_name}_* environment variables found. "
+            f"Set them in your .env file or environment."
+        )
+
+    return credentials
+
+
+def _auto_discover_server() -> str:
+    """Auto-discover the app server URL from environment variables.
+
+    Reads ATLAN_APP_HTTP_HOST and ATLAN_APP_HTTP_PORT to build the server URL.
+
+    Returns:
+        str: The server URL (e.g., "http://localhost:8000").
+    """
+    host = os.getenv("ATLAN_APP_HTTP_HOST", "localhost")
+    port = os.getenv("ATLAN_APP_HTTP_PORT", "8000")
+    # 0.0.0.0 isn't reachable from the test client, use localhost instead
+    if host == "0.0.0.0":
+        host = "localhost"
+    return f"http://{host}:{port}"
+
+
+def _check_server_health(server_url: str, timeout: int = 5) -> bool:
+    """Check if the application server is running and reachable.
+
+    Args:
+        server_url: The server URL to check.
+        timeout: Timeout in seconds.
+
+    Returns:
+        bool: True if server is reachable, False otherwise.
+    """
+    try:
+        response = http_requests.get(f"{server_url}/api/health", timeout=timeout)
+        return response.status_code == 200
+    except http_requests.ConnectionError:
+        return False
+    except Exception:
+        # Server is reachable but health endpoint might not exist
+        # That's OK - at least the server is running
+        return True
+
 
 class BaseIntegrationTest:
     """Base class for integration tests.
 
-    This class provides the test runner infrastructure for executing
-    declarative scenarios. Subclasses define scenarios as class attributes,
-    and the framework handles execution and validation.
+    Subclasses just define scenarios and the framework handles everything else:
+    credentials from env vars, server discovery, test method generation,
+    and assertion validation.
+
+    Minimal Example:
+        >>> class TestMyConnector(BaseIntegrationTest):
+        ...     scenarios = [
+        ...         Scenario(name="auth_works", api="auth",
+        ...                  assert_that={"success": equals(True)})
+        ...     ]
 
     Class Attributes:
         scenarios: List of Scenario objects to execute.
-        server_host: Base URL of the application server.
-        server_version: API version prefix.
-        workflow_endpoint: Default endpoint for workflow API.
-        timeout: Request timeout in seconds.
+        server_host: Base URL of the app server (auto-discovered from env if not set).
+        server_version: API version prefix (default: "v1").
+        workflow_endpoint: Default endpoint for workflow API (default: "/start").
+        timeout: Request timeout in seconds (default: 30).
+        default_credentials: Extra credential fields merged with auto-discovered ones.
+        default_metadata: Default metadata for preflight/workflow tests.
+        default_connection: Default connection info for workflow tests.
+        skip_server_check: Set True to skip the server health check.
 
     Hooks:
         setup_test_environment: Called before any tests run.
         cleanup_test_environment: Called after all tests complete.
+        build_credentials: Transform auto-discovered credentials before use.
         before_scenario: Called before each scenario.
         after_scenario: Called after each scenario.
-
-    Example:
-        >>> class SnowflakeIntegrationTest(BaseIntegrationTest):
-        ...     scenarios = [...]
-        ...     server_host = "http://localhost:8000"
-        ...     workflow_endpoint = "/extract"
-        ...     
-        ...     @classmethod
-        ...     def setup_test_environment(cls):
-        ...         # Create test schema
-        ...         pass
     """
 
     # Scenario definitions - subclasses should override
     scenarios: List[Scenario] = []
 
-    # Server configuration
-    server_host: str = "http://localhost:8000"
+    # Server configuration (auto-discovered from env if not set)
+    server_host: str = ""
     server_version: str = "v1"
     workflow_endpoint: str = "/start"
     timeout: int = 30
 
+    # Default values merged with auto-discovered credentials
+    default_credentials: Dict[str, Any] = {}
+    default_metadata: Dict[str, Any] = {}
+    default_connection: Dict[str, Any] = {}
+
+    # Skip server health check (useful for debugging)
+    skip_server_check: bool = False
+
     # Internal state
     client: IntegrationTestClient
     _results: List[ScenarioResult]
+    _env_credentials: Dict[str, Any] = {}
+
+    def __init_subclass__(cls, **kwargs):
+        """Auto-generate individual test methods for each scenario.
+
+        This runs when a subclass is defined, creating test_<scenario_name>
+        methods so pytest shows each scenario as a separate test.
+        """
+        super().__init_subclass__(**kwargs)
+
+        # Only generate if the subclass defines its own scenarios
+        if "scenarios" in cls.__dict__ and cls.scenarios:
+            _generate_individual_tests(cls)
 
     @classmethod
     def setup_class(cls) -> None:
         """Set up the test class before any tests run.
 
         This method:
-        1. Initializes the API client
-        2. Calls the setup_test_environment hook
-        3. Initializes the results list
+        1. Auto-discovers server URL and credentials from env vars
+        2. Checks if the server is running
+        3. Initializes the API client
+        4. Calls the setup_test_environment hook
         """
-        logger.info(f"Setting up integration test class: {cls.__name__}")
+        # Auto-discover server URL if not explicitly set
+        if not cls.server_host:
+            cls.server_host = _auto_discover_server()
+            logger.info(f"Auto-discovered server: {cls.server_host}")
+
+        # Server health check
+        if not cls.skip_server_check:
+            if not _check_server_health(cls.server_host):
+                pytest.fail(
+                    f"\n{'=' * 60}\n"
+                    f"SERVER NOT RUNNING at {cls.server_host}\n"
+                    f"{'=' * 60}\n"
+                    f"Start the application server before running integration tests:\n"
+                    f"  uv run python main.py\n"
+                    f"{'=' * 60}"
+                )
+
+        # Auto-discover credentials from env vars
+        cls._env_credentials = _auto_discover_credentials()
 
         # Initialize the client
         cls.client = IntegrationTestClient(
@@ -118,12 +249,7 @@ class BaseIntegrationTest:
 
     @classmethod
     def teardown_class(cls) -> None:
-        """Tear down the test class after all tests complete.
-
-        This method:
-        1. Calls the cleanup_test_environment hook
-        2. Logs a summary of results
-        """
+        """Tear down the test class after all tests complete."""
         logger.info(f"Tearing down integration test class: {cls.__name__}")
 
         # Call user-defined cleanup hook
@@ -134,30 +260,62 @@ class BaseIntegrationTest:
         # Log summary
         if cls._results:
             passed = sum(1 for r in cls._results if r.success)
+            failed = sum(1 for r in cls._results if not r.success)
             total = len(cls._results)
-            logger.info(f"Integration test summary: {passed}/{total} scenarios passed")
+            logger.info(
+                f"Integration test summary: {passed}/{total} passed"
+                + (f", {failed} failed" if failed else "")
+            )
 
-    def test_scenarios(self) -> None:
-        """Execute all scenarios defined in the scenarios list.
+    def _build_scenario_args(self, scenario: Scenario) -> Dict[str, Any]:
+        """Build the API args for a scenario.
 
-        This is the main test method that pytest discovers and runs.
-        It iterates through all scenarios and executes them using subtests.
+        Priority order:
+        1. scenario.args (full override, backward compat) - used as-is
+        2. scenario.credentials/metadata/connection (per-scenario overrides)
+        3. cls.default_credentials/metadata/connection (class-level defaults)
+        4. Auto-discovered from E2E_* env vars (lowest priority for credentials)
+
+        Args:
+            scenario: The scenario to build args for.
+
+        Returns:
+            Dict[str, Any]: The complete args dict for the API call.
         """
-        if not self.scenarios:
-            pytest.skip("No scenarios defined")
+        # If scenario has explicit args (backward compat), use those
+        if scenario.args is not None:
+            return evaluate_if_lazy(scenario.args)
 
-        for scenario in self.scenarios:
-            with self.subTest(scenario=scenario.name):
-                self._execute_scenario(scenario)
+        # Build credentials: env vars -> class defaults -> scenario overrides
+        if scenario.credentials is not None:
+            # Scenario provides explicit credentials - use as-is
+            credentials = scenario.credentials
+        else:
+            # Merge env vars + class defaults
+            credentials = {**self._env_credentials, **self.default_credentials}
+            # Apply build_credentials hook if defined
+            if hasattr(self, "build_credentials") and callable(self.build_credentials):
+                credentials = self.build_credentials(credentials)
 
-    def subTest(self, **kwargs):
-        """Context manager for subtests (compatibility with unittest).
+        args = {"credentials": credentials}
 
-        In pytest, we use pytest.raises or similar patterns.
-        This provides a compatible interface.
-        """
-        # Use a simple context manager that logs the subtest
-        return _SubTestContext(kwargs.get("scenario", "unknown"))
+        # Add metadata for preflight and workflow
+        if scenario.api.lower() in ("preflight", "workflow"):
+            if scenario.metadata is not None:
+                metadata = scenario.metadata
+            else:
+                metadata = {**self.default_metadata}
+            args["metadata"] = metadata
+
+        # Add connection for workflow
+        if scenario.api.lower() == "workflow":
+            if scenario.connection is not None:
+                connection = scenario.connection
+            else:
+                connection = {**self.default_connection}
+            args["connection"] = connection
+
+        return args
 
     def _execute_scenario(self, scenario: Scenario) -> ScenarioResult:
         """Execute a single scenario and return the result.
@@ -183,9 +341,9 @@ class BaseIntegrationTest:
             if hasattr(self, "before_scenario"):
                 self.before_scenario(scenario)
 
-            # Step 1: Evaluate lazy arguments
-            args = self._evaluate_args(scenario.args)
-            logger.debug(f"Evaluated args for {scenario.name}")
+            # Step 1: Build args (auto-fill from env if needed)
+            args = self._build_scenario_args(scenario)
+            logger.debug(f"Built args for {scenario.name}")
 
             # Step 2: Call the API
             endpoint = scenario.endpoint or self.workflow_endpoint
@@ -197,18 +355,27 @@ class BaseIntegrationTest:
             result.response = response
             logger.debug(f"API response for {scenario.name}: {response}")
 
-            # Step 3: Validate assertions
+            # Step 3: Validate assertions with rich error messages
             assertion_results = self._validate_assertions(response, scenario.assert_that)
             result.assertion_results = assertion_results
 
             # Check if all assertions passed
-            all_passed = all(assertion_results.values())
+            all_passed = all(r["passed"] for r in assertion_results.values())
             result.success = all_passed
 
             if not all_passed:
-                failed = [k for k, v in assertion_results.items() if not v]
-                error_msg = f"Assertions failed for paths: {failed}"
-                logger.error(f"Scenario {scenario.name} failed: {error_msg}")
+                failed_details = []
+                for path, detail in assertion_results.items():
+                    if not detail["passed"]:
+                        failed_details.append(
+                            f"  - {path}: expected {detail['expected']}, "
+                            f"got {detail['actual']!r}"
+                        )
+                error_msg = (
+                    f"Assertions failed for scenario '{scenario.name}':\n"
+                    + "\n".join(failed_details)
+                )
+                logger.error(error_msg)
                 raise AssertionError(error_msg)
 
             logger.info(f"Scenario {scenario.name} passed")
@@ -216,11 +383,11 @@ class BaseIntegrationTest:
         except Exception as e:
             result.error = e
             result.success = False
-            logger.error(f"Scenario {scenario.name} failed with error: {e}")
+            if not isinstance(e, (AssertionError, pytest.skip.Exception)):
+                logger.error(f"Scenario {scenario.name} failed with error: {e}")
             raise
 
         finally:
-            # Record duration
             result.duration_ms = (time.time() - start_time) * 1000
             self._results.append(result)
 
@@ -230,47 +397,48 @@ class BaseIntegrationTest:
 
         return result
 
-    def _evaluate_args(self, args: Any) -> Dict[str, Any]:
-        """Evaluate scenario arguments, handling lazy values.
-
-        Args:
-            args: The scenario arguments (may be Lazy or dict).
-
-        Returns:
-            Dict[str, Any]: The evaluated arguments.
-        """
-        return evaluate_if_lazy(args)
-
     def _validate_assertions(
         self,
         response: Dict[str, Any],
         assertions: Dict[str, Any],
-    ) -> Dict[str, bool]:
+    ) -> Dict[str, Dict[str, Any]]:
         """Validate all assertions against the response.
+
+        Returns rich results with actual/expected values for error messages.
 
         Args:
             response: The API response dictionary.
             assertions: Dictionary mapping paths to predicates.
 
         Returns:
-            Dict[str, bool]: Dictionary mapping paths to pass/fail status.
+            Dict[str, Dict]: Dict mapping paths to {passed, actual, expected}.
         """
         results = {}
 
         for path, predicate in assertions.items():
             actual = self._get_nested_value(response, path)
+            expected_desc = getattr(predicate, "__doc__", str(predicate))
+
             try:
                 passed = predicate(actual)
-                results[path] = passed
+                results[path] = {
+                    "passed": passed,
+                    "actual": actual,
+                    "expected": expected_desc,
+                }
                 if not passed:
                     logger.debug(
                         f"Assertion failed: {path} - "
-                        f"expected {getattr(predicate, '__doc__', 'predicate')}, "
-                        f"got {actual!r}"
+                        f"expected {expected_desc}, got {actual!r}"
                     )
             except Exception as e:
                 logger.error(f"Assertion error for {path}: {e}")
-                results[path] = False
+                results[path] = {
+                    "passed": False,
+                    "actual": actual,
+                    "expected": expected_desc,
+                    "error": str(e),
+                }
 
         return results
 
@@ -283,11 +451,6 @@ class BaseIntegrationTest:
 
         Returns:
             Any: The value at the path, or None if not found.
-
-        Example:
-            >>> data = {"data": {"workflow_id": "123"}}
-            >>> _get_nested_value(data, "data.workflow_id")
-            "123"
         """
         if not path:
             return data
@@ -309,45 +472,35 @@ class BaseIntegrationTest:
 
         return current
 
+    # Keep test_scenarios for backward compat but skip if individual tests exist
+    def test_scenarios(self) -> None:
+        """Execute all scenarios (backward compatibility).
 
-class _SubTestContext:
-    """Simple context manager for subtest compatibility."""
+        When __init_subclass__ auto-generates individual test methods,
+        this method becomes a no-op to avoid running scenarios twice.
+        """
+        # If individual test methods were generated, skip this
+        has_individual = any(
+            hasattr(self.__class__, f"test_{s.name}") for s in self.scenarios
+        )
+        if has_individual:
+            return
 
-    def __init__(self, name: str):
-        self.name = name
+        # Backward compat: run all scenarios in one test
+        if not self.scenarios:
+            pytest.skip("No scenarios defined")
 
-    def __enter__(self):
-        logger.debug(f"Starting subtest: {self.name}")
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            logger.debug(f"Subtest {self.name} failed: {exc_val}")
-        else:
-            logger.debug(f"Subtest {self.name} passed")
-        return False  # Don't suppress exceptions
-
-
-# =============================================================================
-# Pytest Integration
-# =============================================================================
+        for scenario in self.scenarios:
+            self._execute_scenario(scenario)
 
 
-def generate_test_methods(test_class: Type[BaseIntegrationTest]) -> None:
-    """Generate individual test methods for each scenario.
+def _generate_individual_tests(test_class: Type[BaseIntegrationTest]) -> None:
+    """Generate individual test methods for each scenario on the class.
 
-    This function can be used to generate separate test methods for each
-    scenario, which provides better pytest output.
+    Each scenario becomes test_<scenario_name> so pytest shows them separately.
 
     Args:
         test_class: The test class to add methods to.
-
-    Example:
-        >>> class MyTest(BaseIntegrationTest):
-        ...     scenarios = [...]
-        >>> 
-        >>> generate_test_methods(MyTest)
-        >>> # Now MyTest has test_auth_valid, test_preflight_valid, etc.
     """
     for scenario in test_class.scenarios:
         method_name = f"test_{scenario.name}"
@@ -355,31 +508,37 @@ def generate_test_methods(test_class: Type[BaseIntegrationTest]) -> None:
         def make_test(s: Scenario):
             def test_method(self):
                 self._execute_scenario(s)
-
+            test_method.__doc__ = s.description or f"Test scenario: {s.name}"
             return test_method
 
         setattr(test_class, method_name, make_test(scenario))
 
 
+# =============================================================================
+# Public API (backward compat)
+# =============================================================================
+
+
+def generate_test_methods(test_class: Type[BaseIntegrationTest]) -> None:
+    """Generate individual test methods for each scenario.
+
+    NOTE: This is now done automatically via __init_subclass__ when you
+    define scenarios on your test class. You don't need to call this manually.
+
+    Args:
+        test_class: The test class to add methods to.
+    """
+    _generate_individual_tests(test_class)
+
+
 def parametrize_scenarios(scenarios: List[Scenario]):
     """Create a pytest parametrize decorator for scenarios.
-
-    This provides an alternative way to run scenarios using pytest's
-    built-in parametrization.
 
     Args:
         scenarios: List of scenarios to parametrize.
 
     Returns:
         A pytest.mark.parametrize decorator.
-
-    Example:
-        >>> scenarios = [Scenario(...), Scenario(...)]
-        >>> 
-        >>> class MyTest(BaseIntegrationTest):
-        ...     @parametrize_scenarios(scenarios)
-        ...     def test_scenario(self, scenario):
-        ...         self._execute_scenario(scenario)
     """
     return pytest.mark.parametrize(
         "scenario",
