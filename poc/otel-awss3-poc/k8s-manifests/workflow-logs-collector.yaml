@@ -1,0 +1,160 @@
+# Workflow Logs OTEL Collector - Standalone manifest for tenant deployment
+# BLDX-361: POC for workflow log observability
+#
+# Receives logs from SDK's OTEL_WORKFLOW_LOGS_ENDPOINT and exports to:
+# 1. S3 for historical archival
+# 2. Observability app for live SSE streaming
+#
+# IMPORTANT: Update the ConfigMap values for your tenant before applying!
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-temporal
+  labels:
+    name: platform-temporal
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workflow-logs-collector-config
+  namespace: platform-temporal
+data:
+  collector-config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 100
+        send_batch_max_size: 200
+
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+
+    exporters:
+      # Debug exporter for troubleshooting
+      debug:
+        verbosity: detailed
+
+      # Archive to S3 with hive partitions
+      # IMPORTANT: Update these values for your tenant!
+      awss3:
+        s3uploader:
+          # Update REGION placeholder
+          endpoint: https://s3.ap-south-1.amazonaws.com
+          compression: none
+          # Update REGION placeholder
+          region: ap-south-1
+          # Update BUCKET placeholder (e.g., atlan-vcluster-aplon95p04-5049w2n0ijcf)
+          s3_bucket: atlan-vcluster-atlan3zp01-274192nd53wj
+          s3_prefix: workflow-logs/logs
+
+      # Live streaming to observability app
+      otlphttp:
+        endpoint: http://observability-app.platform-temporal.svc.cluster.local:8080
+        encoding: json
+        tls:
+          insecure: true
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [awss3, otlphttp, debug]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflow-logs-collector
+  namespace: platform-temporal
+  labels:
+    app: workflow-logs-collector
+    component: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workflow-logs-collector
+  template:
+    metadata:
+      labels:
+        app: workflow-logs-collector
+    spec:
+      serviceAccountName: default
+      containers:
+      - name: collector
+        image: ghcr.io/atlanhq/opentelemetry-collector-contrib:0.126.0
+        args:
+          - --config=/etc/otel/collector-config.yaml
+        ports:
+        - containerPort: 4317
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 4318
+          name: otlp-http
+          protocol: TCP
+        volumeMounts:
+        - name: config
+          mountPath: /etc/otel
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: workflow-logs-collector-config
+      imagePullSecrets:
+      - name: github-docker-registry
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workflow-logs-collector
+  namespace: platform-temporal
+  labels:
+    app: workflow-logs-collector
+    component: observability
+spec:
+  selector:
+    app: workflow-logs-collector
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+    protocol: TCP
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+    protocol: TCP
+  type: ClusterIP

@@ -1,0 +1,118 @@
+---
+# ConfigMap for OTEL Collector
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workflow-logs-collector-config
+  namespace: default
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch/archive:
+        timeout: 10s
+        send_batch_size: 100
+      resourcedetection:
+        detectors: [env, system]
+        timeout: 5s
+
+    exporters:
+      awss3:
+        s3uploader:
+          region: ap-south-1
+          s3_bucket: atlan-vcluster-aplon95p04-5049w2n0ijcf
+          s3_prefix: workflow-logs/logs
+          s3_partition_format: 'year=%Y/month=%m/day=%d/hour=%H/minute=%M'
+        marshaler: otlp_json
+
+      debug:
+        verbosity: basic
+
+    service:
+      telemetry:
+        logs:
+          level: info
+        metrics:
+          level: basic
+      pipelines:
+        logs/archive:
+          receivers: [otlp]
+          processors: [resourcedetection, batch/archive]
+          exporters: [awss3, debug]
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflow-logs-collector
+  namespace: default
+  labels:
+    app: workflow-logs-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workflow-logs-collector
+  template:
+    metadata:
+      labels:
+        app: workflow-logs-collector
+    spec:
+      containers:
+      - name: collector
+        image: otel/opentelemetry-collector-contrib:0.129.1
+        args:
+          - --config=/etc/otel/config.yaml
+        ports:
+          - containerPort: 4317
+            name: otlp-grpc
+          - containerPort: 4318
+            name: otlp-http
+          - containerPort: 8888
+            name: metrics
+        env:
+          - name: AWS_REGION
+            value: ap-south-1
+        volumeMounts:
+          - name: config
+            mountPath: /etc/otel
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: workflow-logs-collector-config
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: workflow-logs-collector
+  namespace: default
+  labels:
+    app: workflow-logs-collector
+spec:
+  selector:
+    app: workflow-logs-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+    - name: metrics
+      port: 8888
+      targetPort: 8888

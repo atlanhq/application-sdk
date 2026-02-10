@@ -1,0 +1,174 @@
+version: "3.8"
+
+services:
+  # ===========================================
+  # MinIO - S3-compatible object storage
+  # ===========================================
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Create buckets in MinIO
+  createbuckets:
+    image: minio/mc:latest
+    container_name: createbuckets
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc mb myminio/workflow-logs --ignore-existing;
+      mc anonymous set public myminio/workflow-logs;
+      echo 'Bucket workflow-logs created';
+      exit 0;
+      "
+
+  # ===========================================
+  # OTEL Collector with awss3 + otlphttp exporters
+  # ===========================================
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./collector-config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8888:8888"   # Prometheus metrics
+    depends_on:
+      minio:
+        condition: service_healthy
+      observability-app:
+        condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+
+  # ===========================================
+  # Observability App - FastAPI
+  # ===========================================
+  observability-app:
+    build:
+      context: ./observability-app
+      dockerfile: Dockerfile
+    container_name: observability-app
+    ports:
+      - "8081:8080"
+    environment:
+      - PORT=8080
+      # Polaris/Iceberg config (mounted from creds file if available)
+      - POLARIS_CATALOG_URI=${POLARIS_CATALOG_URI:-}
+      - POLARIS_CRED=${POLARIS_CRED:-}
+      - CATALOG_NAME=${CATALOG_NAME:-context_store}
+      - WAREHOUSE_NAME=${WAREHOUSE_NAME:-context_store}
+      - NAMESPACE=${NAMESPACE:-Workflow_Log_Test}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================
+  # Mock Workers (3 instances)
+  # ===========================================
+  worker-snowflake:
+    build:
+      context: ./mock-worker
+      dockerfile: Dockerfile
+    container_name: worker-snowflake
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
+      - SERVICE_NAME=snowflake-extractor
+      - WORKFLOW_ID=wf-snowflake-001
+      - TRACE_ID=wf-snowflake-001
+      - LOG_INTERVAL_MS=2000
+      - RUN_ID=run-sf-001
+    depends_on:
+      collector:
+        condition: service_started
+
+  worker-mssql:
+    build:
+      context: ./mock-worker
+      dockerfile: Dockerfile
+    container_name: worker-mssql
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
+      - SERVICE_NAME=mssql-extractor
+      - WORKFLOW_ID=wf-mssql-002
+      - TRACE_ID=wf-mssql-002
+      - LOG_INTERVAL_MS=1500
+      - RUN_ID=run-mssql-001
+    depends_on:
+      collector:
+        condition: service_started
+
+  worker-postgres:
+    build:
+      context: ./mock-worker
+      dockerfile: Dockerfile
+    container_name: worker-postgres
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
+      - SERVICE_NAME=postgres-extractor
+      - WORKFLOW_ID=wf-postgres-003
+      - TRACE_ID=wf-postgres-003
+      - LOG_INTERVAL_MS=1000
+      - RUN_ID=run-pg-001
+    depends_on:
+      collector:
+        condition: service_started
+
+  # ===========================================
+  # Ingestion Service - S3 to Iceberg sync
+  # (Optional - run manually or on schedule)
+  # ===========================================
+  ingestion:
+    build:
+      context: ../mdlh-logs-poc
+      dockerfile: ../otel-awss3-poc/ingestion/Dockerfile
+    container_name: ingestion
+    environment:
+      # MinIO connection
+      - S3_ENDPOINT=http://minio:9000
+      - S3_FORCE_PATH_STYLE=true
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_SESSION_TOKEN=
+      - AWS_REGION=us-east-1
+      - S3_BUCKET=workflow-logs
+      - S3_PREFIX=logs
+      # Polaris/Iceberg config
+      - POLARIS_CATALOG_URI=${POLARIS_CATALOG_URI:-}
+      - POLARIS_CRED=${POLARIS_CRED:-}
+      - CATALOG_NAME=${CATALOG_NAME:-context_store}
+      - WAREHOUSE_NAME=${WAREHOUSE_NAME:-context_store}
+      - NAMESPACE=${NAMESPACE:-Workflow_Log_Test}
+    depends_on:
+      minio:
+        condition: service_healthy
+    profiles:
+      - ingestion  # Only run when explicitly requested
+
+volumes:
+  minio-data:
+
+networks:
+  default:
+    name: otel-logs-network

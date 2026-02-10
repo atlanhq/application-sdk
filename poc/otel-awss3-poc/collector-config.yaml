@@ -1,0 +1,82 @@
+# OpenTelemetry Collector Configuration
+# Dual pipeline: archival to S3 (awss3) + live streaming (otlphttp)
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Batch processor for archival pipeline (larger batches, longer timeout)
+  batch/archive:
+    timeout: 10s
+    send_batch_size: 100
+    send_batch_max_size: 200
+
+  # Batch processor for live pipeline (smaller batches, shorter timeout)
+  batch/live:
+    timeout: 2s
+    send_batch_size: 50
+    send_batch_max_size: 100
+
+  # Resource detection for adding host info
+  resourcedetection:
+    detectors: [env, system]
+    system:
+      hostname_sources: [os]
+
+exporters:
+  # Archive to S3 (MinIO) with Hive partitions
+  awss3:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: workflow-logs
+      s3_prefix: logs
+      # Hive-style partitions: year=YYYY/month=MM/day=DD/hour=HH
+      s3_partition: minute
+      endpoint: http://minio:9000
+      s3_force_path_style: true
+    marshaler: otlp_json
+
+  # Live streaming to observability app
+  otlphttp/live:
+    endpoint: http://observability-app:8080
+    encoding: json
+    compression: none
+    tls:
+      insecure: true
+
+  # Debug exporter for troubleshooting
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+service:
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: 0.0.0.0:8888
+
+  pipelines:
+    # Archival pipeline: logs -> batch -> S3
+    logs/archive:
+      receivers: [otlp]
+      processors: [resourcedetection, batch/archive]
+      exporters: [awss3]
+
+    # Live streaming pipeline: logs -> batch -> observability app
+    logs/live:
+      receivers: [otlp]
+      processors: [resourcedetection, batch/live]
+      exporters: [otlphttp/live]
+
+    # Debug pipeline (optional, uncomment for troubleshooting)
+    # logs/debug:
+    #   receivers: [otlp]
+    #   processors: [batch/live]
+    #   exporters: [debug]
