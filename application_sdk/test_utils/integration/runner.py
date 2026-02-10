@@ -124,7 +124,7 @@ def _check_server_health(server_url: str, timeout: int = 5) -> bool:
         bool: True if server is reachable, False otherwise.
     """
     try:
-        response = http_requests.get(f"{server_url}/api/health", timeout=timeout)
+        response = http_requests.get(f"{server_url}/server/health", timeout=timeout)
         return response.status_code == 200
     except http_requests.ConnectionError:
         return False
