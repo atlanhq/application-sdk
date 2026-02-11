@@ -55,10 +55,16 @@ from application_sdk.decorators.automation_activity.models import (
     Parameter,
     ToolMetadata,
 )
-from application_sdk.decorators.automation_activity.registration import MAX_RETRIES, _flush_specs
-from application_sdk.decorators.automation_activity.schema import _build_schema_from_parameters
-from application_sdk.decorators.automation_activity.validation import _validate_inputs_outputs
-
+from application_sdk.decorators.automation_activity.registration import (
+    MAX_RETRIES,
+    _flush_specs,
+)
+from application_sdk.decorators.automation_activity.schema import (
+    _build_schema_from_parameters,
+)
+from application_sdk.decorators.automation_activity.validation import (
+    _validate_inputs_outputs,
+)
 
 # =============================================================================
 # Global registry (W2: thread-safe)
@@ -201,14 +207,15 @@ async def flush_activity_registrations(
         max_retries: Maximum number of retries for transient HTTP failures.
             Defaults to 3.
     """
-    if activity_specs is not None:
-        specs_to_register = activity_specs
-    else:
+    uses_global = activity_specs is None
+    if uses_global:
         with _specs_lock:
             specs_to_register = ACTIVITY_SPECS.copy()
             ACTIVITY_SPECS.clear()
+    else:
+        specs_to_register = activity_specs  # type: ignore[assignment]
 
-    await _flush_specs(
+    success = await _flush_specs(
         specs_to_register=specs_to_register,
         app_name=app_name,
         workflow_task_queue=workflow_task_queue,
@@ -216,3 +223,8 @@ async def flush_activity_registrations(
         app_qualified_name=app_qualified_name,
         max_retries=max_retries,
     )
+
+    # Re-add specs so a subsequent retry can pick them up
+    if not success and uses_global and specs_to_register:
+        with _specs_lock:
+            ACTIVITY_SPECS.extend(specs_to_register)

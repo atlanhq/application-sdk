@@ -1,17 +1,49 @@
 """JSON Schema building helpers for the automation activity decorator."""
 
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, get_args, get_origin, get_type_hints
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from pydantic import BaseModel
 
 from application_sdk.decorators.automation_activity.models import (
+    X_AUTOMATION_ENGINE,
     ActivityCategory,
     ActivitySpec,
     Annotation,
     Parameter,
-    ToolMetadata,
-    X_AUTOMATION_ENGINE,
+    ToolSpec,
+)
+
+# Keys that schema_extra is allowed to set. Prevents callers from
+# accidentally overwriting structural keys like "type" or "description".
+_ALLOWED_SCHEMA_EXTRA_KEYS = frozenset(
+    {
+        "minItems",
+        "maxItems",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "pattern",
+        "enum",
+        "const",
+        "multipleOf",
+        "uniqueItems",
+        "format",
+    }
 )
 
 
@@ -20,21 +52,18 @@ def _get_category_value(category: ActivityCategory) -> str:
     return category.value if hasattr(category, "value") else str(category)
 
 
-def _build_tool_dict(spec: ActivitySpec) -> Dict[str, Any]:
-    """Build tool dictionary from ActivitySpec for API submission."""
-    tool_dict: Dict[str, Any] = {
-        "name": spec.name,
-        "display_name": spec.display_name,
-        "category": _get_category_value(spec.category),
-        "description": spec.description,
-        "input_schema": spec.input_schema,
-        "output_schema": spec.output_schema,
-    }
-    if spec.examples is not None:
-        tool_dict["examples"] = spec.examples
-    if spec.metadata is not None:
-        tool_dict["metadata"] = spec.metadata.model_dump(exclude_none=True)
-    return tool_dict
+def _build_tool_spec(spec: ActivitySpec) -> ToolSpec:
+    """Build a ``ToolSpec`` from an ``ActivitySpec`` for API submission."""
+    return ToolSpec(
+        name=spec.name,
+        display_name=spec.display_name,
+        category=_get_category_value(spec.category),
+        description=spec.description,
+        input_schema=spec.input_schema,
+        output_schema=spec.output_schema,
+        examples=spec.examples,
+        metadata=spec.metadata.model_dump(exclude_none=True) if spec.metadata else None,
+    )
 
 
 def _build_schema_object(
@@ -112,6 +141,21 @@ def _get_json_schema_type_from_hint(type_hint: Any) -> Dict[str, Any]:
     return {"type": "object"}
 
 
+def _validate_and_apply_schema_extra(
+    param: Parameter, prop_schema: Dict[str, Any]
+) -> None:
+    """Validate and merge ``schema_extra`` into *prop_schema* in-place."""
+    if not param.schema_extra:
+        return
+    disallowed = set(param.schema_extra) - _ALLOWED_SCHEMA_EXTRA_KEYS
+    if disallowed:
+        raise ValueError(
+            f"Parameter '{param.name}' has disallowed schema_extra keys: "
+            f"{disallowed}. Allowed keys: {sorted(_ALLOWED_SCHEMA_EXTRA_KEYS)}"
+        )
+    prop_schema.update(param.schema_extra)
+
+
 # ---------------------------------------------------------------------------
 # Input schema
 # ---------------------------------------------------------------------------
@@ -140,9 +184,7 @@ def _build_input_schema_from_parameters(
             exclude_none=True, mode="json"
         )
 
-        # Merge in schema_extra constraints (minItems, maxLength, etc.)
-        if param.schema_extra:
-            prop_schema.update(param.schema_extra)
+        _validate_and_apply_schema_extra(param, prop_schema)
 
         if param_obj.default != inspect.Parameter.empty:
             prop_schema["default"] = param_obj.default
@@ -213,9 +255,7 @@ def _process_nested_model_fields(model_schema: Dict[str, Any]) -> None:
         if is_nested_model:
             _process_nested_model_fields(field_schema)
         elif is_model_reference:
-            nested_model = _resolve_nested_model_reference(
-                model_schema, field_schema
-            )
+            nested_model = _resolve_nested_model_reference(model_schema, field_schema)
             if nested_model:
                 _process_nested_model_fields(nested_model)
 
@@ -240,6 +280,7 @@ def _build_output_schema_from_parameters(
             prop_schema[X_AUTOMATION_ENGINE] = param.annotations.model_dump(
                 exclude_none=True, mode="json"
             )
+            _validate_and_apply_schema_extra(param, prop_schema)
             properties[param.name] = prop_schema
             required.append(param.name)
         schema = _build_schema_object(properties, required)
@@ -261,6 +302,7 @@ def _build_output_schema_from_parameters(
             exclude_none=True, mode="json"
         )
         _process_nested_model_fields(model_schema)
+        _validate_and_apply_schema_extra(output_param, model_schema)
         properties[output_param.name] = model_schema
     else:
         prop_schema = _get_json_schema_type_from_hint(return_type_hint)
@@ -268,6 +310,7 @@ def _build_output_schema_from_parameters(
         prop_schema[X_AUTOMATION_ENGINE] = output_param.annotations.model_dump(
             exclude_none=True, mode="json"
         )
+        _validate_and_apply_schema_extra(output_param, prop_schema)
         properties[output_param.name] = prop_schema
 
     required.append(output_param.name)
