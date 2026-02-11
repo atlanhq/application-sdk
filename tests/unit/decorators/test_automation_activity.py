@@ -11,21 +11,29 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from pydantic import BaseModel, Field
 
-from application_sdk.decorators.automation_activity import (
-    ACTIVITY_SPECS,
+from application_sdk.decorators._models import (
     ActivityCategory,
     Annotation,
     Parameter,
     SubType,
     ToolMetadata,
-    _extract_and_hoist_defs,
+)
+from application_sdk.decorators._registration import (
+    _request_with_retry,
     _resolve_app_qualified_name,
     _resolve_automation_engine_api_url,
+    _validate_base_url,
+)
+from application_sdk.decorators._schema import _extract_and_hoist_defs
+from application_sdk.decorators.automation_activity import (
+    ACTIVITY_SPECS,
     automation_activity,
     flush_activity_registrations,
+    isolated_activity_specs,
 )
 
 
@@ -692,6 +700,7 @@ class TestFlushActivityRegistrations(unittest.TestCase):
             app_name="test",
             workflow_task_queue="q",
             automation_engine_api_url="http://localhost:99999",
+            max_retries=0,
         )
         self.assertEqual(len(ACTIVITY_SPECS), 0)
 
@@ -716,6 +725,337 @@ class TestFlushActivityRegistrations(unittest.TestCase):
             workflow_task_queue="q",
             automation_engine_api_url="http://localhost:99999",
             activity_specs=[],  # explicit empty list
+            max_retries=0,
         )
         # Global should NOT have been cleared
         self.assertEqual(len(ACTIVITY_SPECS), 1)
+
+
+# =============================================================================
+# URL validation tests (T3)
+# =============================================================================
+
+
+class TestValidateBaseUrl(unittest.TestCase):
+    """Tests for _validate_base_url SSRF protection."""
+
+    def test_http_url_accepted(self):
+        _validate_base_url("http://localhost:8000")
+
+    def test_https_url_accepted(self):
+        _validate_base_url("https://engine.internal:443")
+
+    def test_ftp_scheme_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            _validate_base_url("ftp://evil.com/data")
+        self.assertIn("Unsupported URL scheme", str(ctx.exception))
+
+    def test_file_scheme_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            _validate_base_url("file:///etc/passwd")
+        self.assertIn("Unsupported URL scheme", str(ctx.exception))
+
+    def test_no_hostname_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            _validate_base_url("http://")
+        self.assertIn("no hostname", str(ctx.exception))
+
+    def test_aws_metadata_endpoint_blocked(self):
+        with self.assertRaises(ValueError) as ctx:
+            _validate_base_url("http://169.254.169.254/latest/meta-data/")
+        self.assertIn("Blocked host", str(ctx.exception))
+
+    def test_gcp_metadata_endpoint_blocked(self):
+        with self.assertRaises(ValueError) as ctx:
+            _validate_base_url("http://metadata.google.internal/computeMetadata/v1/")
+        self.assertIn("Blocked host", str(ctx.exception))
+
+    @pytest.mark.asyncio
+    async def test_flush_skips_on_invalid_url(self):
+        """flush should log warning and skip when URL fails validation."""
+        ACTIVITY_SPECS.clear()
+
+        @automation_activity(
+            display_name="T",
+            description="T",
+            inputs=[],
+            outputs=[],
+            category=ActivityCategory.UTILITY,
+        )
+        def test_func() -> None:
+            pass
+
+        await flush_activity_registrations(
+            app_name="test",
+            workflow_task_queue="q",
+            automation_engine_api_url="ftp://evil.com",
+            max_retries=0,
+        )
+        # Should not raise — graceful degradation
+        ACTIVITY_SPECS.clear()
+
+
+# =============================================================================
+# isolated_activity_specs tests (T2)
+# =============================================================================
+
+
+class TestIsolatedActivitySpecs(unittest.TestCase):
+    """Tests for the isolated_activity_specs context manager."""
+
+    def setUp(self):
+        ACTIVITY_SPECS.clear()
+
+    def tearDown(self):
+        ACTIVITY_SPECS.clear()
+
+    def test_context_manager_yields_empty_list(self):
+        # Pre-populate some specs
+        @automation_activity(
+            display_name="Pre",
+            description="Pre",
+            inputs=[],
+            outputs=[],
+            category=ActivityCategory.UTILITY,
+        )
+        def pre_func() -> None:
+            pass
+
+        self.assertEqual(len(ACTIVITY_SPECS), 1)
+
+        with isolated_activity_specs() as specs:
+            # Inside the context, ACTIVITY_SPECS is empty
+            self.assertEqual(len(specs), 0)
+            self.assertEqual(len(ACTIVITY_SPECS), 0)
+
+        # After the context, previous specs are restored
+        self.assertEqual(len(ACTIVITY_SPECS), 1)
+        self.assertEqual(ACTIVITY_SPECS[0].display_name, "Pre")
+
+    def test_specs_registered_inside_context_are_discarded(self):
+        with isolated_activity_specs() as specs:
+            @automation_activity(
+                display_name="Inside",
+                description="Inside",
+                inputs=[],
+                outputs=[],
+                category=ActivityCategory.UTILITY,
+            )
+            def inner_func() -> None:
+                pass
+
+            self.assertEqual(len(specs), 1)
+
+        # After context, the inner spec is gone
+        self.assertEqual(len(ACTIVITY_SPECS), 0)
+
+    def test_restores_on_exception(self):
+        @automation_activity(
+            display_name="Safe",
+            description="Safe",
+            inputs=[],
+            outputs=[],
+            category=ActivityCategory.UTILITY,
+        )
+        def safe_func() -> None:
+            pass
+
+        self.assertEqual(len(ACTIVITY_SPECS), 1)
+
+        with self.assertRaises(RuntimeError):
+            with isolated_activity_specs():
+                raise RuntimeError("boom")
+
+        # Even after exception, original specs are restored
+        self.assertEqual(len(ACTIVITY_SPECS), 1)
+        self.assertEqual(ACTIVITY_SPECS[0].display_name, "Safe")
+
+
+# =============================================================================
+# Retry tests (W5)
+# =============================================================================
+
+
+class TestRequestWithRetry(unittest.TestCase):
+    """Tests for _request_with_retry."""
+
+    @pytest.mark.asyncio
+    async def test_succeeds_on_first_try(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.request = AsyncMock(return_value=mock_response)
+
+        result = await _request_with_retry(
+            mock_client, "GET", "http://example.com", max_retries=2
+        )
+        self.assertEqual(result, mock_response)
+        self.assertEqual(mock_client.request.call_count, 1)
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.decorators._registration.asyncio.sleep", new_callable=AsyncMock)
+    async def test_retries_on_connect_error(self, mock_sleep):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.request = AsyncMock(
+            side_effect=[
+                httpx.ConnectError("Connection refused"),
+                httpx.ConnectError("Connection refused"),
+                mock_response,
+            ]
+        )
+
+        result = await _request_with_retry(
+            mock_client, "GET", "http://example.com", max_retries=2
+        )
+        self.assertEqual(result, mock_response)
+        self.assertEqual(mock_client.request.call_count, 3)
+        self.assertEqual(mock_sleep.call_count, 2)
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.decorators._registration.asyncio.sleep", new_callable=AsyncMock)
+    async def test_retries_on_retryable_status(self, mock_sleep):
+        retry_response = MagicMock()
+        retry_response.status_code = 503
+
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        ok_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.request = AsyncMock(
+            side_effect=[retry_response, ok_response]
+        )
+
+        result = await _request_with_retry(
+            mock_client, "GET", "http://example.com", max_retries=2
+        )
+        self.assertEqual(result, ok_response)
+        self.assertEqual(mock_client.request.call_count, 2)
+
+    @pytest.mark.asyncio
+    async def test_raises_after_max_retries(self):
+        mock_client = AsyncMock()
+        mock_client.request = AsyncMock(
+            side_effect=httpx.ConnectError("Connection refused")
+        )
+
+        with patch(
+            "application_sdk.decorators._registration.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
+            with self.assertRaises(httpx.ConnectError):
+                await _request_with_retry(
+                    mock_client, "GET", "http://example.com", max_retries=1
+                )
+
+        # 1 initial + 1 retry = 2 attempts
+        self.assertEqual(mock_client.request.call_count, 2)
+
+    @pytest.mark.asyncio
+    async def test_non_retryable_status_raises_immediately(self):
+        error_response = MagicMock()
+        error_response.status_code = 404
+        error_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "Not Found",
+                request=MagicMock(),
+                response=error_response,
+            )
+        )
+
+        mock_client = AsyncMock()
+        mock_client.request = AsyncMock(return_value=error_response)
+
+        with self.assertRaises(httpx.HTTPStatusError):
+            await _request_with_retry(
+                mock_client, "GET", "http://example.com", max_retries=3
+            )
+
+        # Should NOT retry on 404
+        self.assertEqual(mock_client.request.call_count, 1)
+
+
+# =============================================================================
+# Short-circuit tests (W4)
+# =============================================================================
+
+
+class TestFlushShortCircuit(unittest.TestCase):
+    """Tests that flush short-circuits when app upsert fails."""
+
+    def setUp(self):
+        ACTIVITY_SPECS.clear()
+
+    def tearDown(self):
+        ACTIVITY_SPECS.clear()
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.decorators._registration._request_with_retry", new_callable=AsyncMock)
+    async def test_upsert_failure_skips_tool_registration(self, mock_request):
+        """When the app upsert fails, tool registration should be skipped."""
+        health_response = MagicMock()
+        health_response.status_code = 200
+
+        mock_request.side_effect = [
+            health_response,  # health check passes
+            httpx.HTTPStatusError(
+                "Server Error",
+                request=MagicMock(),
+                response=MagicMock(status_code=500),
+            ),  # upsert fails
+        ]
+
+        @automation_activity(
+            display_name="T",
+            description="T",
+            inputs=[],
+            outputs=[],
+            category=ActivityCategory.UTILITY,
+        )
+        def test_func() -> None:
+            pass
+
+        await flush_activity_registrations(
+            app_name="test",
+            workflow_task_queue="q",
+            automation_engine_api_url="http://localhost:8000",
+            max_retries=0,
+        )
+
+        # Should only have called health check + upsert, NOT tool registration
+        self.assertEqual(mock_request.call_count, 2)
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.decorators._registration.asyncio.sleep", new_callable=AsyncMock)
+    @patch("application_sdk.decorators._registration._request_with_retry", new_callable=AsyncMock)
+    async def test_successful_flow_calls_all_three(self, mock_request, mock_sleep):
+        """On success, all three HTTP calls should be made."""
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        mock_request.return_value = ok_response
+
+        @automation_activity(
+            display_name="T",
+            description="T",
+            inputs=[],
+            outputs=[],
+            category=ActivityCategory.UTILITY,
+        )
+        def test_func() -> None:
+            pass
+
+        await flush_activity_registrations(
+            app_name="test",
+            workflow_task_queue="q",
+            automation_engine_api_url="http://localhost:8000",
+            max_retries=0,
+        )
+
+        # health check + upsert + tools = 3 calls
+        self.assertEqual(mock_request.call_count, 3)

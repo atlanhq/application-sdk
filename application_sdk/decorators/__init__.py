@@ -1,16 +1,19 @@
 """Decorators package for the Atlan Application SDK."""
 
-from application_sdk.decorators.automation_activity import (
-    ACTIVITY_SPECS,
+from application_sdk.decorators._models import (
     ActivityCategory,
+    ActivitySpec,
     Annotation,
     AppSpec,
-    ActivitySpec,
     Parameter,
     SubType,
     ToolMetadata,
+)
+from application_sdk.decorators.automation_activity import (
+    ACTIVITY_SPECS,
     automation_activity,
     flush_activity_registrations,
+    isolated_activity_specs,
 )
 
 __all__ = [
@@ -24,4 +27,5 @@ __all__ = [
     "ToolMetadata",
     "automation_activity",
     "flush_activity_registrations",
+    "isolated_activity_specs",
 ]
