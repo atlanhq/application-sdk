@@ -28,7 +28,6 @@ from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
-from application_sdk.observability.observability import DuckDBUI
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
@@ -77,7 +76,7 @@ class APIServer(ServerInterface):
         docs_export_path (str): Path where documentation will be exported.
         workflows (List[WorkflowInterface]): List of registered workflows.
         event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
-        duckdb_ui (DuckDBUI): Instance of DuckDBUI for handling DuckDB UI functionality.
+        _duckdb_ui: Lazily instantiated DuckDBUI for handling DuckDB UI functionality.
 
     Args:
         lifespan: Optional lifespan manager for the FastAPI application.
@@ -94,7 +93,7 @@ class APIServer(ServerInterface):
     subscription_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
-    duckdb_ui: DuckDBUI
+    _duckdb_ui: Optional[Any] = None
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
@@ -129,7 +128,7 @@ class APIServer(ServerInterface):
         self.handler = handler
         self.workflow_client = workflow_client
         self.templates = Jinja2Templates(directory=frontend_templates_path)
-        self.duckdb_ui = DuckDBUI()
+        self._duckdb_ui = None  # Lazily instantiated on first /observability access
         self.ui_enabled = ui_enabled
         self.has_configmap = has_configmap
 
@@ -163,7 +162,13 @@ class APIServer(ServerInterface):
 
     def observability(self, request: Request) -> RedirectResponse:
         """Endpoint to launch DuckDB UI for log self-serve exploration."""
-        self.duckdb_ui.start_ui()
+        # Lazy import and instantiation: DuckDBUI (and its heavy duckdb/pandas deps)
+        # are only loaded when the /observability endpoint is actually accessed
+        if self._duckdb_ui is None:
+            from application_sdk.observability.observability import DuckDBUI
+
+            self._duckdb_ui = DuckDBUI()
+        self._duckdb_ui.start_ui()
         # Redirect to the local DuckDB UI
         return RedirectResponse(url="http://0.0.0.0:4213")
 

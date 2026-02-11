@@ -10,8 +10,6 @@ from pathlib import Path
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
-import duckdb
-import pandas as pd
 from dapr.clients import DaprClient
 from pydantic import BaseModel
 
@@ -397,6 +395,9 @@ class AtlanObservability(Generic[T], ABC):
 
                 # Write records to each partition using ParquetFileWriter
             for partition_path, partition_data in partition_records.items():
+                # Lazy import: pandas is only needed when flushing observability records
+                import pandas as pd
+
                 # Create new dataframe from current records
                 new_df = pd.DataFrame(partition_data)
 
@@ -614,6 +615,9 @@ class DuckDBUI:
     def start_ui(self):
         """Start DuckDB UI and create views for Hive partitioned parquet files."""
         if not self._is_duckdb_ui_running():
+            # Lazy import: duckdb is only needed when the observability UI is accessed
+            import duckdb
+
             os.makedirs(self.observability_dir, exist_ok=True)
             con = duckdb.connect(self.db_path)
 
