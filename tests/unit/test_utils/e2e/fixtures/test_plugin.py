@@ -1,5 +1,5 @@
 import os
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from application_sdk.test_utils.e2e.fixtures import plugin
 from application_sdk.test_utils.e2e.fixtures.base import (
@@ -34,53 +34,66 @@ class TestPlugin:
         StubFixture.teardown_called = False
         plugin._active_fixture = None
 
-    def _make_session(self, fixture_class=None):
-        config = MagicMock()
-        if fixture_class:
-            config._datasource_fixture_class = fixture_class
-        else:
-            del config._datasource_fixture_class
+    def _make_session(self, yaml_path=None):
+        config = MagicMock(spec=[])
+        if yaml_path:
+            config._datasource_yaml = yaml_path
         session = MagicMock()
         session.config = config
         return session
 
-    def test_sessionstart_noop_without_fixture_class(self):
-        session = self._make_session(fixture_class=None)
+    def test_sessionstart_noop_without_yaml(self):
+        session = self._make_session()
         plugin.pytest_sessionstart(session)
         assert plugin._active_fixture is None
 
-    def test_sessionstart_creates_and_sets_up_fixture(self, monkeypatch):
-        session = self._make_session(fixture_class=StubFixture)
-        plugin.pytest_sessionstart(session)
+    def test_sessionstart_loads_yaml_and_sets_up_fixture(self, monkeypatch):
+        stub = StubFixture()
+        with patch(
+            "application_sdk.test_utils.e2e.fixtures.loader.load_fixture_from_yaml",
+            return_value=stub,
+        ) as mock_load:
+            session = self._make_session(yaml_path="/path/to/datasource.yaml")
+            plugin.pytest_sessionstart(session)
 
-        assert StubFixture.setup_called
-        assert plugin._active_fixture is not None
-        assert os.environ.get("STUB_HOST") == "stub-host"
-        assert os.environ.get("STUB_PORT") == "9999"
+            mock_load.assert_called_once_with("/path/to/datasource.yaml")
+            assert StubFixture.setup_called
+            assert plugin._active_fixture is stub
+            assert os.environ.get("STUB_HOST") == "stub-host"
+            assert os.environ.get("STUB_PORT") == "9999"
 
-        # Cleanup
         monkeypatch.delenv("STUB_HOST", raising=False)
         monkeypatch.delenv("STUB_PORT", raising=False)
 
-    def test_sessionfinish_tears_down_fixture(self):
-        session = self._make_session(fixture_class=StubFixture)
-        plugin.pytest_sessionstart(session)
-        plugin.pytest_sessionfinish(session, exitstatus=0)
+    def test_sessionfinish_tears_down_fixture(self, monkeypatch):
+        stub = StubFixture()
+        with patch(
+            "application_sdk.test_utils.e2e.fixtures.loader.load_fixture_from_yaml",
+            return_value=stub,
+        ):
+            session = self._make_session(yaml_path="/path/to/datasource.yaml")
+            plugin.pytest_sessionstart(session)
+            plugin.pytest_sessionfinish(session, exitstatus=0)
 
         assert StubFixture.teardown_called
         assert plugin._active_fixture is None
+
+        monkeypatch.delenv("STUB_HOST", raising=False)
+        monkeypatch.delenv("STUB_PORT", raising=False)
 
     def test_sessionfinish_noop_without_active_fixture(self):
         session = self._make_session()
         plugin.pytest_sessionfinish(session, exitstatus=0)  # should not raise
 
     def test_connection_info_stored_on_config(self, monkeypatch):
-        session = self._make_session(fixture_class=StubFixture)
-        plugin.pytest_sessionstart(session)
+        stub = StubFixture()
+        with patch(
+            "application_sdk.test_utils.e2e.fixtures.loader.load_fixture_from_yaml",
+            return_value=stub,
+        ):
+            session = self._make_session(yaml_path="/path/to/datasource.yaml")
+            plugin.pytest_sessionstart(session)
 
-        session.config._datasource_connection_info = ConnectionInfo(
-            "stub-host", 9999, "u", "p", "db"
-        )
         info = session.config._datasource_connection_info
         assert info.host == "stub-host"
 

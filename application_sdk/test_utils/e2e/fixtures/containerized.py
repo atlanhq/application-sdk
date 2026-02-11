@@ -1,82 +1,82 @@
-from abc import abstractmethod
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+"""Containerized data source fixture.
+
+Uses testcontainers GenericContainer so apps don't need to write any
+Python — just a datasource.yaml with image, port, env, volumes, credentials.
+"""
+
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from application_sdk.test_utils.e2e.fixtures.base import (
     ConnectionInfo,
     DataSourceFixture,
 )
+from application_sdk.test_utils.e2e.fixtures.readiness import check_tcp
+from application_sdk.test_utils.e2e.fixtures.schema import ContainerizedDatasourceConfig
 
 
-@dataclass
-class VolumeMapping:
-    """Describes a host-path to container-path volume mount."""
+class ContainerizedFixture(DataSourceFixture):
+    """Fixture driven entirely by a ContainerizedDatasourceConfig (parsed from YAML).
 
-    host_path: str
-    container_path: str
-    mode: str = "ro"
+    Lifecycle:
+        1. Create generic DockerContainer with image, env, port, volumes
+        2. Start the container
+        3. Extract host:port from the running container
+        4. Build ConnectionInfo from host:port + config credentials
+        5. Wait until ready (TCP check by default)
+        6. Return ConnectionInfo
 
-
-class ContainerizedDataSourceFixture(DataSourceFixture):
-    """Base for fixtures backed by a testcontainers container.
-
-    Uses Template Method pattern for the setup lifecycle:
-        create_container() -> start() -> wait_until_ready() -> extract_connection_info()
-
-    Subclasses provide DB-specific details:
-        - container_image       -- Docker image (e.g., "postgres:15.12")
-        - container_env         -- env vars passed into the container
-        - get_volume_mappings() -- seed file volume mounts
-        - create_container()    -- build the testcontainers object
-        - extract_connection_info() -- read host/port from the started container
-        - is_ready()            -- DB-specific readiness probe
-        - get_env_vars()        -- env vars to inject into the test process
+    For custom readiness checks (e.g. verifying seed data), subclass this
+    and override is_ready().
     """
 
-    _container: Any = None
-    _connection_info: Optional[ConnectionInfo] = None
-
-    @property
-    @abstractmethod
-    def container_image(self) -> str:
-        """Docker image name:tag."""
-        ...
-
-    @property
-    def container_env(self) -> Dict[str, str]:
-        """Environment variables passed to the container. Override as needed."""
-        return {}
-
-    def get_volume_mappings(self) -> List[VolumeMapping]:
-        """Return volume mappings for seed files. Override to provide seed data."""
-        return []
-
-    @abstractmethod
-    def create_container(self) -> Any:
-        """Create and return the testcontainers container object (not started).
-
-        This is where the subclass uses the specific testcontainers class
-        (e.g., PostgresContainer, MySqlContainer) and configures it.
-        The testcontainers import should happen inside this method to keep
-        it as a deferred, optional dependency.
-        """
-        ...
-
-    @abstractmethod
-    def extract_connection_info(self, container: Any) -> ConnectionInfo:
-        """Extract ConnectionInfo from a running container.
-
-        Called after the container is started. Read the mapped host/port
-        from the container object.
-        """
-        ...
+    def __init__(self, config: ContainerizedDatasourceConfig, yaml_dir: Path) -> None:
+        self._config = config
+        self._yaml_dir = yaml_dir
+        self._container: Any = None
+        self._connection_info: Optional[ConnectionInfo] = None
 
     def setup(self) -> ConnectionInfo:
-        """Start the container, wait for readiness, return connection info."""
-        self._container = self.create_container()
+        """Start the container and return connection info."""
+        from testcontainers.core.container import DockerContainer
+
+        container = DockerContainer(self._config.image)
+        container = container.with_exposed_ports(self._config.port)
+
+        for key, value in self._config.env.items():
+            container = container.with_env(key, value)
+
+        for vol in self._config.volumes:
+            host_path = str(self._resolve_volume_path(vol.host_path))
+            container = container.with_volume_mapping(
+                host_path, vol.container_path, vol.mode
+            )
+
+        self._container = container
         self._container.start()
-        self.wait_until_ready()
-        self._connection_info = self.extract_connection_info(self._container)
+
+        host = self._container.get_container_host_ip()
+        port = int(self._container.get_exposed_port(self._config.port))
+
+        creds = self._config.credentials
+        self._connection_info = ConnectionInfo(
+            host=host,
+            port=port,
+            username=creds.get("username", ""),
+            password=creds.get("password", ""),
+            database=creds.get("database", ""),
+            extra={
+                k: v
+                for k, v in creds.items()
+                if k not in ("username", "password", "database")
+            },
+        )
+
+        self.wait_until_ready(
+            timeout=self._config.readiness.timeout,
+            interval=self._config.readiness.interval,
+        )
+
         return self._connection_info
 
     def teardown(self) -> None:
@@ -85,3 +85,38 @@ class ContainerizedDataSourceFixture(DataSourceFixture):
             self._container.stop()
             self._container = None
             self._connection_info = None
+
+    def is_ready(self) -> bool:
+        """Check if the container port is accepting TCP connections.
+
+        Override this method for custom readiness checks (e.g. seed verification).
+        """
+        if self._connection_info is None:
+            return False
+        return check_tcp(self._connection_info.host, self._connection_info.port)
+
+    def get_env_vars(self) -> Dict[str, str]:
+        """Auto-generate env vars from env_prefix + ConnectionInfo fields.
+
+        E.g. env_prefix="E2E_POSTGRES" produces:
+            E2E_POSTGRES_HOST, E2E_POSTGRES_PORT, E2E_POSTGRES_USERNAME,
+            E2E_POSTGRES_PASSWORD, E2E_POSTGRES_DATABASE
+        """
+        if self._connection_info is None:
+            return {}
+
+        prefix = self._config.env_prefix
+        return {
+            f"{prefix}_HOST": self._connection_info.host,
+            f"{prefix}_PORT": str(self._connection_info.port),
+            f"{prefix}_USERNAME": self._connection_info.username,
+            f"{prefix}_PASSWORD": self._connection_info.password,
+            f"{prefix}_DATABASE": self._connection_info.database,
+        }
+
+    def _resolve_volume_path(self, path: str) -> Path:
+        """Resolve a volume host_path relative to the YAML file directory."""
+        p = Path(path)
+        if p.is_absolute():
+            return p
+        return (self._yaml_dir / p).resolve()
