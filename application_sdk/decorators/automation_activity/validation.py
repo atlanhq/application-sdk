@@ -3,7 +3,7 @@
 import inspect
 from typing import Any, Callable, List, Tuple, get_args, get_origin, get_type_hints
 
-from application_sdk.decorators._models import Parameter
+from application_sdk.decorators.automation_activity.models import Parameter
 
 
 def _validate_inputs_outputs(

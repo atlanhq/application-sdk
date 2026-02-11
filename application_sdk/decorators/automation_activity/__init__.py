@@ -11,12 +11,12 @@ so that consumers do not need to depend on the automation engine package.
 
 Example usage::
 
-    from application_sdk.decorators._models import (
+    from application_sdk.decorators.automation_activity.models import (
         ActivityCategory,
         Annotation,
         Parameter,
     )
-    from application_sdk.decorators.automation_activity import (
+    from application_sdk.decorators import (
         automation_activity,
         flush_activity_registrations,
     )
@@ -49,15 +49,15 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Callable, List, Optional
 
-from application_sdk.decorators._models import (
+from application_sdk.decorators.automation_activity.models import (
     ActivityCategory,
     ActivitySpec,
     Parameter,
     ToolMetadata,
 )
-from application_sdk.decorators._registration import MAX_RETRIES, _flush_specs
-from application_sdk.decorators._schema import _build_schema_from_parameters
-from application_sdk.decorators._validation import _validate_inputs_outputs
+from application_sdk.decorators.automation_activity.registration import MAX_RETRIES, _flush_specs
+from application_sdk.decorators.automation_activity.schema import _build_schema_from_parameters
+from application_sdk.decorators.automation_activity.validation import _validate_inputs_outputs
 
 
 # =============================================================================

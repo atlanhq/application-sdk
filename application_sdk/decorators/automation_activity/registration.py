@@ -1,23 +1,27 @@
 """Activity registration flush and HTTP client for the automation engine."""
 
 import asyncio
-import os
 from typing import Any, List, Optional
 from urllib.parse import urlparse
 
 import httpx
 
-from application_sdk.decorators._models import (
+from application_sdk.constants import (
+    APP_QUALIFIED_NAME,
+    AUTOMATION_ENGINE_API_HOST,
+    AUTOMATION_ENGINE_API_PORT,
+    AUTOMATION_ENGINE_API_URL,
+)
+from application_sdk.decorators.automation_activity.models import (
     APP_QUALIFIED_NAME_PREFIX,
     ENDPOINT_APPS,
     ENDPOINT_SERVER_READY,
     ENDPOINT_TOOLS,
-    ENV_AUTOMATION_ENGINE_API_URL,
     TIMEOUT_API_REQUEST,
     TIMEOUT_HEALTH_CHECK,
     ActivitySpec,
 )
-from application_sdk.decorators._schema import _build_tool_dict
+from application_sdk.decorators.automation_activity.schema import _build_tool_dict
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -72,14 +76,11 @@ def _resolve_automation_engine_api_url(
     if automation_engine_api_url:
         return automation_engine_api_url
 
-    env_url = os.environ.get(ENV_AUTOMATION_ENGINE_API_URL)
-    if env_url:
-        return env_url
+    if AUTOMATION_ENGINE_API_URL:
+        return AUTOMATION_ENGINE_API_URL
 
-    host = os.environ.get("ATLAN_AUTOMATION_ENGINE_API_HOST")
-    port = os.environ.get("ATLAN_AUTOMATION_ENGINE_API_PORT")
-    if host and port:
-        return f"http://{host}:{port}"
+    if AUTOMATION_ENGINE_API_HOST and AUTOMATION_ENGINE_API_PORT:
+        return f"http://{AUTOMATION_ENGINE_API_HOST}:{AUTOMATION_ENGINE_API_PORT}"
 
     return None
 
@@ -91,9 +92,8 @@ def _resolve_app_qualified_name(
     if app_qualified_name:
         return app_qualified_name
 
-    env_qn = os.environ.get("ATLAN_APP_QUALIFIED_NAME")
-    if env_qn:
-        return env_qn
+    if APP_QUALIFIED_NAME:
+        return APP_QUALIFIED_NAME
 
     # Compute: default/apps/<app_name_with_underscores>
     return f"{APP_QUALIFIED_NAME_PREFIX}{app_name.replace('-', '_').lower()}"

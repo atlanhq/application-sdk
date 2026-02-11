@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union, get_args, 
 
 from pydantic import BaseModel
 
-from application_sdk.decorators._models import (
+from application_sdk.decorators.automation_activity.models import (
     ActivityCategory,
     ActivitySpec,
     Annotation,

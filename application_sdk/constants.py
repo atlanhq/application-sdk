@@ -297,6 +297,16 @@ IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"
 #: Retry interval for lock acquisition
 LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60"))
 
+# Automation Engine Configuration
+#: Base URL for the automation engine API (e.g. http://localhost:8000)
+AUTOMATION_ENGINE_API_URL = os.getenv("ATLAN_AUTOMATION_ENGINE_API_URL")
+#: Host for the automation engine API (used with port to construct URL when base URL is not set)
+AUTOMATION_ENGINE_API_HOST = os.getenv("ATLAN_AUTOMATION_ENGINE_API_HOST")
+#: Port for the automation engine API (used with host to construct URL when base URL is not set)
+AUTOMATION_ENGINE_API_PORT = os.getenv("ATLAN_AUTOMATION_ENGINE_API_PORT")
+#: Qualified name for the application (e.g. default/apps/my_app)
+APP_QUALIFIED_NAME = os.getenv("ATLAN_APP_QUALIFIED_NAME")
+
 # MCP Configuration
 #: Flag to indicate if MCP should be enabled or not. Turning this to true will setup an MCP server along
 #: with the application.
