@@ -13,6 +13,7 @@ from application_sdk.constants import (
     DAPR_MAX_GRPC_MESSAGE_LENGTH,
     DEPLOYMENT_OBJECT_STORE_NAME,
     TEMPORARY_PATH,
+    UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -333,7 +334,7 @@ class ObjectStore:
         cls,
         file_content: bytes,
         destination: str,
-        store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
+        store_name: str = UPSTREAM_OBJECT_STORE_NAME,
     ) -> None:
         """Upload file content directly from bytes to object store.
 

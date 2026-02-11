@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import UploadFile, status
 from fastapi.responses import JSONResponse
 
+from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.server.fastapi.models import FileUploadResponse
 from application_sdk.services.objectstore import ObjectStore
 
@@ -54,6 +55,22 @@ def internal_server_error_handler(_, exc: Exception) -> JSONResponse:
     )
 
 
+def _resolve_extension(original_filename: str, resolved_content_type: str) -> str:
+    """Determine file extension from filename, falling back to content type."""
+    extension = Path(original_filename).suffix
+    if not extension:
+        guessed = mimetypes.guess_all_extensions(resolved_content_type)
+        extension = guessed[0] if guessed else ""
+    return extension
+
+
+def _build_object_store_key(stored_filename: str, prefix: Optional[str]) -> str:
+    """Build object store key with optional prefix directory."""
+    if prefix:
+        return f"{prefix}/{stored_filename}"
+    return stored_filename
+
+
 async def upload_file_to_object_store(
     file: UploadFile,
     filename: Optional[str] = None,
@@ -62,103 +79,53 @@ async def upload_file_to_object_store(
 ) -> FileUploadResponse:
     """Upload file to object store and return metadata.
 
-    This function handles file uploads with the following behavior:
-    - Extracts filename, content_type, and size from UploadFile object
-    - Generates a unique UUID for the file ID
-    - Creates fileName as UUID + extension
-    - Preserves original filename as rawName
-    - Includes prefix in key if provided: prefix + "/" + fileName
-    - Uploads file content to object store
-    - Returns FileUploadResponse object with file metadata
-
     Args:
-        file (UploadFile): FastAPI UploadFile object containing the file.
-        filename (Optional[str]): Original filename from form data. If provided,
-            this takes precedence over file.filename. Defaults to None.
-        prefix (Optional[str]): Prefix for file organization in object store.
+        file: FastAPI UploadFile object containing the file.
+        filename: Original filename from form data. Takes precedence
+            over file.filename. Defaults to None.
+        prefix: Prefix for file organization in object store.
             Defaults to "workflow_file_upload".
-        content_type (Optional[str]): Explicit content type of the file. If provided,
-            this takes precedence over file.content_type. Defaults to None.
+        content_type: Explicit content type. Takes precedence
+            over file.content_type. Defaults to None.
 
     Returns:
-        FileUploadResponse: Pydantic model object containing file metadata with
-            the following fields:
-            - id (str): UUID of the file
-            - version (str): Version string (first 8 chars of UUID)
-            - isActive (bool): Whether the file is active
-            - createdAt (int): Unix timestamp in milliseconds
-            - updatedAt (int): Unix timestamp in milliseconds
-            - fileName (str): Generated filename (UUID + extension)
-            - rawName (str): Original filename
-            - key (str): Object store key (includes prefix if provided)
-            - extension (str): File extension
-            - contentType (str): Content type of the file
-            - fileSize (int): File size in bytes
-            - isEncrypted (bool): Whether the file is encrypted
-            - redirectUrl (str): Redirect URL (empty string)
-            - isUploaded (bool): Whether the file is uploaded
-            - uploadedAt (str): ISO timestamp of upload
-            - isArchived (bool): Whether the file is archived
+        FileUploadResponse with file metadata (id, key, rawName, etc.).
 
     Raises:
         Exception: If there's an error uploading to the object store.
     """
-    # Read file content
-    file_content = await file.read()
+    content_bytes = await file.read()
 
-    # Extract metadata from UploadFile object
-    # Use passed filename first, then file.filename, then fallback to "uploaded_file"
-    filename = filename or file.filename or "uploaded_file"
-    # Use explicit content_type if provided, otherwise fallback to file.content_type, then default
-    content_type = content_type or file.content_type or "application/octet-stream"
-    size = len(file_content)
-    # Generate UUID for file ID
-    file_id = str(uuid.uuid4())
-
-    # Determine extension from filename or content type
-    # First try to get extension from filename, then fall back to content type
-    extension = Path(filename).suffix
-    if not extension:
-        extension_list = mimetypes.guess_all_extensions(content_type)
-        if extension_list:
-            extension = extension_list[0]
-        else:
-            extension = ""
-
-    # Generate file name and raw name
-    # fileName = id + extension, rawName = original filename
-    file_name = f"{file_id}{extension}"
-    raw_name = filename  # Keep original filename as rawName
-
-    # Generate key with prefix
-    # key = fileName if prefix is empty, else prefix + "/" + fileName
-    key = file_name
-    if prefix:
-        key = f"{prefix}/{file_name}"
-
-    # Upload directly from bytes to object store
-    await ObjectStore.upload_file_from_bytes(
-        file_content=file_content,
-        destination=key,
+    original_filename = filename or file.filename or "uploaded_file"
+    resolved_content_type = (
+        content_type or file.content_type or "application/octet-stream"
     )
 
-    # Generate metadata and construct FileUploadResponse object
+    file_id = str(uuid.uuid4())
+    extension = _resolve_extension(original_filename, resolved_content_type)
+    stored_filename = f"{file_id}{extension}"
+    object_store_key = _build_object_store_key(stored_filename, prefix)
+
+    await ObjectStore.upload_file_from_bytes(
+        file_content=content_bytes,
+        destination=object_store_key,
+        store_name=UPSTREAM_OBJECT_STORE_NAME,
+    )
+
     now_ms = int(time.time() * 1000)
-    # Simple version generation using first 8 chars of UUID
-    version = file_id[:8]
 
     return FileUploadResponse(
         id=file_id,
-        version=version,
+        version=file_id[:8],
         isActive=True,
         createdAt=now_ms,
         updatedAt=now_ms,
-        fileName=file_name,
-        rawName=raw_name,
-        key=key,
+        fileName=stored_filename,
+        rawName=original_filename,
+        key=object_store_key,
         extension=extension,
-        contentType=content_type,
-        fileSize=size,
+        contentType=resolved_content_type,
+        fileSize=len(content_bytes),
         isEncrypted=False,
         redirectUrl="",
         isUploaded=True,

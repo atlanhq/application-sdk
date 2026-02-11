@@ -1,11 +1,68 @@
 """Unit tests for FastAPI utility functions."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import UploadFile
 
-from application_sdk.server.fastapi.utils import upload_file_to_object_store
+from application_sdk.common.utils import download_file_from_upload_response
+from application_sdk.server.fastapi.models import FileUploadResponse
+from application_sdk.server.fastapi.utils import (
+    _build_object_store_key,
+    _resolve_extension,
+    upload_file_to_object_store,
+)
+
+
+class TestResolveExtension:
+    """Test cases for _resolve_extension helper."""
+
+    def test_extension_from_filename(self):
+        """Test that extension is taken from filename when present."""
+        assert _resolve_extension("report.csv", "application/octet-stream") == ".csv"
+
+    def test_extension_from_filename_multiple_dots(self):
+        """Test that only the final suffix is returned."""
+        assert _resolve_extension("archive.tar.gz", "application/octet-stream") == ".gz"
+
+    def test_fallback_to_content_type(self):
+        """Test fallback to content type when filename has no extension."""
+        assert _resolve_extension("testfile", "text/csv") == ".csv"
+
+    def test_empty_when_no_extension_and_unknown_content_type(self):
+        """Test empty string when neither filename nor content type yields an extension."""
+        assert _resolve_extension("testfile", "application/x-unknown-type") == ""
+
+    def test_filename_extension_takes_precedence(self):
+        """Test that filename extension wins over content type."""
+        assert _resolve_extension("data.json", "text/csv") == ".json"
+
+
+class TestBuildObjectStoreKey:
+    """Test cases for _build_object_store_key helper."""
+
+    def test_key_with_prefix(self):
+        """Test key includes prefix when provided."""
+        assert (
+            _build_object_store_key("abc123.csv", "workflow_file_upload")
+            == "workflow_file_upload/abc123.csv"
+        )
+
+    def test_key_without_prefix_none(self):
+        """Test key is just the filename when prefix is None."""
+        assert _build_object_store_key("abc123.csv", None) == "abc123.csv"
+
+    def test_key_without_prefix_empty(self):
+        """Test key is just the filename when prefix is empty string."""
+        assert _build_object_store_key("abc123.csv", "") == "abc123.csv"
+
+    def test_key_with_nested_prefix(self):
+        """Test key with a multi-level prefix."""
+        assert (
+            _build_object_store_key("abc123.csv", "uploads/2024")
+            == "uploads/2024/abc123.csv"
+        )
 
 
 @pytest.mark.asyncio
@@ -32,12 +89,15 @@ class TestUploadFileToObjectStore:
             prefix="workflow_file_upload",
         )
 
-        # Verify ObjectStore was called
+        # Verify ObjectStore was called with upstream object store
+        from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
+
         mock_objectstore.upload_file_from_bytes.assert_called_once()
         call_args = mock_objectstore.upload_file_from_bytes.call_args
         assert call_args[1]["file_content"] == file_content
         assert call_args[1]["destination"].endswith(".csv")
         assert "workflow_file_upload" in call_args[1]["destination"]
+        assert call_args[1]["store_name"] == UPSTREAM_OBJECT_STORE_NAME
 
         # Verify response structure
         assert result.id is not None
@@ -455,3 +515,91 @@ class TestUploadFileToObjectStore:
         )
         # Empty string is falsy, so should fallback to file.content_type
         assert result4.contentType == "text/csv"
+
+
+@pytest.mark.asyncio
+class TestDownloadFileFromUploadResponse:
+    """Test cases for download_file_from_upload_response utility function."""
+
+    @patch("application_sdk.common.utils.ObjectStore")
+    async def test_download_with_dict_input(self, mock_objectstore):
+        """Test download with a dict containing 'key'."""
+        mock_objectstore.download_file = AsyncMock()
+
+        response = {"key": "workflow_file_upload/abc123.csv", "id": "abc123"}
+        result = await download_file_from_upload_response(response)
+
+        mock_objectstore.download_file.assert_called_once()
+        call_args = mock_objectstore.download_file.call_args
+        assert call_args[1]["source"] == "workflow_file_upload/abc123.csv"
+        assert call_args[1]["destination"].endswith("workflow_file_upload/abc123.csv")
+        from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
+
+        assert call_args[1]["store_name"] == UPSTREAM_OBJECT_STORE_NAME
+        assert result.endswith("workflow_file_upload/abc123.csv")
+
+    @patch("application_sdk.common.utils.ObjectStore")
+    async def test_download_with_string_input(self, mock_objectstore):
+        """Test download with a JSON string."""
+        mock_objectstore.download_file = AsyncMock()
+
+        response_dict = {"key": "workflow_file_upload/abc123.csv"}
+        response_str = json.dumps(response_dict)
+        result = await download_file_from_upload_response(response_str)
+
+        mock_objectstore.download_file.assert_called_once()
+        call_args = mock_objectstore.download_file.call_args
+        assert call_args[1]["source"] == "workflow_file_upload/abc123.csv"
+        assert result.endswith("workflow_file_upload/abc123.csv")
+
+    @patch("application_sdk.common.utils.ObjectStore")
+    async def test_download_with_file_upload_response(self, mock_objectstore):
+        """Test download with a FileUploadResponse object."""
+        mock_objectstore.download_file = AsyncMock()
+
+        response = FileUploadResponse(
+            id="abc123",
+            version="abc12345",
+            isActive=True,
+            createdAt=1000,
+            updatedAt=1000,
+            fileName="abc123.csv",
+            rawName="original.csv",
+            key="workflow_file_upload/abc123.csv",
+            extension=".csv",
+            contentType="text/csv",
+            fileSize=100,
+            isEncrypted=False,
+            redirectUrl="",
+            isUploaded=True,
+            uploadedAt="2024-01-01T00:00:00Z",
+            isArchived=False,
+        )
+        result = await download_file_from_upload_response(response)
+
+        mock_objectstore.download_file.assert_called_once()
+        call_args = mock_objectstore.download_file.call_args
+        assert call_args[1]["source"] == "workflow_file_upload/abc123.csv"
+        assert result.endswith("workflow_file_upload/abc123.csv")
+
+    async def test_download_missing_key_error(self):
+        """Test that ValueError is raised when 'key' is missing from dict."""
+        with pytest.raises(ValueError, match="missing required 'key' field"):
+            await download_file_from_upload_response({"id": "abc123"})
+
+    async def test_download_invalid_json_error(self):
+        """Test that ValueError is raised for invalid JSON string."""
+        with pytest.raises(ValueError, match="Invalid JSON string"):
+            await download_file_from_upload_response("not valid json")
+
+    @patch("application_sdk.common.utils.ObjectStore")
+    async def test_download_error_propagation(self, mock_objectstore):
+        """Test that ObjectStore download errors propagate."""
+        mock_objectstore.download_file = AsyncMock(
+            side_effect=Exception("Download failed")
+        )
+
+        with pytest.raises(Exception, match="Download failed"):
+            await download_file_from_upload_response(
+                {"key": "workflow_file_upload/abc123.csv"}
+            )
