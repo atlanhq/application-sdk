@@ -2,12 +2,13 @@ import asyncio
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from pathlib import Path
-from time import time
+from time import time, time_ns
 from typing import Any, Dict, Generic, List, TypeVar
 
 import duckdb
@@ -16,12 +17,15 @@ from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    APPLICATION_NAME,
     DEPLOYMENT_OBJECT_STORE_NAME,
+    ENABLE_ATLAN_UPLOAD,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
     STATE_STORE_NAME,
     TRACES_FILE_NAME,
+    UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
 
@@ -363,31 +367,24 @@ class AtlanObservability(Generic[T], ABC):
             logging.error(f"Error buffering log: {e}")
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
-        """Flush records to parquet file and object store using ParquetFileWriter.
+        """Flush records to parquet file and upload to object store.
 
         Args:
             records: List of records to flush
 
         This method:
         - Groups records by partition (year/month/day)
-        - Uses ParquetFileWriter for efficient writing
-        - Automatically handles chunking, compression, and dual upload
+        - Writes parquet files with descriptive filenames encoding app identity
+        - Handles dual upload (deployment store + upstream for SDR)
         - Provides robust error handling per partition
         - Cleans up old records if enabled
-
-        Features:
-        - Automatic chunking for large datasets
-        - Dual upload support (primary + upstream if enabled)
-        - Advanced consolidation for optimal performance
-        - Fault-tolerant processing (continues on partition errors)
         """
         if not ENABLE_OBSERVABILITY_DAPR_SINK:
             return
         try:
             # Group records by partition
-            partition_records = {}
+            partition_records: Dict[str, List[Dict[str, Any]]] = {}
             for record in records:
-                # Convert timestamp to datetime
                 record_time = datetime.fromtimestamp(record["timestamp"])
                 partition_path = self._get_partition_path(record_time)
 
@@ -395,39 +392,50 @@ class AtlanObservability(Generic[T], ABC):
                     partition_records[partition_path] = []
                 partition_records[partition_path].append(record)
 
-                # Write records to each partition using ParquetFileWriter
+            # Determine suffix from file type
+            if self.file_name == LOG_FILE_NAME:
+                suffix = "logs"
+            elif self.file_name == METRICS_FILE_NAME:
+                suffix = "metrics"
+            elif self.file_name == TRACES_FILE_NAME:
+                suffix = "traces"
+            else:
+                suffix = "data"
+
+            hostname = socket.gethostname()
+
             for partition_path, partition_data in partition_records.items():
-                # Create new dataframe from current records
-                new_df = pd.DataFrame(partition_data)
-
-                # Extract partition values from path and add to dataframe
-                partition_parts = os.path.basename(
-                    os.path.dirname(partition_path)
-                ).split(os.sep)
-                for part in partition_parts:
-                    if part.startswith("year="):
-                        new_df["year"] = int(part.split("=")[1])
-                    elif part.startswith("month="):
-                        new_df["month"] = int(part.split("=")[1])
-                    elif part.startswith("day="):
-                        new_df["day"] = int(part.split("=")[1])
-
-                # Use new data directly - let ParquetFileWriter handle consolidation and merging
-                df = new_df
-
-                # Use ParquetFileWriter for efficient writing and uploading
-                # Set the output path for this partition
                 try:
-                    # Lazy import and instantiation of ParquetFileWriter
-                    from application_sdk.io.parquet import ParquetFileWriter
+                    df = pd.DataFrame(partition_data)
 
-                    parquet_writer = ParquetFileWriter(
-                        path=partition_path,
-                        chunk_start=0,
-                        chunk_part=int(time()),
+                    # Build unique filename: {timestamp_ns}_{hostname}_{app}_{suffix}.parquet
+                    timestamp_ns = time_ns()
+                    custom_filename = (
+                        f"{timestamp_ns}_{hostname}_{APPLICATION_NAME}_{suffix}.parquet"
                     )
 
-                    await parquet_writer._write_dataframe(dataframe=df)
+                    os.makedirs(partition_path, exist_ok=True)
+                    file_path = os.path.join(partition_path, custom_filename)
+                    df.to_parquet(file_path, index=False, compression="snappy")
+
+                    # Lazy imports for upload
+                    from application_sdk.activities.common.utils import (
+                        get_object_store_prefix,
+                    )
+                    from application_sdk.services.objectstore import ObjectStore
+
+                    # Dual upload: upstream (SDR) + deployment store
+                    if ENABLE_ATLAN_UPLOAD:
+                        await ObjectStore.upload_file(
+                            source=file_path,
+                            store_name=UPSTREAM_OBJECT_STORE_NAME,
+                            destination=get_object_store_prefix(file_path),
+                            retain_local_copy=True,
+                        )
+                    await ObjectStore.upload_file(
+                        source=file_path,
+                        destination=get_object_store_prefix(file_path),
+                    )
 
                 except Exception as partition_error:
                     logging.error(
