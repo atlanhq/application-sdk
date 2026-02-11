@@ -117,17 +117,18 @@ class TestContainerizedFixture:
         fixture = ContainerizedFixture(config, yaml_dir=Path("/project/tests"))
         assert fixture.is_ready() is False
 
-    def test_resolve_volume_path_relative(self):
+    def test_resolve_volume_path_relative(self, tmp_path):
         config = _make_config()
-        fixture = ContainerizedFixture(config, yaml_dir=Path("/project/tests"))
+        fixture = ContainerizedFixture(config, yaml_dir=tmp_path)
         resolved = fixture._resolve_volume_path("./seed.sql")
-        assert resolved == Path("/project/tests/seed.sql")
+        assert resolved == (tmp_path / "seed.sql").resolve()
 
-    def test_resolve_volume_path_absolute(self):
+    def test_resolve_volume_path_absolute(self, tmp_path):
         config = _make_config()
-        fixture = ContainerizedFixture(config, yaml_dir=Path("/project/tests"))
-        resolved = fixture._resolve_volume_path("/absolute/path/seed.sql")
-        assert resolved == Path("/absolute/path/seed.sql")
+        abs_path = tmp_path / "seed.sql"
+        fixture = ContainerizedFixture(config, yaml_dir=Path("/unused"))
+        resolved = fixture._resolve_volume_path(str(abs_path))
+        assert resolved == abs_path
 
     @patch(
         "application_sdk.test_utils.e2e.fixtures.containerized.check_tcp",
