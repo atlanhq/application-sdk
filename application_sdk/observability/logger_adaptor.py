@@ -15,6 +15,7 @@ from opentelemetry.trace.span import TraceFlags
 from pydantic import BaseModel, Field
 
 from application_sdk.constants import (
+    APPLICATION_NAME,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,
     LOG_BATCH_SIZE,
@@ -73,6 +74,7 @@ class LogExtraModel(BaseModel):
     heartbeat_timeout: Optional[str] = None
     # Other fields
     log_type: Optional[str] = None
+    app_name: Optional[str] = None
     # Trace context
     trace_id: Optional[str] = None
 
@@ -526,6 +528,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         - Adds correlation context if available
         """
         kwargs["logger_name"] = self.logger_name
+        kwargs["app_name"] = APPLICATION_NAME
 
         # Get request context
         ctx = request_context.get()
