@@ -160,6 +160,93 @@ class WorkflowClient(ABC):
         pass
 
     @abstractmethod
+    async def create_schedule(
+        self,
+        schedule_id: str,
+        schedule_args: Dict[str, Any],
+        workflow_class: Type["WorkflowInterface"],
+    ) -> Dict[str, Any]:
+        """Create a new workflow schedule.
+
+        Args:
+            schedule_id: Unique identifier for the schedule.
+            schedule_args: Schedule configuration including cron_expression,
+                workflow_args, note, start_at, end_at, jitter.
+            workflow_class: The workflow class to execute on schedule.
+
+        Returns:
+            Dict containing at minimum schedule_id.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+            ValueError: If required arguments are missing or invalid.
+        """
+        pass
+
+    @abstractmethod
+    async def get_schedule(self, schedule_id: str) -> Dict[str, Any]:
+        """Get details of a workflow schedule.
+
+        Args:
+            schedule_id: The ID of the schedule to retrieve.
+
+        Returns:
+            Dict containing schedule details including cron_expression,
+            paused state, note, recent_actions, and next_action_times.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+        """
+        pass
+
+    @abstractmethod
+    async def list_schedules(self) -> list:
+        """List all workflow schedules.
+
+        Returns:
+            List of dicts containing schedule summary information.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+        """
+        pass
+
+    @abstractmethod
+    async def update_schedule(
+        self,
+        schedule_id: str,
+        schedule_args: Dict[str, Any],
+        workflow_class: Optional[Type["WorkflowInterface"]] = None,
+    ) -> Dict[str, Any]:
+        """Update an existing workflow schedule.
+
+        Args:
+            schedule_id: The ID of the schedule to update.
+            schedule_args: Fields to update. May include cron_expression,
+                workflow_args, note, paused.
+            workflow_class: Optional new workflow class for the schedule.
+
+        Returns:
+            Dict containing at minimum schedule_id.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+        """
+        pass
+
+    @abstractmethod
+    async def delete_schedule(self, schedule_id: str) -> None:
+        """Delete a workflow schedule.
+
+        Args:
+            schedule_id: The ID of the schedule to delete.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+        """
+        pass
+
+    @abstractmethod
     def create_worker(
         self,
         activities: Sequence[Any],

@@ -222,6 +222,127 @@ class ConfigMapResponse(BaseModel):
         }
 
 
+class AddScheduleRequest(BaseModel):
+    schedule_id: str = Field(..., description="Unique identifier for the schedule")
+    cron_expression: str = Field(
+        ..., description="Cron expression (e.g. '0 9 * * MON-FRI')"
+    )
+    workflow_args: Dict[str, Any] = Field(
+        default_factory=dict, description="Arguments to pass to the workflow"
+    )
+    note: Optional[str] = Field(
+        None, description="Human-readable note about this schedule"
+    )
+    start_at: Optional[str] = Field(
+        None, description="ISO 8601 datetime to start the schedule"
+    )
+    end_at: Optional[str] = Field(
+        None, description="ISO 8601 datetime to end the schedule"
+    )
+    jitter: Optional[int] = Field(
+        None, description="Random jitter in seconds added to each trigger time"
+    )
+    workflow_class_name: Optional[str] = Field(
+        None,
+        description="Workflow class name (for multi-workflow apps, defaults to first registered)",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "schedule_id": "daily-extraction",
+                "cron_expression": "0 9 * * MON-FRI",
+                "workflow_args": {"metadata": {"include-filter": "{}"}},
+                "note": "Weekday morning extraction",
+            }
+        }
+
+
+class ScheduleData(BaseModel):
+    schedule_id: str = Field(..., description="Unique identifier for the schedule")
+
+
+class ScheduleResponse(BaseModel):
+    success: bool = Field(
+        ..., description="Indicates whether the operation was successful"
+    )
+    message: str = Field(
+        ..., description="Message describing the result of the operation"
+    )
+    data: ScheduleData = Field(..., description="Details about the schedule")
+
+
+class ScheduleDetailsData(BaseModel):
+    schedule_id: str = Field(..., description="Unique identifier for the schedule")
+    cron_expression: str = Field(..., description="Cron expression for the schedule")
+    paused: bool = Field(..., description="Whether the schedule is currently paused")
+    note: Optional[str] = Field(None, description="Human-readable note")
+    workflow_args: Dict[str, Any] = Field(
+        default_factory=dict, description="Arguments passed to the workflow"
+    )
+    recent_actions: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Recent schedule executions"
+    )
+    next_action_times: List[str] = Field(
+        default_factory=list, description="Upcoming scheduled execution times"
+    )
+
+
+class ScheduleDetailsResponse(BaseModel):
+    success: bool = Field(
+        ..., description="Indicates whether the operation was successful"
+    )
+    message: str = Field(
+        ..., description="Message describing the result of the operation"
+    )
+    data: ScheduleDetailsData = Field(..., description="Schedule details")
+
+
+class ScheduleListItem(BaseModel):
+    schedule_id: str = Field(..., description="Unique identifier for the schedule")
+    paused: bool = Field(..., description="Whether the schedule is currently paused")
+    note: Optional[str] = Field(None, description="Human-readable note")
+    cron_expression: Optional[str] = Field(None, description="Cron expression")
+
+
+class ListSchedulesResponse(BaseModel):
+    success: bool = Field(
+        ..., description="Indicates whether the operation was successful"
+    )
+    message: str = Field(
+        ..., description="Message describing the result of the operation"
+    )
+    data: List[ScheduleListItem] = Field(..., description="List of schedules")
+
+
+class EditScheduleRequest(BaseModel):
+    cron_expression: Optional[str] = Field(None, description="New cron expression")
+    workflow_args: Optional[Dict[str, Any]] = Field(
+        None, description="New workflow arguments"
+    )
+    note: Optional[str] = Field(None, description="New note")
+    paused: Optional[bool] = Field(
+        None, description="Set to true to pause, false to unpause"
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "cron_expression": "0 10 * * MON-FRI",
+                "note": "Changed to 10am",
+            }
+        }
+
+
+class DeleteScheduleResponse(BaseModel):
+    success: bool = Field(
+        ..., description="Indicates whether the operation was successful"
+    )
+    message: str = Field(
+        ..., description="Message describing the result of the operation"
+    )
+
+
 class WorkflowTrigger(BaseModel):
     workflow_class: Optional[Type[WorkflowInterface]] = None
     model_config = {"arbitrary_types_allowed": True}
