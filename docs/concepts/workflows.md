@@ -177,6 +177,24 @@ While most customization typically happens in `Activities`, `Handlers`, or `Clie
 
     ```
 
+## Pause and Resume
+
+Workflows support pause and resume via Temporal signals. This is handled automatically by the `PauseInterceptor` — no manual code is needed in workflow implementations.
+
+### How It Works
+
+1. A pause request is sent via the `POST /workflows/v1/pause/{workflow_id}/{run_id}` endpoint.
+2. The `PauseInterceptor` intercepts the pause signal and sets an internal `_paused` flag.
+3. Before every activity execution, the interceptor checks this flag. If paused, it blocks using `workflow.wait_condition` until a resume signal is received.
+4. The currently running activity completes normally — pause takes effect at the next activity boundary.
+5. A resume request via `POST /workflows/v1/resume/{workflow_id}/{run_id}` clears the flag, and the next activity starts.
+
+### Behavior
+
+- **Cooperative pause**: Running activities are not interrupted. They complete, and the next activity is blocked.
+- **Automatic**: The `PauseInterceptor` is registered in the worker and applies to all workflows. No `wait_if_paused()` calls or manual checkpoints are needed.
+- **Signal-based**: Uses Temporal signals (`pause` and `resume`) defined on `WorkflowInterface`. Signal name constants are defined in `application_sdk.constants` (`PAUSE_SIGNAL`, `RESUME_SIGNAL`).
+
 ## Registration and Execution
 
 *   **Registration:** When creating a `Worker`, you register your workflow *classes* (base or custom) using `workflow_classes`. You link this to a specific *instance* of your activities class using `workflow_activities`, which calls the workflow's `get_activities` method.

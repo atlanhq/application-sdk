@@ -39,6 +39,26 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
     default_heartbeat_timeout: timedelta = HEARTBEAT_TIMEOUT
     default_start_to_close_timeout: timedelta = START_TO_CLOSE_TIMEOUT
 
+    _paused: bool = False
+
+    @workflow.signal
+    async def pause(self) -> None:
+        """Signal handler to pause the workflow.
+
+        Actual pause logic is handled by PauseInterceptor. This method
+        is required for Temporal to register the signal.
+        """
+        self._paused = True
+
+    @workflow.signal
+    async def resume(self) -> None:
+        """Signal handler to resume the workflow.
+
+        Actual resume logic is handled by PauseInterceptor. This method
+        is required for Temporal to register the signal.
+        """
+        self._paused = False
+
     @staticmethod
     def get_activities(
         activities: ActivitiesInterfaceType,

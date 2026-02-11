@@ -22,6 +22,8 @@ from application_sdk.constants import (
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
+    PAUSE_SIGNAL,
+    RESUME_SIGNAL,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
@@ -40,6 +42,7 @@ from application_sdk.interceptors.models import (
     EventTypes,
     WorkerTokenRefreshEventData,
 )
+from application_sdk.interceptors.pause import PauseInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.eventstore import EventStore
 from application_sdk.services.secretstore import SecretStore
@@ -350,6 +353,50 @@ class TemporalWorkflowClient(WorkflowClient):
             logger.error(f"Error terminating workflow {workflow_id} {run_id}: {e}")
             raise Exception(f"Error terminating workflow {workflow_id} {run_id}: {e}")
 
+    async def pause_workflow(self, workflow_id: str, run_id: str) -> None:
+        """Pause a workflow execution by sending a pause signal.
+
+        Args:
+            workflow_id (str): The ID of the workflow.
+            run_id (str): The run ID of the workflow.
+
+        Raises:
+            ValueError: If the client is not loaded.
+        """
+        if not self.client:
+            raise ValueError("Client is not loaded")
+
+        try:
+            workflow_handle = self.client.get_workflow_handle(
+                workflow_id, run_id=run_id
+            )
+            await workflow_handle.signal(PAUSE_SIGNAL)
+        except Exception as e:
+            logger.error(f"Error pausing workflow {workflow_id} {run_id}: {e}")
+            raise Exception(f"Error pausing workflow {workflow_id} {run_id}: {e}")
+
+    async def resume_workflow(self, workflow_id: str, run_id: str) -> None:
+        """Resume a paused workflow execution by sending a resume signal.
+
+        Args:
+            workflow_id (str): The ID of the workflow.
+            run_id (str): The run ID of the workflow.
+
+        Raises:
+            ValueError: If the client is not loaded.
+        """
+        if not self.client:
+            raise ValueError("Client is not loaded")
+
+        try:
+            workflow_handle = self.client.get_workflow_handle(
+                workflow_id, run_id=run_id
+            )
+            await workflow_handle.signal(RESUME_SIGNAL)
+        except Exception as e:
+            logger.error(f"Error resuming workflow {workflow_id} {run_id}: {e}")
+            raise Exception(f"Error resuming workflow {workflow_id} {run_id}: {e}")
+
     def create_worker(
         self,
         activities: Sequence[CallableType],
@@ -442,6 +489,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 EventInterceptor(),
                 CleanupInterceptor(),
                 RedisLockInterceptor(activities_dict),
+                PauseInterceptor(),
             ],
         )
 
