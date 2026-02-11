@@ -16,12 +16,10 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
+from application_sdk.constants import PAUSE_SIGNAL, RESUME_SIGNAL
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-
-PAUSE_SIGNAL = "pause"
-RESUME_SIGNAL = "resume"
 
 
 class PauseOutboundInterceptor(WorkflowOutboundInterceptor):

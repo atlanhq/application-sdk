@@ -4,9 +4,9 @@ from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from application_sdk.clients.temporal import TemporalWorkflowClient
+from application_sdk.constants import PAUSE_SIGNAL, RESUME_SIGNAL
 from application_sdk.interceptors.cleanup import cleanup
 from application_sdk.interceptors.events import publish_event
-from application_sdk.interceptors.pause import PAUSE_SIGNAL, RESUME_SIGNAL
 from application_sdk.workflows import WorkflowInterface
 
 

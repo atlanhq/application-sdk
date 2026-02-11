@@ -11,9 +11,8 @@ from unittest import mock
 import pytest
 from temporalio.api.common.v1 import Payload
 
+from application_sdk.constants import PAUSE_SIGNAL, RESUME_SIGNAL
 from application_sdk.interceptors.pause import (
-    PAUSE_SIGNAL,
-    RESUME_SIGNAL,
     PauseInterceptor,
     PauseOutboundInterceptor,
     PauseWorkflowInboundInterceptor,

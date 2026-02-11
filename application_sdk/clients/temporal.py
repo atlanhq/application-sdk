@@ -22,6 +22,8 @@ from application_sdk.constants import (
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
+    PAUSE_SIGNAL,
+    RESUME_SIGNAL,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
@@ -40,11 +42,7 @@ from application_sdk.interceptors.models import (
     EventTypes,
     WorkerTokenRefreshEventData,
 )
-from application_sdk.interceptors.pause import (
-    PAUSE_SIGNAL,
-    RESUME_SIGNAL,
-    PauseInterceptor,
-)
+from application_sdk.interceptors.pause import PauseInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.eventstore import EventStore
 from application_sdk.services.secretstore import SecretStore

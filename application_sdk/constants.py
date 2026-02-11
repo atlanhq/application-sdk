@@ -127,6 +127,10 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 )
 
 # Workflow Constants
+#: Signal name for pausing a workflow
+PAUSE_SIGNAL = "pause"
+#: Signal name for resuming a paused workflow
+RESUME_SIGNAL = "resume"
 #: Timeout duration for activity heartbeats
 HEARTBEAT_TIMEOUT = timedelta(
     seconds=int(os.getenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 300))  # 5 minutes
