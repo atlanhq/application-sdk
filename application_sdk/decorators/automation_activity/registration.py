@@ -1,18 +1,17 @@
 """Activity registration flush and HTTP client for the automation engine."""
 
 import asyncio
-import os
 from typing import Any, List, Optional
 from urllib.parse import urlparse
 
 import httpx
 
 from application_sdk.constants import (
-    ENV_APP_QUALIFIED_NAME,
-    ENV_APP_UPSERT_PROPAGATION_DELAY,
-    ENV_AUTOMATION_ENGINE_API_HOST,
-    ENV_AUTOMATION_ENGINE_API_PORT,
-    ENV_AUTOMATION_ENGINE_API_URL,
+    APP_QUALIFIED_NAME,
+    APP_UPSERT_PROPAGATION_DELAY,
+    AUTOMATION_ENGINE_API_HOST,
+    AUTOMATION_ENGINE_API_PORT,
+    AUTOMATION_ENGINE_API_URL,
 )
 from application_sdk.decorators.automation_activity.models import (
     APP_QUALIFIED_NAME_PREFIX,
@@ -46,7 +45,7 @@ _BLOCKED_HOSTS = frozenset({"169.254.169.254", "metadata.google.internal"})
 
 
 # =============================================================================
-# URL validation (T3)
+# URL validation
 # =============================================================================
 
 
@@ -85,14 +84,11 @@ def _resolve_automation_engine_api_url(
     if automation_engine_api_url:
         return automation_engine_api_url
 
-    env_url = os.environ.get(ENV_AUTOMATION_ENGINE_API_URL)
-    if env_url:
-        return env_url
+    if AUTOMATION_ENGINE_API_URL:
+        return AUTOMATION_ENGINE_API_URL
 
-    host = os.environ.get(ENV_AUTOMATION_ENGINE_API_HOST)
-    port = os.environ.get(ENV_AUTOMATION_ENGINE_API_PORT)
-    if host and port:
-        return f"http://{host}:{port}"
+    if AUTOMATION_ENGINE_API_HOST and AUTOMATION_ENGINE_API_PORT:
+        return f"http://{AUTOMATION_ENGINE_API_HOST}:{AUTOMATION_ENGINE_API_PORT}"
 
     return None
 
@@ -104,16 +100,15 @@ def _resolve_app_qualified_name(
     if app_qualified_name:
         return app_qualified_name
 
-    env_qn = os.environ.get(ENV_APP_QUALIFIED_NAME)
-    if env_qn:
-        return env_qn
+    if APP_QUALIFIED_NAME:
+        return APP_QUALIFIED_NAME
 
     # Compute: default/apps/<app_name_with_underscores>
     return f"{APP_QUALIFIED_NAME_PREFIX}{app_name.replace('-', '_').lower()}"
 
 
 # =============================================================================
-# Retry helper (W5)
+# Retry helper
 # =============================================================================
 
 
@@ -195,7 +190,7 @@ async def _flush_specs(
         )
         return False
 
-    # T3: Validate URL before making any requests
+    # Validate URL before making any requests
     try:
         _validate_base_url(base_url)
     except ValueError as e:
@@ -206,7 +201,7 @@ async def _flush_specs(
 
     qualified_name = _resolve_app_qualified_name(app_qualified_name, app_name)
 
-    # W3 / T5: Single httpx session for all requests
+    # Single httpx session for all requests
     async with httpx.AsyncClient(timeout=TIMEOUT_API_REQUEST) as client:
         # Health check
         try:
@@ -262,11 +257,10 @@ async def _flush_specs(
 
         # TODO: Replace this sleep with a readiness-polling loop or
         # server-side confirmation that the app record is propagated.
-        propagation_delay = float(
-            os.environ.get(
-                ENV_APP_UPSERT_PROPAGATION_DELAY,
-                str(DEFAULT_APP_UPSERT_PROPAGATION_DELAY),
-            )
+        propagation_delay = (
+            float(APP_UPSERT_PROPAGATION_DELAY)
+            if APP_UPSERT_PROPAGATION_DELAY
+            else DEFAULT_APP_UPSERT_PROPAGATION_DELAY
         )
         await asyncio.sleep(propagation_delay)
 

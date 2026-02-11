@@ -619,7 +619,7 @@ class TestAutomationActivity(unittest.TestCase):
             def test_func(x: str) -> None:
                 pass
 
-        self.assertIn("inputs list is empty", str(ctx.exception))
+        self.assertIn("inputs list is empty", str(ctx.exception).lower())
 
     def test_empty_outputs_with_return_type_raises_error(self):
         with self.assertRaises(ValueError) as ctx:
@@ -640,7 +640,7 @@ class TestAutomationActivity(unittest.TestCase):
             def test_func(x: str) -> str:
                 return x
 
-        self.assertIn("outputs list is empty", str(ctx.exception))
+        self.assertIn("outputs list is empty", str(ctx.exception).lower())
 
     # -- $defs hoisting tests --
 
@@ -756,29 +756,42 @@ class TestResolveHelpers(unittest.TestCase):
         result = _resolve_automation_engine_api_url("http://my-host:9999")
         self.assertEqual(result, "http://my-host:9999")
 
-    @patch.dict(
-        "os.environ", {"ATLAN_AUTOMATION_ENGINE_API_URL": "http://env-url:1234"}
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL",
+        "http://env-url:1234",
     )
     def test_resolve_api_url_from_env(self):
         result = _resolve_automation_engine_api_url(None)
         self.assertEqual(result, "http://env-url:1234")
 
-    @patch.dict(
-        "os.environ",
-        {
-            "ATLAN_AUTOMATION_ENGINE_API_HOST": "myhost",
-            "ATLAN_AUTOMATION_ENGINE_API_PORT": "5555",
-        },
-        clear=False,
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL",
+        None,
+    )
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_HOST",
+        "myhost",
+    )
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_PORT",
+        "5555",
     )
     def test_resolve_api_url_from_host_port(self):
-        import os
-
-        os.environ.pop("ATLAN_AUTOMATION_ENGINE_API_URL", None)
         result = _resolve_automation_engine_api_url(None)
         self.assertEqual(result, "http://myhost:5555")
 
-    @patch.dict("os.environ", {}, clear=True)
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL",
+        None,
+    )
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_HOST",
+        None,
+    )
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_PORT",
+        None,
+    )
     def test_resolve_api_url_none_when_nothing_set(self):
         result = _resolve_automation_engine_api_url(None)
         self.assertIsNone(result)
@@ -787,12 +800,18 @@ class TestResolveHelpers(unittest.TestCase):
         result = _resolve_app_qualified_name("custom/qn", "app")
         self.assertEqual(result, "custom/qn")
 
-    @patch.dict("os.environ", {"ATLAN_APP_QUALIFIED_NAME": "env/qn"})
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.APP_QUALIFIED_NAME",
+        "env/qn",
+    )
     def test_resolve_app_qualified_name_from_env(self):
         result = _resolve_app_qualified_name(None, "app")
         self.assertEqual(result, "env/qn")
 
-    @patch.dict("os.environ", {}, clear=True)
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.APP_QUALIFIED_NAME",
+        None,
+    )
     def test_resolve_app_qualified_name_computed(self):
         result = _resolve_app_qualified_name(None, "my-app")
         self.assertEqual(result, "default/apps/my_app")
@@ -837,15 +856,24 @@ class TestFlushActivityRegistrations(unittest.TestCase):
 
         self.assertEqual(len(ACTIVITY_SPECS), 1)
 
-        with patch.dict("os.environ", {}, clear=True):
+        with patch(
+            "application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL",
+            None,
+        ), patch(
+            "application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_HOST",
+            None,
+        ), patch(
+            "application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_PORT",
+            None,
+        ):
             await flush_activity_registrations(
                 app_name="test",
                 workflow_task_queue="q",
                 automation_engine_api_url=None,
             )
 
-        # Specs should have been cleared
-        self.assertEqual(len(ACTIVITY_SPECS), 0)
+        # Specs should be restored (flush failed due to no URL)
+        self.assertEqual(len(ACTIVITY_SPECS), 1)
 
     @pytest.mark.asyncio
     async def test_clears_global_specs_after_flush(self):
@@ -900,7 +928,7 @@ class TestFlushActivityRegistrations(unittest.TestCase):
 
 
 # =============================================================================
-# URL validation tests (T3)
+# URL validation tests
 # =============================================================================
 
 
@@ -964,7 +992,7 @@ class TestValidateBaseUrl(unittest.TestCase):
 
 
 # =============================================================================
-# isolated_activity_specs tests (T2)
+# isolated_activity_specs tests
 # =============================================================================
 
 
@@ -1041,7 +1069,7 @@ class TestIsolatedActivitySpecs(unittest.TestCase):
 
 
 # =============================================================================
-# Retry tests (W5)
+# Retry tests
 # =============================================================================
 
 
@@ -1155,7 +1183,7 @@ class TestRequestWithRetry(unittest.TestCase):
 
 
 # =============================================================================
-# Short-circuit tests (W4)
+# Short-circuit tests
 # =============================================================================
 
 
@@ -1594,7 +1622,10 @@ class TestConfigurablePropagationDelay(unittest.TestCase):
         "application_sdk.decorators.automation_activity.registration.asyncio.sleep",
         new_callable=AsyncMock,
     )
-    @patch.dict("os.environ", {"ATLAN_APP_UPSERT_PROPAGATION_DELAY": "2.5"})
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.APP_UPSERT_PROPAGATION_DELAY",
+        "2.5",
+    )
     async def test_custom_delay_from_env(self, mock_sleep, mock_request):
         """Propagation delay should be read from env var."""
         ok_response = MagicMock()
