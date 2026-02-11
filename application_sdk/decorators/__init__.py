@@ -1,6 +1,6 @@
 """Decorators package for the Atlan Application SDK."""
 
-from application_sdk.decorators._models import (
+from application_sdk.decorators.automation_activity.models import (
     ActivityCategory,
     ActivitySpec,
     Annotation,

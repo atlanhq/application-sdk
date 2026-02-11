@@ -15,20 +15,20 @@ import httpx
 import pytest
 from pydantic import BaseModel, Field
 
-from application_sdk.decorators._models import (
+from application_sdk.decorators.automation_activity.models import (
     ActivityCategory,
     Annotation,
     Parameter,
     SubType,
     ToolMetadata,
 )
-from application_sdk.decorators._registration import (
+from application_sdk.decorators.automation_activity.registration import (
     _request_with_retry,
     _resolve_app_qualified_name,
     _resolve_automation_engine_api_url,
     _validate_base_url,
 )
-from application_sdk.decorators._schema import _extract_and_hoist_defs
+from application_sdk.decorators.automation_activity.schema import _extract_and_hoist_defs
 from application_sdk.decorators.automation_activity import (
     ACTIVITY_SPECS,
     automation_activity,
@@ -589,28 +589,21 @@ class TestResolveHelpers(unittest.TestCase):
         result = _resolve_automation_engine_api_url("http://my-host:9999")
         self.assertEqual(result, "http://my-host:9999")
 
-    @patch.dict("os.environ", {"ATLAN_AUTOMATION_ENGINE_API_URL": "http://env-url:1234"})
+    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL", "http://env-url:1234")
     def test_resolve_api_url_from_env(self):
         result = _resolve_automation_engine_api_url(None)
         self.assertEqual(result, "http://env-url:1234")
 
-    @patch.dict(
-        "os.environ",
-        {
-            "ATLAN_AUTOMATION_ENGINE_API_HOST": "myhost",
-            "ATLAN_AUTOMATION_ENGINE_API_PORT": "5555",
-        },
-        clear=False,
-    )
+    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL", None)
+    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_HOST", "myhost")
+    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_PORT", "5555")
     def test_resolve_api_url_from_host_port(self):
-        # Make sure the direct URL env var is not set
-        import os
-
-        os.environ.pop("ATLAN_AUTOMATION_ENGINE_API_URL", None)
         result = _resolve_automation_engine_api_url(None)
         self.assertEqual(result, "http://myhost:5555")
 
-    @patch.dict("os.environ", {}, clear=True)
+    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL", None)
+    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_HOST", None)
+    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_PORT", None)
     def test_resolve_api_url_none_when_nothing_set(self):
         result = _resolve_automation_engine_api_url(None)
         self.assertIsNone(result)
@@ -619,12 +612,12 @@ class TestResolveHelpers(unittest.TestCase):
         result = _resolve_app_qualified_name("custom/qn", "app")
         self.assertEqual(result, "custom/qn")
 
-    @patch.dict("os.environ", {"ATLAN_APP_QUALIFIED_NAME": "env/qn"})
+    @patch("application_sdk.decorators.automation_activity.registration.APP_QUALIFIED_NAME", "env/qn")
     def test_resolve_app_qualified_name_from_env(self):
         result = _resolve_app_qualified_name(None, "app")
         self.assertEqual(result, "env/qn")
 
-    @patch.dict("os.environ", {}, clear=True)
+    @patch("application_sdk.decorators.automation_activity.registration.APP_QUALIFIED_NAME", None)
     def test_resolve_app_qualified_name_computed(self):
         result = _resolve_app_qualified_name(None, "my-app")
         self.assertEqual(result, "default/apps/my_app")
@@ -669,7 +662,9 @@ class TestFlushActivityRegistrations(unittest.TestCase):
 
         self.assertEqual(len(ACTIVITY_SPECS), 1)
 
-        with patch.dict("os.environ", {}, clear=True):
+        with patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL", None), \
+             patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_HOST", None), \
+             patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_PORT", None):
             await flush_activity_registrations(
                 app_name="test",
                 workflow_task_queue="q",
@@ -895,7 +890,7 @@ class TestRequestWithRetry(unittest.TestCase):
         self.assertEqual(mock_client.request.call_count, 1)
 
     @pytest.mark.asyncio
-    @patch("application_sdk.decorators._registration.asyncio.sleep", new_callable=AsyncMock)
+    @patch("application_sdk.decorators.automation_activity.registration.asyncio.sleep", new_callable=AsyncMock)
     async def test_retries_on_connect_error(self, mock_sleep):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -918,7 +913,7 @@ class TestRequestWithRetry(unittest.TestCase):
         self.assertEqual(mock_sleep.call_count, 2)
 
     @pytest.mark.asyncio
-    @patch("application_sdk.decorators._registration.asyncio.sleep", new_callable=AsyncMock)
+    @patch("application_sdk.decorators.automation_activity.registration.asyncio.sleep", new_callable=AsyncMock)
     async def test_retries_on_retryable_status(self, mock_sleep):
         retry_response = MagicMock()
         retry_response.status_code = 503
@@ -946,7 +941,7 @@ class TestRequestWithRetry(unittest.TestCase):
         )
 
         with patch(
-            "application_sdk.decorators._registration.asyncio.sleep",
+            "application_sdk.decorators.automation_activity.registration.asyncio.sleep",
             new_callable=AsyncMock,
         ):
             with self.assertRaises(httpx.ConnectError):
@@ -996,7 +991,7 @@ class TestFlushShortCircuit(unittest.TestCase):
         ACTIVITY_SPECS.clear()
 
     @pytest.mark.asyncio
-    @patch("application_sdk.decorators._registration._request_with_retry", new_callable=AsyncMock)
+    @patch("application_sdk.decorators.automation_activity.registration._request_with_retry", new_callable=AsyncMock)
     async def test_upsert_failure_skips_tool_registration(self, mock_request):
         """When the app upsert fails, tool registration should be skipped."""
         health_response = MagicMock()
@@ -1032,8 +1027,8 @@ class TestFlushShortCircuit(unittest.TestCase):
         self.assertEqual(mock_request.call_count, 2)
 
     @pytest.mark.asyncio
-    @patch("application_sdk.decorators._registration.asyncio.sleep", new_callable=AsyncMock)
-    @patch("application_sdk.decorators._registration._request_with_retry", new_callable=AsyncMock)
+    @patch("application_sdk.decorators.automation_activity.registration.asyncio.sleep", new_callable=AsyncMock)
+    @patch("application_sdk.decorators.automation_activity.registration._request_with_retry", new_callable=AsyncMock)
     async def test_successful_flow_calls_all_three(self, mock_request, mock_sleep):
         """On success, all three HTTP calls should be made."""
         ok_response = MagicMock()

@@ -54,9 +54,6 @@ TIMEOUT_API_REQUEST = 30.0
 # Default prefix for computing app qualified names
 APP_QUALIFIED_NAME_PREFIX = "default/apps/"
 
-# Environment variable for the automation engine API URL
-ENV_AUTOMATION_ENGINE_API_URL = "ATLAN_AUTOMATION_ENGINE_API_URL"
-
 
 # =============================================================================
 # Pydantic models
