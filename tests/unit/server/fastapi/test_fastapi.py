@@ -382,10 +382,9 @@ class TestServer:
         assert response_data["fileName"] == expected_response.fileName
         mock_upload_file.assert_called_once()
         call_kwargs = mock_upload_file.call_args[1]
-        # Verify UploadFile object is passed
-        from fastapi import UploadFile
-
-        assert isinstance(call_kwargs["file"], UploadFile)
+        # Verify UploadFile-like object is passed (starlette test client uses its own UploadFile class)
+        assert hasattr(call_kwargs["file"], "filename")
+        assert hasattr(call_kwargs["file"], "read")
         assert call_kwargs["file"].filename == "test.csv"
         assert call_kwargs["filename"] == "test.csv"  # Should use provided filename
         assert call_kwargs["prefix"] == "workflow_file_upload"
@@ -429,10 +428,9 @@ class TestServer:
         assert response.status_code == 200
         mock_upload_file.assert_called_once()
         call_kwargs = mock_upload_file.call_args[1]
-        # Verify UploadFile object is passed
-        from fastapi import UploadFile
-
-        assert isinstance(call_kwargs["file"], UploadFile)
+        # Verify UploadFile-like object is passed (starlette test client uses its own UploadFile class)
+        assert hasattr(call_kwargs["file"], "filename")
+        assert hasattr(call_kwargs["file"], "read")
         assert call_kwargs["file"].filename == "test.json"
         assert call_kwargs["prefix"] == "workflow_file_upload"
 
@@ -593,10 +591,9 @@ class TestServer:
         assert response.status_code == 200
         mock_upload_file.assert_called_once()
         call_kwargs = mock_upload_file.call_args[1]
-        # Verify UploadFile object is passed
-        from fastapi import UploadFile
-
-        assert isinstance(call_kwargs["file"], UploadFile)
+        # Verify UploadFile-like object is passed (starlette test client uses its own UploadFile class)
+        assert hasattr(call_kwargs["file"], "filename")
+        assert hasattr(call_kwargs["file"], "read")
         assert call_kwargs["filename"] is None  # Not provided in form data
         assert call_kwargs["prefix"] == "custom_prefix"
 

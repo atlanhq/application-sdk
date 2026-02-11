@@ -658,7 +658,9 @@ class APIServer(ServerInterface):
         self,
         file: UploadFile = File(..., description="File to upload"),
         filename: Optional[str] = Form(None, description="Original filename"),
-        prefix: Optional[str] = Form(None, description="Prefix for file organization"),
+        prefix: Optional[str] = Form(
+            "workflow_file_upload", description="Prefix for file organization"
+        ),
         contentType: Optional[str] = Form(None, description="Content type of the file"),
     ) -> FileUploadResponse:
         """Upload a file to the object store."""
