@@ -1,16 +1,18 @@
 """Activity registration flush and HTTP client for the automation engine."""
 
 import asyncio
+import os
 from typing import Any, List, Optional
 from urllib.parse import urlparse
 
 import httpx
 
 from application_sdk.constants import (
-    APP_QUALIFIED_NAME,
-    AUTOMATION_ENGINE_API_HOST,
-    AUTOMATION_ENGINE_API_PORT,
-    AUTOMATION_ENGINE_API_URL,
+    ENV_APP_QUALIFIED_NAME,
+    ENV_APP_UPSERT_PROPAGATION_DELAY,
+    ENV_AUTOMATION_ENGINE_API_HOST,
+    ENV_AUTOMATION_ENGINE_API_PORT,
+    ENV_AUTOMATION_ENGINE_API_URL,
 )
 from application_sdk.decorators.automation_activity.models import (
     APP_QUALIFIED_NAME_PREFIX,
@@ -20,8 +22,10 @@ from application_sdk.decorators.automation_activity.models import (
     TIMEOUT_API_REQUEST,
     TIMEOUT_HEALTH_CHECK,
     ActivitySpec,
+    AppSpec,
+    ToolRegistrationRequest,
 )
-from application_sdk.decorators.automation_activity.schema import _build_tool_dict
+from application_sdk.decorators.automation_activity.schema import _build_tool_spec
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -30,6 +34,11 @@ logger = get_logger(__name__)
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2.0  # seconds
 RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
+
+# Default delay between app upsert and tool registration to allow the automation
+# engine to propagate the app record before accepting tool registrations.
+# Configurable via ATLAN_APP_UPSERT_PROPAGATION_DELAY env var.
+DEFAULT_APP_UPSERT_PROPAGATION_DELAY = 5.0  # seconds
 
 # URL validation constants
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
@@ -76,11 +85,14 @@ def _resolve_automation_engine_api_url(
     if automation_engine_api_url:
         return automation_engine_api_url
 
-    if AUTOMATION_ENGINE_API_URL:
-        return AUTOMATION_ENGINE_API_URL
+    env_url = os.environ.get(ENV_AUTOMATION_ENGINE_API_URL)
+    if env_url:
+        return env_url
 
-    if AUTOMATION_ENGINE_API_HOST and AUTOMATION_ENGINE_API_PORT:
-        return f"http://{AUTOMATION_ENGINE_API_HOST}:{AUTOMATION_ENGINE_API_PORT}"
+    host = os.environ.get(ENV_AUTOMATION_ENGINE_API_HOST)
+    port = os.environ.get(ENV_AUTOMATION_ENGINE_API_PORT)
+    if host and port:
+        return f"http://{host}:{port}"
 
     return None
 
@@ -92,8 +104,9 @@ def _resolve_app_qualified_name(
     if app_qualified_name:
         return app_qualified_name
 
-    if APP_QUALIFIED_NAME:
-        return APP_QUALIFIED_NAME
+    env_qn = os.environ.get(ENV_APP_QUALIFIED_NAME)
+    if env_qn:
+        return env_qn
 
     # Compute: default/apps/<app_name_with_underscores>
     return f"{APP_QUALIFIED_NAME_PREFIX}{app_name.replace('-', '_').lower()}"
@@ -159,16 +172,19 @@ async def _flush_specs(
     automation_engine_api_url: Optional[str] = None,
     app_qualified_name: Optional[str] = None,
     max_retries: int = MAX_RETRIES,
-) -> None:
+) -> bool:
     """Push a list of activity specs to the automation engine HTTP API.
 
     This is the internal implementation called by the public
     ``flush_activity_registrations`` after it snapshots and clears the
     global ``ACTIVITY_SPECS``.
+
+    Returns:
+        ``True`` if all registrations succeeded, ``False`` otherwise.
     """
     if not specs_to_register:
         logger.info("No activities to register")
-        return
+        return True
 
     base_url = _resolve_automation_engine_api_url(automation_engine_api_url)
     if not base_url:
@@ -177,7 +193,7 @@ async def _flush_specs(
             "Set ATLAN_AUTOMATION_ENGINE_API_URL or pass automation_engine_api_url. "
             "Skipping activity registration."
         )
-        return
+        return False
 
     # T3: Validate URL before making any requests
     try:
@@ -186,7 +202,7 @@ async def _flush_specs(
         logger.warning(
             f"Invalid automation engine URL: {e}. Skipping activity registration."
         )
-        return
+        return False
 
     qualified_name = _resolve_app_qualified_name(app_qualified_name, app_name)
 
@@ -202,12 +218,16 @@ async def _flush_specs(
                 timeout=TIMEOUT_HEALTH_CHECK,
             )
             logger.info("Automation engine health check passed")
-        except Exception as e:
+        except (
+            httpx.HTTPStatusError,
+            httpx.ConnectError,
+            httpx.TimeoutException,
+        ) as e:
             logger.warning(
                 f"Automation engine health check failed: {e}. "
                 "Skipping activity registration."
             )
-            return
+            return False
 
         logger.info(
             f"Registering {len(specs_to_register)} activities with automation engine"
@@ -215,30 +235,49 @@ async def _flush_specs(
 
         # Upsert app
         try:
+            app_spec = AppSpec(
+                name=app_name,
+                task_queue=workflow_task_queue,
+                qualified_name=qualified_name,
+            )
             await _request_with_retry(
                 client,
                 "POST",
                 f"{base_url}{ENDPOINT_APPS}",
                 max_retries=max_retries,
-                json={
-                    "name": app_name,
-                    "task_queue": workflow_task_queue,
-                    "qualified_name": qualified_name,
-                },
+                json=app_spec.model_dump(exclude_none=True),
             )
             logger.info(f"Successfully upserted app '{app_name}'")
-        except Exception as e:
-            # W4: Short-circuit — don't attempt tool registration if upsert failed
+        except (
+            httpx.HTTPStatusError,
+            httpx.ConnectError,
+            httpx.TimeoutException,
+        ) as e:
+            # Short-circuit — don't attempt tool registration if upsert failed
             logger.warning(
                 f"Failed to upsert app '{app_name}': {e}. "
                 "Skipping tool registration."
             )
-            return
+            return False
 
-        await asyncio.sleep(5)
+        # TODO: Replace this sleep with a readiness-polling loop or
+        # server-side confirmation that the app record is propagated.
+        propagation_delay = float(
+            os.environ.get(
+                ENV_APP_UPSERT_PROPAGATION_DELAY,
+                str(DEFAULT_APP_UPSERT_PROPAGATION_DELAY),
+            )
+        )
+        await asyncio.sleep(propagation_delay)
 
         # Build and send tools
-        tools = [_build_tool_dict(item) for item in specs_to_register]
+        tool_specs = [_build_tool_spec(item) for item in specs_to_register]
+        registration_request = ToolRegistrationRequest(
+            app_qualified_name=qualified_name,
+            app_name=app_name,
+            task_queue=workflow_task_queue,
+            tools=tool_specs,
+        )
 
         try:
             await _request_with_retry(
@@ -246,18 +285,17 @@ async def _flush_specs(
                 "POST",
                 f"{base_url}{ENDPOINT_TOOLS}",
                 max_retries=max_retries,
-                json={
-                    "app_qualified_name": qualified_name,
-                    "app_name": app_name,
-                    "task_queue": workflow_task_queue,
-                    "tools": tools,
-                },
+                json=registration_request.model_dump(exclude_none=True),
             )
             logger.info(
-                f"Successfully registered {len(tools)} activities "
+                f"Successfully registered {len(tool_specs)} activities "
                 "with automation engine"
             )
-        except Exception as e:
-            logger.warning(
-                f"Failed to register activities with automation engine: {e}"
-            )
+            return True
+        except (
+            httpx.HTTPStatusError,
+            httpx.ConnectError,
+            httpx.TimeoutException,
+        ) as e:
+            logger.warning(f"Failed to register activities with automation engine: {e}")
+            return False

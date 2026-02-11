@@ -15,12 +15,20 @@ import httpx
 import pytest
 from pydantic import BaseModel, Field
 
+from application_sdk.decorators.automation_activity import (
+    ACTIVITY_SPECS,
+    automation_activity,
+    flush_activity_registrations,
+    isolated_activity_specs,
+)
 from application_sdk.decorators.automation_activity.models import (
     ActivityCategory,
     Annotation,
     Parameter,
     SubType,
     ToolMetadata,
+    ToolRegistrationRequest,
+    ToolSpec,
 )
 from application_sdk.decorators.automation_activity.registration import (
     _request_with_retry,
@@ -28,14 +36,10 @@ from application_sdk.decorators.automation_activity.registration import (
     _resolve_automation_engine_api_url,
     _validate_base_url,
 )
-from application_sdk.decorators.automation_activity.schema import _extract_and_hoist_defs
-from application_sdk.decorators.automation_activity import (
-    ACTIVITY_SPECS,
-    automation_activity,
-    flush_activity_registrations,
-    isolated_activity_specs,
+from application_sdk.decorators.automation_activity.schema import (
+    _build_tool_spec,
+    _extract_and_hoist_defs,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -129,10 +133,14 @@ class TestAutomationActivity(unittest.TestCase):
             display_name="First",
             description="First",
             inputs=[
-                Parameter(name="x", description="X", annotations=Annotation(display_name="X"))
+                Parameter(
+                    name="x", description="X", annotations=Annotation(display_name="X")
+                )
             ],
             outputs=[
-                Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                Parameter(
+                    name="r", description="R", annotations=Annotation(display_name="R")
+                )
             ],
             category=ActivityCategory.UTILITY,
         )
@@ -143,10 +151,14 @@ class TestAutomationActivity(unittest.TestCase):
             display_name="Second",
             description="Second",
             inputs=[
-                Parameter(name="y", description="Y", annotations=Annotation(display_name="Y"))
+                Parameter(
+                    name="y", description="Y", annotations=Annotation(display_name="Y")
+                )
             ],
             outputs=[
-                Parameter(name="o", description="O", annotations=Annotation(display_name="O"))
+                Parameter(
+                    name="o", description="O", annotations=Annotation(display_name="O")
+                )
             ],
             category=ActivityCategory.DATA,
         )
@@ -179,10 +191,14 @@ class TestAutomationActivity(unittest.TestCase):
             display_name="Preserve",
             description="Preserve",
             inputs=[
-                Parameter(name="x", description="X", annotations=Annotation(display_name="X"))
+                Parameter(
+                    name="x", description="X", annotations=Annotation(display_name="X")
+                )
             ],
             outputs=[
-                Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                Parameter(
+                    name="r", description="R", annotations=Annotation(display_name="R")
+                )
             ],
             category=ActivityCategory.UTILITY,
         )
@@ -198,11 +214,17 @@ class TestAutomationActivity(unittest.TestCase):
             display_name="Schema",
             description="Schema",
             inputs=[
-                Parameter(name="x", description="X", annotations=Annotation(display_name="X")),
-                Parameter(name="y", description="Y", annotations=Annotation(display_name="Y")),
+                Parameter(
+                    name="x", description="X", annotations=Annotation(display_name="X")
+                ),
+                Parameter(
+                    name="y", description="Y", annotations=Annotation(display_name="Y")
+                ),
             ],
             outputs=[
-                Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                Parameter(
+                    name="r", description="R", annotations=Annotation(display_name="R")
+                )
             ],
             category=ActivityCategory.UTILITY,
         )
@@ -220,11 +242,21 @@ class TestAutomationActivity(unittest.TestCase):
             display_name="Tuple",
             description="Tuple",
             inputs=[
-                Parameter(name="x", description="X", annotations=Annotation(display_name="X"))
+                Parameter(
+                    name="x", description="X", annotations=Annotation(display_name="X")
+                )
             ],
             outputs=[
-                Parameter(name="result", description="R", annotations=Annotation(display_name="R")),
-                Parameter(name="count", description="C", annotations=Annotation(display_name="C")),
+                Parameter(
+                    name="result",
+                    description="R",
+                    annotations=Annotation(display_name="R"),
+                ),
+                Parameter(
+                    name="count",
+                    description="C",
+                    annotations=Annotation(display_name="C"),
+                ),
             ],
             category=ActivityCategory.UTILITY,
         )
@@ -242,11 +274,17 @@ class TestAutomationActivity(unittest.TestCase):
             display_name="Defaults",
             description="Defaults",
             inputs=[
-                Parameter(name="x", description="X", annotations=Annotation(display_name="X")),
-                Parameter(name="y", description="Y", annotations=Annotation(display_name="Y")),
+                Parameter(
+                    name="x", description="X", annotations=Annotation(display_name="X")
+                ),
+                Parameter(
+                    name="y", description="Y", annotations=Annotation(display_name="Y")
+                ),
             ],
             outputs=[
-                Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                Parameter(
+                    name="r", description="R", annotations=Annotation(display_name="R")
+                )
             ],
             category=ActivityCategory.UTILITY,
         )
@@ -264,10 +302,14 @@ class TestAutomationActivity(unittest.TestCase):
             display_name="Optional",
             description="Optional",
             inputs=[
-                Parameter(name="x", description="X", annotations=Annotation(display_name="X"))
+                Parameter(
+                    name="x", description="X", annotations=Annotation(display_name="X")
+                )
             ],
             outputs=[
-                Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                Parameter(
+                    name="r", description="R", annotations=Annotation(display_name="R")
+                )
             ],
             category=ActivityCategory.UTILITY,
         )
@@ -283,10 +325,16 @@ class TestAutomationActivity(unittest.TestCase):
             display_name="Model",
             description="Model",
             inputs=[
-                Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                Parameter(
+                    name="r", description="R", annotations=Annotation(display_name="R")
+                )
             ],
             outputs=[
-                Parameter(name="output", description="O", annotations=Annotation(display_name="O"))
+                Parameter(
+                    name="output",
+                    description="O",
+                    annotations=Annotation(display_name="O"),
+                )
             ],
             category=ActivityCategory.UTILITY,
         )
@@ -302,10 +350,16 @@ class TestAutomationActivity(unittest.TestCase):
             display_name="List",
             description="List",
             inputs=[
-                Parameter(name="paths", description="P", annotations=Annotation(display_name="P"))
+                Parameter(
+                    name="paths",
+                    description="P",
+                    annotations=Annotation(display_name="P"),
+                )
             ],
             outputs=[
-                Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                Parameter(
+                    name="r", description="R", annotations=Annotation(display_name="R")
+                )
             ],
             category=ActivityCategory.UTILITY,
         )
@@ -317,6 +371,64 @@ class TestAutomationActivity(unittest.TestCase):
         assert_data_validates(spec.input_schema, {"paths": ["a", "b"]})
         assert_data_fails_validation(spec.input_schema, {"paths": "not_array"})
 
+    # -- schema_extra tests --
+
+    def test_schema_extra_valid_keys_applied(self):
+        @automation_activity(
+            display_name="Extra",
+            description="Extra",
+            inputs=[
+                Parameter(
+                    name="items",
+                    description="Items",
+                    annotations=Annotation(display_name="Items"),
+                    schema_extra={"minItems": 1, "maxItems": 10},
+                )
+            ],
+            outputs=[
+                Parameter(
+                    name="r", description="R", annotations=Annotation(display_name="R")
+                )
+            ],
+            category=ActivityCategory.UTILITY,
+        )
+        def test_func(items: List[str]) -> str:
+            return ",".join(items)
+
+        spec = ACTIVITY_SPECS[0]
+        items_prop = spec.input_schema["properties"]["items"]
+        self.assertEqual(items_prop["minItems"], 1)
+        self.assertEqual(items_prop["maxItems"], 10)
+
+    def test_schema_extra_disallowed_key_raises_error(self):
+        with self.assertRaises(ValueError) as ctx:
+
+            @automation_activity(
+                display_name="Bad",
+                description="Bad",
+                inputs=[
+                    Parameter(
+                        name="x",
+                        description="X",
+                        annotations=Annotation(display_name="X"),
+                        schema_extra={"type": "string", "minLength": 1},
+                    )
+                ],
+                outputs=[
+                    Parameter(
+                        name="r",
+                        description="R",
+                        annotations=Annotation(display_name="R"),
+                    )
+                ],
+                category=ActivityCategory.UTILITY,
+            )
+            def test_func(x: str) -> str:
+                return x
+
+        self.assertIn("disallowed schema_extra keys", str(ctx.exception))
+        self.assertIn("type", str(ctx.exception))
+
     # -- Annotation tests --
 
     def test_annotations_sub_type_in_input_schema(self):
@@ -327,11 +439,15 @@ class TestAutomationActivity(unittest.TestCase):
                 Parameter(
                     name="path",
                     description="Path",
-                    annotations=Annotation(sub_type=SubType.FILE_PATH, display_name="Path"),
+                    annotations=Annotation(
+                        sub_type=SubType.FILE_PATH, display_name="Path"
+                    ),
                 )
             ],
             outputs=[
-                Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                Parameter(
+                    name="r", description="R", annotations=Annotation(display_name="R")
+                )
             ],
             category=ActivityCategory.UTILITY,
         )
@@ -356,7 +472,9 @@ class TestAutomationActivity(unittest.TestCase):
                 )
             ],
             outputs=[
-                Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                Parameter(
+                    name="r", description="R", annotations=Annotation(display_name="R")
+                )
             ],
             category=ActivityCategory.UTILITY,
         )
@@ -377,11 +495,23 @@ class TestAutomationActivity(unittest.TestCase):
                 display_name="Bad",
                 description="Bad",
                 inputs=[
-                    Parameter(name="x", description="X", annotations=Annotation(display_name="X")),
-                    Parameter(name="y", description="Y", annotations=Annotation(display_name="Y")),
+                    Parameter(
+                        name="x",
+                        description="X",
+                        annotations=Annotation(display_name="X"),
+                    ),
+                    Parameter(
+                        name="y",
+                        description="Y",
+                        annotations=Annotation(display_name="Y"),
+                    ),
                 ],
                 outputs=[
-                    Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                    Parameter(
+                        name="r",
+                        description="R",
+                        annotations=Annotation(display_name="R"),
+                    )
                 ],
                 category=ActivityCategory.UTILITY,
             )
@@ -398,10 +528,18 @@ class TestAutomationActivity(unittest.TestCase):
                 display_name="Bad",
                 description="Bad",
                 inputs=[
-                    Parameter(name="wrong", description="W", annotations=Annotation(display_name="W"))
+                    Parameter(
+                        name="wrong",
+                        description="W",
+                        annotations=Annotation(display_name="W"),
+                    )
                 ],
                 outputs=[
-                    Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                    Parameter(
+                        name="r",
+                        description="R",
+                        annotations=Annotation(display_name="R"),
+                    )
                 ],
                 category=ActivityCategory.UTILITY,
             )
@@ -418,11 +556,23 @@ class TestAutomationActivity(unittest.TestCase):
                 display_name="Bad",
                 description="Bad",
                 inputs=[
-                    Parameter(name="x", description="X", annotations=Annotation(display_name="X"))
+                    Parameter(
+                        name="x",
+                        description="X",
+                        annotations=Annotation(display_name="X"),
+                    )
                 ],
                 outputs=[
-                    Parameter(name="a", description="A", annotations=Annotation(display_name="A")),
-                    Parameter(name="b", description="B", annotations=Annotation(display_name="B")),
+                    Parameter(
+                        name="a",
+                        description="A",
+                        annotations=Annotation(display_name="A"),
+                    ),
+                    Parameter(
+                        name="b",
+                        description="B",
+                        annotations=Annotation(display_name="B"),
+                    ),
                 ],
                 category=ActivityCategory.UTILITY,
             )
@@ -436,10 +586,18 @@ class TestAutomationActivity(unittest.TestCase):
                 display_name="Bad",
                 description="Bad",
                 inputs=[
-                    Parameter(name="x", description="X", annotations=Annotation(display_name="X"))
+                    Parameter(
+                        name="x",
+                        description="X",
+                        annotations=Annotation(display_name="X"),
+                    )
                 ],
                 outputs=[
-                    Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                    Parameter(
+                        name="r",
+                        description="R",
+                        annotations=Annotation(display_name="R"),
+                    )
                 ],
                 category=ActivityCategory.UTILITY,
             )
@@ -470,7 +628,11 @@ class TestAutomationActivity(unittest.TestCase):
                 display_name="Bad",
                 description="Bad",
                 inputs=[
-                    Parameter(name="x", description="X", annotations=Annotation(display_name="X"))
+                    Parameter(
+                        name="x",
+                        description="X",
+                        annotations=Annotation(display_name="X"),
+                    )
                 ],
                 outputs=[],
                 category=ActivityCategory.UTILITY,
@@ -526,10 +688,16 @@ class TestAutomationActivity(unittest.TestCase):
             display_name="Hoist",
             description="Hoist",
             inputs=[
-                Parameter(name="items", description="I", annotations=Annotation(display_name="I"))
+                Parameter(
+                    name="items",
+                    description="I",
+                    annotations=Annotation(display_name="I"),
+                )
             ],
             outputs=[
-                Parameter(name="r", description="R", annotations=Annotation(display_name="R"))
+                Parameter(
+                    name="r", description="R", annotations=Annotation(display_name="R")
+                )
             ],
             category=ActivityCategory.UTILITY,
         )
@@ -584,26 +752,33 @@ class TestAutomationActivity(unittest.TestCase):
 
 
 class TestResolveHelpers(unittest.TestCase):
-
     def test_resolve_api_url_explicit(self):
         result = _resolve_automation_engine_api_url("http://my-host:9999")
         self.assertEqual(result, "http://my-host:9999")
 
-    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL", "http://env-url:1234")
+    @patch.dict(
+        "os.environ", {"ATLAN_AUTOMATION_ENGINE_API_URL": "http://env-url:1234"}
+    )
     def test_resolve_api_url_from_env(self):
         result = _resolve_automation_engine_api_url(None)
         self.assertEqual(result, "http://env-url:1234")
 
-    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL", None)
-    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_HOST", "myhost")
-    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_PORT", "5555")
+    @patch.dict(
+        "os.environ",
+        {
+            "ATLAN_AUTOMATION_ENGINE_API_HOST": "myhost",
+            "ATLAN_AUTOMATION_ENGINE_API_PORT": "5555",
+        },
+        clear=False,
+    )
     def test_resolve_api_url_from_host_port(self):
+        import os
+
+        os.environ.pop("ATLAN_AUTOMATION_ENGINE_API_URL", None)
         result = _resolve_automation_engine_api_url(None)
         self.assertEqual(result, "http://myhost:5555")
 
-    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL", None)
-    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_HOST", None)
-    @patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_PORT", None)
+    @patch.dict("os.environ", {}, clear=True)
     def test_resolve_api_url_none_when_nothing_set(self):
         result = _resolve_automation_engine_api_url(None)
         self.assertIsNone(result)
@@ -612,12 +787,12 @@ class TestResolveHelpers(unittest.TestCase):
         result = _resolve_app_qualified_name("custom/qn", "app")
         self.assertEqual(result, "custom/qn")
 
-    @patch("application_sdk.decorators.automation_activity.registration.APP_QUALIFIED_NAME", "env/qn")
+    @patch.dict("os.environ", {"ATLAN_APP_QUALIFIED_NAME": "env/qn"})
     def test_resolve_app_qualified_name_from_env(self):
         result = _resolve_app_qualified_name(None, "app")
         self.assertEqual(result, "env/qn")
 
-    @patch("application_sdk.decorators.automation_activity.registration.APP_QUALIFIED_NAME", None)
+    @patch.dict("os.environ", {}, clear=True)
     def test_resolve_app_qualified_name_computed(self):
         result = _resolve_app_qualified_name(None, "my-app")
         self.assertEqual(result, "default/apps/my_app")
@@ -629,7 +804,6 @@ class TestResolveHelpers(unittest.TestCase):
 
 
 class TestFlushActivityRegistrations(unittest.TestCase):
-
     def setUp(self):
         ACTIVITY_SPECS.clear()
 
@@ -649,6 +823,7 @@ class TestFlushActivityRegistrations(unittest.TestCase):
     @pytest.mark.asyncio
     async def test_no_url_warns_and_returns(self):
         """When no URL is configured, flush should warn and skip."""
+
         # Populate a spec
         @automation_activity(
             display_name="T",
@@ -662,9 +837,7 @@ class TestFlushActivityRegistrations(unittest.TestCase):
 
         self.assertEqual(len(ACTIVITY_SPECS), 1)
 
-        with patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_URL", None), \
-             patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_HOST", None), \
-             patch("application_sdk.decorators.automation_activity.registration.AUTOMATION_ENGINE_API_PORT", None):
+        with patch.dict("os.environ", {}, clear=True):
             await flush_activity_registrations(
                 app_name="test",
                 workflow_task_queue="q",
@@ -829,6 +1002,7 @@ class TestIsolatedActivitySpecs(unittest.TestCase):
 
     def test_specs_registered_inside_context_are_discarded(self):
         with isolated_activity_specs() as specs:
+
             @automation_activity(
                 display_name="Inside",
                 description="Inside",
@@ -890,7 +1064,10 @@ class TestRequestWithRetry(unittest.TestCase):
         self.assertEqual(mock_client.request.call_count, 1)
 
     @pytest.mark.asyncio
-    @patch("application_sdk.decorators.automation_activity.registration.asyncio.sleep", new_callable=AsyncMock)
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.asyncio.sleep",
+        new_callable=AsyncMock,
+    )
     async def test_retries_on_connect_error(self, mock_sleep):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -913,7 +1090,10 @@ class TestRequestWithRetry(unittest.TestCase):
         self.assertEqual(mock_sleep.call_count, 2)
 
     @pytest.mark.asyncio
-    @patch("application_sdk.decorators.automation_activity.registration.asyncio.sleep", new_callable=AsyncMock)
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.asyncio.sleep",
+        new_callable=AsyncMock,
+    )
     async def test_retries_on_retryable_status(self, mock_sleep):
         retry_response = MagicMock()
         retry_response.status_code = 503
@@ -923,9 +1103,7 @@ class TestRequestWithRetry(unittest.TestCase):
         ok_response.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
-        mock_client.request = AsyncMock(
-            side_effect=[retry_response, ok_response]
-        )
+        mock_client.request = AsyncMock(side_effect=[retry_response, ok_response])
 
         result = await _request_with_retry(
             mock_client, "GET", "http://example.com", max_retries=2
@@ -991,7 +1169,10 @@ class TestFlushShortCircuit(unittest.TestCase):
         ACTIVITY_SPECS.clear()
 
     @pytest.mark.asyncio
-    @patch("application_sdk.decorators.automation_activity.registration._request_with_retry", new_callable=AsyncMock)
+    @patch(
+        "application_sdk.decorators.automation_activity.registration._request_with_retry",
+        new_callable=AsyncMock,
+    )
     async def test_upsert_failure_skips_tool_registration(self, mock_request):
         """When the app upsert fails, tool registration should be skipped."""
         health_response = MagicMock()
@@ -1027,8 +1208,14 @@ class TestFlushShortCircuit(unittest.TestCase):
         self.assertEqual(mock_request.call_count, 2)
 
     @pytest.mark.asyncio
-    @patch("application_sdk.decorators.automation_activity.registration.asyncio.sleep", new_callable=AsyncMock)
-    @patch("application_sdk.decorators.automation_activity.registration._request_with_retry", new_callable=AsyncMock)
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.asyncio.sleep",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "application_sdk.decorators.automation_activity.registration._request_with_retry",
+        new_callable=AsyncMock,
+    )
     async def test_successful_flow_calls_all_three(self, mock_request, mock_sleep):
         """On success, all three HTTP calls should be made."""
         ok_response = MagicMock()
@@ -1054,3 +1241,415 @@ class TestFlushShortCircuit(unittest.TestCase):
 
         # health check + upsert + tools = 3 calls
         self.assertEqual(mock_request.call_count, 3)
+
+
+# =============================================================================
+# Contract tests — payload shape validation
+# =============================================================================
+
+
+class TestToolSpecContract(unittest.TestCase):
+    """Validate the shape of payloads sent to the automation engine API."""
+
+    def _make_activity_spec(self, **overrides):
+        defaults = {
+            "name": "my_activity",
+            "display_name": "My Activity",
+            "description": "Does things",
+            "input_schema": {"type": "object", "properties": {}, "required": []},
+            "output_schema": {"type": "object", "properties": {}, "required": []},
+            "category": ActivityCategory.UTILITY,
+        }
+        defaults.update(overrides)
+        from application_sdk.decorators.automation_activity.models import ActivitySpec
+
+        return ActivitySpec(**defaults)
+
+    def test_tool_spec_has_required_fields(self):
+        """ToolSpec built from ActivitySpec must contain all required API fields."""
+        spec = self._make_activity_spec()
+        tool = _build_tool_spec(spec)
+        self.assertIsInstance(tool, ToolSpec)
+        self.assertEqual(tool.name, "my_activity")
+        self.assertEqual(tool.display_name, "My Activity")
+        self.assertEqual(tool.category, "Utility")
+        self.assertEqual(tool.description, "Does things")
+        self.assertIsInstance(tool.input_schema, dict)
+        self.assertIsInstance(tool.output_schema, dict)
+        self.assertIsNone(tool.examples)
+        self.assertIsNone(tool.metadata)
+
+    def test_tool_spec_with_metadata_and_examples(self):
+        """ToolSpec should carry metadata and examples when present."""
+        spec = self._make_activity_spec(
+            examples=["example1"],
+            metadata=ToolMetadata(icon="star"),
+        )
+        tool = _build_tool_spec(spec)
+        self.assertEqual(tool.examples, ["example1"])
+        self.assertEqual(tool.metadata, {"icon": "star"})
+
+    def test_tool_spec_serialisation_excludes_none(self):
+        """Serialised ToolSpec should not include None-valued optional fields."""
+        spec = self._make_activity_spec()
+        tool = _build_tool_spec(spec)
+        dumped = tool.model_dump(exclude_none=True)
+        self.assertNotIn("examples", dumped)
+        self.assertNotIn("metadata", dumped)
+        # Required fields are present
+        for key in (
+            "name",
+            "display_name",
+            "category",
+            "description",
+            "input_schema",
+            "output_schema",
+        ):
+            self.assertIn(key, dumped)
+
+    def test_tool_registration_request_shape(self):
+        """ToolRegistrationRequest should serialise to the expected API shape."""
+        spec = self._make_activity_spec()
+        tool = _build_tool_spec(spec)
+        request = ToolRegistrationRequest(
+            app_qualified_name="default/apps/my_app",
+            app_name="my_app",
+            task_queue="q",
+            tools=[tool],
+        )
+        dumped = request.model_dump(exclude_none=True)
+        self.assertEqual(dumped["app_qualified_name"], "default/apps/my_app")
+        self.assertEqual(dumped["app_name"], "my_app")
+        self.assertEqual(dumped["task_queue"], "q")
+        self.assertEqual(len(dumped["tools"]), 1)
+        self.assertEqual(dumped["tools"][0]["name"], "my_activity")
+
+    def test_tool_registration_request_rejects_empty_tools(self):
+        """ToolRegistrationRequest with empty tools should still be valid (API decides)."""
+        request = ToolRegistrationRequest(
+            app_qualified_name="default/apps/x",
+            app_name="x",
+            task_queue="q",
+            tools=[],
+        )
+        self.assertEqual(len(request.tools), 0)
+
+
+# =============================================================================
+# Output schema_extra tests
+# =============================================================================
+
+
+class TestOutputSchemaExtra(unittest.TestCase):
+    """Tests for schema_extra on output parameters."""
+
+    def setUp(self):
+        ACTIVITY_SPECS.clear()
+
+    def tearDown(self):
+        ACTIVITY_SPECS.clear()
+
+    def test_output_schema_extra_valid_keys_applied(self):
+        """Valid schema_extra on an output parameter should be merged into the schema."""
+
+        @automation_activity(
+            display_name="T",
+            description="T",
+            inputs=[],
+            outputs=[
+                Parameter(
+                    name="result",
+                    description="Result",
+                    annotations=Annotation(display_name="Result"),
+                    schema_extra={"minLength": 1},
+                ),
+            ],
+            category=ActivityCategory.UTILITY,
+        )
+        def my_func() -> str:
+            return "ok"
+
+        spec = ACTIVITY_SPECS[-1]
+        result_schema = spec.output_schema["properties"]["result"]
+        self.assertEqual(result_schema["minLength"], 1)
+
+    def test_output_schema_extra_disallowed_key_raises(self):
+        """Disallowed schema_extra key on output parameter should raise ValueError."""
+        with self.assertRaises(ValueError) as ctx:
+
+            @automation_activity(
+                display_name="T",
+                description="T",
+                inputs=[],
+                outputs=[
+                    Parameter(
+                        name="result",
+                        description="Result",
+                        annotations=Annotation(display_name="Result"),
+                        schema_extra={"type": "number"},
+                    ),
+                ],
+                category=ActivityCategory.UTILITY,
+            )
+            def my_func() -> str:
+                return "ok"
+
+        self.assertIn("disallowed schema_extra keys", str(ctx.exception))
+
+    def test_output_schema_extra_on_tuple_return(self):
+        """schema_extra should work on tuple-return output parameters."""
+
+        @automation_activity(
+            display_name="T",
+            description="T",
+            inputs=[],
+            outputs=[
+                Parameter(
+                    name="a",
+                    description="A",
+                    annotations=Annotation(display_name="A"),
+                    schema_extra={"maxLength": 100},
+                ),
+                Parameter(
+                    name="b",
+                    description="B",
+                    annotations=Annotation(display_name="B"),
+                ),
+            ],
+            category=ActivityCategory.UTILITY,
+        )
+        def my_func() -> Tuple[str, str]:
+            return ("x", "y")
+
+        spec = ACTIVITY_SPECS[-1]
+        self.assertEqual(spec.output_schema["properties"]["a"]["maxLength"], 100)
+        # b should NOT have maxLength
+        self.assertNotIn("maxLength", spec.output_schema["properties"]["b"])
+
+
+# =============================================================================
+# Specs preservation on flush failure
+# =============================================================================
+
+
+class TestSpecsPreservationOnFailure(unittest.TestCase):
+    """Tests that specs are re-added to ACTIVITY_SPECS when flush fails."""
+
+    def setUp(self):
+        ACTIVITY_SPECS.clear()
+
+    def tearDown(self):
+        ACTIVITY_SPECS.clear()
+
+    @pytest.mark.asyncio
+    @patch(
+        "application_sdk.decorators.automation_activity.registration._request_with_retry",
+        new_callable=AsyncMock,
+    )
+    async def test_specs_restored_on_tool_registration_failure(self, mock_request):
+        """When tool registration fails, specs should be put back in ACTIVITY_SPECS."""
+        health_ok = MagicMock()
+        health_ok.status_code = 200
+
+        mock_request.side_effect = [
+            health_ok,  # health check
+            health_ok,  # upsert
+            httpx.HTTPStatusError(
+                "Server Error",
+                request=MagicMock(),
+                response=MagicMock(status_code=500),
+            ),  # tool registration fails
+        ]
+
+        @automation_activity(
+            display_name="T",
+            description="T",
+            inputs=[],
+            outputs=[],
+            category=ActivityCategory.UTILITY,
+        )
+        def test_func() -> None:
+            pass
+
+        self.assertEqual(len(ACTIVITY_SPECS), 1)
+
+        with patch(
+            "application_sdk.decorators.automation_activity.registration.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
+            await flush_activity_registrations(
+                app_name="test",
+                workflow_task_queue="q",
+                automation_engine_api_url="http://localhost:8000",
+                max_retries=0,
+            )
+
+        # Specs should be restored after failure
+        self.assertEqual(len(ACTIVITY_SPECS), 1)
+        self.assertEqual(ACTIVITY_SPECS[0].name, "test_func")
+
+    @pytest.mark.asyncio
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.asyncio.sleep",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "application_sdk.decorators.automation_activity.registration._request_with_retry",
+        new_callable=AsyncMock,
+    )
+    async def test_specs_cleared_on_success(self, mock_request, mock_sleep):
+        """When flush succeeds, specs should NOT be restored."""
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        mock_request.return_value = ok_response
+
+        @automation_activity(
+            display_name="T",
+            description="T",
+            inputs=[],
+            outputs=[],
+            category=ActivityCategory.UTILITY,
+        )
+        def test_func() -> None:
+            pass
+
+        self.assertEqual(len(ACTIVITY_SPECS), 1)
+
+        await flush_activity_registrations(
+            app_name="test",
+            workflow_task_queue="q",
+            automation_engine_api_url="http://localhost:8000",
+            max_retries=0,
+        )
+
+        # Specs should be consumed and NOT restored
+        self.assertEqual(len(ACTIVITY_SPECS), 0)
+
+    @pytest.mark.asyncio
+    async def test_specs_not_restored_when_explicit_list_provided(self):
+        """When activity_specs is explicitly passed, global ACTIVITY_SPECS is untouched."""
+        from application_sdk.decorators.automation_activity.models import ActivitySpec
+
+        explicit = [
+            ActivitySpec(
+                name="x",
+                display_name="X",
+                description="X",
+                input_schema={},
+                output_schema={},
+                category=ActivityCategory.UTILITY,
+            )
+        ]
+
+        # Put something in the global list to verify it's not touched
+        @automation_activity(
+            display_name="T",
+            description="T",
+            inputs=[],
+            outputs=[],
+            category=ActivityCategory.UTILITY,
+        )
+        def test_func() -> None:
+            pass
+
+        self.assertEqual(len(ACTIVITY_SPECS), 1)
+
+        with patch(
+            "application_sdk.decorators.automation_activity.registration._flush_specs",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            await flush_activity_registrations(
+                app_name="test",
+                workflow_task_queue="q",
+                automation_engine_api_url="http://localhost:8000",
+                activity_specs=explicit,
+            )
+
+        # Global ACTIVITY_SPECS should be untouched (not cleared, not extended)
+        self.assertEqual(len(ACTIVITY_SPECS), 1)
+        self.assertEqual(ACTIVITY_SPECS[0].name, "test_func")
+
+
+# =============================================================================
+# Configurable propagation delay
+# =============================================================================
+
+
+class TestConfigurablePropagationDelay(unittest.TestCase):
+    """Tests that the propagation delay is configurable via env var."""
+
+    def setUp(self):
+        ACTIVITY_SPECS.clear()
+
+    def tearDown(self):
+        ACTIVITY_SPECS.clear()
+
+    @pytest.mark.asyncio
+    @patch(
+        "application_sdk.decorators.automation_activity.registration._request_with_retry",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.asyncio.sleep",
+        new_callable=AsyncMock,
+    )
+    @patch.dict("os.environ", {"ATLAN_APP_UPSERT_PROPAGATION_DELAY": "2.5"})
+    async def test_custom_delay_from_env(self, mock_sleep, mock_request):
+        """Propagation delay should be read from env var."""
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        mock_request.return_value = ok_response
+
+        @automation_activity(
+            display_name="T",
+            description="T",
+            inputs=[],
+            outputs=[],
+            category=ActivityCategory.UTILITY,
+        )
+        def test_func() -> None:
+            pass
+
+        await flush_activity_registrations(
+            app_name="test",
+            workflow_task_queue="q",
+            automation_engine_api_url="http://localhost:8000",
+            max_retries=0,
+        )
+
+        mock_sleep.assert_called_once_with(2.5)
+
+    @pytest.mark.asyncio
+    @patch(
+        "application_sdk.decorators.automation_activity.registration._request_with_retry",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "application_sdk.decorators.automation_activity.registration.asyncio.sleep",
+        new_callable=AsyncMock,
+    )
+    async def test_default_delay_without_env(self, mock_sleep, mock_request):
+        """Without env var, default delay (5.0) should be used."""
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        mock_request.return_value = ok_response
+
+        @automation_activity(
+            display_name="T",
+            description="T",
+            inputs=[],
+            outputs=[],
+            category=ActivityCategory.UTILITY,
+        )
+        def test_func() -> None:
+            pass
+
+        await flush_activity_registrations(
+            app_name="test",
+            workflow_task_queue="q",
+            automation_engine_api_url="http://localhost:8000",
+            max_retries=0,
+        )
+
+        mock_sleep.assert_called_once_with(5.0)

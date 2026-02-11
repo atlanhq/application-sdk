@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-
 # =============================================================================
 # Enums
 # =============================================================================
@@ -71,9 +70,7 @@ class AppSpec(BaseModel):
     description: Optional[str] = Field(
         default=None, description="Description of the app"
     )
-    metadata: Optional[Dict[str, Any]] = Field(
-        default=None, description="App metadata"
-    )
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="App metadata")
 
 
 class Annotation(BaseModel):
@@ -111,9 +108,29 @@ class ActivitySpec(BaseModel):
         description="Output schema as JSON Schema dictionary"
     )
     category: ActivityCategory = Field(description="Category of the activity")
-    examples: Optional[List[str]] = Field(
-        default=None, description="Examples of usage"
-    )
-    metadata: Optional[ToolMetadata] = Field(
+    examples: Optional[List[str]] = Field(default=None, description="Examples of usage")
+    metadata: Optional[ToolMetadata] = Field(default=None, description="Tool metadata")
+
+
+class ToolSpec(BaseModel):
+    """Single tool payload sent to the automation engine API."""
+
+    name: str = Field(description="Name of the tool")
+    display_name: str = Field(description="Display name of the tool")
+    category: str = Field(description="Category of the tool")
+    description: str = Field(description="Description of the tool")
+    input_schema: Dict[str, Any] = Field(description="Input schema")
+    output_schema: Dict[str, Any] = Field(description="Output schema")
+    examples: Optional[List[str]] = Field(default=None, description="Examples of usage")
+    metadata: Optional[Dict[str, Any]] = Field(
         default=None, description="Tool metadata"
     )
+
+
+class ToolRegistrationRequest(BaseModel):
+    """Request body for tool registration with the automation engine API."""
+
+    app_qualified_name: str = Field(description="Qualified name of the app")
+    app_name: str = Field(description="Name of the app")
+    task_queue: str = Field(description="Task queue for the app's workers")
+    tools: List[ToolSpec] = Field(description="List of tools to register")
