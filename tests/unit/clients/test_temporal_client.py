@@ -529,3 +529,383 @@ async def test_publish_token_refresh_event_exception_handling(
     mock_logger.warning.assert_called_once_with(
         "Failed to publish token refresh event: Event store connection failed"
     )
+
+
+# --- Schedule Tests ---
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_create_schedule(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+    mock_dapr_output_client: Mock,
+):
+    """Test creating a schedule calls Temporal's create_schedule with correct args."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    schedule_args = {
+        "cron_expression": "0 9 * * MON-FRI",
+        "workflow_args": {"param1": "value1"},
+        "note": "Test schedule",
+    }
+
+    result = await temporal_client.create_schedule(
+        "test-schedule", schedule_args, MockWorkflow
+    )
+
+    mock_client.create_schedule.assert_called_once()
+    call_args = mock_client.create_schedule.call_args
+    assert call_args[0][0] == "test-schedule"
+    assert result == {"schedule_id": "test-schedule"}
+    mock_dapr_output_client.save_state_object.assert_called_once()
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_create_schedule_client_not_loaded(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test create_schedule raises ValueError when client is not loaded."""
+    with pytest.raises(ValueError, match="Client is not loaded"):
+        await temporal_client.create_schedule("test-schedule", {}, MockWorkflow)
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_create_schedule_with_optional_params(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+    mock_dapr_output_client: Mock,
+):
+    """Test creating a schedule with start_at, end_at, and jitter."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    schedule_args = {
+        "cron_expression": "0 9 * * *",
+        "workflow_args": {},
+        "start_at": "2025-01-01T00:00:00",
+        "end_at": "2025-12-31T23:59:59",
+        "jitter": 30,
+    }
+
+    result = await temporal_client.create_schedule(
+        "test-schedule-opts", schedule_args, MockWorkflow
+    )
+
+    mock_client.create_schedule.assert_called_once()
+    assert result == {"schedule_id": "test-schedule-opts"}
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_get_schedule(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test get_schedule returns correctly structured schedule details."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    # Build mock description
+    mock_action = MagicMock()
+    mock_action.args = [{"workflow_id": "test-wf"}]
+    # Make isinstance check work for ScheduleActionStartWorkflow
+    from temporalio.client import ScheduleActionStartWorkflow
+
+    mock_action.__class__ = ScheduleActionStartWorkflow
+
+    mock_spec = MagicMock()
+    mock_spec.cron_expressions = ["0 9 * * MON-FRI"]
+
+    mock_state = MagicMock()
+    mock_state.paused = False
+    mock_state.note = "Test note"
+
+    mock_info = MagicMock()
+    mock_info.recent_actions = []
+    mock_info.next_action_times = []
+
+    mock_schedule = MagicMock()
+    mock_schedule.action = mock_action
+    mock_schedule.spec = mock_spec
+    mock_schedule.state = mock_state
+
+    mock_description = MagicMock()
+    mock_description.id = "test-schedule"
+    mock_description.schedule = mock_schedule
+    mock_description.info = mock_info
+
+    mock_handle = AsyncMock()
+    mock_handle.describe.return_value = mock_description
+    mock_client.get_schedule_handle = MagicMock(return_value=mock_handle)
+
+    result = await temporal_client.get_schedule("test-schedule")
+
+    assert result["schedule_id"] == "test-schedule"
+    assert result["cron_expression"] == "0 9 * * MON-FRI"
+    assert result["paused"] is False
+    assert result["note"] == "Test note"
+    assert result["workflow_args"] == {"workflow_id": "test-wf"}
+    assert result["recent_actions"] == []
+    assert result["next_action_times"] == []
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_get_schedule_client_not_loaded(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test get_schedule raises ValueError when client is not loaded."""
+    with pytest.raises(ValueError, match="Client is not loaded"):
+        await temporal_client.get_schedule("test-schedule")
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_list_schedules(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test list_schedules returns all schedules from Temporal."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    # Create mock schedule list entries
+    mock_entry_1 = MagicMock()
+    mock_entry_1.id = "schedule-1"
+    mock_entry_1.schedule.spec.cron_expressions = ["0 9 * * *"]
+    mock_entry_1.schedule.state.paused = False
+    mock_entry_1.schedule.state.note = "First"
+
+    mock_entry_2 = MagicMock()
+    mock_entry_2.id = "schedule-2"
+    mock_entry_2.schedule.spec.cron_expressions = ["0 18 * * *"]
+    mock_entry_2.schedule.state.paused = True
+    mock_entry_2.schedule.state.note = "Second"
+
+    # Mock async iterator
+    async def mock_list_schedules():
+        for entry in [mock_entry_1, mock_entry_2]:
+            yield entry
+
+    mock_client.list_schedules = MagicMock(return_value=mock_list_schedules())
+
+    result = await temporal_client.list_schedules()
+
+    assert len(result) == 2
+    assert result[0]["schedule_id"] == "schedule-1"
+    assert result[0]["paused"] is False
+    assert result[0]["cron_expression"] == "0 9 * * *"
+    assert result[1]["schedule_id"] == "schedule-2"
+    assert result[1]["paused"] is True
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_list_schedules_empty(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test list_schedules returns empty list when no schedules exist."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    async def mock_list_schedules():
+        return
+        yield  # noqa: make it an async generator
+
+    mock_client.list_schedules = MagicMock(return_value=mock_list_schedules())
+
+    result = await temporal_client.list_schedules()
+    assert result == []
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_list_schedules_client_not_loaded(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test list_schedules raises ValueError when client is not loaded."""
+    with pytest.raises(ValueError, match="Client is not loaded"):
+        await temporal_client.list_schedules()
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_update_schedule_pause(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test update_schedule pauses a schedule via handle.pause()."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    mock_handle = AsyncMock()
+    mock_client.get_schedule_handle = MagicMock(return_value=mock_handle)
+
+    result = await temporal_client.update_schedule(
+        "test-schedule", {"paused": True, "note": "Maintenance window"}
+    )
+
+    mock_handle.pause.assert_called_once_with(note="Maintenance window")
+    mock_handle.unpause.assert_not_called()
+    mock_handle.update.assert_not_called()
+    assert result == {"schedule_id": "test-schedule"}
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_update_schedule_unpause(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test update_schedule unpauses a schedule via handle.unpause()."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    mock_handle = AsyncMock()
+    mock_client.get_schedule_handle = MagicMock(return_value=mock_handle)
+
+    result = await temporal_client.update_schedule("test-schedule", {"paused": False})
+
+    mock_handle.unpause.assert_called_once_with(note="Unpaused via API")
+    mock_handle.pause.assert_not_called()
+    assert result == {"schedule_id": "test-schedule"}
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_update_schedule_cron(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test update_schedule changes cron expression via handle.update()."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    mock_handle = AsyncMock()
+    mock_client.get_schedule_handle = MagicMock(return_value=mock_handle)
+
+    result = await temporal_client.update_schedule(
+        "test-schedule", {"cron_expression": "0 10 * * *"}
+    )
+
+    mock_handle.update.assert_called_once()
+    mock_handle.pause.assert_not_called()
+    mock_handle.unpause.assert_not_called()
+    assert result == {"schedule_id": "test-schedule"}
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_update_schedule_client_not_loaded(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test update_schedule raises ValueError when client is not loaded."""
+    with pytest.raises(ValueError, match="Client is not loaded"):
+        await temporal_client.update_schedule("test-schedule", {})
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_delete_schedule(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test delete_schedule calls handle.delete()."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    mock_handle = AsyncMock()
+    mock_client.get_schedule_handle = MagicMock(return_value=mock_handle)
+
+    await temporal_client.delete_schedule("test-schedule")
+
+    mock_client.get_schedule_handle.assert_called_once_with("test-schedule")
+    mock_handle.delete.assert_called_once()
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_delete_schedule_client_not_loaded(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test delete_schedule raises ValueError when client is not loaded."""
+    with pytest.raises(ValueError, match="Client is not loaded"):
+        await temporal_client.delete_schedule("test-schedule")
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_delete_schedule_error(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test delete_schedule error handling."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    mock_handle = AsyncMock()
+    mock_handle.delete.side_effect = Exception("Schedule not found")
+    mock_client.get_schedule_handle = MagicMock(return_value=mock_handle)
+
+    with pytest.raises(Exception, match="Error deleting schedule"):
+        await temporal_client.delete_schedule("nonexistent-schedule")

@@ -191,7 +191,7 @@ Provides clients for interacting with the Temporal workflow orchestration servic
     *   **Purpose:** The concrete *Temporal implementation* of `WorkflowClient`. Primary client for applications.
     *   **Connection:** Internally creates and uses a `TemporalClient` instance.
     *   **Configuration:** Initialized with `host`, `port`, `application_name`, `namespace`. Defaults read from environment variables.
-    *   **Key Methods:** `load()`, `close()`, `start_workflow()`, `stop_workflow()`, `get_workflow_run_status()`, `create_worker()`.
+    *   **Key Methods:** `load()`, `close()`, `start_workflow()`, `stop_workflow()`, `get_workflow_run_status()`, `create_worker()`, `create_schedule()`, `get_schedule()`, `list_schedules()`, `update_schedule()`, `delete_schedule()`.
 
 ### Configuration and Usage
 
@@ -207,6 +207,18 @@ The common pattern is to use the `get_workflow_client` utility function.
     *   Takes `workflow_args` (dict) and the `workflow_class`.
     *   Handles storing configuration/credentials securely (StateStore/SecretStore).
     *   Initiates the workflow execution on Temporal.
+
+### Schedule Management
+
+`TemporalWorkflowClient` provides full schedule lifecycle management using Temporal's native Schedule API. This is the recommended approach over the legacy `cron_schedule` parameter on `start_workflow()`.
+
+*   **`create_schedule(schedule_id, schedule_args, workflow_class)`**: Creates a new schedule that triggers workflow runs on a cron expression. Accepts optional `start_at`, `end_at`, `jitter`, and `note` fields in `schedule_args`.
+*   **`get_schedule(schedule_id)`**: Returns schedule details including cron expression, paused state, note, workflow args, recent actions, and next action times.
+*   **`list_schedules()`**: Returns a summary list of all schedules with their IDs, paused state, cron expression, and note.
+*   **`update_schedule(schedule_id, schedule_args, workflow_class=None)`**: Updates a schedule's cron expression, workflow args, note, or paused state. Pause/unpause uses Temporal's atomic `handle.pause()`/`handle.unpause()` operations; other changes use `handle.update()`.
+*   **`delete_schedule(schedule_id)`**: Permanently removes a schedule.
+
+> **Note:** The `cron_schedule` parameter on `start_workflow()` is deprecated. Use `create_schedule()` instead for new implementations.
 
 ### Example (Getting and Using `TemporalWorkflowClient`)
 

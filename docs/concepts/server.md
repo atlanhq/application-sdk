@@ -28,7 +28,7 @@ This module provides the core server framework for building Atlan applications, 
         *   `EventWorkflowTrigger`: Triggers a workflow based on incoming events
 
 5.  **Models (`application_sdk.server.fastapi.models.py`)**:
-    *   **Purpose:** Defines Pydantic models used for request/response validation and serialization for the default API endpoints (e.g., `TestAuthRequest`, `WorkflowResponse`, `PreflightCheckRequest`, `PreflightCheckResponse`).
+    *   **Purpose:** Defines Pydantic models used for request/response validation and serialization for the default API endpoints (e.g., `TestAuthRequest`, `WorkflowResponse`, `PreflightCheckRequest`, `PreflightCheckResponse`, `AddScheduleRequest`, `ScheduleResponse`, `EditScheduleRequest`).
 
 6.  **Subscriptions (`application_sdk.server.fastapi.models.py`)**:
     *   **Purpose:** Configure Dapr pub/sub message subscriptions for event-driven processing without Temporal workflows.
@@ -81,7 +81,22 @@ This setup provides:
 *   Endpoints defined in `application_sdk.server.fastapi.routers.server` (e.g., `/server/health`)
 *   Endpoints for interacting with the `handler` (e.g., `/workflows/v1/test_auth`, `/workflows/v1/metadata`, `/workflows/v1/preflight_check`)
 *   The endpoint(s) you defined via `HttpWorkflowTrigger` (e.g., `/workflows/v1/start-extraction`)
+*   Schedule management endpoints (see below)
 *   Documentation served at `/atlandocs`
+
+#### Schedule Management Endpoints
+
+The `APIServer` automatically registers schedule management endpoints when a `WorkflowClient` is configured. These use Temporal's native Schedule API for full lifecycle management.
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/workflows/v1/schedule` | POST | Create a new schedule (`AddScheduleRequest`) |
+| `/workflows/v1/schedule` | GET | List all schedules |
+| `/workflows/v1/schedule/{schedule_id}` | GET | Get schedule details |
+| `/workflows/v1/schedule/{schedule_id}` | PUT | Update schedule (cron, args, note, pause/unpause) |
+| `/workflows/v1/schedule/{schedule_id}` | DELETE | Delete a schedule |
+
+For multi-workflow applications, pass `workflow_class_name` in `AddScheduleRequest` to target a specific registered workflow class. If omitted, the first registered workflow class is used.
 
 ### 2. Adding Custom Endpoints & Triggering Workflows
 
