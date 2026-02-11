@@ -66,34 +66,9 @@ def _build_tool_spec(spec: ActivitySpec) -> ToolSpec:
     )
 
 
-def _build_schema_object(
-    properties: Dict[str, Any], required: List[str]
-) -> Dict[str, Any]:
-    """Build a JSON schema object with properties and required fields."""
-    return {"type": "object", "properties": properties, "required": required}
-
-
-def _extract_and_hoist_defs(
-    schema: Dict[str, Any], collected_defs: Dict[str, Any]
-) -> None:
-    """Recursively extract ``$defs`` from nested schemas and collect them.
-
-    This mutates *schema* by removing ``$defs`` from nested locations, and
-    collects them into *collected_defs* for hoisting to root level.
-    """
-    if not isinstance(schema, dict):
-        return
-
-    if "$defs" in schema:
-        collected_defs.update(schema.pop("$defs"))
-
-    for value in schema.values():
-        if isinstance(value, dict):
-            _extract_and_hoist_defs(value, collected_defs)
-        elif isinstance(value, list):
-            for item in value:
-                if isinstance(item, dict):
-                    _extract_and_hoist_defs(item, collected_defs)
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
 
 def _get_json_schema_type_from_hint(type_hint: Any) -> Dict[str, Any]:
@@ -156,46 +131,56 @@ def _validate_and_apply_schema_extra(
     prop_schema.update(param.schema_extra)
 
 
-# ---------------------------------------------------------------------------
-# Input schema
-# ---------------------------------------------------------------------------
+def _stamp_param_metadata(param: Parameter, prop_schema: Dict[str, Any]) -> None:
+    """Stamp description, automation-engine annotation, and schema_extra onto *prop_schema*.
+
+    If *prop_schema* represents a Pydantic model (has ``"properties"``),
+    nested field annotations are also normalised.
+    """
+    prop_schema["description"] = param.description
+    prop_schema[X_AUTOMATION_ENGINE] = param.annotations.model_dump(
+        exclude_none=True, mode="json"
+    )
+    _process_nested_model_fields(prop_schema)
+    _validate_and_apply_schema_extra(param, prop_schema)
 
 
-def _build_input_schema_from_parameters(
-    parameters: List[Parameter], func: Callable[..., Any]
+def _extract_and_hoist_defs(
+    schema: Dict[str, Any], collected_defs: Dict[str, Any]
+) -> None:
+    """Recursively extract ``$defs`` from nested schemas and collect them.
+
+    This mutates *schema* by removing ``$defs`` from nested locations, and
+    collects them into *collected_defs* for hoisting to root level.
+    """
+    if not isinstance(schema, dict):
+        return
+
+    if "$defs" in schema:
+        collected_defs.update(schema.pop("$defs"))
+
+    for value in schema.values():
+        if isinstance(value, dict):
+            _extract_and_hoist_defs(value, collected_defs)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _extract_and_hoist_defs(item, collected_defs)
+
+
+def _finalize_schema(
+    properties: Dict[str, Any],
+    required: List[str],
+    order_key: str,
+    order_values: List[str],
 ) -> Dict[str, Any]:
-    """Build input schema from Parameter list."""
-    sig = inspect.signature(func)
-    type_hints = get_type_hints(func)
-    param_names = list(sig.parameters.keys())
-    properties: Dict[str, Any] = {}
-    required: List[str] = []
-
-    for param in parameters:
-        param_name = param.name
-        if param_name not in param_names:
-            continue
-
-        param_obj = sig.parameters[param_name]
-        type_hint = type_hints.get(param_name, Any)
-        prop_schema = _get_json_schema_type_from_hint(type_hint)
-        prop_schema["description"] = param.description
-        prop_schema[X_AUTOMATION_ENGINE] = param.annotations.model_dump(
-            exclude_none=True, mode="json"
-        )
-
-        _validate_and_apply_schema_extra(param, prop_schema)
-
-        if param_obj.default != inspect.Parameter.empty:
-            prop_schema["default"] = param_obj.default
-        else:
-            required.append(param_name)
-        properties[param_name] = prop_schema
-
-    schema = _build_schema_object(properties, required)
-    schema["input_order"] = [
-        param_name for param_name in param_names if param_name in properties
-    ]
+    """Build the schema object, set the order key, and hoist ``$defs``."""
+    schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+    }
+    schema[order_key] = order_values
 
     collected_defs: Dict[str, Any] = {}
     _extract_and_hoist_defs(schema, collected_defs)
@@ -206,7 +191,7 @@ def _build_input_schema_from_parameters(
 
 
 # ---------------------------------------------------------------------------
-# Output schema
+# Nested model annotation processing
 # ---------------------------------------------------------------------------
 
 
@@ -260,6 +245,49 @@ def _process_nested_model_fields(model_schema: Dict[str, Any]) -> None:
                 _process_nested_model_fields(nested_model)
 
 
+# ---------------------------------------------------------------------------
+# Input schema
+# ---------------------------------------------------------------------------
+
+
+def _build_input_schema_from_parameters(
+    parameters: List[Parameter], func: Callable[..., Any]
+) -> Dict[str, Any]:
+    """Build input schema from Parameter list."""
+    sig = inspect.signature(func)
+    type_hints = get_type_hints(func)
+    param_names = list(sig.parameters.keys())
+    properties: Dict[str, Any] = {}
+    required: List[str] = []
+
+    for param in parameters:
+        param_name = param.name
+        if param_name not in param_names:
+            continue
+
+        param_obj = sig.parameters[param_name]
+        prop_schema = _get_json_schema_type_from_hint(type_hints.get(param_name, Any))
+        _stamp_param_metadata(param, prop_schema)
+
+        if param_obj.default != inspect.Parameter.empty:
+            prop_schema["default"] = param_obj.default
+        else:
+            required.append(param_name)
+        properties[param_name] = prop_schema
+
+    return _finalize_schema(
+        properties,
+        required,
+        order_key="input_order",
+        order_values=[n for n in param_names if n in properties],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Output schema
+# ---------------------------------------------------------------------------
+
+
 def _build_output_schema_from_parameters(
     parameters: List[Parameter], func: Callable[..., Any]
 ) -> Dict[str, Any]:
@@ -273,56 +301,28 @@ def _build_output_schema_from_parameters(
 
     if is_tuple:
         for param in parameters:
-            prop_schema: Dict[str, Any] = {
-                "type": "string",
-                "description": param.description,
-            }
-            prop_schema[X_AUTOMATION_ENGINE] = param.annotations.model_dump(
-                exclude_none=True, mode="json"
-            )
-            _validate_and_apply_schema_extra(param, prop_schema)
+            prop_schema: Dict[str, Any] = {"type": "string"}
+            _stamp_param_metadata(param, prop_schema)
             properties[param.name] = prop_schema
             required.append(param.name)
-        schema = _build_schema_object(properties, required)
-        schema["output_order"] = [param.name for param in parameters]
-        return schema
-
-    # Single return
-    if not parameters:
-        schema = _build_schema_object({}, [])
-        schema["output_order"] = []
-        return schema
-
-    output_param = parameters[0]
-
-    if inspect.isclass(return_type_hint) and issubclass(return_type_hint, BaseModel):
-        model_schema = _get_json_schema_type_from_hint(return_type_hint)
-        model_schema["description"] = output_param.description
-        model_schema[X_AUTOMATION_ENGINE] = output_param.annotations.model_dump(
-            exclude_none=True, mode="json"
-        )
-        _process_nested_model_fields(model_schema)
-        _validate_and_apply_schema_extra(output_param, model_schema)
-        properties[output_param.name] = model_schema
-    else:
+    elif parameters:
+        output_param = parameters[0]
         prop_schema = _get_json_schema_type_from_hint(return_type_hint)
-        prop_schema["description"] = output_param.description
-        prop_schema[X_AUTOMATION_ENGINE] = output_param.annotations.model_dump(
-            exclude_none=True, mode="json"
-        )
-        _validate_and_apply_schema_extra(output_param, prop_schema)
+        _stamp_param_metadata(output_param, prop_schema)
         properties[output_param.name] = prop_schema
+        required.append(output_param.name)
 
-    required.append(output_param.name)
-    schema = _build_schema_object(properties, required)
-    schema["output_order"] = [param.name for param in parameters]
+    return _finalize_schema(
+        properties,
+        required,
+        order_key="output_order",
+        order_values=[p.name for p in parameters],
+    )
 
-    collected_defs: Dict[str, Any] = {}
-    _extract_and_hoist_defs(schema, collected_defs)
-    if collected_defs:
-        schema["$defs"] = collected_defs
 
-    return schema
+# ---------------------------------------------------------------------------
+# Public dispatcher
+# ---------------------------------------------------------------------------
 
 
 def _build_schema_from_parameters(
