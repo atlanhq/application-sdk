@@ -1,9 +1,10 @@
+from __future__ import annotations
+
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 
 from typing_extensions import deprecated
 
-from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.base import BaseClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import APPLICATION_MODE, ENABLE_MCP, ApplicationMode
@@ -18,8 +19,11 @@ from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.server.fastapi.models import EventWorkflowTrigger
-from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
+
+if TYPE_CHECKING:
+    from application_sdk.activities import ActivitiesInterface
+    from application_sdk.worker import Worker
 
 logger = get_logger(__name__)
 metrics = get_metrics()
@@ -171,6 +175,14 @@ class BaseApplication:
         """
         await self.workflow_client.load()
 
+        # In SERVER mode, we only need the workflow_client (for start/stop/status APIs).
+        # Skip Worker, activities, and thread pool creation to save memory.
+        if APPLICATION_MODE == ApplicationMode.SERVER:
+            logger.info(
+                "SERVER mode: skipping worker and activities setup to reduce memory usage"
+            )
+            return
+
         workflow_classes = [
             workflow_class for workflow_class, _ in workflow_and_activities_classes
         ]
@@ -179,6 +191,9 @@ class BaseApplication:
             workflow_activities.extend(  # type: ignore
                 workflow_class.get_activities(activities_class())  # type: ignore
             )
+
+        # Lazy import: Worker pulls in temporalio which is not needed at module load time
+        from application_sdk.worker import Worker
 
         self.worker = Worker(
             workflow_client=self.workflow_client,
