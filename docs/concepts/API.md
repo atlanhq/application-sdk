@@ -193,7 +193,7 @@ This document provides comprehensive documentation for all APIs exposed by the A
 
 ### Stop Workflow
 **Endpoint:** `POST /workflows/v1/stop/{workflow_id}/{run_id}`
-**Description:** Stop a running workflow.
+**Description:** Stop a running workflow. This terminates the workflow immediately.
 
 **Path Parameters:**
 - `workflow_id` (string, **required**): The unique identifier of the workflow
@@ -210,6 +210,46 @@ This document provides comprehensive documentation for all APIs exposed by the A
 
 **Response Field Requirements:**
 - `success` (boolean, **required**): Always `true` for successful stop request
+
+### Pause Workflow
+**Endpoint:** `POST /workflows/v1/pause/{workflow_id}/{run_id}`
+**Description:** Pause a running workflow. The currently executing activity will complete, but no new activities will start until the workflow is resumed. This is cooperative pause at the activity boundary.
+
+**Path Parameters:**
+- `workflow_id` (string, **required**): The unique identifier of the workflow
+- `run_id` (string, **required**): The unique identifier of the workflow run
+
+**Request:** No payload required.
+
+**Response:**
+```json
+{
+  "success": true
+}
+```
+
+**Response Field Requirements:**
+- `success` (boolean, **required**): Always `true` for successful pause request
+
+### Resume Workflow
+**Endpoint:** `POST /workflows/v1/resume/{workflow_id}/{run_id}`
+**Description:** Resume a previously paused workflow. The next activity in the workflow will start executing.
+
+**Path Parameters:**
+- `workflow_id` (string, **required**): The unique identifier of the workflow
+- `run_id` (string, **required**): The unique identifier of the workflow run
+
+**Request:** No payload required.
+
+**Response:**
+```json
+{
+  "success": true
+}
+```
+
+**Response Field Requirements:**
+- `success` (boolean, **required**): Always `true` for successful resume request
 
 ---
 
