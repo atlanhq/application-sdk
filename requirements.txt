@@ -94,7 +94,7 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   tqdm
     #   uvicorn
 coverage==7.13.1
-cryptography==46.0.3
+cryptography==46.0.5
     # via
     #   authlib
     #   azure-identity
