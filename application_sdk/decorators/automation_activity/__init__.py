@@ -67,7 +67,7 @@ from application_sdk.decorators.automation_activity.validation import (
 )
 
 # =============================================================================
-# Global registry (W2: thread-safe)
+# Global registry (thread-safe)
 # =============================================================================
 
 _specs_lock = threading.Lock()
@@ -86,7 +86,7 @@ ACTIVITY_SPECS: List[ActivitySpec] = []
 
 
 # =============================================================================
-# Test isolation (T2)
+# Test isolation
 # =============================================================================
 
 

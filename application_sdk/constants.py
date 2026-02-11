@@ -298,16 +298,16 @@ IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"
 LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60"))
 
 # Automation Engine Configuration
-#: Env var: base URL for the automation engine API (e.g. http://localhost:8000)
-ENV_AUTOMATION_ENGINE_API_URL = "ATLAN_AUTOMATION_ENGINE_API_URL"
-#: Env var: host for the automation engine API (used with port to construct URL)
-ENV_AUTOMATION_ENGINE_API_HOST = "ATLAN_AUTOMATION_ENGINE_API_HOST"
-#: Env var: port for the automation engine API (used with host to construct URL)
-ENV_AUTOMATION_ENGINE_API_PORT = "ATLAN_AUTOMATION_ENGINE_API_PORT"
-#: Env var: qualified name for the application (e.g. default/apps/my_app)
-ENV_APP_QUALIFIED_NAME = "ATLAN_APP_QUALIFIED_NAME"
-#: Env var: delay (seconds) between app upsert and tool registration
-ENV_APP_UPSERT_PROPAGATION_DELAY = "ATLAN_APP_UPSERT_PROPAGATION_DELAY"
+#: Base URL for the automation engine API (e.g. http://localhost:8000)
+AUTOMATION_ENGINE_API_URL = os.getenv("ATLAN_AUTOMATION_ENGINE_API_URL")
+#: Host for the automation engine API (used with port to construct URL)
+AUTOMATION_ENGINE_API_HOST = os.getenv("ATLAN_AUTOMATION_ENGINE_API_HOST")
+#: Port for the automation engine API (used with host to construct URL)
+AUTOMATION_ENGINE_API_PORT = os.getenv("ATLAN_AUTOMATION_ENGINE_API_PORT")
+#: Qualified name for the application (e.g. default/apps/my_app)
+APP_QUALIFIED_NAME = os.getenv("ATLAN_APP_QUALIFIED_NAME")
+#: Delay (seconds) between app upsert and tool registration
+APP_UPSERT_PROPAGATION_DELAY = os.getenv("ATLAN_APP_UPSERT_PROPAGATION_DELAY")
 
 # MCP Configuration
 #: Flag to indicate if MCP should be enabled or not. Turning this to true will setup an MCP server along
