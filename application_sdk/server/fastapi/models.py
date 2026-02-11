@@ -303,7 +303,6 @@ class Subscription(BaseModel):
     dead_letter_topic: Optional[str] = None
 
 
-
 class FileUploadResponse(BaseModel):
     """Response model for file upload endpoint matching heracles format."""
 
