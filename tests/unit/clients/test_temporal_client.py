@@ -955,5 +955,5 @@ async def test_delete_schedule_error(
     mock_handle.delete.side_effect = Exception("Schedule not found")
     mock_client.get_schedule_handle = MagicMock(return_value=mock_handle)
 
-    with pytest.raises(Exception, match="Error deleting schedule"):
+    with pytest.raises(Exception, match="Schedule not found"):
         await temporal_client.delete_schedule("nonexistent-schedule")

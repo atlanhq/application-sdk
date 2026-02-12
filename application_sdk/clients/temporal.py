@@ -661,7 +661,7 @@ class TemporalWorkflowClient(WorkflowClient):
             return {"schedule_id": schedule_id}
         except Exception as e:
             logger.error(f"Error creating schedule {schedule_id}: {e}")
-            raise Exception(f"Error creating schedule {schedule_id}: {e}")
+            raise
 
     async def get_schedule(self, schedule_id: str) -> Dict[str, Any]:
         """Get details of a workflow schedule.
@@ -717,7 +717,7 @@ class TemporalWorkflowClient(WorkflowClient):
             }
         except Exception as e:
             logger.error(f"Error getting schedule {schedule_id}: {e}")
-            raise Exception(f"Error getting schedule {schedule_id}: {e}")
+            raise
 
     async def list_schedules(self) -> List[Dict[str, Any]]:
         """List all workflow schedules.
@@ -756,7 +756,7 @@ class TemporalWorkflowClient(WorkflowClient):
             return schedules
         except Exception as e:
             logger.error(f"Error listing schedules: {e}")
-            raise Exception(f"Error listing schedules: {e}")
+            raise
 
     async def update_schedule(
         self,
@@ -836,7 +836,7 @@ class TemporalWorkflowClient(WorkflowClient):
             return {"schedule_id": schedule_id}
         except Exception as e:
             logger.error(f"Error updating schedule {schedule_id}: {e}")
-            raise Exception(f"Error updating schedule {schedule_id}: {e}")
+            raise
 
     async def delete_schedule(self, schedule_id: str) -> None:
         """Delete a workflow schedule.
@@ -856,4 +856,4 @@ class TemporalWorkflowClient(WorkflowClient):
             logger.info(f"Schedule deleted: {schedule_id}")
         except Exception as e:
             logger.error(f"Error deleting schedule {schedule_id}: {e}")
-            raise Exception(f"Error deleting schedule {schedule_id}: {e}")
+            raise
