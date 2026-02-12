@@ -1,7 +1,7 @@
 # Request/Response DTOs for workflows
 
 from enum import Enum
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Coroutine, Dict, List, Literal, Optional, Type, Union
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -242,9 +242,16 @@ class AddScheduleRequest(BaseModel):
     jitter: Optional[int] = Field(
         None, description="Random jitter in seconds added to each trigger time"
     )
-    overlap_policy: Optional[str] = Field(
+    overlap_policy: Literal[
         "SKIP",
-        description="Overlap policy when a workflow is still running at next trigger. Options: SKIP, BUFFER_ONE, BUFFER_ALL, CANCEL_OTHER, TERMINATE_OTHER, ALLOW_ALL",
+        "BUFFER_ONE",
+        "BUFFER_ALL",
+        "CANCEL_OTHER",
+        "TERMINATE_OTHER",
+        "ALLOW_ALL",
+    ] = Field(
+        "SKIP",
+        description="Overlap policy when a workflow is still running at next trigger",
     )
     workflow_class_name: Optional[str] = Field(
         None,

@@ -781,62 +781,62 @@ class TemporalWorkflowClient(WorkflowClient):
         if not self.client:
             raise ValueError("Client is not loaded")
 
-        handle = self.client.get_schedule_handle(schedule_id)
+        try:
+            handle = self.client.get_schedule_handle(schedule_id)
 
-        # Handle pause/unpause separately
-        paused = schedule_args.get("paused")
-        if paused is True:
-            await handle.pause(note=schedule_args.get("note", "Paused via API"))
-        elif paused is False:
-            await handle.unpause(note=schedule_args.get("note", "Unpaused via API"))
+            # Handle pause/unpause separately
+            paused = schedule_args.get("paused")
+            if paused is True:
+                await handle.pause(note=schedule_args.get("note", "Paused via API"))
+            elif paused is False:
+                await handle.unpause(note=schedule_args.get("note", "Unpaused via API"))
 
-        # Update schedule spec/action/state if there are other changes
-        has_spec_changes = "cron_expression" in schedule_args
-        has_state_changes = "note" in schedule_args and paused is None
-        has_action_changes = "workflow_args" in schedule_args
+            # Update schedule spec/action/state if there are other changes
+            has_spec_changes = "cron_expression" in schedule_args
+            has_state_changes = "note" in schedule_args and paused is None
+            has_action_changes = "workflow_args" in schedule_args
 
-        if has_spec_changes or has_state_changes or has_action_changes:
+            if has_spec_changes or has_state_changes or has_action_changes:
 
-            def updater(input: ScheduleUpdateInput) -> ScheduleUpdate:
-                schedule = input.description.schedule
+                def updater(input: ScheduleUpdateInput) -> ScheduleUpdate:
+                    schedule = input.description.schedule
 
-                if "cron_expression" in schedule_args:
-                    schedule.spec = ScheduleSpec(
-                        cron_expressions=[schedule_args["cron_expression"]],
-                        start_at=schedule.spec.start_at if schedule.spec else None,
-                        end_at=schedule.spec.end_at if schedule.spec else None,
-                        jitter=schedule.spec.jitter if schedule.spec else None,
-                    )
+                    if "cron_expression" in schedule_args:
+                        schedule.spec = ScheduleSpec(
+                            cron_expressions=[schedule_args["cron_expression"]],
+                            start_at=schedule.spec.start_at if schedule.spec else None,
+                            end_at=schedule.spec.end_at if schedule.spec else None,
+                            jitter=schedule.spec.jitter if schedule.spec else None,
+                        )
 
-                if "note" in schedule_args and paused is None:
-                    if schedule.state:
-                        schedule.state.note = schedule_args["note"]
+                    if "note" in schedule_args and paused is None:
+                        if schedule.state:
+                            schedule.state.note = schedule_args["note"]
 
-                if "workflow_args" in schedule_args and isinstance(
-                    schedule.action, ScheduleActionStartWorkflow
-                ):
-                    workflow_id = schedule_args["workflow_args"].get(
-                        "workflow_id",
-                        schedule.action.id if schedule.action else schedule_id,
-                    )
-                    schedule.action = ScheduleActionStartWorkflow(
-                        workflow_class or schedule.action.workflow,  # type: ignore
-                        args=[{"workflow_id": workflow_id}],
-                        id=workflow_id,
-                        task_queue=schedule.action.task_queue,
-                        execution_timeout=schedule.action.execution_timeout,
-                    )
+                    if "workflow_args" in schedule_args and isinstance(
+                        schedule.action, ScheduleActionStartWorkflow
+                    ):
+                        workflow_id = schedule_args["workflow_args"].get(
+                            "workflow_id",
+                            schedule.action.id if schedule.action else schedule_id,
+                        )
+                        schedule.action = ScheduleActionStartWorkflow(
+                            workflow_class or schedule.action.workflow,  # type: ignore
+                            args=[{"workflow_id": workflow_id}],
+                            id=workflow_id,
+                            task_queue=schedule.action.task_queue,
+                            execution_timeout=schedule.action.execution_timeout,
+                        )
 
-                return ScheduleUpdate(schedule=schedule)
+                    return ScheduleUpdate(schedule=schedule)
 
-            try:
                 await handle.update(updater)
-            except Exception as e:
-                logger.error(f"Error updating schedule {schedule_id}: {e}")
-                raise Exception(f"Error updating schedule {schedule_id}: {e}")
 
-        logger.info(f"Schedule updated: {schedule_id}")
-        return {"schedule_id": schedule_id}
+            logger.info(f"Schedule updated: {schedule_id}")
+            return {"schedule_id": schedule_id}
+        except Exception as e:
+            logger.error(f"Error updating schedule {schedule_id}: {e}")
+            raise Exception(f"Error updating schedule {schedule_id}: {e}")
 
     async def delete_schedule(self, schedule_id: str) -> None:
         """Delete a workflow schedule.

@@ -2,6 +2,7 @@ from typing import Any, Dict, Generator
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from temporalio.client import ScheduleOverlapPolicy
 
 from application_sdk.clients.temporal import TemporalWorkflowClient
 from application_sdk.constants import PAUSE_SIGNAL, RESUME_SIGNAL
@@ -562,6 +563,11 @@ async def test_create_schedule(
     mock_client.create_schedule.assert_called_once()
     call_args = mock_client.create_schedule.call_args
     assert call_args[0][0] == "test-schedule"
+    schedule = call_args[0][1]
+    assert schedule.spec.cron_expressions == ["0 9 * * MON-FRI"]
+    assert schedule.policy.overlap == ScheduleOverlapPolicy.SKIP
+    assert schedule.state.note == "Test schedule"
+    assert schedule.state.paused is False
     assert result == {"schedule_id": "test-schedule"}
     mock_dapr_output_client.save_state_object.assert_called_once()
 
@@ -607,7 +613,49 @@ async def test_create_schedule_with_optional_params(
     )
 
     mock_client.create_schedule.assert_called_once()
+    call_args = mock_client.create_schedule.call_args
+    schedule = call_args[0][1]
+    assert schedule.spec.cron_expressions == ["0 9 * * *"]
+    assert schedule.spec.start_at is not None
+    assert schedule.spec.start_at.year == 2025
+    assert schedule.spec.start_at.month == 1
+    assert schedule.spec.end_at is not None
+    assert schedule.spec.end_at.year == 2025
+    assert schedule.spec.end_at.month == 12
+    assert schedule.spec.jitter.total_seconds() == 30
     assert result == {"schedule_id": "test-schedule-opts"}
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_create_schedule_with_overlap_policy(
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+    mock_dapr_output_client: Mock,
+):
+    """Test creating a schedule with non-default overlap policy."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    schedule_args = {
+        "cron_expression": "0 9 * * *",
+        "workflow_args": {},
+        "overlap_policy": "ALLOW_ALL",
+    }
+
+    result = await temporal_client.create_schedule(
+        "test-schedule-overlap", schedule_args, MockWorkflow
+    )
+
+    mock_client.create_schedule.assert_called_once()
+    call_args = mock_client.create_schedule.call_args
+    schedule = call_args[0][1]
+    assert schedule.policy.overlap == ScheduleOverlapPolicy.ALLOW_ALL
+    assert result == {"schedule_id": "test-schedule-overlap"}
 
 
 @patch(
