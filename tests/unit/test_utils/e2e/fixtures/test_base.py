@@ -21,9 +21,7 @@ class ConcreteFixture(DataSourceFixture):
         return ConnectionInfo(
             host="localhost",
             port=5432,
-            username="user",
-            password="pass",
-            database="testdb",
+            credentials={"username": "user", "password": "pass", "database": "testdb"},
         )
 
     def teardown(self) -> None:
@@ -38,28 +36,24 @@ class ConcreteFixture(DataSourceFixture):
 
 class TestConnectionInfo:
     def test_creation_with_defaults(self):
-        info = ConnectionInfo(
-            host="localhost",
-            port=5432,
-            username="user",
-            password="pass",
-            database="testdb",
-        )
+        info = ConnectionInfo(host="localhost", port=5432)
         assert info.host == "localhost"
         assert info.port == 5432
-        assert info.extra == {}
+        assert info.credentials == {}
 
-    def test_creation_with_extra(self):
+    def test_creation_with_credentials(self):
         info = ConnectionInfo(
             host="localhost",
             port=5432,
-            username="user",
-            password="pass",
-            database="testdb",
-            extra={"schema": "public", "warehouse": "compute_wh"},
+            credentials={
+                "username": "user",
+                "password": "pass",
+                "database": "testdb",
+                "api_token": "tok123",
+            },
         )
-        assert info.extra["schema"] == "public"
-        assert info.extra["warehouse"] == "compute_wh"
+        assert info.credentials["username"] == "user"
+        assert info.credentials["api_token"] == "tok123"
 
 
 class TestDataSourceFixture:

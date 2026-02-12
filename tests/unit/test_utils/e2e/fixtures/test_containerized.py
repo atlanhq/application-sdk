@@ -58,9 +58,9 @@ class TestContainerizedFixture:
 
         assert info.host == "localhost"
         assert info.port == 54321
-        assert info.username == "pg"
-        assert info.password == "pass"
-        assert info.database == "testdb"
+        assert info.credentials["username"] == "pg"
+        assert info.credentials["password"] == "pass"
+        assert info.credentials["database"] == "testdb"
         mock_container.start.assert_called_once()
 
     @patch(
@@ -153,7 +153,7 @@ class TestContainerizedFixture:
         return_value=True,
     )
     @patch("testcontainers.core.container.DockerContainer")
-    def test_extra_credentials_in_connection_info(self, mock_docker_cls, mock_tcp):
+    def test_all_credentials_passed_through(self, mock_docker_cls, mock_tcp):
         mock_container = _make_mock_container()
         mock_docker_cls.return_value = mock_container
         mock_container.with_exposed_ports.return_value = mock_container
@@ -165,10 +165,40 @@ class TestContainerizedFixture:
                 "username": "pg",
                 "password": "pass",
                 "database": "testdb",
-                "schema": "public",
+                "api_token": "tok123",
             }
         )
         fixture = ContainerizedFixture(config, yaml_dir=Path("/project/tests"))
         info = fixture.setup()
 
-        assert info.extra == {"schema": "public"}
+        assert info.credentials == {
+            "username": "pg",
+            "password": "pass",
+            "database": "testdb",
+            "api_token": "tok123",
+        }
+
+    @patch(
+        "application_sdk.test_utils.e2e.fixtures.containerized.check_tcp",
+        return_value=True,
+    )
+    @patch("testcontainers.core.container.DockerContainer")
+    def test_get_env_vars_uppercases_credential_keys(self, mock_docker_cls, mock_tcp):
+        mock_container = _make_mock_container()
+        mock_docker_cls.return_value = mock_container
+        mock_container.with_exposed_ports.return_value = mock_container
+        mock_container.with_env.return_value = mock_container
+        mock_container.with_volume_mapping.return_value = mock_container
+
+        config = _make_config(
+            credentials={"username": "pg", "api_token": "tok123"},
+            env_prefix="E2E_SUPER",
+        )
+        fixture = ContainerizedFixture(config, yaml_dir=Path("/project/tests"))
+        fixture.setup()
+
+        env_vars = fixture.get_env_vars()
+        assert env_vars["E2E_SUPER_USERNAME"] == "pg"
+        assert env_vars["E2E_SUPER_API_TOKEN"] == "tok123"
+        assert env_vars["E2E_SUPER_HOST"] == "localhost"
+        assert env_vars["E2E_SUPER_PORT"] == "54321"

@@ -1,6 +1,6 @@
 """Pydantic models for YAML-driven datasource fixture configuration."""
 
-from typing import Dict, List, Literal
+from typing import Any, Dict, List, Literal
 
 from pydantic import BaseModel, Field
 
@@ -34,9 +34,10 @@ class ContainerizedDatasourceConfig(BaseModel):
     volumes: List[VolumeConfig] = Field(
         default_factory=list, description="Volume mounts for seed files"
     )
-    credentials: Dict[str, str] = Field(
+    credentials: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Credential fields: username, password, database",
+        description="Credential fields passed through to tests. Keys are UPPERCASED "
+        "when generating env vars (e.g. username -> E2E_POSTGRES_USERNAME).",
     )
     env_prefix: str = Field(
         description="Prefix for auto-generated env vars, e.g. 'E2E_POSTGRES'"

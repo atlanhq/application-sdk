@@ -16,7 +16,7 @@ class StubFixture(DataSourceFixture):
 
     def setup(self) -> ConnectionInfo:
         StubFixture.setup_called = True
-        return ConnectionInfo("stub-host", 9999, "u", "p", "db")
+        return ConnectionInfo("stub-host", 9999, {"username": "u", "password": "p"})
 
     def teardown(self) -> None:
         StubFixture.teardown_called = True

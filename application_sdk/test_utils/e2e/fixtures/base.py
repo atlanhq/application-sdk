@@ -6,14 +6,20 @@ from typing import Any, Dict, Optional
 
 @dataclass
 class ConnectionInfo:
-    """Standardized connection info exposed by a data source fixture after setup."""
+    """Connection info exposed by a data source fixture after setup.
+
+    ``host`` and ``port`` are always provided by the container runtime.
+    ``credentials`` is a pass-through of whatever the developer declared in
+    the YAML ``credentials`` block — the SDK does not interpret these fields.
+
+    When generating env vars, all credential keys are UPPERCASED automatically.
+    For example, ``credentials={"username": "pg"}`` with ``env_prefix="E2E_PG"``
+    produces ``E2E_PG_USERNAME=pg``.
+    """
 
     host: str
     port: int
-    username: str
-    password: str
-    database: str
-    extra: Dict[str, Any] = field(default_factory=dict)
+    credentials: Dict[str, Any] = field(default_factory=dict)
 
 
 class DataSourceFixture(ABC):

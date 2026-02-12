@@ -58,18 +58,10 @@ class ContainerizedFixture(DataSourceFixture):
         host = self._container.get_container_host_ip()
         port = int(self._container.get_exposed_port(self._config.port))
 
-        creds = self._config.credentials
         self._connection_info = ConnectionInfo(
             host=host,
             port=port,
-            username=creds.get("username", ""),
-            password=creds.get("password", ""),
-            database=creds.get("database", ""),
-            extra={
-                k: v
-                for k, v in creds.items()
-                if k not in ("username", "password", "database")
-            },
+            credentials=dict(self._config.credentials),
         )
 
         self.wait_until_ready(
@@ -98,21 +90,27 @@ class ContainerizedFixture(DataSourceFixture):
     def get_env_vars(self) -> Dict[str, str]:
         """Auto-generate env vars from env_prefix + ConnectionInfo fields.
 
-        E.g. env_prefix="E2E_POSTGRES" produces:
-            E2E_POSTGRES_HOST, E2E_POSTGRES_PORT, E2E_POSTGRES_USERNAME,
-            E2E_POSTGRES_PASSWORD, E2E_POSTGRES_DATABASE
+        ``host`` and ``port`` always get env vars. Every key in ``credentials``
+        is UPPERCASED and appended to the prefix.
+
+        E.g. env_prefix="E2E_POSTGRES" with credentials={"username": "pg", "api_token": "x"}
+        produces: E2E_POSTGRES_HOST, E2E_POSTGRES_PORT, E2E_POSTGRES_USERNAME,
+        E2E_POSTGRES_API_TOKEN
         """
         if self._connection_info is None:
             return {}
 
         prefix = self._config.env_prefix
-        return {
+        env_vars: Dict[str, str] = {
             f"{prefix}_HOST": self._connection_info.host,
             f"{prefix}_PORT": str(self._connection_info.port),
-            f"{prefix}_USERNAME": self._connection_info.username,
-            f"{prefix}_PASSWORD": self._connection_info.password,
-            f"{prefix}_DATABASE": self._connection_info.database,
         }
+
+        # All credential keys are UPPERCASED when generating env vars
+        for key, value in self._connection_info.credentials.items():
+            env_vars[f"{prefix}_{key.upper()}"] = str(value)
+
+        return env_vars
 
     def _resolve_volume_path(self, path: str) -> Path:
         """Resolve a volume host_path relative to the YAML file directory."""
