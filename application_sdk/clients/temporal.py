@@ -11,6 +11,8 @@ from temporalio.client import (
     Client,
     Schedule,
     ScheduleActionStartWorkflow,
+    ScheduleOverlapPolicy,
+    SchedulePolicy,
     ScheduleSpec,
     ScheduleState,
     ScheduleUpdate,
@@ -601,30 +603,37 @@ class TemporalWorkflowClient(WorkflowClient):
         start_at = schedule_args.get("start_at")
         end_at = schedule_args.get("end_at")
         jitter = schedule_args.get("jitter")
+        overlap_policy_str = schedule_args.get("overlap_policy", "SKIP")
+        overlap_policy = ScheduleOverlapPolicy[overlap_policy_str]
 
         # Build schedule spec
         spec_kwargs: Dict[str, Any] = {
             "cron_expressions": [cron_expression],
         }
         if start_at:
-            spec_kwargs["start_at"] = datetime.fromisoformat(start_at).replace(
-                tzinfo=timezone.utc
+            dt = datetime.fromisoformat(start_at)
+            spec_kwargs["start_at"] = (
+                dt.astimezone(timezone.utc)
+                if dt.tzinfo
+                else dt.replace(tzinfo=timezone.utc)
             )
         if end_at:
-            spec_kwargs["end_at"] = datetime.fromisoformat(end_at).replace(
-                tzinfo=timezone.utc
+            dt = datetime.fromisoformat(end_at)
+            spec_kwargs["end_at"] = (
+                dt.astimezone(timezone.utc)
+                if dt.tzinfo
+                else dt.replace(tzinfo=timezone.utc)
             )
         if jitter is not None:
             spec_kwargs["jitter"] = timedelta(seconds=jitter)
 
         # Store workflow args in state store
         workflow_id = workflow_args.get("workflow_id", schedule_id)
-        workflow_args.update(
-            {
-                "application_name": self.application_name,
-                "workflow_id": workflow_id,
-            }
-        )
+        workflow_args = {
+            **workflow_args,
+            "application_name": self.application_name,
+            "workflow_id": workflow_id,
+        }
         await StateStore.save_state_object(
             id=workflow_id, value=workflow_args, type=StateType.WORKFLOWS
         )
@@ -641,6 +650,7 @@ class TemporalWorkflowClient(WorkflowClient):
                         execution_timeout=WORKFLOW_MAX_TIMEOUT_HOURS,
                     ),
                     spec=ScheduleSpec(**spec_kwargs),
+                    policy=SchedulePolicy(overlap=overlap_policy),
                     state=ScheduleState(
                         note=note,
                         paused=False,

@@ -242,6 +242,10 @@ class AddScheduleRequest(BaseModel):
     jitter: Optional[int] = Field(
         None, description="Random jitter in seconds added to each trigger time"
     )
+    overlap_policy: Optional[str] = Field(
+        "SKIP",
+        description="Overlap policy when a workflow is still running at next trigger. Options: SKIP, BUFFER_ONE, BUFFER_ALL, CANCEL_OTHER, TERMINATE_OTHER, ALLOW_ALL",
+    )
     workflow_class_name: Optional[str] = Field(
         None,
         description="Workflow class name (for multi-workflow apps, defaults to first registered)",
@@ -254,6 +258,7 @@ class AddScheduleRequest(BaseModel):
                 "cron_expression": "0 9 * * MON-FRI",
                 "workflow_args": {"metadata": {"include-filter": "{}"}},
                 "note": "Weekday morning extraction",
+                "overlap_policy": "SKIP",
             }
         }
 

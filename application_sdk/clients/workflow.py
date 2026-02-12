@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
-from typing import Any, Dict, Optional, Sequence, Type
+from typing import Any, Dict, List, Optional, Sequence, Type
 
 from application_sdk.workflows import WorkflowInterface
 
@@ -200,7 +200,7 @@ class WorkflowClient(ABC):
         pass
 
     @abstractmethod
-    async def list_schedules(self) -> list:
+    async def list_schedules(self) -> List[Dict[str, Any]]:
         """List all workflow schedules.
 
         Returns:

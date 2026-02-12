@@ -114,8 +114,6 @@ class APIServer(ServerInterface):
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
-    _workflow_classes: Dict[str, Type[WorkflowInterface]] = {}
-
     ui_enabled: bool = True
 
     def __init__(
@@ -138,6 +136,7 @@ class APIServer(ServerInterface):
         # First, set the instance variables
         self.handler = handler
         self.workflow_client = workflow_client
+        self.workflow_classes: Dict[str, Type[WorkflowInterface]] = {}
         self.templates = Jinja2Templates(directory=frontend_templates_path)
         self.duckdb_ui = DuckDBUI()
         self.ui_enabled = ui_enabled
@@ -274,7 +273,7 @@ class APIServer(ServerInterface):
             raise ValueError("workflow_class cannot be None")
 
         # Register workflow class for schedule endpoint resolution
-        self._workflow_classes[workflow_class.__name__] = workflow_class
+        self.workflow_classes[workflow_class.__name__] = workflow_class
 
         async def start_workflow_http(body: WorkflowRequest) -> WorkflowResponse:
             try:
@@ -969,18 +968,18 @@ class APIServer(ServerInterface):
         Raises:
             ValueError: If no workflow classes are registered or name is not found.
         """
-        if not self._workflow_classes:
+        if not self.workflow_classes:
             raise ValueError(
                 "No workflow classes registered. Call register_workflow() first."
             )
         if name:
-            if name not in self._workflow_classes:
+            if name not in self.workflow_classes:
                 raise ValueError(
                     f"Workflow class '{name}' not found. "
-                    f"Available: {list(self._workflow_classes.keys())}"
+                    f"Available: {list(self.workflow_classes.keys())}"
                 )
-            return self._workflow_classes[name]
-        return next(iter(self._workflow_classes.values()))
+            return self.workflow_classes[name]
+        return next(iter(self.workflow_classes.values()))
 
     async def add_schedule(self, body: AddScheduleRequest) -> ScheduleResponse:
         """Create a new workflow schedule."""
@@ -1137,7 +1136,12 @@ class APIServer(ServerInterface):
     async def edit_schedule(
         self, schedule_id: str, body: EditScheduleRequest
     ) -> ScheduleResponse:
-        """Update an existing workflow schedule."""
+        """Update an existing workflow schedule.
+
+        Note: Changing the workflow class is intentionally not supported via this
+        endpoint. The existing workflow class on the schedule is preserved. This
+        avoids mismatched args being sent to a different workflow type.
+        """
         start_time = time.time()
         metrics = get_metrics()
 
