@@ -8,17 +8,15 @@ from typing import (
     List,
     Optional,
     Tuple,
-    Union,
-    get_args,
     get_origin,
     get_type_hints,
 )
 
-from pydantic import BaseModel
+from pydantic import TypeAdapter
+from pydantic.json_schema import GenerateJsonSchema
 
 from application_sdk.decorators.automation_activity.models import (
     X_AUTOMATION_ENGINE,
-    ActivityCategory,
     ActivitySpec,
     Annotation,
     Parameter,
@@ -47,17 +45,12 @@ _ALLOWED_SCHEMA_EXTRA_KEYS = frozenset(
 )
 
 
-def _get_category_value(category: ActivityCategory) -> str:
-    """Get string value from category enum."""
-    return category.value if hasattr(category, "value") else str(category)
-
-
 def _build_tool_spec(spec: ActivitySpec) -> ToolSpec:
     """Build a ``ToolSpec`` from an ``ActivitySpec`` for API submission."""
     return ToolSpec(
         name=spec.name,
         display_name=spec.display_name,
-        category=_get_category_value(spec.category),
+        category=spec.category.value,
         description=spec.description,
         input_schema=spec.input_schema,
         output_schema=spec.output_schema,
@@ -71,49 +64,27 @@ def _build_tool_spec(spec: ActivitySpec) -> ToolSpec:
 # ---------------------------------------------------------------------------
 
 
+class _NullableSchemaGenerator(GenerateJsonSchema):
+    """Emits ``"nullable": true`` for Optional types instead of ``anyOf``."""
+
+    def nullable_schema(self, schema: Any) -> Dict[str, Any]:
+        null_schema = {"type": "null"}
+        inner = self.generate_inner(schema["schema"])
+        if inner == null_schema:
+            return null_schema
+        result = dict(inner)
+        result["nullable"] = True
+        return result
+
+
 def _get_json_schema_type_from_hint(type_hint: Any) -> Dict[str, Any]:
-    """Convert a Python type hint to a JSON Schema type definition."""
-    origin = get_origin(type_hint)
-    args = get_args(type_hint)
-
-    # Handle Optional/Union types
-    if origin in (Union, Optional):
-        non_none_args = [arg for arg in args if arg not in (type(None), None)]
-        if non_none_args:
-            schema = _get_json_schema_type_from_hint(non_none_args[0])
-            schema["nullable"] = True
-            return schema
-
-    # Handle List types
-    if origin in (list, List):
-        return {
-            "type": "array",
-            "items": _get_json_schema_type_from_hint(args[0] if args else Any),
-        }
-
-    # Handle Tuple types
-    if origin in (tuple, Tuple):
-        return {"type": "array", "items": {}}
-
-    # Handle Pydantic models
-    if inspect.isclass(type_hint) and issubclass(type_hint, BaseModel):
-        return type_hint.model_json_schema()
-
-    # Handle basic types
-    type_mapping: Dict[Any, Any] = {
-        str: "string",
-        int: "integer",
-        float: "number",
-        bool: "boolean",
-        dict: "object",
-        Dict: "object",
-        Any: {},
-    }
-    if type_hint in type_mapping:
-        result = type_mapping[type_hint]
-        return result if isinstance(result, dict) else {"type": result}
-
-    return {"type": "object"}
+    """Convert a Python type hint to JSON Schema via Pydantic TypeAdapter."""
+    try:
+        return TypeAdapter(type_hint).json_schema(
+            schema_generator=_NullableSchemaGenerator
+        )
+    except Exception:
+        return {"type": "object"}
 
 
 def _validate_and_apply_schema_extra(
@@ -206,25 +177,28 @@ def _resolve_nested_model_reference(
     return definitions.get(ref_path)
 
 
+def _get_child_schema(
+    parent_schema: Dict[str, Any], field_schema: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Return the nested schema for a field, resolving ``$ref`` if needed."""
+    if "properties" in field_schema:
+        return field_schema
+    if "$ref" in field_schema:
+        return _resolve_nested_model_reference(parent_schema, field_schema)
+    return None
+
+
 def _process_nested_model_fields(model_schema: Dict[str, Any]) -> None:
     """Process nested model fields to ensure annotations are properly formatted."""
     if "properties" not in model_schema:
         return
 
     for _field_name, field_schema in model_schema["properties"].items():
-        has_annotation = X_AUTOMATION_ENGINE in field_schema
-        is_nested_model = "properties" in field_schema
-        is_model_reference = "$ref" in field_schema
+        nested = _get_child_schema(model_schema, field_schema)
 
-        if not has_annotation:
-            if is_nested_model:
-                _process_nested_model_fields(field_schema)
-            elif is_model_reference:
-                nested_model = _resolve_nested_model_reference(
-                    model_schema, field_schema
-                )
-                if nested_model:
-                    _process_nested_model_fields(nested_model)
+        if X_AUTOMATION_ENGINE not in field_schema:
+            if nested:
+                _process_nested_model_fields(nested)
             continue
 
         annotation_data = field_schema[X_AUTOMATION_ENGINE]
@@ -237,17 +211,26 @@ def _process_nested_model_fields(model_schema: Dict[str, Any]) -> None:
             exclude_none=True, mode="json"
         )
 
-        if is_nested_model:
-            _process_nested_model_fields(field_schema)
-        elif is_model_reference:
-            nested_model = _resolve_nested_model_reference(model_schema, field_schema)
-            if nested_model:
-                _process_nested_model_fields(nested_model)
+        if nested:
+            _process_nested_model_fields(nested)
 
 
 # ---------------------------------------------------------------------------
 # Input schema
 # ---------------------------------------------------------------------------
+
+
+def _build_input_property(
+    param: Parameter, sig: inspect.Signature, type_hints: Dict[str, Any]
+) -> Tuple[str, Dict[str, Any], bool]:
+    """Build a single input property schema. Returns (name, schema, is_required)."""
+    param_obj = sig.parameters[param.name]
+    prop_schema = _get_json_schema_type_from_hint(type_hints.get(param.name, Any))
+    _stamp_param_metadata(param, prop_schema)
+    is_required = param_obj.default == inspect.Parameter.empty
+    if not is_required:
+        prop_schema["default"] = param_obj.default
+    return param.name, prop_schema, is_required
 
 
 def _build_input_schema_from_parameters(
@@ -257,23 +240,14 @@ def _build_input_schema_from_parameters(
     sig = inspect.signature(func)
     type_hints = get_type_hints(func)
     param_names = list(sig.parameters.keys())
-    properties: Dict[str, Any] = {}
-    required: List[str] = []
 
-    for param in parameters:
-        param_name = param.name
-        if param_name not in param_names:
-            continue
-
-        param_obj = sig.parameters[param_name]
-        prop_schema = _get_json_schema_type_from_hint(type_hints.get(param_name, Any))
-        _stamp_param_metadata(param, prop_schema)
-
-        if param_obj.default != inspect.Parameter.empty:
-            prop_schema["default"] = param_obj.default
-        else:
-            required.append(param_name)
-        properties[param_name] = prop_schema
+    entries = [
+        _build_input_property(p, sig, type_hints)
+        for p in parameters
+        if p.name in param_names
+    ]
+    properties = {name: schema for name, schema, _ in entries}
+    required = [name for name, _, req in entries if req]
 
     return _finalize_schema(
         properties,
