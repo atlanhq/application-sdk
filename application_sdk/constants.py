@@ -298,7 +298,7 @@ IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"
 LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60"))
 
 # Automation Engine Configuration
-#: Base URL for the automation engine API (e.g. http://localhost:8000)
+#: Base URL for the automation engine API (e.g. ``http://localhost:8000``)
 AUTOMATION_ENGINE_API_URL = os.getenv("ATLAN_AUTOMATION_ENGINE_API_URL")
 #: Host for the automation engine API (used with port to construct URL)
 AUTOMATION_ENGINE_API_HOST = os.getenv("ATLAN_AUTOMATION_ENGINE_API_HOST")

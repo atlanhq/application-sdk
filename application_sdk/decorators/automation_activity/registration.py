@@ -74,37 +74,26 @@ def _validate_base_url(url: str) -> None:
 def _resolve_automation_engine_api_url(
     automation_engine_api_url: Optional[str],
 ) -> Optional[str]:
-    """Resolve the automation engine API URL from the argument or environment.
-
-    Priority:
-    1. Explicit ``automation_engine_api_url`` argument
-    2. ``ATLAN_AUTOMATION_ENGINE_API_URL`` environment variable
-    3. Constructed from ``ATLAN_AUTOMATION_ENGINE_API_HOST`` + ``ATLAN_AUTOMATION_ENGINE_API_PORT``
-    """
-    if automation_engine_api_url:
-        return automation_engine_api_url
-
-    if AUTOMATION_ENGINE_API_URL:
-        return AUTOMATION_ENGINE_API_URL
-
-    if AUTOMATION_ENGINE_API_HOST and AUTOMATION_ENGINE_API_PORT:
-        return f"http://{AUTOMATION_ENGINE_API_HOST}:{AUTOMATION_ENGINE_API_PORT}"
-
-    return None
+    """Resolve the automation engine API URL from argument or environment."""
+    candidates = [
+        automation_engine_api_url,
+        AUTOMATION_ENGINE_API_URL,
+        f"http://{AUTOMATION_ENGINE_API_HOST}:{AUTOMATION_ENGINE_API_PORT}"
+        if AUTOMATION_ENGINE_API_HOST and AUTOMATION_ENGINE_API_PORT
+        else None,
+    ]
+    return next((c for c in candidates if c), None)
 
 
 def _resolve_app_qualified_name(
     app_qualified_name: Optional[str], app_name: str
 ) -> str:
-    """Resolve the app qualified name from the argument or compute from app_name."""
-    if app_qualified_name:
-        return app_qualified_name
-
-    if APP_QUALIFIED_NAME:
-        return APP_QUALIFIED_NAME
-
-    # Compute: default/apps/<app_name_with_underscores>
-    return f"{APP_QUALIFIED_NAME_PREFIX}{app_name.replace('-', '_').lower()}"
+    """Resolve the app qualified name from argument, env, or compute from app_name."""
+    return (
+        app_qualified_name
+        or APP_QUALIFIED_NAME
+        or f"{APP_QUALIFIED_NAME_PREFIX}{app_name.replace('-', '_').lower()}"
+    )
 
 
 # =============================================================================
@@ -160,6 +149,90 @@ async def _request_with_retry(
 # =============================================================================
 
 
+async def _check_engine_health(
+    client: httpx.AsyncClient, base_url: str, max_retries: int
+) -> bool:
+    """Return True if automation engine is healthy."""
+    try:
+        await _request_with_retry(
+            client,
+            "GET",
+            f"{base_url}{ENDPOINT_SERVER_READY}",
+            max_retries=max_retries,
+            timeout=TIMEOUT_HEALTH_CHECK,
+        )
+        logger.info("Automation engine health check passed")
+        return True
+    except (
+        httpx.HTTPStatusError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+    ) as e:
+        logger.warning(
+            f"Automation engine health check failed: {e}. "
+            "Skipping activity registration."
+        )
+        return False
+
+
+async def _upsert_app(
+    client: httpx.AsyncClient,
+    base_url: str,
+    app_spec: AppSpec,
+    max_retries: int,
+) -> bool:
+    """Upsert app record. Return True on success."""
+    try:
+        await _request_with_retry(
+            client,
+            "POST",
+            f"{base_url}{ENDPOINT_APPS}",
+            max_retries=max_retries,
+            json=app_spec.model_dump(exclude_none=True),
+        )
+        logger.info(f"Successfully upserted app '{app_spec.name}'")
+        return True
+    except (
+        httpx.HTTPStatusError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+    ) as e:
+        logger.warning(
+            f"Failed to upsert app '{app_spec.name}': {e}. "
+            "Skipping tool registration."
+        )
+        return False
+
+
+async def _register_tools(
+    client: httpx.AsyncClient,
+    base_url: str,
+    registration_request: ToolRegistrationRequest,
+    max_retries: int,
+) -> bool:
+    """Register tools with automation engine. Return True on success."""
+    try:
+        await _request_with_retry(
+            client,
+            "POST",
+            f"{base_url}{ENDPOINT_TOOLS}",
+            max_retries=max_retries,
+            json=registration_request.model_dump(exclude_none=True),
+        )
+        logger.info(
+            f"Successfully registered {len(registration_request.tools)} activities "
+            "with automation engine"
+        )
+        return True
+    except (
+        httpx.HTTPStatusError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+    ) as e:
+        logger.warning(f"Failed to register activities with automation engine: {e}")
+        return False
+
+
 async def _flush_specs(
     specs_to_register: List[ActivitySpec],
     app_name: str,
@@ -201,95 +274,37 @@ async def _flush_specs(
 
     qualified_name = _resolve_app_qualified_name(app_qualified_name, app_name)
 
-    # Single httpx session for all requests
+    logger.info(
+        f"Registering {len(specs_to_register)} activities with automation engine"
+    )
+
+    app_spec = AppSpec(
+        name=app_name,
+        task_queue=workflow_task_queue,
+        qualified_name=qualified_name,
+    )
+    tool_specs = [_build_tool_spec(item) for item in specs_to_register]
+    registration_request = ToolRegistrationRequest(
+        app_qualified_name=qualified_name,
+        app_name=app_name,
+        task_queue=workflow_task_queue,
+        tools=tool_specs,
+    )
+
+    # TODO: Replace this sleep with a readiness-polling loop or
+    # server-side confirmation that the app record is propagated.
+    propagation_delay = (
+        float(APP_UPSERT_PROPAGATION_DELAY)
+        if APP_UPSERT_PROPAGATION_DELAY
+        else DEFAULT_APP_UPSERT_PROPAGATION_DELAY
+    )
+
     async with httpx.AsyncClient(timeout=TIMEOUT_API_REQUEST) as client:
-        # Health check
-        try:
-            await _request_with_retry(
-                client,
-                "GET",
-                f"{base_url}{ENDPOINT_SERVER_READY}",
-                max_retries=max_retries,
-                timeout=TIMEOUT_HEALTH_CHECK,
-            )
-            logger.info("Automation engine health check passed")
-        except (
-            httpx.HTTPStatusError,
-            httpx.ConnectError,
-            httpx.TimeoutException,
-        ) as e:
-            logger.warning(
-                f"Automation engine health check failed: {e}. "
-                "Skipping activity registration."
-            )
+        if not await _check_engine_health(client, base_url, max_retries):
             return False
-
-        logger.info(
-            f"Registering {len(specs_to_register)} activities with automation engine"
-        )
-
-        # Upsert app
-        try:
-            app_spec = AppSpec(
-                name=app_name,
-                task_queue=workflow_task_queue,
-                qualified_name=qualified_name,
-            )
-            await _request_with_retry(
-                client,
-                "POST",
-                f"{base_url}{ENDPOINT_APPS}",
-                max_retries=max_retries,
-                json=app_spec.model_dump(exclude_none=True),
-            )
-            logger.info(f"Successfully upserted app '{app_name}'")
-        except (
-            httpx.HTTPStatusError,
-            httpx.ConnectError,
-            httpx.TimeoutException,
-        ) as e:
-            # Short-circuit — don't attempt tool registration if upsert failed
-            logger.warning(
-                f"Failed to upsert app '{app_name}': {e}. "
-                "Skipping tool registration."
-            )
+        if not await _upsert_app(client, base_url, app_spec, max_retries):
             return False
-
-        # TODO: Replace this sleep with a readiness-polling loop or
-        # server-side confirmation that the app record is propagated.
-        propagation_delay = (
-            float(APP_UPSERT_PROPAGATION_DELAY)
-            if APP_UPSERT_PROPAGATION_DELAY
-            else DEFAULT_APP_UPSERT_PROPAGATION_DELAY
-        )
         await asyncio.sleep(propagation_delay)
-
-        # Build and send tools
-        tool_specs = [_build_tool_spec(item) for item in specs_to_register]
-        registration_request = ToolRegistrationRequest(
-            app_qualified_name=qualified_name,
-            app_name=app_name,
-            task_queue=workflow_task_queue,
-            tools=tool_specs,
+        return await _register_tools(
+            client, base_url, registration_request, max_retries
         )
-
-        try:
-            await _request_with_retry(
-                client,
-                "POST",
-                f"{base_url}{ENDPOINT_TOOLS}",
-                max_retries=max_retries,
-                json=registration_request.model_dump(exclude_none=True),
-            )
-            logger.info(
-                f"Successfully registered {len(tool_specs)} activities "
-                "with automation engine"
-            )
-            return True
-        except (
-            httpx.HTTPStatusError,
-            httpx.ConnectError,
-            httpx.TimeoutException,
-        ) as e:
-            logger.warning(f"Failed to register activities with automation engine: {e}")
-            return False
