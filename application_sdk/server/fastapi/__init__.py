@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Any, Callable, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
@@ -33,15 +33,24 @@ from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
 from application_sdk.server.fastapi.models import (
+    AddScheduleRequest,
     ConfigMapResponse,
+    DeleteScheduleResponse,
+    EditScheduleRequest,
     EventWorkflowRequest,
     EventWorkflowResponse,
     EventWorkflowTrigger,
     FetchMetadataRequest,
     FetchMetadataResponse,
     HttpWorkflowTrigger,
+    ListSchedulesResponse,
     PreflightCheckRequest,
     PreflightCheckResponse,
+    ScheduleData,
+    ScheduleDetailsData,
+    ScheduleDetailsResponse,
+    ScheduleListItem,
+    ScheduleResponse,
     Subscription,
     TestAuthRequest,
     TestAuthResponse,
@@ -105,7 +114,6 @@ class APIServer(ServerInterface):
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
-
     ui_enabled: bool = True
 
     def __init__(
@@ -128,6 +136,7 @@ class APIServer(ServerInterface):
         # First, set the instance variables
         self.handler = handler
         self.workflow_client = workflow_client
+        self.workflow_classes: Dict[str, Type[WorkflowInterface]] = {}
         self.templates = Jinja2Templates(directory=frontend_templates_path)
         self.duckdb_ui = DuckDBUI()
         self.ui_enabled = ui_enabled
@@ -262,6 +271,9 @@ class APIServer(ServerInterface):
         # Validate and store workflow_class at the method level to ensure it's not None
         if workflow_class is None:
             raise ValueError("workflow_class cannot be None")
+
+        # Register workflow class for schedule endpoint resolution
+        self.workflow_classes[workflow_class.__name__] = workflow_class
 
         async def start_workflow_http(body: WorkflowRequest) -> WorkflowResponse:
             try:
@@ -426,6 +438,37 @@ class APIServer(ServerInterface):
             self.get_configmap,
             methods=["GET"],
             response_model=ConfigMapResponse,
+        )
+
+        self.workflow_router.add_api_route(
+            "/schedule",
+            self.add_schedule,
+            methods=["POST"],
+            response_model=ScheduleResponse,
+        )
+        self.workflow_router.add_api_route(
+            "/schedule",
+            self.list_schedules,
+            methods=["GET"],
+            response_model=ListSchedulesResponse,
+        )
+        self.workflow_router.add_api_route(
+            "/schedule/{schedule_id}",
+            self.get_schedule_details,
+            methods=["GET"],
+            response_model=ScheduleDetailsResponse,
+        )
+        self.workflow_router.add_api_route(
+            "/schedule/{schedule_id}",
+            self.edit_schedule,
+            methods=["PUT"],
+            response_model=ScheduleResponse,
+        )
+        self.workflow_router.add_api_route(
+            "/schedule/{schedule_id}",
+            self.delete_schedule,
+            methods=["DELETE"],
+            response_model=DeleteScheduleResponse,
         )
 
         self.dapr_router.add_api_route(
@@ -908,6 +951,280 @@ class APIServer(ServerInterface):
                 metric_type=MetricType.COUNTER,
                 labels={"status": "error"},
                 description="Total number of workflow resume requests",
+            )
+            raise e
+
+    def _resolve_workflow_class(
+        self, name: Optional[str] = None
+    ) -> Type[WorkflowInterface]:
+        """Resolve a workflow class by name or return the first registered one.
+
+        Args:
+            name: Optional workflow class name. If None, returns the first registered class.
+
+        Returns:
+            The resolved workflow class.
+
+        Raises:
+            ValueError: If no workflow classes are registered or name is not found.
+        """
+        if not self.workflow_classes:
+            raise ValueError(
+                "No workflow classes registered. Call register_workflow() first."
+            )
+        if name:
+            if name not in self.workflow_classes:
+                raise ValueError(
+                    f"Workflow class '{name}' not found. "
+                    f"Available: {list(self.workflow_classes.keys())}"
+                )
+            return self.workflow_classes[name]
+        return next(iter(self.workflow_classes.values()))
+
+    async def add_schedule(self, body: AddScheduleRequest) -> ScheduleResponse:
+        """Create a new workflow schedule."""
+        start_time = time.time()
+        metrics = get_metrics()
+
+        try:
+            if not self.workflow_client:
+                raise Exception("Temporal client not initialized")
+
+            workflow_class = self._resolve_workflow_class(body.workflow_class_name)
+            schedule_data = await self.workflow_client.create_schedule(
+                schedule_id=body.schedule_id,
+                schedule_args=body.model_dump(),
+                workflow_class=workflow_class,
+            )
+
+            metrics.record_metric(
+                name="schedule_creates_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "success"},
+                description="Total number of schedule create requests",
+            )
+
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="schedule_create_duration_seconds",
+                value=duration,
+                metric_type=MetricType.HISTOGRAM,
+                labels={},
+                description="Schedule create duration in seconds",
+            )
+
+            return ScheduleResponse(
+                success=True,
+                message="Schedule created successfully",
+                data=ScheduleData(
+                    schedule_id=schedule_data.get("schedule_id", body.schedule_id),
+                ),
+            )
+        except Exception as e:
+            metrics.record_metric(
+                name="schedule_creates_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "error"},
+                description="Total number of schedule create requests",
+            )
+            raise e
+
+    async def list_schedules(self) -> ListSchedulesResponse:
+        """List all workflow schedules."""
+        start_time = time.time()
+        metrics = get_metrics()
+
+        try:
+            if not self.workflow_client:
+                raise Exception("Temporal client not initialized")
+
+            schedules = await self.workflow_client.list_schedules()
+
+            metrics.record_metric(
+                name="schedule_lists_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "success"},
+                description="Total number of schedule list requests",
+            )
+
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="schedule_list_duration_seconds",
+                value=duration,
+                metric_type=MetricType.HISTOGRAM,
+                labels={},
+                description="Schedule list duration in seconds",
+            )
+
+            return ListSchedulesResponse(
+                success=True,
+                message="Schedules fetched successfully",
+                data=[
+                    ScheduleListItem(
+                        schedule_id=s["schedule_id"],
+                        paused=s["paused"],
+                        note=s.get("note"),
+                        cron_expression=s.get("cron_expression"),
+                    )
+                    for s in schedules
+                ],
+            )
+        except Exception as e:
+            metrics.record_metric(
+                name="schedule_lists_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "error"},
+                description="Total number of schedule list requests",
+            )
+            raise e
+
+    async def get_schedule_details(self, schedule_id: str) -> ScheduleDetailsResponse:
+        """Get details of a workflow schedule."""
+        start_time = time.time()
+        metrics = get_metrics()
+
+        try:
+            if not self.workflow_client:
+                raise Exception("Temporal client not initialized")
+
+            schedule_info = await self.workflow_client.get_schedule(schedule_id)
+
+            metrics.record_metric(
+                name="schedule_gets_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "success"},
+                description="Total number of schedule get requests",
+            )
+
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="schedule_get_duration_seconds",
+                value=duration,
+                metric_type=MetricType.HISTOGRAM,
+                labels={},
+                description="Schedule get duration in seconds",
+            )
+
+            return ScheduleDetailsResponse(
+                success=True,
+                message="Schedule fetched successfully",
+                data=ScheduleDetailsData(
+                    schedule_id=schedule_info["schedule_id"],
+                    cron_expression=schedule_info["cron_expression"],
+                    paused=schedule_info["paused"],
+                    note=schedule_info.get("note"),
+                    workflow_args=schedule_info.get("workflow_args", {}),
+                    recent_actions=schedule_info.get("recent_actions", []),
+                    next_action_times=schedule_info.get("next_action_times", []),
+                ),
+            )
+        except Exception as e:
+            metrics.record_metric(
+                name="schedule_gets_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "error"},
+                description="Total number of schedule get requests",
+            )
+            raise e
+
+    async def edit_schedule(
+        self, schedule_id: str, body: EditScheduleRequest
+    ) -> ScheduleResponse:
+        """Update an existing workflow schedule.
+
+        Note: Changing the workflow class is intentionally not supported via this
+        endpoint. The existing workflow class on the schedule is preserved. This
+        avoids mismatched args being sent to a different workflow type.
+        """
+        start_time = time.time()
+        metrics = get_metrics()
+
+        try:
+            if not self.workflow_client:
+                raise Exception("Temporal client not initialized")
+
+            await self.workflow_client.update_schedule(
+                schedule_id=schedule_id,
+                schedule_args=body.model_dump(exclude_none=True),
+            )
+
+            metrics.record_metric(
+                name="schedule_updates_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "success"},
+                description="Total number of schedule update requests",
+            )
+
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="schedule_update_duration_seconds",
+                value=duration,
+                metric_type=MetricType.HISTOGRAM,
+                labels={},
+                description="Schedule update duration in seconds",
+            )
+
+            return ScheduleResponse(
+                success=True,
+                message="Schedule updated successfully",
+                data=ScheduleData(schedule_id=schedule_id),
+            )
+        except Exception as e:
+            metrics.record_metric(
+                name="schedule_updates_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "error"},
+                description="Total number of schedule update requests",
+            )
+            raise e
+
+    async def delete_schedule(self, schedule_id: str) -> DeleteScheduleResponse:
+        """Delete a workflow schedule."""
+        start_time = time.time()
+        metrics = get_metrics()
+
+        try:
+            if not self.workflow_client:
+                raise Exception("Temporal client not initialized")
+
+            await self.workflow_client.delete_schedule(schedule_id)
+
+            metrics.record_metric(
+                name="schedule_deletes_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "success"},
+                description="Total number of schedule delete requests",
+            )
+
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="schedule_delete_duration_seconds",
+                value=duration,
+                metric_type=MetricType.HISTOGRAM,
+                labels={},
+                description="Schedule delete duration in seconds",
+            )
+
+            return DeleteScheduleResponse(
+                success=True,
+                message="Schedule deleted successfully",
+            )
+        except Exception as e:
+            metrics.record_metric(
+                name="schedule_deletes_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "error"},
+                description="Total number of schedule delete requests",
             )
             raise e
 

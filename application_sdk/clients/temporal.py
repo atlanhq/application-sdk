@@ -1,12 +1,25 @@
 import asyncio
 import time
 import uuid
+import warnings
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
-from typing import Any, Dict, Optional, Sequence, Type
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Sequence, Type
 
 from temporalio import activity, workflow
-from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
+from temporalio.client import (
+    Client,
+    Schedule,
+    ScheduleActionStartWorkflow,
+    ScheduleOverlapPolicy,
+    SchedulePolicy,
+    ScheduleSpec,
+    ScheduleState,
+    ScheduleUpdate,
+    ScheduleUpdateInput,
+    WorkflowExecutionStatus,
+    WorkflowFailureError,
+)
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import (
@@ -312,12 +325,21 @@ class TemporalWorkflowClient(WorkflowClient):
             if not self.client:
                 raise ValueError("Client is not loaded")
 
+            cron_schedule = workflow_args.get("cron_schedule", "")
+            if cron_schedule:
+                warnings.warn(
+                    "cron_schedule in start_workflow is deprecated. "
+                    "Use create_schedule() instead for full schedule lifecycle management.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+
             handle = await self.client.start_workflow(
                 workflow_class,  # type: ignore
                 args=[{"workflow_id": workflow_id}],
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
-                cron_schedule=workflow_args.get("cron_schedule", ""),
+                cron_schedule=cron_schedule,
                 execution_timeout=WORKFLOW_MAX_TIMEOUT_HOURS,
             )
 
@@ -551,3 +573,287 @@ class TemporalWorkflowClient(WorkflowClient):
             raise Exception(
                 f"Error getting workflow status for {workflow_id} {run_id}: {e}"
             )
+
+    async def create_schedule(
+        self,
+        schedule_id: str,
+        schedule_args: Dict[str, Any],
+        workflow_class: Type[WorkflowInterface],
+    ) -> Dict[str, Any]:
+        """Create a new workflow schedule using Temporal's Schedule API.
+
+        Args:
+            schedule_id: Unique identifier for the schedule.
+            schedule_args: Schedule configuration including cron_expression,
+                workflow_args, note, start_at, end_at, jitter.
+            workflow_class: The workflow class to execute on schedule.
+
+        Returns:
+            Dict containing schedule_id.
+
+        Raises:
+            ValueError: If the client is not loaded.
+        """
+        if not self.client:
+            raise ValueError("Client is not loaded")
+
+        cron_expression = schedule_args.get("cron_expression", "")
+        workflow_args = schedule_args.get("workflow_args", {})
+        note = schedule_args.get("note")
+        start_at = schedule_args.get("start_at")
+        end_at = schedule_args.get("end_at")
+        jitter = schedule_args.get("jitter")
+        overlap_policy_str = schedule_args.get("overlap_policy", "SKIP")
+        overlap_policy = ScheduleOverlapPolicy[overlap_policy_str]
+
+        # Build schedule spec
+        spec_kwargs: Dict[str, Any] = {
+            "cron_expressions": [cron_expression],
+        }
+        if start_at:
+            dt = datetime.fromisoformat(start_at)
+            spec_kwargs["start_at"] = (
+                dt.astimezone(timezone.utc)
+                if dt.tzinfo
+                else dt.replace(tzinfo=timezone.utc)
+            )
+        if end_at:
+            dt = datetime.fromisoformat(end_at)
+            spec_kwargs["end_at"] = (
+                dt.astimezone(timezone.utc)
+                if dt.tzinfo
+                else dt.replace(tzinfo=timezone.utc)
+            )
+        if jitter is not None:
+            spec_kwargs["jitter"] = timedelta(seconds=jitter)
+
+        # Store workflow args in state store
+        workflow_id = workflow_args.get("workflow_id", schedule_id)
+        workflow_args = {
+            **workflow_args,
+            "application_name": self.application_name,
+            "workflow_id": workflow_id,
+        }
+        await StateStore.save_state_object(
+            id=workflow_id, value=workflow_args, type=StateType.WORKFLOWS
+        )
+
+        try:
+            await self.client.create_schedule(
+                schedule_id,
+                Schedule(
+                    action=ScheduleActionStartWorkflow(
+                        workflow_class,  # type: ignore
+                        args=[{"workflow_id": workflow_id}],
+                        id=workflow_id,
+                        task_queue=self.worker_task_queue,
+                        execution_timeout=WORKFLOW_MAX_TIMEOUT_HOURS,
+                    ),
+                    spec=ScheduleSpec(**spec_kwargs),
+                    policy=SchedulePolicy(overlap=overlap_policy),
+                    state=ScheduleState(
+                        note=note,
+                        paused=False,
+                    ),
+                ),
+            )
+            logger.info(f"Schedule created: {schedule_id}")
+            return {"schedule_id": schedule_id}
+        except Exception as e:
+            logger.error(f"Error creating schedule {schedule_id}: {e}")
+            raise
+
+    async def get_schedule(self, schedule_id: str) -> Dict[str, Any]:
+        """Get details of a workflow schedule.
+
+        Args:
+            schedule_id: The ID of the schedule to retrieve.
+
+        Returns:
+            Dict containing schedule details.
+
+        Raises:
+            ValueError: If the client is not loaded.
+        """
+        if not self.client:
+            raise ValueError("Client is not loaded")
+
+        try:
+            handle = self.client.get_schedule_handle(schedule_id)
+            description = await handle.describe()
+
+            schedule = description.schedule
+            info = description.info
+
+            # Extract cron expression from spec
+            cron_expression = ""
+            if schedule.spec and schedule.spec.cron_expressions:
+                cron_expression = schedule.spec.cron_expressions[0]
+
+            # Extract workflow args from action
+            workflow_args: Dict[str, Any] = {}
+            if isinstance(schedule.action, ScheduleActionStartWorkflow):
+                if schedule.action.args:
+                    raw_args = schedule.action.args[0]
+                    if isinstance(raw_args, dict):
+                        workflow_args = raw_args
+
+            return {
+                "schedule_id": description.id,
+                "cron_expression": cron_expression,
+                "paused": schedule.state.paused if schedule.state else False,
+                "note": schedule.state.note if schedule.state else None,
+                "workflow_args": workflow_args,
+                "recent_actions": [
+                    {
+                        "scheduled_at": str(action.scheduled_at),
+                        "started_at": str(action.started_at),
+                    }
+                    for action in (info.recent_actions if info else [])
+                ],
+                "next_action_times": [
+                    str(t) for t in (info.next_action_times if info else [])
+                ],
+            }
+        except Exception as e:
+            logger.error(f"Error getting schedule {schedule_id}: {e}")
+            raise
+
+    async def list_schedules(self) -> List[Dict[str, Any]]:
+        """List all workflow schedules.
+
+        Returns:
+            List of dicts containing schedule summary information.
+
+        Raises:
+            ValueError: If the client is not loaded.
+        """
+        if not self.client:
+            raise ValueError("Client is not loaded")
+
+        try:
+            schedules: List[Dict[str, Any]] = []
+            async for entry in self.client.list_schedules():
+                cron_expression = None
+                if entry.schedule and entry.schedule.spec:
+                    if entry.schedule.spec.cron_expressions:
+                        cron_expression = entry.schedule.spec.cron_expressions[0]
+
+                paused = False
+                note = None
+                if entry.schedule and entry.schedule.state:
+                    paused = entry.schedule.state.paused
+                    note = entry.schedule.state.note
+
+                schedules.append(
+                    {
+                        "schedule_id": entry.id,
+                        "paused": paused,
+                        "note": note,
+                        "cron_expression": cron_expression,
+                    }
+                )
+            return schedules
+        except Exception as e:
+            logger.error(f"Error listing schedules: {e}")
+            raise
+
+    async def update_schedule(
+        self,
+        schedule_id: str,
+        schedule_args: Dict[str, Any],
+        workflow_class: Optional[Type[WorkflowInterface]] = None,
+    ) -> Dict[str, Any]:
+        """Update an existing workflow schedule.
+
+        Args:
+            schedule_id: The ID of the schedule to update.
+            schedule_args: Fields to update. May include cron_expression,
+                workflow_args, note, paused.
+            workflow_class: Optional new workflow class for the schedule.
+
+        Returns:
+            Dict containing schedule_id.
+
+        Raises:
+            ValueError: If the client is not loaded.
+        """
+        if not self.client:
+            raise ValueError("Client is not loaded")
+
+        try:
+            handle = self.client.get_schedule_handle(schedule_id)
+
+            # Handle pause/unpause separately
+            paused = schedule_args.get("paused")
+            if paused is True:
+                await handle.pause(note=schedule_args.get("note", "Paused via API"))
+            elif paused is False:
+                await handle.unpause(note=schedule_args.get("note", "Unpaused via API"))
+
+            # Update schedule spec/action/state if there are other changes
+            has_spec_changes = "cron_expression" in schedule_args
+            has_state_changes = "note" in schedule_args and paused is None
+            has_action_changes = "workflow_args" in schedule_args
+
+            if has_spec_changes or has_state_changes or has_action_changes:
+
+                def updater(input: ScheduleUpdateInput) -> ScheduleUpdate:
+                    schedule = input.description.schedule
+
+                    if "cron_expression" in schedule_args:
+                        schedule.spec = ScheduleSpec(
+                            cron_expressions=[schedule_args["cron_expression"]],
+                            start_at=schedule.spec.start_at if schedule.spec else None,
+                            end_at=schedule.spec.end_at if schedule.spec else None,
+                            jitter=schedule.spec.jitter if schedule.spec else None,
+                        )
+
+                    if "note" in schedule_args and paused is None:
+                        if schedule.state:
+                            schedule.state.note = schedule_args["note"]
+
+                    if "workflow_args" in schedule_args and isinstance(
+                        schedule.action, ScheduleActionStartWorkflow
+                    ):
+                        workflow_id = schedule_args["workflow_args"].get(
+                            "workflow_id",
+                            schedule.action.id if schedule.action else schedule_id,
+                        )
+                        schedule.action = ScheduleActionStartWorkflow(
+                            workflow_class or schedule.action.workflow,  # type: ignore
+                            args=[{"workflow_id": workflow_id}],
+                            id=workflow_id,
+                            task_queue=schedule.action.task_queue,
+                            execution_timeout=schedule.action.execution_timeout,
+                        )
+
+                    return ScheduleUpdate(schedule=schedule)
+
+                await handle.update(updater)
+
+            logger.info(f"Schedule updated: {schedule_id}")
+            return {"schedule_id": schedule_id}
+        except Exception as e:
+            logger.error(f"Error updating schedule {schedule_id}: {e}")
+            raise
+
+    async def delete_schedule(self, schedule_id: str) -> None:
+        """Delete a workflow schedule.
+
+        Args:
+            schedule_id: The ID of the schedule to delete.
+
+        Raises:
+            ValueError: If the client is not loaded.
+        """
+        if not self.client:
+            raise ValueError("Client is not loaded")
+
+        try:
+            handle = self.client.get_schedule_handle(schedule_id)
+            await handle.delete()
+            logger.info(f"Schedule deleted: {schedule_id}")
+        except Exception as e:
+            logger.error(f"Error deleting schedule {schedule_id}: {e}")
+            raise
