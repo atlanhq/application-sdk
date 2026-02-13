@@ -18,13 +18,13 @@ jobs:
       uv_lock_path: 'uv.lock'
       severity: 'CRITICAL,HIGH'
       ignore_unfixed: true
-      linear_team_id: ${{ secrets.LINEAR_TEAM_ID }}
       linear_priority: 2
       skip_ticket_on_clean: true
       service_name: 'Application SDK'
       registry_login: true
       registry_url: 'cgr.dev'
     secrets:
+      LINEAR_TEAM_ID: ${{ secrets.LINEAR_TEAM_ID }}
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
       REGISTRY_USERNAME: ${{ secrets.CHAINGUARD_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.CHAINGUARD_PASSWORD }}
