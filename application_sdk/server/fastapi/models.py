@@ -222,6 +222,29 @@ class ConfigMapResponse(BaseModel):
         }
 
 
+class UIConfigResponse(BaseModel):
+    success: bool = Field(
+        ..., description="Indicates whether the operation was successful"
+    )
+    message: str = Field(
+        ..., description="Message describing the result of the operation"
+    )
+    data: Dict[str, Any] = Field(..., description="UI configuration object")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "success": True,
+                "message": "UI configuration fetched successfully",
+                "data": {
+                    "kind": "ConfigMap",
+                    "metadata": {"name": "atlan-example-connector"},
+                    "data": {"config": '{"properties": {}, "steps": []}'},
+                },
+            }
+        }
+
+
 class AddScheduleRequest(BaseModel):
     schedule_id: str = Field(..., description="Unique identifier for the schedule")
     cron_expression: str = Field(
