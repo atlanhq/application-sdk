@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.0.0 (February 13, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.3...v3.0.0
+
+### Bug Fixes
+
+- restore pandas extra compatibility (#1037) (by @fyzanshaik-atlan in [8425922](https://github.com/atlanhq/application-sdk/commit/8425922))
+
+
 ## v2.3.3 (February 04, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.2...v2.3.3
