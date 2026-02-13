@@ -22,5 +22,9 @@ jobs:
       linear_priority: 2
       skip_ticket_on_clean: true
       service_name: 'Application SDK'
+      registry_login: true
+      registry_url: 'cgr.dev'
     secrets:
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+      REGISTRY_USERNAME: ${{ secrets.CHAINGUARD_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.CHAINGUARD_PASSWORD }}
