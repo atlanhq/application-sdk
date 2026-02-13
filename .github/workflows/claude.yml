@@ -8,6 +8,12 @@ on:
   issues:
     types: [opened, assigned]
 
+permissions:
+  id-token: write
+  contents: write
+  issues: write
+  pull-requests: write
+
 jobs:
   claude:
     if: |
@@ -16,20 +22,29 @@ jobs:
       (github.event_name == 'issues' && contains(github.event.issue.body, '@claude'))
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
-      issues: write
       id-token: write
+    timeout-minutes: 15
+    env:
+      ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+      CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1'
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Connect to VPN
+        uses: ./.github/actions/globalprotect-connect
+        with:
+          portal-url: vpn2.atlan.app
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           claude_args: "--model claude-sonnet-4"
-        env:
-          ANTHROPIC_BASE_URL: "https://llmproxy.atlan.dev"
-          ANTHROPIC_AUTH_TOKEN: ${{ secrets.LITELLM_API_KEY }}
-          CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1"
