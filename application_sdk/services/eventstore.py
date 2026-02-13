@@ -12,11 +12,13 @@ from dapr import clients
 from temporalio import activity, workflow
 
 from application_sdk.constants import (
+    APP_IMAGE,
     APP_TENANT_ID,
     APPLICATION_NAME,
     ATLAN_BASE_URL,
     DAPR_BINDING_OPERATION_CREATE,
     EVENT_STORE_NAME,
+    K8S_NAMESPACE,
 )
 from application_sdk.interceptors.models import (
     ApplicationEventNames,
@@ -166,6 +168,10 @@ class EventStore:
             labels["tenant_id"] = APP_TENANT_ID
             if ATLAN_BASE_URL:
                 labels["atlan_base_url"] = ATLAN_BASE_URL
+            if APP_IMAGE:
+                labels["app_image"] = APP_IMAGE
+            if K8S_NAMESPACE:
+                labels["k8s_namespace"] = K8S_NAMESPACE
 
             # Add any additional data from event.data
             if event.data:
