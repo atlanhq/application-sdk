@@ -281,6 +281,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                 {"metadata": workflow_args["metadata"]}
             )
 
+            # Guard against None or empty results
+            if not result:
+                raise ValueError("Preflight check failed: No results returned")
+
             # Check if any individual check failed (dynamically detect check keys)
             failed_checks = [
                 key
@@ -289,7 +293,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                 and "success" in value
                 and not value.get("success", True)
             ]
-            if not result or failed_checks:
+            if failed_checks:
                 failure_messages = [
                     result[key].get("failureMessage", "Unknown failure")
                     for key in failed_checks

@@ -613,13 +613,16 @@ class APIServer(ServerInterface):
             preflight_check = await self.handler.preflight_check(body.model_dump())
 
             # Determine overall success based on individual check results (dynamic)
-            # Guard against empty results (all() returns True for empty iterables)
-            check_results = [
-                value.get("success", True)
-                for value in preflight_check.values()
-                if isinstance(value, dict) and "success" in value
-            ]
-            all_checks_passed = bool(check_results) and all(check_results)
+            # Guard against None or empty results
+            if not preflight_check:
+                all_checks_passed = False
+            else:
+                check_results = [
+                    value.get("success", True)
+                    for value in preflight_check.values()
+                    if isinstance(value, dict) and "success" in value
+                ]
+                all_checks_passed = bool(check_results) and all(check_results)
 
             # Record preflight check result
             metrics.record_metric(
