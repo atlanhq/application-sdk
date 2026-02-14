@@ -44,6 +44,10 @@ APP_PORT = int(os.getenv("ATLAN_APP_HTTP_PORT", "8000"))
 APP_TENANT_ID = os.getenv("ATLAN_TENANT_ID", "default")
 # Domain Name of the tenant
 DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
+#: Container image URL of the running application (set by deployment infrastructure)
+APP_IMAGE = os.getenv("ATLAN_APP_IMAGE", "")
+#: Kubernetes namespace where the application is deployed (set by deployment infrastructure)
+K8S_NAMESPACE = os.getenv("ATLAN_K8S_NAMESPACE", "")
 #: Host address for the application's dashboard
 APP_DASHBOARD_HOST = str(os.getenv("ATLAN_APP_DASHBOARD_HOST", "localhost"))
 #: Port number for the application's dashboard
