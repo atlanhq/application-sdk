@@ -47,13 +47,7 @@ def extract_column_name(description_item: Any) -> str:
     if isinstance(description_item, (tuple, list)) and len(description_item) > 0:
         return str(description_item[0]).lower()
 
-    # Last resort: convert to string
-    logger.warning(
-        f"Unexpected cursor description format: {type(description_item)}. "
-        "Falling back to string conversion."
-    )
-    return str(description_item).lower()
-
+    raise ValueError(f"Unexpected cursor description format: {type(description_item)}")
 
 def get_workflow_client(
     engine_type: WorkflowEngineType = WorkflowEngineType.TEMPORAL,
