@@ -32,6 +32,47 @@ class TestObjectStore:
         mock_client.invoke_binding.assert_called_once()
         mock_cleanup.assert_called_once_with("/tmp/test.txt")
 
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_upload_file_normalizes_temporary_destination_path(
+        self, mock_invoke: AsyncMock
+    ) -> None:
+        """Test upload_file strips temporary path prefix from destination key."""
+        destination = (
+            "./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456/test.txt"
+        )
+
+        with patch("builtins.open", mock_open(read_data=b"content")), patch(
+            "application_sdk.services.objectstore.ObjectStore._cleanup_local_path"
+        ):
+            await ObjectStore.upload_file(
+                source="/tmp/test.txt",
+                destination=destination,
+            )
+
+        mock_invoke.assert_called_once()
+        call_kwargs = mock_invoke.call_args.kwargs
+        assert call_kwargs["metadata"]["key"] == (
+            "artifacts/apps/my-app/workflows/wf-123/run-456/test.txt"
+        )
+
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_upload_file_keeps_relative_destination_path(
+        self, mock_invoke: AsyncMock
+    ) -> None:
+        """Test upload_file keeps already-relative object store destinations unchanged."""
+        destination = "datasets/sales/2024/test.txt"
+
+        with patch("builtins.open", mock_open(read_data=b"content")), patch(
+            "application_sdk.services.objectstore.ObjectStore._cleanup_local_path"
+        ):
+            await ObjectStore.upload_file(
+                source="/tmp/test.txt",
+                destination=destination,
+            )
+
+        mock_invoke.assert_called_once()
+        assert mock_invoke.call_args.kwargs["metadata"]["key"] == destination
+
     @patch("application_sdk.services.objectstore.DaprClient")
     async def test_upload_directory_success(self, mock_dapr_client: MagicMock) -> None:
         mock_client = MagicMock()
@@ -67,6 +108,31 @@ class TestObjectStore:
                 destination="/tmp/test.txt",
             )
         m().write.assert_called_once_with(b"abc")
+        mock_get_content.assert_called_once_with("prefix/test.txt", "objectstore")
+
+    @patch(
+        "application_sdk.services.objectstore.ObjectStore.get_content",
+        new_callable=AsyncMock,
+    )
+    async def test_download_file_normalizes_temporary_source(
+        self, mock_get_content: AsyncMock
+    ) -> None:
+        """Test download_file strips temporary path prefix from source key."""
+        mock_get_content.return_value = b"abc"
+        source = "./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456/test.txt"
+
+        with patch("builtins.open", mock_open()), patch(
+            "os.path.exists", return_value=True
+        ), patch("os.path.dirname", return_value="/tmp"):
+            await ObjectStore.download_file(
+                source=source,
+                destination="/tmp/test.txt",
+            )
+
+        mock_get_content.assert_called_once_with(
+            "artifacts/apps/my-app/workflows/wf-123/run-456/test.txt",
+            "objectstore",
+        )
 
     @patch("application_sdk.services.objectstore.DaprClient")
     async def test_delete_file_success(self, mock_dapr_client: MagicMock) -> None:
@@ -118,7 +184,7 @@ class TestObjectStore:
         await ObjectStore.delete_prefix(prefix="prefix/")
 
         mock_list_files.assert_called_once_with(
-            prefix="prefix/", store_name="objectstore"
+            prefix="prefix", store_name="objectstore"
         )
         assert mock_delete_file.call_count == 3
         mock_delete_file.assert_any_call(
@@ -143,7 +209,7 @@ class TestObjectStore:
         await ObjectStore.delete_prefix(prefix="empty/prefix/")
 
         mock_list_files.assert_called_once_with(
-            prefix="empty/prefix/", store_name="objectstore"
+            prefix="empty/prefix", store_name="objectstore"
         )
 
     @patch(
@@ -175,7 +241,7 @@ class TestObjectStore:
         await ObjectStore.delete_prefix(prefix="prefix/")
 
         mock_list_files.assert_called_once_with(
-            prefix="prefix/", store_name="objectstore"
+            prefix="prefix", store_name="objectstore"
         )
         assert mock_delete_file.call_count == 3
 
@@ -189,9 +255,27 @@ class TestObjectStore:
 
         # Should raise FileNotFoundError to give developers clear feedback
         with pytest.raises(
-            FileNotFoundError, match="No files found under prefix: prefix/"
+            FileNotFoundError, match="No files found under prefix: prefix"
         ):
             await ObjectStore.delete_prefix(prefix="prefix/")
+
+    @patch(
+        "application_sdk.services.objectstore.ObjectStore.list_files",
+        new_callable=AsyncMock,
+    )
+    async def test_delete_prefix_normalizes_temporary_prefix(
+        self, mock_list_files: AsyncMock
+    ) -> None:
+        """Test delete_prefix strips temporary path prefix before listing."""
+        mock_list_files.return_value = []
+        prefix = "./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456/"
+
+        await ObjectStore.delete_prefix(prefix=prefix)
+
+        mock_list_files.assert_called_once_with(
+            prefix="artifacts/apps/my-app/workflows/wf-123/run-456",
+            store_name="objectstore",
+        )
 
     @patch("application_sdk.services.objectstore.DaprClient")
     async def test_get_content_success(self, mock_dapr_client: MagicMock) -> None:
@@ -214,6 +298,25 @@ class TestObjectStore:
                 "fileName": "test/file.txt",
                 "blobName": "test/file.txt",
             },
+        )
+
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_get_content_normalizes_temporary_key(
+        self, mock_invoke: AsyncMock
+    ) -> None:
+        """Test get_content strips temporary path prefix from key."""
+        mock_invoke.return_value = b"data"
+        key = "./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456/test.json"
+
+        await ObjectStore.get_content(key=key)
+
+        mock_invoke.assert_called_once()
+        call_kwargs = mock_invoke.call_args.kwargs
+        assert call_kwargs["metadata"]["key"] == (
+            "artifacts/apps/my-app/workflows/wf-123/run-456/test.json"
+        )
+        assert call_kwargs["data"] == (
+            b'{"key": "artifacts/apps/my-app/workflows/wf-123/run-456/test.json"}'
         )
 
     @patch("application_sdk.services.objectstore.DaprClient")
@@ -538,6 +641,29 @@ class TestObjectStore:
         mock_invoke.assert_called_once()
 
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_list_files_normalizes_temporary_prefix_for_binding(
+        self, mock_invoke: AsyncMock
+    ) -> None:
+        """Test list_files strips temporary prefix for metadata/data payload."""
+        import orjson
+
+        mock_invoke.return_value = orjson.dumps(
+            ["artifacts/apps/my-app/workflows/wf-123/run-456/file1.json"]
+        )
+        prefix = "./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456/"
+
+        await ObjectStore.list_files(prefix=prefix)
+
+        mock_invoke.assert_called_once()
+        call_kwargs = mock_invoke.call_args.kwargs
+        assert call_kwargs["metadata"]["prefix"] == (
+            "artifacts/apps/my-app/workflows/wf-123/run-456"
+        )
+        assert call_kwargs["data"] == (
+            b'{"prefix": "artifacts/apps/my-app/workflows/wf-123/run-456"}'
+        )
+
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
     async def test_list_files_empty_response(self, mock_invoke: AsyncMock) -> None:
         """14: Test handling of empty/None response from Dapr."""
         # Arrange: simulate empty byte response
@@ -605,6 +731,20 @@ class TestObjectStore:
         # Assert - backslashes replaced, forward slashes unchanged
         assert result == "artifacts/apps/default/workflows/wf123/file.json"
         assert "\\" not in result
+
+    def test_normalize_object_store_path_temporary_path(self) -> None:
+        """Test _normalize_object_store_path strips temporary path prefix."""
+        result = ObjectStore._normalize_object_store_path(
+            "./local/tmp/artifacts/apps/default/workflows/wf123/file.json"
+        )
+        assert result == "artifacts/apps/default/workflows/wf123/file.json"
+
+    def test_normalize_object_store_path_idempotent_for_relative_key(self) -> None:
+        """Test _normalize_object_store_path keeps relative object store keys unchanged."""
+        result = ObjectStore._normalize_object_store_path(
+            "artifacts/apps/default/workflows/wf123/file.json"
+        )
+        assert result == "artifacts/apps/default/workflows/wf123/file.json"
 
     @patch(
         "application_sdk.services.objectstore.ObjectStore.list_files",
@@ -703,8 +843,10 @@ class TestObjectStore:
             store_name="objectstore",
         )
 
-        # Assert: list_files should be called with the Windows prefix (not normalized)
-        mock_list_files.assert_called_once_with(windows_prefix, "objectstore")
+        # Assert: list_files should be called with normalized object-store prefix
+        mock_list_files.assert_called_once_with(
+            "artifacts/apps/default/workflows/wf123", "objectstore"
+        )
 
         # Assert: download_file should be called 3 times with correct relative paths
         assert mock_download_file.call_count == 3
@@ -738,3 +880,25 @@ class TestObjectStore:
         expected_path3 = os.path.join(TEMPORARY_PATH, "models/model.parquet")
         assert call3_args[1] == expected_path3
         assert call3_args[2] == "objectstore"
+
+    @patch(
+        "application_sdk.services.objectstore.ObjectStore.list_files",
+        new_callable=AsyncMock,
+    )
+    async def test_download_prefix_normalizes_temporary_source_before_list(
+        self, mock_list_files: AsyncMock
+    ) -> None:
+        """Test download_prefix strips temporary source prefix before list_files call."""
+        mock_list_files.return_value = []
+        source_prefix = "./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456/"
+
+        await ObjectStore.download_prefix(
+            source=source_prefix,
+            destination="./local/tmp/downloads",
+            store_name="objectstore",
+        )
+
+        mock_list_files.assert_called_once_with(
+            "artifacts/apps/my-app/workflows/wf-123/run-456",
+            "objectstore",
+        )
