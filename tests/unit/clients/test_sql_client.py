@@ -6,7 +6,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.models import DatabaseConfig
-from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.clients.sql import BaseSQLClient, _extract_column_name
 from application_sdk.common.error_codes import CommonError
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
@@ -20,6 +20,113 @@ from application_sdk.test_utils.hypothesis.strategies.sql_client import (
     sql_connection_string_strategy,
     sql_error_strategy,
 )
+
+
+class TestExtractColumnName:
+    """Test suite for _extract_column_name helper function.
+
+    This function handles different cursor.description formats across DB drivers:
+    - Named tuples with .name attribute (psycopg2, cx_Oracle, most SQLAlchemy drivers)
+    - Plain tuples where name is at index 0 (clickhouse-connect, some ODBC drivers)
+    """
+
+    def test_extract_from_named_tuple_with_name_attribute(self):
+        """Test extraction from objects with .name attribute (psycopg2, cx_Oracle style)."""
+        mock_desc = MagicMock()
+        mock_desc.name = "COLUMN_NAME"
+
+        result = _extract_column_name(mock_desc)
+        assert result == "column_name"
+
+    def test_extract_from_plain_tuple(self):
+        """Test extraction from plain tuples (clickhouse-connect style).
+
+        clickhouse-connect returns: (name, type_code, None, None, None, None, nullable)
+        """
+        plain_tuple = ("COLUMN_NAME", "String", None, None, None, None, True)
+
+        result = _extract_column_name(plain_tuple)
+        assert result == "column_name"
+
+    def test_extract_from_list(self):
+        """Test extraction from list format (some ODBC drivers)."""
+        list_desc = ["COLUMN_NAME", "VARCHAR", 255, None, None, None, True]
+
+        result = _extract_column_name(list_desc)
+        assert result == "column_name"
+
+    def test_extract_preserves_lowercase(self):
+        """Test that column names are converted to lowercase."""
+        mock_desc = MagicMock()
+        mock_desc.name = "MixedCase_Column"
+
+        result = _extract_column_name(mock_desc)
+        assert result == "mixedcase_column"
+
+    def test_extract_from_tuple_preserves_lowercase(self):
+        """Test that tuple-based column names are converted to lowercase."""
+        plain_tuple = ("MixedCase_Column", "Int64", None, None, None, None, False)
+
+        result = _extract_column_name(plain_tuple)
+        assert result == "mixedcase_column"
+
+    def test_extract_handles_empty_name_attribute(self):
+        """Test handling of empty .name attribute."""
+        mock_desc = MagicMock()
+        mock_desc.name = ""
+
+        result = _extract_column_name(mock_desc)
+        assert result == ""
+
+    def test_extract_handles_numeric_name_in_tuple(self):
+        """Test handling of numeric column names in tuples."""
+        plain_tuple = (123, "Int64", None, None, None, None, True)
+
+        result = _extract_column_name(plain_tuple)
+        assert result == "123"
+
+    def test_extract_prefers_name_attribute_over_index(self):
+        """Test that .name attribute takes precedence over index 0."""
+        # Create an object that has both .name attribute AND is indexable
+        mock_desc = MagicMock()
+        mock_desc.name = "FROM_NAME_ATTR"
+        mock_desc.__getitem__ = MagicMock(return_value="FROM_INDEX")
+
+        result = _extract_column_name(mock_desc)
+        assert result == "from_name_attr"
+
+    @pytest.mark.parametrize(
+        "description_item,expected",
+        [
+            # Plain tuple style (clickhouse-connect)
+            (("id", "UInt64", None, None, None, None, True), "id"),
+            (("USER_ID", "String", None, None, None, None, False), "user_id"),
+            (("Created_At", "DateTime", None, None, None, None, True), "created_at"),
+            # List style (some ODBC drivers)
+            (["column_name", "VARCHAR"], "column_name"),
+            (["UPPER_CASE", "INT"], "upper_case"),
+        ],
+    )
+    def test_extract_various_tuple_formats(self, description_item, expected):
+        """Parametrized test for tuple/list cursor.description formats."""
+        result = _extract_column_name(description_item)
+        assert result == expected
+
+    @pytest.mark.parametrize(
+        "name_value,expected",
+        [
+            ("id", "id"),
+            ("USER_ID", "user_id"),
+            ("Created_At", "created_at"),
+            ("COLUMN_NAME", "column_name"),
+        ],
+    )
+    def test_extract_various_named_formats(self, name_value, expected):
+        """Parametrized test for named tuple cursor.description formats."""
+        mock_desc = MagicMock()
+        mock_desc.name = name_value
+        result = _extract_column_name(mock_desc)
+        assert result == expected
 
 
 @pytest.fixture
@@ -324,6 +431,86 @@ async def test_run_query(
     "application_sdk.clients.sql.asyncio.get_running_loop",
     new_callable=MagicMock,
 )
+async def test_run_query_with_tuple_description(
+    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: BaseSQLClient
+):
+    """Test query execution with tuple-based cursor.description (clickhouse-connect style).
+
+    This test verifies that run_query correctly handles drivers that return plain tuples
+    in cursor.description instead of named tuples with .name attribute.
+    """
+    # Mock the engine to avoid "Engine is not initialized" error
+    mock_engine = MagicMock()
+    mock_connection = MagicMock()
+    sql_client.engine = mock_engine
+
+    # Mock the query text
+    query = "SELECT * FROM test_table"
+    mock_text.return_value = query
+
+    def get_item_gen(arr: list[str]):
+        def get_item(idx: int):
+            return arr[idx]
+
+        return get_item
+
+    # Create MagicMock rows
+    row1 = MagicMock()
+    row1.__iter__.return_value = iter(["value1", "value2"])
+    row1.__getitem__.side_effect = get_item_gen(["value1", "value2"])
+
+    row2 = MagicMock()
+    row2.__iter__.return_value = iter(["value3", "value4"])
+    row2.__getitem__.side_effect = get_item_gen(["value3", "value4"])
+
+    # Mock cursor with TUPLE-BASED description (clickhouse-connect style)
+    # This is the key difference from test_run_query - using plain tuples instead of objects
+    mock_cursor = MagicMock()
+    mock_cursor.cursor.description = [
+        ("COL1", "String", None, None, None, None, True),  # Plain tuple format
+        ("COL2", "Int64", None, None, None, None, False),  # Plain tuple format
+    ]
+    mock_cursor.fetchmany = MagicMock(
+        side_effect=[
+            [row1, row2],  # First batch
+            [],  # End of data
+        ]
+    )
+
+    # Mock engine.connect() to return the connection
+    mock_engine.connect.return_value = mock_connection
+    mock_connection.execute.return_value = mock_cursor
+
+    # Mock run_in_executor to return cursor and then batches
+    mock_get_running_loop.return_value.run_in_executor = AsyncMock(
+        side_effect=[
+            mock_cursor,  # Simulate connection.execute
+            [row1, row2],  # First batch from `fetchmany`
+            [],  # End of data from `fetchmany`
+        ]
+    )
+
+    # Run run_query and collect all results
+    results: list[dict[str, str]] = []
+    async for batch in sql_client.run_query(query):
+        results.extend(batch)
+
+    # Expected results - column names should be lowercase
+    expected_results = [
+        {"col1": "value1", "col2": "value2"},
+        {"col1": "value3", "col2": "value4"},
+    ]
+
+    # Assertions
+    assert results == expected_results
+
+
+@pytest.mark.asyncio
+@patch("sqlalchemy.text")
+@patch(
+    "application_sdk.clients.sql.asyncio.get_running_loop",
+    new_callable=MagicMock,
+)
 async def test_run_query_with_error(
     mock_get_running_loop: MagicMock, mock_text: Any, sql_client: BaseSQLClient
 ):
@@ -410,10 +597,13 @@ async def test_run_query_property_based(
     query_result: Dict[str, Any],
 ):
     """Property-based test for query execution with various result structures"""
-    with patch("sqlalchemy.text") as mock_text, patch(
-        "application_sdk.clients.sql.asyncio.get_running_loop",
-        new_callable=MagicMock,
-    ) as mock_get_running_loop:
+    with (
+        patch("sqlalchemy.text") as mock_text,
+        patch(
+            "application_sdk.clients.sql.asyncio.get_running_loop",
+            new_callable=MagicMock,
+        ) as mock_get_running_loop,
+    ):
         # Mock the query text
         query = "SELECT * FROM test_table"
         mock_text.return_value = query
@@ -456,10 +646,13 @@ async def test_run_query_error_property_based(
     error_type: str,
 ):
     """Property-based test for query execution with various error scenarios"""
-    with patch("sqlalchemy.text") as mock_text, patch(
-        "application_sdk.clients.sql.asyncio.get_running_loop",
-        new_callable=MagicMock,
-    ) as mock_get_running_loop:
+    with (
+        patch("sqlalchemy.text") as mock_text,
+        patch(
+            "application_sdk.clients.sql.asyncio.get_running_loop",
+            new_callable=MagicMock,
+        ) as mock_get_running_loop,
+    ):
         # Mock the engine to avoid "Engine is not initialized" error
         mock_engine = MagicMock()
         mock_connection = MagicMock()
