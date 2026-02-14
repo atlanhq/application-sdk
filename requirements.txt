@@ -114,6 +114,8 @@ distlib==0.4.0
     # via virtualenv
 dnspython==2.8.0
     # via email-validator
+docker==7.1.0
+    # via testcontainers
 docstring-parser==0.17.0
     # via cyclopts
 docutils==0.22.4
@@ -441,6 +443,7 @@ python-dotenv==1.2.1
     #   atlan-application-sdk
     #   fastmcp
     #   pydantic-settings
+    #   testcontainers
     #   uvicorn
 python-json-logger==4.0.0
     # via pydocket
@@ -457,7 +460,9 @@ pytz==2025.2
     #   pandas
     #   pyatlan
 pywin32==311 ; sys_platform == 'win32'
-    # via mcp
+    # via
+    #   docker
+    #   mcp
 pywin32-ctypes==0.2.3 ; sys_platform == 'win32'
     # via keyring
 pyyaml==6.0.3
@@ -484,6 +489,7 @@ referencing==0.36.2
 requests==2.32.5
     # via
     #   azure-core
+    #   docker
     #   frictionless
     #   jsonschema-path
     #   msal
@@ -545,6 +551,8 @@ temporalio==1.21.1
     # via atlan-application-sdk
 tenacity==9.1.2
     # via pyatlan
+testcontainers==4.14.1
+    # via atlan-application-sdk
 text-unidecode==1.3
     # via python-slugify
 tqdm==4.67.1
@@ -595,6 +603,7 @@ typing-extensions==4.15.0
     #   sqlalchemy
     #   starlette
     #   temporalio
+    #   testcontainers
     #   typeguard
     #   typer
     #   typing-inspect
@@ -613,8 +622,10 @@ tzdata==2025.3
 urllib3==2.6.3
     # via
     #   botocore
+    #   docker
     #   requests
     #   sentry-sdk
+    #   testcontainers
 uvicorn==0.40.0
     # via
     #   fastapi
@@ -639,7 +650,9 @@ websockets==16.0
 win32-setctime==1.2.0 ; sys_platform == 'win32'
     # via loguru
 wrapt==1.17.3
-    # via opentelemetry-instrumentation
+    # via
+    #   opentelemetry-instrumentation
+    #   testcontainers
 yarl==1.22.0
     # via aiohttp
 zipp==3.23.0
