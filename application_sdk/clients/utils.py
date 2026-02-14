@@ -49,6 +49,7 @@ def extract_column_name(description_item: Any) -> str:
 
     raise ValueError(f"Unexpected cursor description format: {type(description_item)}")
 
+
 def get_workflow_client(
     engine_type: WorkflowEngineType = WorkflowEngineType.TEMPORAL,
     application_name: str = APPLICATION_NAME,
