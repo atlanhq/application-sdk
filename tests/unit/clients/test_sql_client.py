@@ -6,7 +6,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.models import DatabaseConfig
-from application_sdk.clients.sql import BaseSQLClient, _extract_column_name
+from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.clients.utils import extract_column_name
 from application_sdk.common.error_codes import CommonError
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
@@ -23,7 +24,7 @@ from application_sdk.test_utils.hypothesis.strategies.sql_client import (
 
 
 class TestExtractColumnName:
-    """Test suite for _extract_column_name helper function.
+    """Test suite for extract_column_name helper function.
 
     This function handles different cursor.description formats across DB drivers:
     - Named tuples with .name attribute (psycopg2, cx_Oracle, most SQLAlchemy drivers)
@@ -35,7 +36,7 @@ class TestExtractColumnName:
         mock_desc = MagicMock()
         mock_desc.name = "COLUMN_NAME"
 
-        result = _extract_column_name(mock_desc)
+        result = extract_column_name(mock_desc)
         assert result == "column_name"
 
     def test_extract_from_plain_tuple(self):
@@ -45,14 +46,14 @@ class TestExtractColumnName:
         """
         plain_tuple = ("COLUMN_NAME", "String", None, None, None, None, True)
 
-        result = _extract_column_name(plain_tuple)
+        result = extract_column_name(plain_tuple)
         assert result == "column_name"
 
     def test_extract_from_list(self):
         """Test extraction from list format (some ODBC drivers)."""
         list_desc = ["COLUMN_NAME", "VARCHAR", 255, None, None, None, True]
 
-        result = _extract_column_name(list_desc)
+        result = extract_column_name(list_desc)
         assert result == "column_name"
 
     def test_extract_preserves_lowercase(self):
@@ -60,14 +61,14 @@ class TestExtractColumnName:
         mock_desc = MagicMock()
         mock_desc.name = "MixedCase_Column"
 
-        result = _extract_column_name(mock_desc)
+        result = extract_column_name(mock_desc)
         assert result == "mixedcase_column"
 
     def test_extract_from_tuple_preserves_lowercase(self):
         """Test that tuple-based column names are converted to lowercase."""
         plain_tuple = ("MixedCase_Column", "Int64", None, None, None, None, False)
 
-        result = _extract_column_name(plain_tuple)
+        result = extract_column_name(plain_tuple)
         assert result == "mixedcase_column"
 
     def test_extract_handles_empty_name_attribute(self):
@@ -75,14 +76,14 @@ class TestExtractColumnName:
         mock_desc = MagicMock()
         mock_desc.name = ""
 
-        result = _extract_column_name(mock_desc)
+        result = extract_column_name(mock_desc)
         assert result == ""
 
     def test_extract_handles_numeric_name_in_tuple(self):
         """Test handling of numeric column names in tuples."""
         plain_tuple = (123, "Int64", None, None, None, None, True)
 
-        result = _extract_column_name(plain_tuple)
+        result = extract_column_name(plain_tuple)
         assert result == "123"
 
     def test_extract_prefers_name_attribute_over_index(self):
@@ -92,7 +93,7 @@ class TestExtractColumnName:
         mock_desc.name = "FROM_NAME_ATTR"
         mock_desc.__getitem__ = MagicMock(return_value="FROM_INDEX")
 
-        result = _extract_column_name(mock_desc)
+        result = extract_column_name(mock_desc)
         assert result == "from_name_attr"
 
     @pytest.mark.parametrize(
@@ -109,7 +110,7 @@ class TestExtractColumnName:
     )
     def test_extract_various_tuple_formats(self, description_item, expected):
         """Parametrized test for tuple/list cursor.description formats."""
-        result = _extract_column_name(description_item)
+        result = extract_column_name(description_item)
         assert result == expected
 
     @pytest.mark.parametrize(
@@ -125,7 +126,7 @@ class TestExtractColumnName:
         """Parametrized test for named tuple cursor.description formats."""
         mock_desc = MagicMock()
         mock_desc.name = name_value
-        result = _extract_column_name(mock_desc)
+        result = extract_column_name(mock_desc)
         assert result == expected
 
 
