@@ -33,6 +33,51 @@ class TestObjectStore:
         mock_cleanup.assert_called_once_with("/tmp/test.txt")
 
     @patch("application_sdk.services.objectstore.DaprClient")
+    async def test_upload_file_from_bytes_success(
+        self, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test successful upload from bytes."""
+        mock_client = MagicMock()
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        test_file_content = b"test file content from bytes"
+        destination = "test-file-uuid.csv"
+
+        await ObjectStore.upload_file_from_bytes(
+            file_content=test_file_content,
+            destination=destination,
+        )
+
+        mock_client.invoke_binding.assert_called_once_with(
+            binding_name="objectstore",
+            operation="create",
+            data=test_file_content,
+            binding_metadata={
+                "key": destination,
+                "fileName": destination,
+                "blobName": destination,
+            },
+        )
+
+    @patch("application_sdk.services.objectstore.DaprClient")
+    async def test_upload_file_from_bytes_failure(
+        self, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test upload from bytes failure handling."""
+        mock_client = MagicMock()
+        mock_client.invoke_binding.side_effect = Exception("Upload failed")
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        test_file_content = b"test content"
+        destination = "test-file.txt"
+
+        with pytest.raises(Exception, match="Upload failed"):
+            await ObjectStore.upload_file_from_bytes(
+                file_content=test_file_content,
+                destination=destination,
+            )
+
+    @patch("application_sdk.services.objectstore.DaprClient")
     async def test_upload_directory_success(self, mock_dapr_client: MagicMock) -> None:
         mock_client = MagicMock()
         mock_dapr_client.return_value.__enter__.return_value = mock_client
