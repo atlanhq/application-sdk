@@ -2,8 +2,6 @@ from collections import namedtuple
 from enum import Enum
 from typing import List, Optional
 
-import pandas as pd
-
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -74,6 +72,8 @@ async def convert_data_files(
 def convert_json_to_parquet(file_path: str) -> Optional[str]:
     """Convert the downloaded files from json to parquet"""
     try:
+        import pandas as pd
+
         logger.info(f"Converting {file_path} to parquet")
         df = pd.read_json(file_path, orient="records", lines=True)
         df = df.loc[:, ~df.where(df.astype(bool)).isna().all(axis=0)]
@@ -89,6 +89,8 @@ def convert_json_to_parquet(file_path: str) -> Optional[str]:
 def convert_parquet_to_json(file_path: str) -> Optional[str]:
     """Convert the downloaded files from parquet to json"""
     try:
+        import pandas as pd
+
         logger.info(f"Converting {file_path} to json")
         df = pd.read_parquet(file_path)
         json_file_path = file_path.replace(".parquet", ".json")

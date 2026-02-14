@@ -1,4 +1,3 @@
-from application_sdk.clients.temporal import TemporalWorkflowClient
 from application_sdk.clients.workflow import WorkflowEngineType
 from application_sdk.constants import APPLICATION_NAME
 
@@ -18,6 +17,10 @@ def get_workflow_client(
         A workflow client instance
     """
     if engine_type == WorkflowEngineType.TEMPORAL:
+        # Lazy import: TemporalWorkflowClient pulls in temporalio + grpc
+        # which are not needed at module load time
+        from application_sdk.clients.temporal import TemporalWorkflowClient
+
         return TemporalWorkflowClient(application_name=application_name)
     else:
         raise ValueError(f"Unsupported workflow engine type: {engine_type}")

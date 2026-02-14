@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import textwrap
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 
-import daft
 import yaml
-from daft.functions import to_struct, when
 from pyatlan.model.enums import AtlanConnectorType
+
+if TYPE_CHECKING:
+    import daft
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
@@ -205,6 +208,8 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             Optional[daft.Expression]: The constructed struct expression or None if all fields are null
         """
+        import daft
+        from daft.functions import to_struct, when
 
         # Check if level is None
         if level is None:
@@ -296,6 +301,8 @@ class QueryBasedTransformer(TransformerInterface):
             daft.DataFrame: DataFrame with columns grouped into structs
         """
         try:
+            import daft
+
             # Get all column names
             columns = dataframe.column_names
             logger.debug("=== DEBUG: get_grouped_dataframe_by_prefix ===")
@@ -371,6 +378,8 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             Tuple[daft.DataFrame, str]: DataFrame with default attributes added and the entity SQL template
         """
+        import daft
+
         # prepare default attributes
         default_attributes = {
             "connection_qualified_name": daft.lit(connection_qualified_name),
@@ -419,6 +428,8 @@ class QueryBasedTransformer(TransformerInterface):
     ) -> Optional[daft.DataFrame]:
         """Transform records using SQL executed through Daft"""
         try:
+            import daft
+
             if dataframe.count_rows() == 0:
                 return None
 

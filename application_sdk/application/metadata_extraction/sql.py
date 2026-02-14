@@ -1,26 +1,33 @@
+from __future__ import annotations
+
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 
 from typing_extensions import deprecated
 
 from application_sdk.application import BaseApplication
-from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.clients.utils import get_workflow_client
-from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
-from application_sdk.handlers.sql import BaseSQLHandler
+from application_sdk.constants import (
+    APPLICATION_MODE,
+    MAX_CONCURRENT_ACTIVITIES,
+    ApplicationMode,
+)
 from application_sdk.observability.decorators.observability_decorator import (
     observability,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.observability.traces_adaptor import get_traces
-from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
-from application_sdk.transformers.query import QueryBasedTransformer
-from application_sdk.worker import Worker
-from application_sdk.workflows.metadata_extraction.sql import (
-    BaseSQLMetadataExtractionActivities,
-    BaseSQLMetadataExtractionWorkflow,
-)
+
+if TYPE_CHECKING:
+    from application_sdk.clients.sql import BaseSQLClient
+    from application_sdk.handlers.sql import BaseSQLHandler
+    from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
+    from application_sdk.transformers.query import QueryBasedTransformer
+    from application_sdk.worker import Worker
+    from application_sdk.workflows.metadata_extraction.sql import (
+        BaseSQLMetadataExtractionActivities,
+        BaseSQLMetadataExtractionWorkflow,
+    )
 
 logger = get_logger(__name__)
 metrics = get_metrics()
@@ -55,9 +62,26 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             server (Optional[APIServer]): Server for the application. Defaults to None.
         """
         self.application_name = name
-        self.transformer_class = transformer_class or QueryBasedTransformer
-        self.client_class = client_class or BaseSQLClient
-        self.handler_class = handler_class or BaseSQLHandler
+
+        # Lazy-resolve defaults to avoid importing heavy modules at module load time.
+        # Apps always pass these explicitly, so defaults are rarely needed.
+        if transformer_class is None:
+            from application_sdk.transformers.query import QueryBasedTransformer
+
+            transformer_class = QueryBasedTransformer
+        self.transformer_class = transformer_class
+
+        if client_class is None:
+            from application_sdk.clients.sql import BaseSQLClient
+
+            client_class = BaseSQLClient
+        self.client_class = client_class
+
+        if handler_class is None:
+            from application_sdk.handlers.sql import BaseSQLHandler
+
+            handler_class = BaseSQLHandler
+        self.handler_class = handler_class
 
         # setup application server. serves the UI, and handles the various triggers
         self.server = server
@@ -65,6 +89,8 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         self.worker = None
 
         # setup workflow client for worker and application server
+        from application_sdk.clients.utils import get_workflow_client
+
         self.workflow_client = get_workflow_client(
             application_name=self.application_name
         )
@@ -72,12 +98,14 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
     @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_workflow(
         self,
-        workflow_and_activities_classes: List[
-            Tuple[
-                Type[BaseSQLMetadataExtractionWorkflow],
-                Type[BaseSQLMetadataExtractionActivities],
+        workflow_and_activities_classes: Optional[
+            List[
+                Tuple[
+                    Type[BaseSQLMetadataExtractionWorkflow],
+                    Type[BaseSQLMetadataExtractionActivities],
+                ]
             ]
-        ] = [(BaseSQLMetadataExtractionWorkflow, BaseSQLMetadataExtractionActivities)],
+        ] = None,
         passthrough_modules: List[str] = [],
         activity_executor: Optional[ThreadPoolExecutor] = None,
         max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
@@ -94,6 +122,23 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
 
         # load the workflow client
         await self.workflow_client.load()
+
+        # In SERVER mode, we only need the workflow_client (for start/stop/status APIs).
+        # Skip Worker, activities, and thread pool creation to save memory.
+        if APPLICATION_MODE == ApplicationMode.SERVER:
+            logger.info(
+                "SERVER mode: skipping worker and activities setup to reduce memory usage"
+            )
+            return
+
+        # Resolve default if not provided (lazy import to avoid loading temporalio at module level)
+        if workflow_and_activities_classes is None:
+            from application_sdk.workflows.metadata_extraction.sql import (
+                BaseSQLMetadataExtractionActivities as _DefaultActivities,
+                BaseSQLMetadataExtractionWorkflow as _DefaultWorkflow,
+            )
+
+            workflow_and_activities_classes = [(_DefaultWorkflow, _DefaultActivities)]
 
         workflow_classes = [
             workflow_class for workflow_class, _ in workflow_and_activities_classes
@@ -112,6 +157,9 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
                 )
             )
 
+        # Lazy import: Worker pulls in temporalio which is not needed at module load time
+        from application_sdk.worker import Worker
+
         self.worker = Worker(
             workflow_client=self.workflow_client,
             workflow_classes=workflow_classes,
@@ -125,7 +173,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
     async def start_workflow(
         self,
         workflow_args: Dict[str, Any],
-        workflow_class: Type = BaseSQLMetadataExtractionWorkflow,
+        workflow_class: Optional[Type] = None,
     ) -> Any:
         """
         Start a new workflow execution for SQL metadata extraction.
@@ -143,6 +191,13 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         if self.workflow_client is None:
             raise ValueError("Workflow client not initialized")
 
+        if workflow_class is None:
+            from application_sdk.workflows.metadata_extraction.sql import (
+                BaseSQLMetadataExtractionWorkflow,
+            )
+
+            workflow_class = BaseSQLMetadataExtractionWorkflow
+
         workflow_response = await self.workflow_client.start_workflow(
             workflow_args, workflow_class
         )
@@ -151,7 +206,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
     @observability(logger=logger, metrics=metrics, traces=traces)
     async def start(
         self,
-        workflow_class: Type = BaseSQLMetadataExtractionWorkflow,
+        workflow_class: Optional[Type] = None,
         ui_enabled: bool = True,
         has_configmap: bool = False,
     ):
@@ -162,6 +217,13 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             ui_enabled: Whether to enable the UI. Defaults to True.
             has_configmap: Whether the application has a configmap. Defaults to False.
         """
+        if workflow_class is None:
+            from application_sdk.workflows.metadata_extraction.sql import (
+                BaseSQLMetadataExtractionWorkflow,
+            )
+
+            workflow_class = BaseSQLMetadataExtractionWorkflow
+
         await super().start(
             workflow_class=workflow_class,
             ui_enabled=ui_enabled,
@@ -186,7 +248,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
     @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_server(
         self,
-        workflow_class: Type = BaseSQLMetadataExtractionWorkflow,
+        workflow_class: Optional[Type] = None,
         ui_enabled: bool = True,
         has_configmap: bool = False,
     ):
@@ -199,9 +261,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
     @observability(logger=logger, metrics=metrics, traces=traces)
     async def _setup_server(
         self,
-        workflow_class: Type[
-            BaseSQLMetadataExtractionWorkflow
-        ] = BaseSQLMetadataExtractionWorkflow,
+        workflow_class: Optional[Type[BaseSQLMetadataExtractionWorkflow]] = None,
         ui_enabled: bool = True,
         has_configmap: bool = False,
     ) -> Any:
@@ -216,6 +276,16 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         Returns:
             Any: None
         """
+        # Lazy import: APIServer and HttpWorkflowTrigger are only needed at server setup time
+        from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
+
+        if workflow_class is None:
+            from application_sdk.workflows.metadata_extraction.sql import (
+                BaseSQLMetadataExtractionWorkflow,
+            )
+
+            workflow_class = BaseSQLMetadataExtractionWorkflow
+
         if self.workflow_client is None:
             await self.workflow_client.load()
 
