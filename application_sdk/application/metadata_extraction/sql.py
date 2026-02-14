@@ -6,24 +6,23 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 from typing_extensions import deprecated
 
 from application_sdk.application import BaseApplication
-from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import (
     APPLICATION_MODE,
     MAX_CONCURRENT_ACTIVITIES,
     ApplicationMode,
 )
-from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.observability.decorators.observability_decorator import (
     observability,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.observability.traces_adaptor import get_traces
-from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
-from application_sdk.transformers.query import QueryBasedTransformer
 
 if TYPE_CHECKING:
+    from application_sdk.clients.sql import BaseSQLClient
+    from application_sdk.handlers.sql import BaseSQLHandler
+    from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
+    from application_sdk.transformers.query import QueryBasedTransformer
     from application_sdk.worker import Worker
     from application_sdk.workflows.metadata_extraction.sql import (
         BaseSQLMetadataExtractionActivities,
@@ -63,9 +62,26 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             server (Optional[APIServer]): Server for the application. Defaults to None.
         """
         self.application_name = name
-        self.transformer_class = transformer_class or QueryBasedTransformer
-        self.client_class = client_class or BaseSQLClient
-        self.handler_class = handler_class or BaseSQLHandler
+
+        # Lazy-resolve defaults to avoid importing heavy modules at module load time.
+        # Apps always pass these explicitly, so defaults are rarely needed.
+        if transformer_class is None:
+            from application_sdk.transformers.query import QueryBasedTransformer
+
+            transformer_class = QueryBasedTransformer
+        self.transformer_class = transformer_class
+
+        if client_class is None:
+            from application_sdk.clients.sql import BaseSQLClient
+
+            client_class = BaseSQLClient
+        self.client_class = client_class
+
+        if handler_class is None:
+            from application_sdk.handlers.sql import BaseSQLHandler
+
+            handler_class = BaseSQLHandler
+        self.handler_class = handler_class
 
         # setup application server. serves the UI, and handles the various triggers
         self.server = server
@@ -73,6 +89,8 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         self.worker = None
 
         # setup workflow client for worker and application server
+        from application_sdk.clients.utils import get_workflow_client
+
         self.workflow_client = get_workflow_client(
             application_name=self.application_name
         )
@@ -258,6 +276,9 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         Returns:
             Any: None
         """
+        # Lazy import: APIServer and HttpWorkflowTrigger are only needed at server setup time
+        from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
+
         if workflow_class is None:
             from application_sdk.workflows.metadata_extraction.sql import (
                 BaseSQLMetadataExtractionWorkflow,

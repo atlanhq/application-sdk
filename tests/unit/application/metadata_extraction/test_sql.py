@@ -90,7 +90,7 @@ class TestBaseSQLMetadataExtractionApplication:
         assert app.application_name == "test-app"
         assert app.server == mock_server
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_setup_workflow_success(self, mock_get_workflow_client):
         """Test successful SQL metadata extraction workflow setup."""
         mock_workflow_client = AsyncMock()
@@ -113,7 +113,7 @@ class TestBaseSQLMetadataExtractionApplication:
         assert app.worker is not None
         mock_workflow_client.load.assert_called_once()
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_setup_workflow_with_custom_classes(self, mock_get_workflow_client):
         """Test SQL metadata extraction workflow setup with custom classes."""
         mock_workflow_client = AsyncMock()
@@ -141,7 +141,7 @@ class TestBaseSQLMetadataExtractionApplication:
         assert app.worker is not None
         mock_workflow_client.load.assert_called_once()
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_setup_workflow_with_passthrough_modules(
         self, mock_get_workflow_client
     ):
@@ -168,7 +168,7 @@ class TestBaseSQLMetadataExtractionApplication:
 
         assert app.worker is not None
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_setup_workflow_with_activity_executor(
         self, mock_get_workflow_client
     ):
@@ -195,7 +195,7 @@ class TestBaseSQLMetadataExtractionApplication:
 
         assert app.worker is not None
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_setup_workflow_with_max_concurrent_activities(
         self, mock_get_workflow_client
     ):
@@ -219,7 +219,7 @@ class TestBaseSQLMetadataExtractionApplication:
 
         assert app.worker is not None
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_start_workflow_success(self, mock_get_workflow_client):
         """Test successful SQL metadata extraction workflow start."""
         mock_workflow_client = AsyncMock()
@@ -238,7 +238,7 @@ class TestBaseSQLMetadataExtractionApplication:
             workflow_args, MockSQLMetadataExtractionWorkflow
         )
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_start_workflow_default_class(self, mock_get_workflow_client):
         """Test SQL metadata extraction workflow start with default workflow class."""
         mock_workflow_client = AsyncMock()
@@ -255,7 +255,7 @@ class TestBaseSQLMetadataExtractionApplication:
             workflow_args, BaseSQLMetadataExtractionWorkflow
         )
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_start_workflow_no_client(self, mock_get_workflow_client):
         """Test SQL metadata extraction workflow start when workflow client is None."""
         mock_get_workflow_client.return_value = None
@@ -266,7 +266,7 @@ class TestBaseSQLMetadataExtractionApplication:
         with pytest.raises(ValueError, match="Workflow client not initialized"):
             await app.start_workflow({}, MockSQLMetadataExtractionWorkflow)
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_start_worker_success(self, mock_get_workflow_client):
         """Test successful SQL metadata extraction worker start."""
         mock_workflow_client = AsyncMock()
@@ -286,8 +286,8 @@ class TestBaseSQLMetadataExtractionApplication:
         with pytest.raises(ValueError, match="Worker not initialized"):
             await app.start_worker()
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
+    @patch("application_sdk.clients.utils.get_workflow_client")
+    @patch("application_sdk.server.fastapi.APIServer")
     async def test_setup_server_success(
         self, mock_api_server, mock_get_workflow_client
     ):
@@ -305,8 +305,8 @@ class TestBaseSQLMetadataExtractionApplication:
         mock_api_server.assert_called_once()
         mock_server_instance.register_workflow.assert_called_once()
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
+    @patch("application_sdk.clients.utils.get_workflow_client")
+    @patch("application_sdk.server.fastapi.APIServer")
     async def test_setup_server_default_class(
         self, mock_api_server, mock_get_workflow_client
     ):
@@ -324,8 +324,8 @@ class TestBaseSQLMetadataExtractionApplication:
         mock_api_server.assert_called_once()
         mock_server_instance.register_workflow.assert_called_once()
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
+    @patch("application_sdk.clients.utils.get_workflow_client")
+    @patch("application_sdk.server.fastapi.APIServer")
     async def test_setup_server_with_custom_handler(
         self, mock_api_server, mock_get_workflow_client
     ):
@@ -345,8 +345,8 @@ class TestBaseSQLMetadataExtractionApplication:
         mock_api_server.assert_called_once()
         mock_server_instance.register_workflow.assert_called_once()
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
+    @patch("application_sdk.clients.utils.get_workflow_client")
+    @patch("application_sdk.server.fastapi.APIServer")
     async def test_setup_server_with_custom_client(
         self, mock_api_server, mock_get_workflow_client
     ):
@@ -366,8 +366,8 @@ class TestBaseSQLMetadataExtractionApplication:
         mock_api_server.assert_called_once()
         mock_server_instance.register_workflow.assert_called_once()
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
+    @patch("application_sdk.clients.utils.get_workflow_client")
+    @patch("application_sdk.server.fastapi.APIServer")
     async def test_setup_server_handler_initialization(
         self, mock_api_server, mock_get_workflow_client
     ):
@@ -394,7 +394,7 @@ class TestBaseSQLMetadataExtractionApplication:
 class TestSQLApplicationModeStart:
     """Test cases for split architecture based on APPLICATION_MODE in SQL application."""
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.WORKER)
     async def test_start_worker_mode_starts_worker_non_daemon(
         self, mock_get_workflow_client
@@ -419,8 +419,8 @@ class TestSQLApplicationModeStart:
         # In WORKER mode, worker should start with daemon=False (main thread)
         app.worker.start.assert_called_once_with(daemon=False)
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
+    @patch("application_sdk.clients.utils.get_workflow_client")
+    @patch("application_sdk.server.fastapi.APIServer")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.LOCAL)
     async def test_start_local_mode_starts_worker_daemon(
         self, mock_api_server, mock_get_workflow_client
@@ -449,8 +449,8 @@ class TestSQLApplicationModeStart:
         # In LOCAL mode, server should also be started
         mock_server_instance.start.assert_called_once()
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
+    @patch("application_sdk.clients.utils.get_workflow_client")
+    @patch("application_sdk.server.fastapi.APIServer")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.SERVER)
     async def test_start_server_mode_starts_server(
         self, mock_api_server, mock_get_workflow_client
@@ -471,7 +471,7 @@ class TestSQLApplicationModeStart:
         mock_api_server.assert_called_once()
         mock_server_instance.start.assert_called_once()
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.WORKER)
     async def test_worker_mode_does_not_start_server(self, mock_get_workflow_client):
         """Test that WORKER mode does not set up or start server."""
@@ -494,8 +494,8 @@ class TestSQLApplicationModeStart:
         # Server should not be initialized
         assert app.server is None
 
-    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
-    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
+    @patch("application_sdk.clients.utils.get_workflow_client")
+    @patch("application_sdk.server.fastapi.APIServer")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.SERVER)
     async def test_server_mode_does_not_start_worker(
         self, mock_api_server, mock_get_workflow_client

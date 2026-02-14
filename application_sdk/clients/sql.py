@@ -21,9 +21,6 @@ from typing import (
 )
 from urllib.parse import quote_plus
 
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
-from temporalio import activity
-
 from application_sdk.clients import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.common.aws_utils import (
@@ -32,15 +29,27 @@ from application_sdk.common.aws_utils import (
 )
 from application_sdk.common.error_codes import ClientError, CommonError
 from application_sdk.common.utils import parse_credentials_extra
-from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
+from application_sdk.constants import (
+    APPLICATION_MODE,
+    AWS_SESSION_NAME,
+    USE_SERVER_SIDE_CURSOR,
+    ApplicationMode,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-activity.logger = logger
+
+# Only set activity logger in worker mode to avoid importing temporalio in server mode.
+# activity.logger is only relevant for Temporal activity heartbeat logging.
+if APPLICATION_MODE != ApplicationMode.SERVER:
+    from temporalio import activity
+
+    activity.logger = logger
 
 if TYPE_CHECKING:
     import daft
     import pandas as pd
+    from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
     from sqlalchemy.orm import Session
 
 

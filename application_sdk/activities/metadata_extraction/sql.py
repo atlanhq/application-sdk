@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from datetime import datetime
 from typing import (
@@ -35,7 +37,6 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.services.secretstore import SecretStore
 from application_sdk.transformers import TransformerInterface
-from application_sdk.transformers.query import QueryBasedTransformer
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -44,6 +45,8 @@ queries = read_sql_files(queries_prefix=SQL_QUERIES_PATH)
 
 if TYPE_CHECKING:
     import pandas as pd
+
+    from application_sdk.transformers.query import QueryBasedTransformer
 
 
 class BaseSQLMetadataExtractionActivitiesState(ActivitiesState):
@@ -98,7 +101,8 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     sql_client_class: Type[BaseSQLClient] = BaseSQLClient
     handler_class: Type[BaseSQLHandler] = BaseSQLHandler
-    transformer_class: Type[TransformerInterface] = QueryBasedTransformer
+    # Default is None; resolved lazily in __init__ to avoid importing pyatlan at module load time
+    transformer_class: Optional[Type[TransformerInterface]] = None
 
     def __init__(
         self,
@@ -125,6 +129,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             self.handler_class = handler_class
         if transformer_class:
             self.transformer_class = transformer_class
+
+        # Lazy-resolve default: QueryBasedTransformer pulls in pyatlan which is heavy
+        if self.transformer_class is None:
+            from application_sdk.transformers.query import QueryBasedTransformer
+
+            self.transformer_class = QueryBasedTransformer
 
         # Control whether to execute per-db using multidb executor
         self.multidb = multidb

@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 from typing_extensions import deprecated
 
 from application_sdk.clients.base import BaseClient
-from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import APPLICATION_MODE, ENABLE_MCP, ApplicationMode
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.interceptors.models import EventRegistration
@@ -17,13 +16,13 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server import ServerInterface
-from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
-from application_sdk.server.fastapi.models import EventWorkflowTrigger
-from application_sdk.workflows import WorkflowInterface
 
 if TYPE_CHECKING:
     from application_sdk.activities import ActivitiesInterface
+    from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
+    from application_sdk.server.fastapi.models import EventWorkflowTrigger
     from application_sdk.worker import Worker
+    from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
 metrics = get_metrics()
@@ -64,6 +63,9 @@ class BaseApplication:
 
         self.worker = None
 
+        # Lazy import: get_workflow_client pulls in TemporalWorkflowClient -> temporalio
+        from application_sdk.clients.utils import get_workflow_client
+
         self.workflow_client = get_workflow_client(application_name=name)
 
         self.application_manifest: Optional[Dict[str, Any]] = application_manifest
@@ -80,6 +82,8 @@ class BaseApplication:
             self.mcp_server = MCPServer(application_name=name)
 
     def bootstrap_event_registration(self):
+        from application_sdk.server.fastapi.models import EventWorkflowTrigger
+
         self.event_subscriptions: Dict[str, EventWorkflowTrigger] = {}
         if self.application_manifest is None:
             logger.warning("No application manifest found, skipping event registration")
@@ -269,6 +273,9 @@ class BaseApplication:
             ui_enabled (bool): Whether to enable the UI.
             has_configmap (bool): Whether to enable the configmap.
         """
+        # Lazy import: APIServer and HttpWorkflowTrigger pull in server dependencies
+        from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
+
         if self.workflow_client is None:
             await self.workflow_client.load()
 
