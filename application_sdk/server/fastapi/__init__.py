@@ -612,12 +612,21 @@ class APIServer(ServerInterface):
             await self.handler.load(body.credentials)
             preflight_check = await self.handler.preflight_check(body.model_dump())
 
-            # Record successful preflight check
+            # Determine overall success based on individual check results (dynamic)
+            # Guard against empty results (all() returns True for empty iterables)
+            check_results = [
+                value.get("success", True)
+                for value in preflight_check.values()
+                if isinstance(value, dict) and "success" in value
+            ]
+            all_checks_passed = bool(check_results) and all(check_results)
+
+            # Record preflight check result
             metrics.record_metric(
                 name="preflight_checks_total",
                 value=1.0,
                 metric_type=MetricType.COUNTER,
-                labels={"status": "success"},
+                labels={"status": "success" if all_checks_passed else "failed"},
                 description="Total number of preflight checks",
             )
 
@@ -631,7 +640,9 @@ class APIServer(ServerInterface):
                 description="Preflight check duration in seconds",
             )
 
-            return PreflightCheckResponse(success=True, data=preflight_check)
+            return PreflightCheckResponse(
+                success=all_checks_passed, data=preflight_check
+            )
         except Exception as e:
             # Record failed preflight check
             metrics.record_metric(

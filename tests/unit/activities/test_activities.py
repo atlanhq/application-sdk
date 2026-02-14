@@ -278,7 +278,13 @@ class TestActivitiesInterfaceActivities:
 
         mock_handler = MockHandler()
         mock_handler.preflight_check = AsyncMock(
-            return_value={"error": "Handler failed"}
+            return_value={
+                "testCheck": {
+                    "success": False,
+                    "successMessage": "",
+                    "failureMessage": "Handler failed",
+                }
+            }
         )
         state.handler = mock_handler
 

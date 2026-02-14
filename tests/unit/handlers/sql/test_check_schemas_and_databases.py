@@ -134,7 +134,6 @@ class TestCheckSchemasAndDatabases:
         assert result["success"] is False
         assert result["successMessage"] == ""
         assert "Schemas and Databases check failed" in result["failureMessage"]
-        assert "error" in result
         handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
@@ -150,8 +149,10 @@ class TestCheckSchemasAndDatabases:
 
         assert result["success"] is False
         assert result["successMessage"] == ""
-        assert "Schemas and Databases check failed" in result["failureMessage"]
-        assert result["error"] == "Database error"
+        assert (
+            "Schemas and Databases check failed: Database error"
+            in result["failureMessage"]
+        )
         handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
