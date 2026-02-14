@@ -52,6 +52,10 @@ from application_sdk.server.fastapi.models import (
     WorkflowResponse,
     WorkflowTrigger,
 )
+from application_sdk.server.fastapi.routers.credentials import (
+    get_credentials_router,
+    register_handler,
+)
 from application_sdk.server.fastapi.routers.server import get_server_router
 from application_sdk.server.fastapi.utils import internal_server_error_handler
 from application_sdk.services.statestore import StateStore, StateType
@@ -220,6 +224,12 @@ class APIServer(ServerInterface):
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
+        self.app.include_router(get_credentials_router())
+
+        # Register handler for credentials configmap lookup
+        if self.handler:
+            handler_id = getattr(self.handler, "app_id", None) or "default"
+            register_handler(handler_id, type(self.handler))
 
         # Register subscription routes from subscriptions with handler callbacks
         subscription_router = APIRouter()

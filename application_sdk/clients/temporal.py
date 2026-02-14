@@ -3,7 +3,10 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from typing import Any, Dict, Optional, Sequence, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Type
+
+if TYPE_CHECKING:
+    from application_sdk.credentials import Credential
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
@@ -32,6 +35,7 @@ from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
 from application_sdk.interceptors.correlation_context import (
     CorrelationContextInterceptor,
 )
+from application_sdk.interceptors.credential import CredentialInterceptor
 from application_sdk.interceptors.events import EventInterceptor, publish_event
 from application_sdk.interceptors.lock import RedisLockInterceptor
 from application_sdk.interceptors.models import (
@@ -358,6 +362,7 @@ class TemporalWorkflowClient(WorkflowClient):
         max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
         activity_executor: Optional[ThreadPoolExecutor] = None,
         auto_start_token_refresh: bool = True,
+        credential_declarations: Optional[List["Credential"]] = None,
     ) -> Worker:
         """Create a Temporal worker with automatic token refresh and graceful shutdown.
 
@@ -369,6 +374,10 @@ class TemporalWorkflowClient(WorkflowClient):
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
             auto_start_token_refresh (bool): Whether to automatically start token refresh.
                 Set to False if you've already started it via load().
+            credential_declarations (List[Credential] | None): Credential declarations
+                for the CredentialInterceptor. If provided, credentials will be
+                automatically bootstrapped at workflow start.
+
         Returns:
             Worker: The created worker instance.
 
@@ -422,6 +431,15 @@ class TemporalWorkflowClient(WorkflowClient):
         # Create activities lookup dict for interceptors
         activities_dict = {getattr(a, "__name__", str(a)): a for a in final_activities}
 
+        # Build interceptors list
+        interceptors = [
+            CorrelationContextInterceptor(),
+            CredentialInterceptor(credential_declarations),
+            EventInterceptor(),
+            CleanupInterceptor(),
+            RedisLockInterceptor(activities_dict),
+        ]
+
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
@@ -437,12 +455,7 @@ class TemporalWorkflowClient(WorkflowClient):
             graceful_shutdown_timeout=timedelta(
                 seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
             ),
-            interceptors=[
-                CorrelationContextInterceptor(),
-                EventInterceptor(),
-                CleanupInterceptor(),
-                RedisLockInterceptor(activities_dict),
-            ],
+            interceptors=interceptors,
         )
 
     async def get_workflow_run_status(

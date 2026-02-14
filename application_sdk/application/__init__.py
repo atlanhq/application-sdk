@@ -1,9 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 
 from typing_extensions import deprecated
 
 from application_sdk.activities import ActivitiesInterface
+
+if TYPE_CHECKING:
+    from application_sdk.credentials import Credential
 from application_sdk.clients.base import BaseClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import APPLICATION_MODE, ENABLE_MCP, ApplicationMode
@@ -160,6 +163,7 @@ class BaseApplication:
         ],
         passthrough_modules: List[str] = [],
         activity_executor: Optional[ThreadPoolExecutor] = None,
+        credential_declarations: Optional[List["Credential"]] = None,
     ):
         """
         Set up the workflow client and start the worker for the application.
@@ -168,6 +172,9 @@ class BaseApplication:
             workflow_and_activities_classes (list): The workflow and activities classes for the application.
             passthrough_modules (list): The modules to pass through to the worker.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
+            credential_declarations (list[Credential] | None): List of Credential declarations
+                for automatic credential bootstrap. If provided, credentials will be automatically
+                injected at workflow start.
         """
         await self.workflow_client.load()
 
@@ -186,6 +193,7 @@ class BaseApplication:
             workflow_activities=workflow_activities,
             passthrough_modules=passthrough_modules,
             activity_executor=activity_executor,
+            credential_declarations=credential_declarations,
         )
 
         # Register MCP tools if ENABLED_MCP is True and an MCP server is initialized
