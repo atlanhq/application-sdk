@@ -8,6 +8,7 @@ import orjson
 from dapr.clients import DaprClient
 from temporalio import activity
 
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
     DAPR_MAX_GRPC_MESSAGE_LENGTH,
@@ -41,7 +42,27 @@ class ObjectStore:
         Returns:
             The normalized path (forward slashes) for object store keys.
         """
-        return path.replace(os.sep, "/")
+        # Replace Windows separators even on Unix hosts, then normalize OS separator.
+        return path.replace("\\", "/").replace(os.sep, "/")
+
+    @classmethod
+    def _normalize_object_store_path(cls, path: str) -> str:
+        """Normalize object store keys/prefixes from local or object-store style paths.
+
+        Accepts either:
+        1. Local SDK temporary paths (e.g., ``./local/tmp/artifacts/...``)
+        2. Already-relative object store keys/prefixes (e.g., ``artifacts/...``)
+
+        Returns:
+            A normalized object store key/prefix with forward slashes and
+            without leading/trailing slash.
+        """
+        if not path:
+            return ""
+
+        normalized_path = get_object_store_prefix(path)
+        normalized_path = cls._normalize_object_store_key(normalized_path)
+        return normalized_path.strip("/")
 
     @classmethod
     def _create_file_metadata(cls, key: str) -> dict[str, str]:
@@ -84,11 +105,16 @@ class ObjectStore:
             Exception: If there's an error listing files from the object store.
         """
         try:
-            data = json.dumps({"prefix": prefix}).encode("utf-8") if prefix else ""
+            normalized_prefix = cls._normalize_object_store_path(prefix)
+            data = (
+                json.dumps({"prefix": normalized_prefix}).encode("utf-8")
+                if normalized_prefix
+                else ""
+            )
 
             response_data = await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_LIST_OPERATION,
-                metadata=cls._create_list_metadata(prefix),
+                metadata=cls._create_list_metadata(normalized_prefix),
                 data=data,
                 store_name=store_name,
             )
@@ -116,11 +142,6 @@ class ObjectStore:
             else:
                 return []
 
-            # Normalize prefix for cross-platform path comparison
-            normalized_prefix = (
-                cls._normalize_object_store_key(prefix) if prefix else ""
-            )
-
             valid_list = []
             for path in paths:
                 if not isinstance(path, str):
@@ -141,7 +162,9 @@ class ObjectStore:
             return valid_list
 
         except Exception as e:
-            logger.error(f"Error listing files with prefix {prefix}: {str(e)}")
+            logger.error(
+                f"Error listing files with prefix {normalized_prefix or prefix}: {str(e)}"
+            )
             raise e
 
     @classmethod
@@ -163,27 +186,28 @@ class ObjectStore:
         Raises:
             Exception: If there's an error getting the file from the object store.
         """
+        normalized_key = cls._normalize_object_store_path(key)
         try:
-            data = json.dumps({"key": key}).encode("utf-8") if key else ""
+            data = json.dumps({"key": normalized_key}).encode("utf-8")
 
             response_data = await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_GET_OPERATION,
-                metadata=cls._create_file_metadata(key),
+                metadata=cls._create_file_metadata(normalized_key),
                 data=data,
                 store_name=store_name,
             )
             if not response_data:
                 if suppress_error:
                     return None
-                raise Exception(f"No data received for file: {key}")
+                raise Exception(f"No data received for file: {normalized_key}")
 
-            logger.debug(f"Successfully retrieved file content: {key}")
+            logger.debug(f"Successfully retrieved file content: {normalized_key}")
             return response_data
 
         except Exception as e:
             if suppress_error:
                 return None
-            logger.error(f"Error getting file content for {key}: {str(e)}")
+            logger.error(f"Error getting file content for {normalized_key}: {str(e)}")
             raise
 
     @classmethod
@@ -218,18 +242,19 @@ class ObjectStore:
         Raises:
             Exception: If there's an error deleting the file from the object store.
         """
+        normalized_key = cls._normalize_object_store_path(key)
         try:
-            data = json.dumps({"key": key}).encode("utf-8")
+            data = json.dumps({"key": normalized_key}).encode("utf-8")
 
             await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_DELETE_OPERATION,
-                metadata=cls._create_file_metadata(key),
+                metadata=cls._create_file_metadata(normalized_key),
                 data=data,
                 store_name=store_name,
             )
-            logger.debug(f"Successfully deleted file: {key}")
+            logger.debug(f"Successfully deleted file: {normalized_key}")
         except Exception as e:
-            logger.error(f"Error deleting file {key}: {str(e)}")
+            logger.error(f"Error deleting file {normalized_key}: {str(e)}")
             raise
 
     @classmethod
@@ -245,23 +270,30 @@ class ObjectStore:
         Raises:
             Exception: If there's an error deleting files from the object store.
         """
+        normalized_prefix = cls._normalize_object_store_path(prefix)
         try:
             # First, list all files under the prefix
             try:
                 files_to_delete = await cls.list_files(
-                    prefix=prefix, store_name=store_name
+                    prefix=normalized_prefix, store_name=store_name
                 )
             except Exception as e:
                 # If we can't list files for any reason, we can't delete them either
                 # Raise FileNotFoundError to give developers clear feedback
-                logger.info(f"Cannot list files under prefix {prefix}: {str(e)}")
-                raise FileNotFoundError(f"No files found under prefix: {prefix}")
+                logger.info(
+                    f"Cannot list files under prefix {normalized_prefix}: {str(e)}"
+                )
+                raise FileNotFoundError(
+                    f"No files found under prefix: {normalized_prefix}"
+                )
 
             if not files_to_delete:
-                logger.info(f"No files found under prefix: {prefix}")
+                logger.info(f"No files found under prefix: {normalized_prefix}")
                 return
 
-            logger.info(f"Deleting {len(files_to_delete)} files under prefix: {prefix}")
+            logger.info(
+                f"Deleting {len(files_to_delete)} files under prefix: {normalized_prefix}"
+            )
 
             # Delete each file individually
             for file_path in files_to_delete:
@@ -271,10 +303,14 @@ class ObjectStore:
                     logger.warning(f"Failed to delete file {file_path}: {str(e)}")
                     # Continue with other files even if one fails
 
-            logger.info(f"Successfully deleted all files under prefix: {prefix}")
+            logger.info(
+                f"Successfully deleted all files under prefix: {normalized_prefix}"
+            )
 
         except Exception as e:
-            logger.error(f"Error deleting files under prefix {prefix}: {str(e)}")
+            logger.error(
+                f"Error deleting files under prefix {normalized_prefix}: {str(e)}"
+            )
             raise
 
     @classmethod
@@ -303,6 +339,7 @@ class ObjectStore:
             ...     destination="reports/2024/january/report.pdf"
             ... )
         """
+        normalized_destination = cls._normalize_object_store_path(destination)
         try:
             with SafeFileOps.open(source, "rb") as f:
                 file_content = f.read()
@@ -314,13 +351,13 @@ class ObjectStore:
             await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_CREATE_OPERATION,
                 data=file_content,
-                metadata=cls._create_file_metadata(destination),
+                metadata=cls._create_file_metadata(normalized_destination),
                 store_name=store_name,
             )
-            logger.debug(f"Successfully uploaded file: {destination}")
+            logger.debug(f"Successfully uploaded file: {normalized_destination}")
         except Exception as e:
             logger.error(
-                f"Error uploading file {destination} to object store: {str(e)}"
+                f"Error uploading file {normalized_destination} to object store: {str(e)}"
             )
             raise e
 
@@ -369,6 +406,7 @@ class ObjectStore:
         if not SafeFileOps.isdir(source):
             raise ValueError(f"The provided path '{source}' is not a valid directory.")
 
+        normalized_destination = cls._normalize_object_store_path(destination)
         try:
             for root, _, files in os.walk(source):
                 # Skip subdirectories if not recursive
@@ -381,7 +419,7 @@ class ObjectStore:
                     relative_path = os.path.relpath(file_path, source)
                     # Create store key by combining prefix with relative path
                     store_key = cls._normalize_object_store_key(
-                        os.path.join(destination, relative_path)
+                        os.path.join(normalized_destination, relative_path)
                     )
                     await cls.upload_file(
                         file_path, store_key, store_name, retain_local_copy
@@ -421,21 +459,22 @@ class ObjectStore:
             ...     destination="/tmp/downloaded_report.pdf"
             ... )
         """
+        normalized_source = cls._normalize_object_store_path(source)
         # Ensure directory exists
 
         if not SafeFileOps.exists(os.path.dirname(destination)):
             SafeFileOps.makedirs(os.path.dirname(destination), exist_ok=True)
 
         try:
-            response_data = await cls.get_content(source, store_name)
+            response_data = await cls.get_content(normalized_source, store_name)
 
             with SafeFileOps.open(destination, "wb") as f:
                 f.write(response_data)
 
-            logger.info(f"Successfully downloaded file: {source}")
+            logger.info(f"Successfully downloaded file: {normalized_source}")
         except Exception as e:
             logger.warning(
-                f"Failed to download file {source} from object store: {str(e)}"
+                f"Failed to download file {normalized_source} from object store: {str(e)}"
             )
             raise e
 
@@ -453,15 +492,16 @@ class ObjectStore:
             destination: Local directory where files will be saved.
             store_name: Name of the Dapr object store binding to use.
         """
+        normalized_source = cls._normalize_object_store_path(source)
         try:
             # List all files under the prefix
-            file_list = await cls.list_files(source, store_name)
+            file_list = await cls.list_files(normalized_source, store_name)
 
-            logger.info(f"Found {len(file_list)} files to download from: {source}")
+            logger.info(
+                f"Found {len(file_list)} files to download from: {normalized_source}"
+            )
 
             # Normalize source prefix to use forward slashes for comparison
-            normalized_source = cls._normalize_object_store_key(source)
-
             # Download each file
             for file_path in file_list:
                 normalized_file_path = cls._normalize_object_store_key(file_path)
@@ -477,7 +517,7 @@ class ObjectStore:
                 local_file_path = os.path.join(destination, relative_path)
                 await cls.download_file(file_path, local_file_path, store_name)
 
-            logger.info(f"Successfully downloaded all files from: {source}")
+            logger.info(f"Successfully downloaded all files from: {normalized_source}")
         except Exception as e:
             logger.warning(f"Failed to download files from object store: {str(e)}")
             raise
