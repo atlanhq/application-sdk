@@ -13,6 +13,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
 )
+from tenacity import RetryError, retry, stop_after_attempt, stop_never, wait_exponential
 
 from application_sdk.clients.atlan_auth import AtlanAuthClient
 from application_sdk.clients.workflow import WorkflowClient
@@ -22,6 +23,7 @@ from application_sdk.constants import (
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
+    WORKFLOW_CONNECTION_MAX_RETRIES,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
@@ -212,17 +214,26 @@ class TemporalWorkflowClient(WorkflowClient):
                 # Continue the loop even if there's an error, but wait a bit
                 await asyncio.sleep(60)  # Wait 1 minute before retrying
 
-    async def load(self) -> None:
+    async def load(self, max_retries: int | None = None) -> None:
         """Connect to the Temporal server and start token refresh if needed.
 
         Establishes a connection to the Temporal server using the configured
-        connection string and namespace. If authentication is enabled, sets up
+        connection string and namespace. Uses exponential backoff retry (via tenacity)
+        for transient connection failures. If authentication is enabled, sets up
         automatic token refresh using rpc_metadata updates.
 
+        Args:
+            max_retries (int | None, optional): Maximum number of retry attempts.
+                Defaults to WORKFLOW_CONNECTION_MAX_RETRIES (5).
+                Set to 0 to disable retries.
+
         Raises:
-            ConnectionError: If connection to the Temporal server fails.
+            RuntimeError: If connection to the Temporal server fails after all retries.
             ValueError: If authentication is enabled but credentials are missing.
         """
+        max_retries = (
+            max_retries if max_retries is not None else WORKFLOW_CONNECTION_MAX_RETRIES
+        )
 
         connection_options: Dict[str, Any] = {
             "target_host": self.get_connection_string(),
@@ -238,8 +249,11 @@ class TemporalWorkflowClient(WorkflowClient):
             connection_options["api_key"] = token
             logger.info("Added initial auth token to client connection")
 
-        # Create the client
-        self.client = await Client.connect(**connection_options)
+        # Connect with exponential backoff retry using tenacity
+        self.client = await self._connect_with_retry(
+            connection_options=connection_options,
+            max_retries=max_retries,
+        )
 
         # Start token refresh loop if auth is enabled
         if self.auth_manager.auth_enabled:
@@ -251,6 +265,66 @@ class TemporalWorkflowClient(WorkflowClient):
             logger.info(
                 f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"
             )
+
+    async def _connect_with_retry(
+        self,
+        connection_options: Dict[str, Any],
+        max_retries: int,
+    ) -> Client:
+        """Connect to the Temporal server with exponential backoff retry.
+
+        Uses tenacity library for retry logic with exponential backoff.
+        This is critical for handling temporary network issues during startup.
+
+        Args:
+            connection_options (Dict[str, Any]): Connection options for Temporal client.
+            max_retries (int): Maximum number of retry attempts. Set to 0 to disable.
+
+        Returns:
+            Client: The connected Temporal client.
+
+        Raises:
+            RuntimeError: If connection fails after all retry attempts.
+        """
+
+        def _log_retry(retry_state):
+            """Log retry attempts."""
+            exception = retry_state.outcome.exception()
+            attempt = retry_state.attempt_number
+            logger.warning(
+                f"Failed to connect to Temporal server (attempt {attempt}): {exception}. Retrying..."
+            )
+
+        # Build tenacity retry decorator dynamically based on max_retries
+        # stop_after_attempt(1) means no retries (just 1 attempt)
+        stop_strategy = (
+            stop_after_attempt(max_retries + 1) if max_retries >= 0 else stop_never
+        )
+
+        @retry(
+            stop=stop_strategy,
+            wait=wait_exponential(multiplier=1, min=1, max=60),
+            before_sleep=_log_retry,
+            reraise=True,
+        )
+        async def _connect():
+            return await Client.connect(**connection_options)
+
+        try:
+            client = await _connect()
+            logger.info("Successfully connected to Temporal server")
+            return client
+        except RetryError as e:
+            logger.error(
+                f"Failed to connect to Temporal server after {max_retries + 1} attempts"
+            )
+            raise RuntimeError(
+                f"Failed to connect to Temporal server after {max_retries + 1} attempts: {e.last_attempt.exception()}"
+            ) from e
+        except Exception as e:
+            # Handle case where max_retries=0 (no retries, direct failure)
+            logger.error(f"Failed to connect to Temporal server: {e}")
+            raise RuntimeError(f"Failed to connect to Temporal server: {e}") from e
 
     async def close(self) -> None:
         """Close the Temporal client connection and stop token refresh.
