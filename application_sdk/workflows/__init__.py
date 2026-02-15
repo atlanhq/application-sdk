@@ -4,20 +4,24 @@ This module provides the base workflow interface and common functionality for
 all workflow implementations in the application SDK.
 """
 
+from __future__ import annotations
+
 from abc import ABC
 from datetime import timedelta
-from typing import Any, Callable, Dict, Generic, Sequence, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, Generic, Sequence, Type, TypeVar
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from application_sdk.activities import ActivitiesInterface
 from application_sdk.constants import HEARTBEAT_TIMEOUT, START_TO_CLOSE_TIMEOUT
 from application_sdk.observability.logger_adaptor import get_logger
 
+if TYPE_CHECKING:
+    from application_sdk.activities import ActivitiesInterface
+
 logger = get_logger(__name__)
 
-ActivitiesInterfaceType = TypeVar("ActivitiesInterfaceType", bound=ActivitiesInterface)
+ActivitiesInterfaceType = TypeVar("ActivitiesInterfaceType")
 
 
 @workflow.defn

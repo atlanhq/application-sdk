@@ -63,10 +63,9 @@ class BaseApplication:
 
         self.worker = None
 
-        # Lazy import: get_workflow_client pulls in TemporalWorkflowClient -> temporalio
-        from application_sdk.clients.utils import get_workflow_client
-
-        self.workflow_client = get_workflow_client(application_name=name)
+        # workflow_client is created lazily via the property to avoid loading
+        # temporalio + grpc at startup (saves ~20 MiB in server mode).
+        self._workflow_client = None
 
         self.application_manifest: Optional[Dict[str, Any]] = application_manifest
         self.bootstrap_event_registration()
@@ -80,6 +79,26 @@ class BaseApplication:
             from application_sdk.server.mcp import MCPServer
 
             self.mcp_server = MCPServer(application_name=name)
+
+    @property
+    def workflow_client(self):
+        """Lazily create the workflow client on first access.
+
+        This avoids importing temporalio + grpc at startup, saving ~20 MiB
+        in server mode where the client is only needed when workflow APIs
+        (/start, /stop, /status) are actually called.
+        """
+        if self._workflow_client is None:
+            from application_sdk.clients.utils import get_workflow_client
+
+            self._workflow_client = get_workflow_client(
+                application_name=self.application_name
+            )
+        return self._workflow_client
+
+    @workflow_client.setter
+    def workflow_client(self, value):
+        self._workflow_client = value
 
     def bootstrap_event_registration(self):
         from application_sdk.server.fastapi.models import EventWorkflowTrigger
@@ -177,15 +196,17 @@ class BaseApplication:
             passthrough_modules (list): The modules to pass through to the worker.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
-        await self.workflow_client.load()
-
         # In SERVER mode, we only need the workflow_client (for start/stop/status APIs).
-        # Skip Worker, activities, and thread pool creation to save memory.
+        # Skip Worker, activities, thread pool creation, and workflow_client.load()
+        # to save memory. The workflow_client is lazily created and loaded when
+        # workflow APIs (/start, /stop, /status) are actually called.
         if APPLICATION_MODE == ApplicationMode.SERVER:
             logger.info(
                 "SERVER mode: skipping worker and activities setup to reduce memory usage"
             )
             return
+
+        await self.workflow_client.load()
 
         workflow_classes = [
             workflow_class for workflow_class, _ in workflow_and_activities_classes
@@ -275,9 +296,6 @@ class BaseApplication:
         """
         # Lazy import: APIServer and HttpWorkflowTrigger pull in server dependencies
         from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
-
-        if self.workflow_client is None:
-            await self.workflow_client.load()
 
         mcp_http_app: Optional[Any] = None
         lifespan: Optional[Any] = None

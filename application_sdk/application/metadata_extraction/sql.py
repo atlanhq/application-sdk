@@ -18,6 +18,11 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.observability.traces_adaptor import get_traces
 
+# Sentinel to distinguish "not provided" from explicit None.
+# When transformer_class is _UNSET, we lazy-resolve the default.
+# When transformer_class is explicitly None (server mode), we skip resolution.
+_UNSET = object()
+
 if TYPE_CHECKING:
     from application_sdk.clients.sql import BaseSQLClient
     from application_sdk.handlers.sql import BaseSQLHandler
@@ -48,7 +53,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         name: str,
         client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[BaseSQLHandler]] = None,
-        transformer_class: Optional[Type[QueryBasedTransformer]] = None,
+        transformer_class: Optional[Type[QueryBasedTransformer]] = _UNSET,
         server: Optional[APIServer] = None,
     ):
         """
@@ -58,14 +63,16 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             name (str): Name of the application (used for workflow client and server identification).
             client_class (Type[BaseSQLClient]): SQL client class for source connectivity.
             handler_class (Optional[Type[HandlerInterface]]): Handler class for preflight checks and metadata logic. Defaults to BaseSQLHandler.
-            transformer_class (Optional[Type[TransformerInterface]]): Transformer class for mapping to Atlas entities. Defaults to QueryBasedTransformer.
+            transformer_class (Optional[Type[TransformerInterface]]): Transformer class for mapping to Atlas entities. Defaults to QueryBasedTransformer. Pass None to skip (e.g. in server mode).
             server (Optional[APIServer]): Server for the application. Defaults to None.
         """
         self.application_name = name
 
         # Lazy-resolve defaults to avoid importing heavy modules at module load time.
-        # Apps always pass these explicitly, so defaults are rarely needed.
-        if transformer_class is None:
+        # Use _UNSET sentinel to distinguish "not provided" from explicit None.
+        # When None is passed explicitly (server mode), skip resolution to avoid
+        # importing pyatlan which is not needed for the server.
+        if transformer_class is _UNSET:
             from application_sdk.transformers.query import QueryBasedTransformer
 
             transformer_class = QueryBasedTransformer
@@ -88,12 +95,9 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
 
         self.worker = None
 
-        # setup workflow client for worker and application server
-        from application_sdk.clients.utils import get_workflow_client
-
-        self.workflow_client = get_workflow_client(
-            application_name=self.application_name
-        )
+        # workflow_client is created lazily via the property inherited from
+        # BaseApplication to avoid loading temporalio + grpc at startup.
+        self._workflow_client = None
 
     @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_workflow(
@@ -120,16 +124,18 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
 
-        # load the workflow client
-        await self.workflow_client.load()
-
         # In SERVER mode, we only need the workflow_client (for start/stop/status APIs).
-        # Skip Worker, activities, and thread pool creation to save memory.
+        # Skip Worker, activities, thread pool creation, and workflow_client.load()
+        # to save memory. The workflow_client is lazily created and loaded when
+        # workflow APIs (/start, /stop, /status) are actually called.
         if APPLICATION_MODE == ApplicationMode.SERVER:
             logger.info(
                 "SERVER mode: skipping worker and activities setup to reduce memory usage"
             )
             return
+
+        # load the workflow client
+        await self.workflow_client.load()
 
         # Resolve default if not provided (lazy import to avoid loading temporalio at module level)
         if workflow_and_activities_classes is None:
@@ -285,9 +291,6 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             )
 
             workflow_class = BaseSQLMetadataExtractionWorkflow
-
-        if self.workflow_client is None:
-            await self.workflow_client.load()
 
         # setup application server. serves the UI, and handles the various triggers
         self.server = APIServer(

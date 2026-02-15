@@ -12,8 +12,10 @@ from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.constants import ApplicationMode
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.transformers.query import QueryBasedTransformer
-from application_sdk.workflows.metadata_extraction.sql import (
+from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
+)
+from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
 )
 

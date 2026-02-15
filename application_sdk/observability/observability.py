@@ -10,18 +10,24 @@ from pathlib import Path
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
-from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    APPLICATION_MODE,
     DEPLOYMENT_OBJECT_STORE_NAME,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
     STATE_STORE_NAME,
     TRACES_FILE_NAME,
+    ApplicationMode,
 )
 from application_sdk.observability.utils import get_observability_dir
+
+# Only import DaprClient in worker/local mode. The server doesn't need
+# to push observability data to Dapr, saving ~47 modules.
+if APPLICATION_MODE != ApplicationMode.SERVER:
+    from dapr.clients import DaprClient
 
 
 class LogRecord(BaseModel):
