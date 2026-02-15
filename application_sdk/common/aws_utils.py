@@ -10,7 +10,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-def get_region_name_from_hostname(hostname: str) -> str:
+def get_region_name_from_hostname(hostname: str) -> str | None:
     """
     Extract region name from AWS RDS endpoint.
     Example: database-1.abc123xyz.us-east-1.rds.amazonaws.com -> us-east-1
@@ -28,7 +28,8 @@ def get_region_name_from_hostname(hostname: str) -> str:
     match = re.search(r"-([a-z]{2}-[a-z]+-\d)\.", hostname)
     if match:
         return match.group(1)
-    raise ValueError("Could not find valid AWS region from hostname")
+    logger.warning("Could not find valid AWS region from hostname")
+    return None
 
 
 def generate_aws_rds_token_with_iam_role(
