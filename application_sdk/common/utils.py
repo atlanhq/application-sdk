@@ -17,11 +17,9 @@ from typing import (
     Union,
 )
 
-from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import CommonError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 
@@ -532,6 +530,8 @@ async def get_file_names(output_path: str, typename: str) -> List[str]:
     Returns:
         List[str]: List of relative file paths for the asset type
     """
+    from application_sdk.activities.common.utils import get_object_store_prefix
+    from application_sdk.services.objectstore import ObjectStore
 
     source = get_object_store_prefix(os.path.join(output_path, typename))
     await ObjectStore.download_prefix(source, TEMPORARY_PATH)
