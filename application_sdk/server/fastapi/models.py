@@ -6,7 +6,6 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, Type, Union
 from pydantic import BaseModel, Field, RootModel
 
 from application_sdk.interceptors.models import Event, EventFilter
-from application_sdk.workflows import WorkflowInterface
 
 
 class TestAuthRequest(RootModel[Dict[str, Any]]):
@@ -221,7 +220,7 @@ class ConfigMapResponse(BaseModel):
 
 
 class WorkflowTrigger(BaseModel):
-    workflow_class: Optional[Type[WorkflowInterface]] = None
+    workflow_class: Optional[Type[Any]] = None
     model_config = {"arbitrary_types_allowed": True}
 
 

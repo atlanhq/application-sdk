@@ -309,11 +309,14 @@ class BaseApplication:
 
         self.server = APIServer(
             lifespan=lifespan,
-            workflow_client=self.workflow_client,
+            workflow_client=None,  # Deferred: resolved lazily on first API call
             ui_enabled=ui_enabled,
             handler=self.handler_class(client=self.client_class()),
             has_configmap=has_configmap,
         )
+        # Store a back-reference so the server can lazily resolve the
+        # workflow client via the application's lazy property when needed.
+        self.server._application = self  # type: ignore[attr-defined]
 
         # Mount MCP at root
         if mcp_http_app:

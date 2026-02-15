@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import os
 import time
-from typing import Any, Callable, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
@@ -12,7 +14,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from uvicorn import Config, Server
 
-from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APP_DASHBOARD_HOST,
     APP_DASHBOARD_PORT,
@@ -53,8 +54,11 @@ from application_sdk.server.fastapi.models import (
 )
 from application_sdk.server.fastapi.routers.server import get_server_router
 from application_sdk.server.fastapi.utils import internal_server_error_handler
-from application_sdk.services.statestore import StateStore, StateType
-from application_sdk.workflows import WorkflowInterface
+
+if TYPE_CHECKING:
+    from application_sdk.clients.workflow import WorkflowClient
+    from application_sdk.services.statestore import StateStore, StateType
+    from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
 
@@ -126,7 +130,8 @@ class APIServer(ServerInterface):
         """
         # First, set the instance variables
         self.handler = handler
-        self.workflow_client = workflow_client
+        self._workflow_client = workflow_client
+        self._application: Optional[Any] = None  # Set by _setup_server for lazy resolution
         self.templates = Jinja2Templates(directory=frontend_templates_path)
         self._duckdb_ui = None  # Lazily instantiated on first /observability access
         self.ui_enabled = ui_enabled
@@ -159,6 +164,27 @@ class APIServer(ServerInterface):
 
         # Initialize parent class
         super().__init__(handler)
+
+    async def _resolve_workflow_client(self) -> WorkflowClient:
+        """Lazily resolve the workflow client on first API call.
+
+        This defers loading temporalio + grpc (~200 modules, ~12 MiB) from server
+        startup to the first workflow API request (/start, /stop, /status).
+        """
+        if self._workflow_client is None and self._application is not None:
+            # Access the application's lazy workflow_client property,
+            # which creates and returns a TemporalWorkflowClient.
+            self._workflow_client = self._application.workflow_client
+            await self._workflow_client.load()
+        return self._workflow_client
+
+    @property
+    def workflow_client(self):
+        return self._workflow_client
+
+    @workflow_client.setter
+    def workflow_client(self, value):
+        self._workflow_client = value
 
     def observability(self, request: Request) -> RedirectResponse:
         """Endpoint to launch DuckDB UI for log self-serve exploration."""
@@ -270,11 +296,12 @@ class APIServer(ServerInterface):
 
         async def start_workflow_http(body: WorkflowRequest) -> WorkflowResponse:
             try:
-                if not self.workflow_client:
+                client = await self._resolve_workflow_client()
+                if not client:
                     raise Exception("Temporal client not initialized")
 
                 # Use the captured wf_class variable, which is guaranteed to be non-None
-                workflow_data = await self.workflow_client.start_workflow(
+                workflow_data = await client.start_workflow(
                     body.model_dump(), workflow_class=workflow_class
                 )
 
@@ -302,11 +329,12 @@ class APIServer(ServerInterface):
             body: EventWorkflowRequest,
         ) -> EventWorkflowResponse:
             try:
-                if not self.workflow_client:
+                client = await self._resolve_workflow_client()
+                if not client:
                     raise Exception("Temporal client not initialized")
 
                 # Use the captured wf_class variable, which is guaranteed to be non-None
-                workflow_data = await self.workflow_client.start_workflow(
+                workflow_data = await client.start_workflow(
                     body.model_dump(), workflow_class=workflow_class
                 )
 
@@ -689,6 +717,8 @@ class APIServer(ServerInterface):
         Returns:
             WorkflowConfigResponse: Response containing the workflow configuration.
         """
+        from application_sdk.services.statestore import StateStore, StateType
+
         if not StateType.is_member(type):
             raise ValueError(f"Invalid type {type} for state store")
 
@@ -707,10 +737,11 @@ class APIServer(ServerInterface):
         metrics = get_metrics()
 
         try:
-            if not self.workflow_client:
+            client = await self._resolve_workflow_client()
+            if not client:
                 raise Exception("Temporal client not initialized")
 
-            workflow_status = await self.workflow_client.get_workflow_run_status(
+            workflow_status = await client.get_workflow_run_status(
                 workflow_id,
                 run_id,
                 include_last_executed_run_id=True,
@@ -766,6 +797,8 @@ class APIServer(ServerInterface):
         Returns:
             WorkflowConfigResponse: Response containing the updated configuration.
         """
+        from application_sdk.services.statestore import StateStore, StateType
+
         if not StateType.is_member(type):
             raise ValueError(f"Invalid type {type} for state store")
 
@@ -784,10 +817,11 @@ class APIServer(ServerInterface):
         metrics = get_metrics()
 
         try:
-            if not self.workflow_client:
+            client = await self._resolve_workflow_client()
+            if not client:
                 raise Exception("Temporal client not initialized")
 
-            await self.workflow_client.stop_workflow(workflow_id, run_id)
+            await client.stop_workflow(workflow_id, run_id)
 
             # Record successful workflow stop
             metrics.record_metric(
