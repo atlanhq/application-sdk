@@ -43,12 +43,31 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         application_name (str): Name of the application, set to "sql-connector".
     """
 
-    # Default is None; resolved lazily in get_activities() to avoid importing
+    # Default is lazily resolved via _get_activities_cls() to avoid importing
     # the heavy activities module (which pulls in io, services, dapr) at class
     # definition time. This saves ~47+ modules in server mode.
-    activities_cls: Type[BaseSQLMetadataExtractionActivities] | None = None
+    _activities_cls: Type[BaseSQLMetadataExtractionActivities] | None = None
 
     application_name: str = APPLICATION_NAME
+
+    @classmethod
+    def _get_activities_cls(cls) -> Type[BaseSQLMetadataExtractionActivities]:
+        """Lazily resolve the default activities class."""
+        if cls._activities_cls is None:
+            from application_sdk.activities.metadata_extraction.sql import (
+                BaseSQLMetadataExtractionActivities,
+            )
+
+            cls._activities_cls = BaseSQLMetadataExtractionActivities
+        return cls._activities_cls
+
+    @property
+    def activities_cls(self) -> Type[BaseSQLMetadataExtractionActivities]:
+        return self._get_activities_cls()
+
+    @activities_cls.setter
+    def activities_cls(self, value: Type[BaseSQLMetadataExtractionActivities]) -> None:
+        type(self)._activities_cls = value
 
     @staticmethod
     def get_activities(
