@@ -229,7 +229,7 @@ LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
 LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
 
 # Log Location configuration
-LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
+LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.jsonl.gz")
 # Hive Partitioning Configuration
 ENABLE_HIVE_PARTITIONING = (
     os.getenv("ATLAN_ENABLE_HIVE_PARTITIONING", "true").lower() == "true"
