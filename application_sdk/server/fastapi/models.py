@@ -20,10 +20,8 @@ class TestAuthResponse(BaseModel):
     message: str
 
 
-class MetadataType(str, Enum):
-    DATABASE = "database"
-    SCHEMA = "schema"
-    ALL = "all"
+# Re-export MetadataType from its canonical location for backward compatibility
+from application_sdk.handlers import MetadataType  # noqa: F401
 
 
 class FetchMetadataRequest(RootModel[Dict[str, Any]]):

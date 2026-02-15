@@ -14,9 +14,8 @@ from application_sdk.common.utils import (
     read_sql_files,
 )
 from application_sdk.constants import SQL_QUERIES_PATH, SQL_SERVER_MIN_VERSION
-from application_sdk.handlers import HandlerInterface
+from application_sdk.handlers import HandlerInterface, MetadataType
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.server.fastapi.models import MetadataType
 
 if TYPE_CHECKING:
     from application_sdk.clients.sql import BaseSQLClient
