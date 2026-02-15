@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Any, Callable, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
@@ -20,7 +20,6 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
-    ENABLE_TEST_APIS,
     EVENT_STORE_NAME,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
@@ -34,6 +33,7 @@ from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
 from application_sdk.server.fastapi.models import (
+    AuxiliaryWorkflow,
     ConfigMapResponse,
     EventWorkflowRequest,
     EventWorkflowResponse,
@@ -46,9 +46,6 @@ from application_sdk.server.fastapi.models import (
     Subscription,
     TestAuthRequest,
     TestAuthResponse,
-    TestDataCleanupRequest,
-    TestDataGenerateRequest,
-    TestDataJobResponse,
     WorkflowConfigRequest,
     WorkflowConfigResponse,
     WorkflowData,
@@ -96,7 +93,6 @@ class APIServer(ServerInterface):
     dapr_router: APIRouter
     events_router: APIRouter
     subscription_router: APIRouter
-    test_data_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
     duckdb_ui: DuckDBUI
@@ -129,6 +125,7 @@ class APIServer(ServerInterface):
             lifespan: Optional lifespan manager for the FastAPI application.
             handler: Handler for processing application operations.
             workflow_client: Client for Temporal workflow operations.
+            auxiliary_workflows: List of auxiliary workflow objects for SDK features.
         """
         # First, set the instance variables
         self.handler = handler
@@ -137,6 +134,7 @@ class APIServer(ServerInterface):
         self.duckdb_ui = DuckDBUI()
         self.ui_enabled = ui_enabled
         self.has_configmap = has_configmap
+        self.auxiliary_workflows: Dict[str, AuxiliaryWorkflow] = {}
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -148,8 +146,11 @@ class APIServer(ServerInterface):
         self.workflow_router = APIRouter()
         self.dapr_router = APIRouter()
         self.events_router = APIRouter()
-        self.test_data_router = APIRouter()
         self.subscriptions = subscriptions
+
+        # Initialize a dictionary to hold routers for auxiliary workflows, keyed by workflow name or identifier
+        self.auxiliary_routers: Dict[str, APIRouter] = {}
+
         # Set up the application
         error_handler = internal_server_error_handler  # Store as local variable
         self.app.add_exception_handler(
@@ -217,6 +218,7 @@ class APIServer(ServerInterface):
         - Pubsub router (/dapr)
         - Events router (/events/v1)
         - Subscription router (/subscriptions/v1)
+        - Auxiliary workflows (if any)
         """
         # Register all routes first
         self.register_routes()
@@ -227,10 +229,8 @@ class APIServer(ServerInterface):
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
-        # Include test data router only if ENABLE_TEST_APIS is true
-        if ENABLE_TEST_APIS:
-            self.app.include_router(self.test_data_router, prefix="/test-data/v1")
-            logger.info("Test data APIs enabled at /test-data/v1")
+        # Note: Auxiliary workflow routers are included later in register_workflow()
+        # after routes are added to them, not here
 
         # Register subscription routes from subscriptions with handler callbacks
         subscription_router = APIRouter()
@@ -364,6 +364,72 @@ class APIServer(ServerInterface):
 
                 self.app.include_router(self.events_router, prefix="/events/v1")
 
+    def register_auxiliary_workflow(self, auxiliary_workflow: AuxiliaryWorkflow):
+        """Register an auxiliary workflow with its associated routes.
+
+        Args:
+            auxiliary_workflow (AuxiliaryWorkflow): The auxiliary workflow object containing the workflow class and triggers.
+
+        Raises:
+            Exception: If temporal client is not initialized for HTTP triggers.
+        """
+        workflow_name = auxiliary_workflow.name
+        workflow_class = auxiliary_workflow.workflow_class
+        triggers = auxiliary_workflow.triggers
+
+        # Validate and store workflow_class at the method level to ensure it's not None
+        if workflow_class is None:
+            raise ValueError(
+                f"workflow_class cannot be None for auxiliary workflow {workflow_name}"
+            )
+
+        router = self.auxiliary_routers.get(workflow_name)
+        if not router:
+            router = APIRouter()
+            self.auxiliary_routers[workflow_name] = router
+
+        async def start_auxiliary_workflow(body: WorkflowRequest) -> WorkflowResponse:
+            try:
+                if not self.workflow_client:
+                    raise Exception("Temporal client not initialized")
+
+                workflow_data = await self.workflow_client.start_workflow(
+                    body.model_dump(), workflow_class=workflow_class
+                )
+
+                return WorkflowResponse(
+                    success=True,
+                    message=f"Auxiliary workflow {workflow_name} started successfully",
+                    data=WorkflowData(
+                        workflow_id=workflow_data.get("workflow_id") or "",
+                        run_id=workflow_data.get("run_id") or "",
+                    ),
+                )
+            except Exception as e:
+                logger.error(f"Error starting auxiliary workflow: {e}")
+                return WorkflowResponse(
+                    success=False,
+                    message=f"Auxiliary workflow {workflow_name} failed to start",
+                    data=WorkflowData(
+                        workflow_id="",
+                        run_id="",
+                    ),
+                )
+
+        for trigger in triggers:
+            trigger.workflow_class = workflow_class
+            if isinstance(trigger, HttpWorkflowTrigger):
+                router.add_api_route(
+                    trigger.endpoint,
+                    start_auxiliary_workflow,
+                    methods=trigger.methods,
+                    response_model=WorkflowResponse,
+                )
+
+        # Include the router with a prefix based on the auxiliary workflow name
+        self.app.include_router(router, prefix=auxiliary_workflow.api_route_prefix)
+        self.auxiliary_workflows[workflow_name] = auxiliary_workflow
+
     def register_routes(self):
         """
         Method to register the routes for the FastAPI application
@@ -441,22 +507,6 @@ class APIServer(ServerInterface):
             response_model=EventWorkflowResponse,
         )
 
-        # Register test data routes only if ENABLE_TEST_APIS is true
-        if ENABLE_TEST_APIS:
-            self.test_data_router.add_api_route(
-                "/generate",
-                self.generate_test_data,
-                methods=["POST"],
-                response_model=TestDataJobResponse,
-            )
-
-            self.test_data_router.add_api_route(
-                "/cleanup",
-                self.cleanup_test_data,
-                methods=["POST"],
-                response_model=TestDataJobResponse,
-            )
-
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
         self.app.get("/")(self.frontend_home)
@@ -524,40 +574,6 @@ class APIServer(ServerInterface):
                 run_id="",
             ),
             status=EventWorkflowResponse.Status.DROP,
-        )
-
-    async def generate_test_data(
-        self, body: TestDataGenerateRequest
-    ) -> TestDataJobResponse:
-        """Generate test data endpoint - dummy implementation."""
-        import uuid
-        from datetime import datetime
-
-        workflow_id = body.workflow_id or f"test-data-gen-{uuid.uuid4()}"
-        return TestDataJobResponse(
-            job_id=workflow_id,
-            workflow_id=workflow_id,
-            run_id="dummy-run-id",
-            status="NOT_IMPLEMENTED",
-            operation="generate",
-            created_at=datetime.utcnow().isoformat(),
-        )
-
-    async def cleanup_test_data(
-        self, body: TestDataCleanupRequest
-    ) -> TestDataJobResponse:
-        """Cleanup test data endpoint - dummy implementation."""
-        import uuid
-        from datetime import datetime
-
-        workflow_id = body.workflow_id or f"test-data-cleanup-{uuid.uuid4()}"
-        return TestDataJobResponse(
-            job_id=workflow_id,
-            workflow_id=workflow_id,
-            run_id="dummy-run-id",
-            status="NOT_IMPLEMENTED",
-            operation="cleanup",
-            created_at=datetime.utcnow().isoformat(),
         )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:

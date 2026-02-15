@@ -17,7 +17,10 @@ from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
-from application_sdk.server.fastapi.models import EventWorkflowTrigger
+from application_sdk.server.fastapi.models import (
+    AuxiliaryWorkflow,
+    EventWorkflowTrigger,
+)
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
@@ -67,6 +70,9 @@ class BaseApplication:
 
         self.client_class = client_class or BaseClient
         self.handler_class = handler_class or BaseHandler
+
+        # Auxiliary workflows registry for SDK-provided endpoints
+        self.auxiliary_workflows: List[AuxiliaryWorkflow] = []
 
         # MCP configuration
         self.mcp_server: Optional["MCPServer"] = None
@@ -118,6 +124,34 @@ class BaseApplication:
             )
 
         self.event_subscriptions[event_id].workflow_class = workflow_class
+
+    def add_auxiliary_workflow(self, workflow: AuxiliaryWorkflow) -> None:
+        """Register an auxiliary workflow for SDK-provided endpoints.
+
+        This allows apps to provide workflow implementations for SDK features
+        like test data generation, query extraction, data quality checks, etc.
+
+        Args:
+            workflow: An AuxiliaryWorkflow object defining the workflow and its triggers.
+
+        Example:
+            application.add_auxiliary_workflow(
+                TestDataAuxiliaryWorkflow(BigQueryTestDataWorkflow)
+            )
+
+        Raises:
+            ValueError: If a workflow with the same name is already registered.
+        """
+        # Validate no duplicate names
+        if any(aw.name == workflow.name for aw in self.auxiliary_workflows):
+            raise ValueError(
+                f"Auxiliary workflow '{workflow.name}' is already registered"
+            )
+
+        self.auxiliary_workflows.append(workflow)
+        logger.info(
+            f"Registered auxiliary workflow '{workflow.name}': {workflow.workflow_class.__name__}"
+        )
 
     async def start(
         self,
@@ -300,6 +334,34 @@ class BaseApplication:
             workflow_class=workflow_class,
             triggers=[HttpWorkflowTrigger()],
         )
+
+        # Register auxiliary workflows if any
+        self._register_auxiliary_workflows()
+
+    def _register_auxiliary_workflows(self) -> None:
+        """Register auxiliary workflows if any."""
+        if not self.auxiliary_workflows:
+            return
+
+        for auxiliary_workflow in self.auxiliary_workflows:
+            if not auxiliary_workflow.enabled:
+                logger.info(
+                    f"Auxiliary workflow '{auxiliary_workflow.name}' is disabled, skipping"
+                )
+                continue
+
+            if not auxiliary_workflow.triggers:
+                logger.warning(
+                    f"Auxiliary workflow '{auxiliary_workflow.name}' has no triggers, skipping"
+                )
+                continue
+
+            logger.info(
+                f"Registering auxiliary workflow '{auxiliary_workflow.name}' with "
+                f"{len(auxiliary_workflow.triggers)} triggers at '{auxiliary_workflow.api_route_prefix}'"
+            )
+
+            self.server.register_auxiliary_workflow(auxiliary_workflow)
 
     @deprecated("Use application.start(). Deprecated since v2.3.0.")
     @observability(logger=logger, metrics=metrics, traces=traces)

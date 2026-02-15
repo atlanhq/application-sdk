@@ -303,28 +303,57 @@ class Subscription(BaseModel):
     dead_letter_topic: Optional[str] = None
 
 
-class TestDataGenerateRequest(BaseModel):
-    workflow_id: Optional[str] = Field(
-        None, description="Optional workflow ID for the test data generation job"
+class AuxiliaryWorkflow(BaseModel):
+    """Base class for auxiliary workflows.
+
+    Auxiliary workflows are SDK-provided features like test data generation,
+    query extraction testing, data quality validation, etc. that applications
+    can optionally implement.
+
+    Subclasses must provide:
+        - name: Unique identifier
+        - workflow_class: The workflow implementation
+        - api_route_prefix: Route prefix for endpoints
+        - triggers: List of HTTP/Event triggers
+    """
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    name: str = Field(..., description="Unique identifier for this auxiliary workflow")
+    workflow_class: Type[WorkflowInterface] = Field(
+        ..., description="Workflow class implementing this auxiliary feature"
     )
-    config: Dict[str, Any] = Field(
-        default_factory=dict, description="Configuration for test data generation"
+    api_route_prefix: str = Field(
+        ...,
+        description="Route prefix for this workflow's endpoints (e.g., '/test-data/v1')",
+    )
+    triggers: List[WorkflowTrigger] = Field(
+        ..., description="List of triggers (HTTP or Event) for this workflow"
+    )
+    enabled: bool = Field(
+        default=True, description="Whether this auxiliary workflow is enabled"
     )
 
 
-class TestDataCleanupRequest(BaseModel):
-    workflow_id: Optional[str] = Field(
-        None, description="Optional workflow ID for the test data cleanup job"
-    )
-    config: Dict[str, Any] = Field(
-        default_factory=dict, description="Configuration for test data cleanup"
-    )
+class TestDataAuxiliaryWorkflow(AuxiliaryWorkflow):
+    """Test Data auxiliary workflow for generating and cleaning up test data."""
 
+    def __init__(self, workflow_class: Type[WorkflowInterface], enabled: bool = None):
+        """Initialize test data auxiliary workflow.
 
-class TestDataJobResponse(BaseModel):
-    job_id: str = Field(..., description="Unique identifier for the job")
-    workflow_id: str = Field(..., description="Workflow ID associated with the job")
-    run_id: str = Field(..., description="Run ID associated with the job")
-    status: str = Field(..., description="Current status of the job")
-    operation: str = Field(..., description="Operation type (generate or cleanup)")
-    created_at: str = Field(..., description="Timestamp when the job was created")
+        Args:
+            workflow_class: The workflow class implementing test data operations
+            enabled: Whether to enable (defaults to ENABLE_TEST_APIS env var)
+        """
+        from application_sdk.constants import ENABLE_TEST_APIS
+
+        if enabled is None:
+            enabled = ENABLE_TEST_APIS
+
+        super().__init__(
+            name="test_data",
+            workflow_class=workflow_class,
+            api_route_prefix="/test-data/v1",
+            triggers=[HttpWorkflowTrigger()],
+            enabled=enabled,
+        )
