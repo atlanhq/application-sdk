@@ -15,7 +15,13 @@ class MockHandler(HandlerInterface):
 
     async def preflight_check(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Mock preflight check."""
-        return {"status": "success"}
+        return {
+            "testCheck": {
+                "success": True,
+                "successMessage": "Test check passed",
+                "failureMessage": "",
+            }
+        }
 
     async def fetch_metadata(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Mock fetch metadata."""
@@ -259,7 +265,13 @@ class TestActivitiesInterfaceActivities:
 
         result = await mock_activities.preflight_check(workflow_args)
 
-        assert result == {"status": "success"}
+        assert result == {
+            "testCheck": {
+                "success": True,
+                "successMessage": "Test check passed",
+                "failureMessage": "",
+            }
+        }
 
     async def test_preflight_check_no_handler(self, mock_activities):
         """Test preflight_check when handler is not found."""
