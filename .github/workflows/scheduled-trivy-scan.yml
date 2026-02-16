@@ -134,6 +134,8 @@ jobs:
               if [ "$IMAGE_VULNS" -gt 0 ]; then
                 echo "### Docker Image Vulnerabilities ($IMAGE_VULNS)"
                 echo ""
+                echo "| Severity | Package | Installed | Fixed | CVE |"
+                echo "|----------|---------|-----------|-------|-----|"
                 jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | "| \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "N/A") | \(.VulnerabilityID) |"' trivy-image.json | sort -t'|' -k2,2 | head -50
                 echo ""
               fi
@@ -141,6 +143,8 @@ jobs:
               if [ "$DEPS_VULNS" -gt 0 ]; then
                 echo "### Dependency Vulnerabilities ($DEPS_VULNS)"
                 echo ""
+                echo "| Severity | Package | Installed | Fixed | CVE |"
+                echo "|----------|---------|-----------|-------|-----|"
                 jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | "| \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "N/A") | \(.VulnerabilityID) |"' trivy-deps.json | sort -t'|' -k2,2 | head -50
                 echo ""
               fi
@@ -205,26 +209,28 @@ jobs:
 
           TITLE="[Security] $SERVICE — $TOTAL_VULNS CRITICAL,HIGH vulnerabilities ($DATE)"
 
-          DESCRIPTION="## Scheduled Trivy Scan Results
+          read -r -d '' DESCRIPTION << DESC_EOF || true
+## Scheduled Trivy Scan Results
 
-          **Service:** $SERVICE
-          **Repository:** [$REPO](${{ github.server_url }}/${{ github.repository }})
-          **Scan date:** $DATE
-          **Workflow run:** [View logs]($RUN_URL)
+**Service:** $SERVICE
+**Repository:** [$REPO](${{ github.server_url }}/${{ github.repository }})
+**Scan date:** $DATE
+**Workflow run:** [View logs]($RUN_URL)
 
-          ---
+---
 
-          **Image vulnerabilities:** $IMAGE_VULNS
-          **Dependency vulnerabilities:** $DEPS_VULNS
-          **Total:** $TOTAL_VULNS
+| Metric | Count |
+|--------|-------|
+| Image vulnerabilities | $IMAGE_VULNS |
+| Dependency vulnerabilities | $DEPS_VULNS |
+| **Total** | **$TOTAL_VULNS** |
 
-          | Severity | Package | Installed | Fixed | CVE |
-          |----------|---------|-----------|-------|-----|
-          $VULN_SUMMARY
+$VULN_SUMMARY
 
-          ---
+---
 
-          *This ticket was automatically created by the scheduled Trivy scan workflow.*"
+*This ticket was automatically created by the scheduled Trivy scan workflow.*
+DESC_EOF
 
           # Build GraphQL mutation
           MUTATION=$(jq -n \
