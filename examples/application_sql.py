@@ -163,7 +163,7 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
 
     workflow_response = await app.start_workflow(workflow_args=workflow_args)
 
-    await app.start_worker(daemon=daemon)
+    await app.start()
 
     return workflow_response
 

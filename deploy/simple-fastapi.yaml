@@ -1,0 +1,68 @@
+# Minimal FastAPI server on python:3.13-alpine — ConfigMap + Deployment + Service in one file.
+# Apply: kubectl apply -f deploy/simple-fastapi.yaml
+# Port-forward: kubectl port-forward deployment/simple-fastapi 8000:8000
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: simple-fastapi-app
+data:
+  main.py: |
+    from fastapi import FastAPI
+    app = FastAPI()
+
+    @app.get("/")
+    def root():
+        return {"message": "Hello"}
+
+    @app.get("/health")
+    def health():
+        return {"status": "ok"}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simple-fastapi
+  labels:
+    app: simple-fastapi
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: simple-fastapi
+  template:
+    metadata:
+      labels:
+        app: simple-fastapi
+    spec:
+      containers:
+        - name: server
+          image: python:3.13-alpine
+          command:
+            - sh
+            - -c
+            - |
+              pip install --no-cache-dir fastapi uvicorn &&
+              uvicorn main:app --host 0.0.0.0 --port 8000
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: app
+              mountPath: /app
+          workingDir: /app
+      volumes:
+        - name: app
+          configMap:
+            name: simple-fastapi-app
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: simple-fastapi
+spec:
+  selector:
+    app: simple-fastapi
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP

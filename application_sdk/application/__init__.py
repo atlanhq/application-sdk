@@ -5,7 +5,6 @@ from typing_extensions import deprecated
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.base import BaseClient
-from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import APPLICATION_MODE, ENABLE_MCP, ApplicationMode
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.interceptors.models import EventRegistration
@@ -18,7 +17,6 @@ from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.server.fastapi.models import EventWorkflowTrigger
-from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
@@ -60,7 +58,13 @@ class BaseApplication:
 
         self.worker = None
 
-        self.workflow_client = get_workflow_client(application_name=name)
+        # Defer workflow client in SERVER mode to avoid loading Temporal until _setup_server
+        if APPLICATION_MODE != ApplicationMode.SERVER:
+            from application_sdk.clients.utils import get_workflow_client
+
+            self.workflow_client = get_workflow_client(application_name=name)
+        else:
+            self.workflow_client = None
 
         self.application_manifest: Optional[Dict[str, Any]] = application_manifest
         self.bootstrap_event_registration()
@@ -180,6 +184,8 @@ class BaseApplication:
                 workflow_class.get_activities(activities_class())  # type: ignore
             )
 
+        from application_sdk.worker import Worker
+
         self.worker = Worker(
             workflow_client=self.workflow_client,
             workflow_classes=workflow_classes,
@@ -255,7 +261,13 @@ class BaseApplication:
             has_configmap (bool): Whether to enable the configmap.
         """
         if self.workflow_client is None:
-            await self.workflow_client.load()
+            from application_sdk.clients.utils import get_workflow_client
+
+            self.workflow_client = get_workflow_client(
+                application_name=self.application_name
+            )
+        assert self.workflow_client is not None
+        await self.workflow_client.load()
 
         mcp_http_app: Optional[Any] = None
         lifespan: Optional[Any] = None

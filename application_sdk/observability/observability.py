@@ -10,7 +10,6 @@ from pathlib import Path
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
-import duckdb
 import pandas as pd
 from dapr.clients import DaprClient
 from pydantic import BaseModel
@@ -613,6 +612,8 @@ class DuckDBUI:
 
     def start_ui(self):
         """Start DuckDB UI and create views for Hive partitioned parquet files."""
+        import duckdb  # Lazy import to avoid loading DuckDB at API server startup
+
         if not self._is_duckdb_ui_running():
             os.makedirs(self.observability_dir, exist_ok=True)
             con = duckdb.connect(self.db_path)

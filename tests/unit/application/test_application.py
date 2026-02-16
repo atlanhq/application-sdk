@@ -218,7 +218,7 @@ class TestBaseApplication:
         with pytest.raises(ValueError, match="Event invalid_id not initialized"):
             app.register_event_subscription("invalid_id", MockWorkflowInterface)
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_setup_workflow_success(self, mock_get_workflow_client):
         """Test successful workflow setup."""
         mock_workflow_client = AsyncMock()
@@ -239,7 +239,7 @@ class TestBaseApplication:
         assert app.worker is not None
         mock_workflow_client.load.assert_called_once()
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_setup_workflow_with_passthrough_modules(
         self, mock_get_workflow_client
     ):
@@ -264,7 +264,7 @@ class TestBaseApplication:
 
         assert app.worker is not None
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_start_workflow_success(self, mock_get_workflow_client):
         """Test successful workflow start."""
         mock_workflow_client = AsyncMock()
@@ -281,7 +281,7 @@ class TestBaseApplication:
             workflow_args, MockWorkflowInterface
         )
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_start_workflow_no_client(self, mock_get_workflow_client):
         """Test workflow start when workflow client is None."""
         mock_get_workflow_client.return_value = None
@@ -292,7 +292,7 @@ class TestBaseApplication:
         with pytest.raises(ValueError, match="Workflow client not initialized"):
             await app.start_workflow({}, MockWorkflowInterface)
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     async def test_start_worker_success(self, mock_get_workflow_client):
         """Test successful worker start."""
         mock_workflow_client = AsyncMock()
@@ -312,7 +312,7 @@ class TestBaseApplication:
         with pytest.raises(ValueError, match="Worker not initialized"):
             await app.start_worker()
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     @patch("application_sdk.application.APIServer")
     async def test_setup_server_success(
         self, mock_api_server, mock_get_workflow_client
@@ -339,7 +339,7 @@ class TestBaseApplication:
         assert isinstance(handler.client, BaseClient)
         mock_server_instance.register_workflow.assert_called_once()
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     @patch("application_sdk.application.APIServer")
     async def test_setup_server_with_custom_client_and_handler(
         self, mock_api_server, mock_get_workflow_client
@@ -368,7 +368,7 @@ class TestBaseApplication:
         assert isinstance(handler.client, MockClientClass)
         mock_server_instance.register_workflow.assert_called_once()
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     @patch("application_sdk.application.APIServer")
     async def test_setup_server_with_event_subscriptions(
         self, mock_api_server, mock_get_workflow_client
@@ -402,7 +402,7 @@ class TestBaseApplication:
         # Should register both event trigger and HTTP trigger
         assert mock_server_instance.register_workflow.call_count == 2
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     @patch("application_sdk.application.APIServer")
     async def test_setup_server_missing_workflow_class(
         self, mock_api_server, mock_get_workflow_client
@@ -456,7 +456,7 @@ class TestBaseApplication:
 class TestApplicationModeStart:
     """Test cases for split architecture based on APPLICATION_MODE."""
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.WORKER)
     async def test_start_worker_mode_starts_worker_non_daemon(
         self, mock_get_workflow_client
@@ -479,7 +479,7 @@ class TestApplicationModeStart:
         # In WORKER mode, worker should start with daemon=False (main thread)
         app.worker.start.assert_called_once_with(daemon=False)
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     @patch("application_sdk.application.APIServer")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.LOCAL)
     async def test_start_local_mode_starts_worker_daemon(
@@ -507,7 +507,7 @@ class TestApplicationModeStart:
         # In LOCAL mode, server should also be started
         mock_server_instance.start.assert_called_once()
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     @patch("application_sdk.application.APIServer")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.SERVER)
     async def test_start_server_mode_starts_server(
@@ -527,7 +527,7 @@ class TestApplicationModeStart:
         mock_api_server.assert_called_once()
         mock_server_instance.start.assert_called_once()
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.WORKER)
     async def test_worker_mode_does_not_start_server(self, mock_get_workflow_client):
         """Test that WORKER mode does not set up or start server."""
@@ -548,7 +548,7 @@ class TestApplicationModeStart:
         # Server should not be initialized
         assert app.server is None
 
-    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.clients.utils.get_workflow_client")
     @patch("application_sdk.application.APIServer")
     @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.SERVER)
     async def test_server_mode_does_not_start_worker(

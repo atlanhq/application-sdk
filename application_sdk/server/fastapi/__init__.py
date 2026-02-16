@@ -24,11 +24,10 @@ from application_sdk.constants import (
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
-from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
-from application_sdk.observability.observability import DuckDBUI
+from application_sdk.observability.duckdb_ui import DuckDBUI
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
@@ -54,7 +53,6 @@ from application_sdk.server.fastapi.models import (
 )
 from application_sdk.server.fastapi.routers.server import get_server_router
 from application_sdk.server.fastapi.utils import internal_server_error_handler
-from application_sdk.services.statestore import StateStore, StateType
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
@@ -154,9 +152,10 @@ class APIServer(ServerInterface):
         self.app.add_middleware(LogMiddleware)
         self.app.add_middleware(MetricsMiddleware)
 
-        # Register routers and setup docs
+        # Register routers and setup docs (skip docs when UI disabled to reduce memory)
         self.register_routers()
-        self.setup_atlan_docs()
+        if self.ui_enabled:
+            self.setup_atlan_docs()
 
         # Initialize parent class
         super().__init__(handler)
@@ -173,6 +172,8 @@ class APIServer(ServerInterface):
         Generates documentation using AtlanDocsGenerator and mounts it at the /atlandocs endpoint.
         Any exceptions during documentation generation are logged as warnings.
         """
+        from application_sdk.docgen import AtlanDocsGenerator
+
         docs_generator = AtlanDocsGenerator(
             docs_directory_path=self.docs_directory_path,
             export_path=self.docs_export_path,
@@ -684,6 +685,8 @@ class APIServer(ServerInterface):
         Returns:
             WorkflowConfigResponse: Response containing the workflow configuration.
         """
+        from application_sdk.services.statestore import StateStore, StateType
+
         if not StateType.is_member(type):
             raise ValueError(f"Invalid type {type} for state store")
 
@@ -761,6 +764,8 @@ class APIServer(ServerInterface):
         Returns:
             WorkflowConfigResponse: Response containing the updated configuration.
         """
+        from application_sdk.services.statestore import StateStore, StateType
+
         if not StateType.is_member(type):
             raise ValueError(f"Invalid type {type} for state store")
 

@@ -8,7 +8,8 @@ from hypothesis import given
 from hypothesis import strategies as st
 from loguru import logger
 
-from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.logger_adaptor_full import AtlanLoggerAdapter
 from application_sdk.test_utils.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
@@ -194,7 +195,7 @@ def test_process_with_generated_request_context(request_id: str):
     """Test process() method with generated request context data."""
     with create_logger_adapter() as logger_adapter:
         with mock.patch(
-            "application_sdk.observability.logger_adaptor.request_context"
+            "application_sdk.observability.logger_adaptor_full.request_context"
         ) as mock_context:
             mock_context.get.return_value = {"request_id": request_id}
             msg, kwargs = logger_adapter.process("Test message", {})
@@ -341,7 +342,7 @@ class TestCorrelationContext:
         """Test process() when correlation context is set."""
         with create_logger_adapter() as logger_adapter:
             with mock.patch(
-                "application_sdk.observability.logger_adaptor.correlation_context"
+                "application_sdk.observability.logger_adaptor_full.correlation_context"
             ) as mock_corr_context:
                 mock_corr_context.get.return_value = {
                     self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
@@ -357,7 +358,7 @@ class TestCorrelationContext:
         """Test process() when correlation context is empty."""
         with create_logger_adapter() as logger_adapter:
             with mock.patch(
-                "application_sdk.observability.logger_adaptor.correlation_context"
+                "application_sdk.observability.logger_adaptor_full.correlation_context"
             ) as mock_corr_context:
                 mock_corr_context.get.return_value = {}
 
@@ -370,7 +371,7 @@ class TestCorrelationContext:
         """Test process() extracts trace_id from correlation context."""
         with create_logger_adapter() as logger_adapter:
             with mock.patch(
-                "application_sdk.observability.logger_adaptor.correlation_context"
+                "application_sdk.observability.logger_adaptor_full.correlation_context"
             ) as mock_corr_context:
                 mock_corr_context.get.return_value = {
                     "trace_id": self.TRACE_ID,
@@ -386,7 +387,7 @@ class TestCorrelationContext:
         """Test process() when trace_id is not in correlation context."""
         with create_logger_adapter() as logger_adapter:
             with mock.patch(
-                "application_sdk.observability.logger_adaptor.correlation_context"
+                "application_sdk.observability.logger_adaptor_full.correlation_context"
             ) as mock_corr_context:
                 mock_corr_context.get.return_value = {
                     self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
@@ -401,7 +402,7 @@ class TestCorrelationContext:
         """Test process() gracefully handles None when correlation context is unset."""
         with create_logger_adapter() as logger_adapter:
             with mock.patch(
-                "application_sdk.observability.logger_adaptor.correlation_context"
+                "application_sdk.observability.logger_adaptor_full.correlation_context"
             ) as mock_corr_context:
                 # ContextVar returns None when not set
                 mock_corr_context.get.return_value = None
@@ -420,7 +421,7 @@ class TestCorrelationContext:
         """Test process() gracefully handles None when request context is unset."""
         with create_logger_adapter() as logger_adapter:
             with mock.patch(
-                "application_sdk.observability.logger_adaptor.request_context"
+                "application_sdk.observability.logger_adaptor_full.request_context"
             ) as mock_req_context:
                 # ContextVar returns None when not set
                 mock_req_context.get.return_value = None
@@ -512,7 +513,7 @@ class TestCorrelationContextIntegration:
         with create_logger_adapter() as logger_adapter:
             with mock.patch("temporalio.workflow.info") as mock_workflow_info:
                 with mock.patch(
-                    "application_sdk.observability.logger_adaptor.correlation_context"
+                    "application_sdk.observability.logger_adaptor_full.correlation_context"
                 ) as mock_corr_context:
                     workflow_info = mock.Mock(
                         workflow_id=self.WORKFLOW_ID,
@@ -543,7 +544,7 @@ class TestCorrelationContextIntegration:
         with create_logger_adapter() as logger_adapter:
             with mock.patch("temporalio.activity.info") as mock_activity_info:
                 with mock.patch(
-                    "application_sdk.observability.logger_adaptor.correlation_context"
+                    "application_sdk.observability.logger_adaptor_full.correlation_context"
                 ) as mock_corr_context:
                     activity_info = mock.Mock(
                         workflow_id=self.WORKFLOW_ID,

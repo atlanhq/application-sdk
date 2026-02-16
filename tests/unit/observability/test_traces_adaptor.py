@@ -6,10 +6,10 @@ from unittest import mock
 import pytest
 from opentelemetry.trace import SpanKind
 
-from application_sdk.observability.traces_adaptor import (
+from application_sdk.observability.traces_adaptor import get_traces
+from application_sdk.observability.traces_adaptor_full import (
     AtlanTracesAdapter,
     TraceRecord,
-    get_traces,
 )
 
 
