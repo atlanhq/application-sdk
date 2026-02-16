@@ -285,17 +285,26 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             if not result:
                 raise ValueError("Preflight check failed: No results returned")
 
-            # Check if any individual check failed (dynamically detect check keys)
-            failed_checks = [
-                key
+            # Find all check entries (dicts with 'success' field)
+            check_entries = {
+                key: value
                 for key, value in result.items()
-                if isinstance(value, dict)
-                and "success" in value
-                and not value.get("success", True)
+                if isinstance(value, dict) and "success" in value
+            }
+
+            # Fail if no recognized check entries exist (pessimistic approach)
+            if not check_entries:
+                raise ValueError(
+                    "Preflight check failed: No recognized check results found"
+                )
+
+            # Check if any individual check failed
+            failed_checks = [
+                key for key, value in check_entries.items() if not value.get("success")
             ]
             if failed_checks:
                 failure_messages = [
-                    result[key].get("failureMessage", "Unknown failure")
+                    check_entries[key].get("failureMessage", "Unknown failure")
                     for key in failed_checks
                 ]
                 raise ValueError(
