@@ -19,7 +19,8 @@ class LogMiddleware(BaseHTTPMiddleware):
         # Use the existing logger instead of creating a new one
         self.logger = logger
         # Remove any existing handlers to prevent duplicate logging
-        self.logger.logger.handlers = []
+        if hasattr(self.logger, "logger"):
+            self.logger.logger.handlers = []
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
