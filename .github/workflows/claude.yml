@@ -48,3 +48,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           claude_args: "--model claude-sonnet-4"
+          custom_instructions: |
+            When a user asks you to "review" a pull request (e.g. "@claude review",
+            "@claude review this PR", "@claude please review"), execute the /review
+            slash command. Do not attempt a freeform review — always use the skill.
