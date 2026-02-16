@@ -5,7 +5,9 @@ on:
   push:
     branches:
       - main
-      - debug/reduce-api-server-memory
+    paths:
+      - 'Dockerfile'
+      - 'entrypoint.sh'
 
 permissions:
   contents: read
