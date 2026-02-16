@@ -75,10 +75,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
         "os.path.isdir", return_value=False
     ), patch("glob.glob", return_value=[]), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
-    ) as mock_download, patch(
-        "application_sdk.activities.common.utils.get_object_store_prefix",
-        return_value="local/test.parquet",
-    ):
+    ) as mock_download:
         parquet_input = ParquetFileReader(
             path=path, chunk_size=100000, dataframe_type=DataframeType.pandas
         )
@@ -88,12 +85,12 @@ async def test_download_file_invoked_for_missing_files() -> None:
         )
 
         # Should attempt to download the file
+        expected_destination = os.path.join("./local/tmp/", path)
         mock_download.assert_called_once_with(
-            source="local/test.parquet", destination="./local/tmp/local/test.parquet"
+            source=path, destination=expected_destination
         )
         # Result should be the actual downloaded file path in temporary directory
-        expected_path = "./local/tmp/local/test.parquet"
-        assert result == [expected_path]
+        assert result == [expected_destination]
 
 
 # ---------------------------------------------------------------------------

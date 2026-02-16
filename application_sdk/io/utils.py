@@ -3,7 +3,6 @@ import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
-from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import IOError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
@@ -102,7 +101,7 @@ async def download_files(
 
         if path.endswith(file_extension):
             # Single file case (file_names validation already ensures this is valid)
-            source_path = get_object_store_prefix(path)
+            source_path = path
             destination_path = os.path.join(TEMPORARY_PATH, source_path)
             await ObjectStore.download_file(
                 source=source_path,
@@ -114,7 +113,7 @@ async def download_files(
             # Directory with specific files - download each file individually
             for file_name in file_names:
                 file_path = os.path.join(path, file_name)
-                source_path = get_object_store_prefix(file_path)
+                source_path = file_path
                 destination_path = os.path.join(TEMPORARY_PATH, source_path)
                 await ObjectStore.download_file(
                     source=source_path,
@@ -123,7 +122,7 @@ async def download_files(
                 downloaded_paths.append(destination_path)
         else:
             # Download entire directory
-            source_path = get_object_store_prefix(path)
+            source_path = path
             destination_path = os.path.join(TEMPORARY_PATH, source_path)
             await ObjectStore.download_prefix(
                 source=source_path,

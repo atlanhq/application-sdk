@@ -61,23 +61,20 @@ async def test_download_file_invoked_for_missing_files() -> None:
     path = "/local"
     file_names = ["a.json", "b.json"]
 
-    def mock_isfile(path):
+    def mock_isfile(p):
         # Return False for initial local check, True for downloaded files
         # Normalize paths for cross-platform comparison
         expected_paths = [
-            os.path.join("./local/tmp/local", "a.json"),
-            os.path.join("./local/tmp/local", "b.json"),
+            os.path.join("./local/tmp/", os.path.join(path, "a.json")),
+            os.path.join("./local/tmp/", os.path.join(path, "b.json")),
         ]
-        if path in expected_paths:
+        if p in expected_paths:
             return True
         return False
 
     with patch("os.path.isfile", side_effect=mock_isfile), patch(
         "os.path.isdir", return_value=True
     ), patch("glob.glob", side_effect=[[]]), patch(  # Only for initial local check
-        "application_sdk.activities.common.utils.get_object_store_prefix",
-        side_effect=lambda p: p.lstrip("/").replace("\\", "/"),
-    ), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
         json_input = JsonFileReader(
@@ -90,19 +87,19 @@ async def test_download_file_invoked_for_missing_files() -> None:
         # Normalize paths for cross-platform compatibility
         expected_calls = [
             call(
-                source=os.path.join("local", "a.json"),
-                destination=os.path.join("./local/tmp/local", "a.json"),
+                source=os.path.join(path, "a.json"),
+                destination=os.path.join("./local/tmp/", os.path.join(path, "a.json")),
             ),
             call(
-                source=os.path.join("local", "b.json"),
-                destination=os.path.join("./local/tmp/local", "b.json"),
+                source=os.path.join(path, "b.json"),
+                destination=os.path.join("./local/tmp/", os.path.join(path, "b.json")),
             ),
         ]
         mock_download.assert_has_calls(expected_calls, any_order=True)
         # Normalize result paths for comparison
         expected_result = [
-            os.path.join("./local/tmp/local", "a.json"),
-            os.path.join("./local/tmp/local", "b.json"),
+            os.path.join("./local/tmp/", os.path.join(path, "a.json")),
+            os.path.join("./local/tmp/", os.path.join(path, "b.json")),
         ]
         assert result == expected_result
 
@@ -140,9 +137,6 @@ async def test_download_file_error_propagation() -> None:
     with patch("os.path.isfile", return_value=False), patch(
         "os.path.isdir", return_value=True
     ), patch("glob.glob", return_value=[]), patch(
-        "application_sdk.activities.common.utils.get_object_store_prefix",
-        side_effect=lambda p: p.lstrip("/").replace("\\", "/"),
-    ), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file",
         side_effect=Exception("Download failed"),
     ):

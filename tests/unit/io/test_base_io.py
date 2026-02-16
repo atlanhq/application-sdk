@@ -171,20 +171,16 @@ class TestReaderDownloadFiles:
         ), patch("glob.glob", return_value=[]), patch(
             "application_sdk.services.objectstore.ObjectStore.download_file",
             new_callable=AsyncMock,
-        ) as mock_download, patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
-            return_value="data/test.parquet",
-        ):
+        ) as mock_download:
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
+            expected_destination = os.path.join("./local/tmp/", path)
             mock_download.assert_called_once_with(
-                source="data/test.parquet", destination="./local/tmp/data/test.parquet"
+                source=path, destination=expected_destination
             )
-            # Result should be the actual downloaded file path in temporary directory
-            expected_path = "./local/tmp/data/test.parquet"
-            assert result == [expected_path]
+            assert result == [expected_destination]
 
     @pytest.mark.asyncio
     async def test_download_files_download_directory_success(self):
@@ -193,34 +189,25 @@ class TestReaderDownloadFiles:
         input_instance = MockReader(path)
         expected_files = ["/data/file1.parquet", "/data/file2.parquet"]
 
+        expected_destination = os.path.join("./local/tmp/", path)
+
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
         ), patch("glob.glob", return_value=[]), patch(
             "application_sdk.services.objectstore.ObjectStore.download_prefix",
             new_callable=AsyncMock,
-        ) as mock_download, patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
-            return_value="data",
-        ):
-            # Mock the file finding function to return empty for local check, then files after download
+        ) as mock_download:
+            # Mock the file finding function to return empty on first call, then files on second
             with patch(
-                "application_sdk.io.utils.find_local_files_by_extension"
-            ) as mock_find_files:
-                # Use a function that returns different values based on the path
-                def mock_find_files_func(path, extension, file_names=None):
-                    if path == "/data":
-                        return []  # Local check returns empty
-                    else:
-                        return expected_files  # After download returns files
-
-                mock_find_files.side_effect = mock_find_files_func
-
+                "application_sdk.io.utils.find_local_files_by_extension",
+                side_effect=[[], expected_files],
+            ):
                 result = await download_files(
                     input_instance.path, ".parquet", input_instance.file_names
                 )
 
                 mock_download.assert_called_once_with(
-                    source="data", destination="./local/tmp/data"
+                    source=path, destination=expected_destination
                 )
                 assert result == expected_files
 
@@ -233,18 +220,13 @@ class TestReaderDownloadFiles:
         # Expected files will be in temporary directory after download
         # Normalize paths for cross-platform compatibility
         expected_files = [
-            os.path.join("./local/tmp/data", "file1.parquet"),
-            os.path.join("./local/tmp/data", "file2.parquet"),
+            os.path.join("./local/tmp/", os.path.join(path, "file1.parquet")),
+            os.path.join("./local/tmp/", os.path.join(path, "file2.parquet")),
         ]
 
-        def mock_isfile(path):
+        def mock_isfile(p):
             # Return False for initial local check, True for downloaded files
-            # Normalize paths for cross-platform comparison
-            expected_paths = [
-                os.path.join("./local/tmp/data", "file1.parquet"),
-                os.path.join("./local/tmp/data", "file2.parquet"),
-            ]
-            if path in expected_paths:
+            if p in expected_files:
                 return True
             return False
 
@@ -256,24 +238,24 @@ class TestReaderDownloadFiles:
         ), patch(
             "application_sdk.services.objectstore.ObjectStore.download_file",
             new_callable=AsyncMock,
-        ) as mock_download, patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
-            side_effect=lambda p: p.lstrip("/").replace("\\", "/"),
-        ):
+        ) as mock_download:
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
             # Should download each specific file
-            # Normalize paths for cross-platform compatibility
             assert mock_download.call_count == 2
             mock_download.assert_any_call(
-                source=os.path.join("data", "file1.parquet"),
-                destination=os.path.join("./local/tmp/data", "file1.parquet"),
+                source=os.path.join(path, "file1.parquet"),
+                destination=os.path.join(
+                    "./local/tmp/", os.path.join(path, "file1.parquet")
+                ),
             )
             mock_download.assert_any_call(
-                source=os.path.join("data", "file2.parquet"),
-                destination=os.path.join("./local/tmp/data", "file2.parquet"),
+                source=os.path.join(path, "file2.parquet"),
+                destination=os.path.join(
+                    "./local/tmp/", os.path.join(path, "file2.parquet")
+                ),
             )
             assert result == expected_files
 
@@ -289,9 +271,6 @@ class TestReaderDownloadFiles:
             "application_sdk.services.objectstore.ObjectStore.download_file",
             new_callable=AsyncMock,
             side_effect=Exception("Download failed"),
-        ), patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
-            return_value="data/test.parquet",
         ):
             with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
                 await download_files(
@@ -309,9 +288,6 @@ class TestReaderDownloadFiles:
         ), patch("glob.glob", return_value=[]), patch(
             "application_sdk.services.objectstore.ObjectStore.download_prefix",
             new_callable=AsyncMock,
-        ), patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
-            return_value="data",
         ), patch(
             "application_sdk.io.utils.find_local_files_by_extension",
             side_effect=[
@@ -407,9 +383,6 @@ class TestReaderDownloadFiles:
             "application_sdk.services.objectstore.ObjectStore.download_file",
             new_callable=AsyncMock,
             side_effect=Exception("Download failed"),
-        ), patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
-            return_value="data/test.parquet",
         ), patch("application_sdk.io.utils.logger") as mock_logger:
             with pytest.raises(SDKIOError):
                 await download_files(

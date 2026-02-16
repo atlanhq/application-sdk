@@ -27,7 +27,6 @@ import orjson
 from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import ENABLE_ATLAN_UPLOAD, UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.io.utils import (
@@ -641,11 +640,11 @@ class Writer(ABC):
                 source=file_name,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
                 retain_local_copy=True,  # Always retain for the second upload to deployment store
-                destination=get_object_store_prefix(file_name),
+                destination=file_name,
             )
         await ObjectStore.upload_file(
             source=file_name,
-            destination=get_object_store_prefix(file_name),
+            destination=file_name,
             retain_local_copy=retain_local,  # Respect the writer's retain_local_copy setting
         )
 
@@ -736,7 +735,7 @@ class Writer(ABC):
             with open(output_file_name, "wb") as f:
                 f.write(orjson.dumps(statistics))
 
-            destination_file_path = get_object_store_prefix(output_file_name)
+            destination_file_path = output_file_name
             # Push the file to the object store
             await ObjectStore.upload_file(
                 source=output_file_name,

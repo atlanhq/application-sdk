@@ -591,7 +591,8 @@ async def upload_to_atlan(self, workflow_args: Dict[str, Any]) -> ActivityStatis
     It only runs if ENABLE_ATLAN_UPLOAD is set to true.
     """
     # Use workflow-specific prefix to migrate only the current workflow's data
-    migration_prefix = get_object_store_prefix(workflow_args["output_path"])
+    # ObjectStore normalizes the path internally (strips ./local/tmp/, fixes slashes)
+    migration_prefix = workflow_args["output_path"]
 
     # AtlanStorage handles the bucket cloning from customer environment to Atlan
     upload_stats = await AtlanStorage.migrate_from_objectstore_to_atlan(migration_prefix)

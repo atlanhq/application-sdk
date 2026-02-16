@@ -696,52 +696,52 @@ class TestObjectStore:
             await ObjectStore.list_files(prefix="test")
 
     @patch("application_sdk.services.objectstore.os.sep", "\\")
-    def test_normalize_object_store_key_windows_path(self) -> None:
-        """Test _normalize_object_store_key converts Windows backslashes to forward slashes."""
+    def test_as_store_key_windows_path(self) -> None:
+        """Test _as_store_key converts Windows backslashes to forward slashes."""
         # Arrange
         windows_path = "artifacts\\apps\\default\\workflows\\wf123\\file.json"
 
         # Act
-        result = ObjectStore._normalize_object_store_key(windows_path)
+        result = ObjectStore._as_store_key(windows_path)
 
         # Assert
         assert result == "artifacts/apps/default/workflows/wf123/file.json"
         assert "\\" not in result
 
-    def test_normalize_object_store_key_unix_path(self) -> None:
-        """Test _normalize_object_store_key leaves Unix paths unchanged."""
+    def test_as_store_key_unix_path(self) -> None:
+        """Test _as_store_key leaves Unix paths unchanged."""
         # Arrange
         unix_path = "artifacts/apps/default/workflows/wf123/file.json"
 
         # Act
-        result = ObjectStore._normalize_object_store_key(unix_path)
+        result = ObjectStore._as_store_key(unix_path)
 
         # Assert
         assert result == unix_path
 
     @patch("application_sdk.services.objectstore.os.sep", "\\")
-    def test_normalize_object_store_key_mixed_path(self) -> None:
-        """Test _normalize_object_store_key handles mixed separators on Windows."""
+    def test_as_store_key_mixed_path(self) -> None:
+        """Test _as_store_key handles mixed separators on Windows."""
         # Arrange - on Windows, os.sep is backslash, so only backslashes get replaced
         mixed_path = "artifacts/apps\\default/workflows\\wf123\\file.json"
 
         # Act
-        result = ObjectStore._normalize_object_store_key(mixed_path)
+        result = ObjectStore._as_store_key(mixed_path)
 
         # Assert - backslashes replaced, forward slashes unchanged
         assert result == "artifacts/apps/default/workflows/wf123/file.json"
         assert "\\" not in result
 
-    def test_normalize_object_store_path_temporary_path(self) -> None:
-        """Test _normalize_object_store_path strips temporary path prefix."""
-        result = ObjectStore._normalize_object_store_path(
+    def test_as_store_key_temporary_path(self) -> None:
+        """Test _as_store_key strips temporary path prefix."""
+        result = ObjectStore._as_store_key(
             "./local/tmp/artifacts/apps/default/workflows/wf123/file.json"
         )
         assert result == "artifacts/apps/default/workflows/wf123/file.json"
 
-    def test_normalize_object_store_path_idempotent_for_relative_key(self) -> None:
-        """Test _normalize_object_store_path keeps relative object store keys unchanged."""
-        result = ObjectStore._normalize_object_store_path(
+    def test_as_store_key_idempotent_for_relative_key(self) -> None:
+        """Test _as_store_key keeps relative object store keys unchanged."""
+        result = ObjectStore._as_store_key(
             "artifacts/apps/default/workflows/wf123/file.json"
         )
         assert result == "artifacts/apps/default/workflows/wf123/file.json"
