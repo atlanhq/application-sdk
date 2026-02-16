@@ -12,7 +12,6 @@ from dapr import clients
 from temporalio import activity, workflow
 
 from application_sdk.constants import (
-    APP_IMAGE,
     APP_TENANT_ID,
     APPLICATION_NAME,
     ATLAN_BASE_URL,
@@ -167,8 +166,6 @@ class EventStore:
             labels["tenant_id"] = APP_TENANT_ID
             if ATLAN_BASE_URL:
                 labels["atlan_base_url"] = ATLAN_BASE_URL
-            if APP_IMAGE:
-                labels["app_image"] = APP_IMAGE
 
             # Add any additional data from event.data
             if event.data:

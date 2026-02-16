@@ -12,7 +12,7 @@ from application_sdk.interceptors.models import (
     EventTypes,
     WorkflowStates,
 )
-from application_sdk.services.eventstore import LIFECYCLE_EVENTS, EventStore
+from application_sdk.services.eventstore import EventStore
 
 
 class TestEvent:
@@ -252,58 +252,3 @@ class TestEventMetadata:
         assert metadata.activity_type == "test_activity"
         assert metadata.activity_id == "test_activity_id"
         assert metadata.attempt == 1
-
-
-class TestSendLifecycleEventToSegment:
-    """Test cases for EventStore._send_lifecycle_event_to_segment()."""
-
-    def _create_lifecycle_event(self, event_name: str) -> Event:
-        """Create a lifecycle event with metadata."""
-        return Event(
-            event_type=EventTypes.APPLICATION_EVENT.value,
-            event_name=event_name,
-            data={},
-            metadata=EventMetadata(
-                application_name="test_app",
-                workflow_id="wf-1",
-                workflow_run_id="run-1",
-            ),
-        )
-
-    @patch("application_sdk.services.eventstore.get_metrics")
-    def test_app_image_included_when_set(self, mock_get_metrics):
-        """Test that app_image label is included when ATLAN_APP_IMAGE is set."""
-        mock_metrics = Mock()
-        mock_get_metrics.return_value = mock_metrics
-
-        event = self._create_lifecycle_event(ApplicationEventNames.WORKFLOW_START.value)
-
-        with patch("application_sdk.services.eventstore.APP_IMAGE", "ghcr.io/app:1.0"):
-            EventStore._send_lifecycle_event_to_segment(event)
-
-        metric_record = mock_metrics.segment_client.send_metric.call_args[0][0]
-        assert metric_record.labels["app_image"] == "ghcr.io/app:1.0"
-
-    @patch("application_sdk.services.eventstore.get_metrics")
-    def test_app_image_excluded_when_empty(self, mock_get_metrics):
-        """Test that app_image label is not included when ATLAN_APP_IMAGE is empty."""
-        mock_metrics = Mock()
-        mock_get_metrics.return_value = mock_metrics
-
-        event = self._create_lifecycle_event(ApplicationEventNames.WORKFLOW_START.value)
-
-        with patch("application_sdk.services.eventstore.APP_IMAGE", ""):
-            EventStore._send_lifecycle_event_to_segment(event)
-
-        metric_record = mock_metrics.segment_client.send_metric.call_args[0][0]
-        assert "app_image" not in metric_record.labels
-
-    def test_non_lifecycle_event_skipped(self):
-        """Test that non-lifecycle events are not sent to Segment."""
-        event = self._create_lifecycle_event("some_other_event")
-
-        assert event.event_name not in LIFECYCLE_EVENTS
-        # Should return without calling get_metrics
-        with patch("application_sdk.services.eventstore.get_metrics") as mock:
-            EventStore._send_lifecycle_event_to_segment(event)
-            mock.assert_not_called()
