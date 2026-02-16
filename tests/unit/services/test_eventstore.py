@@ -285,20 +285,6 @@ class TestSendLifecycleEventToSegment:
         assert metric_record.labels["app_image"] == "ghcr.io/app:1.0"
 
     @patch("application_sdk.services.eventstore.get_metrics")
-    def test_k8s_namespace_included_when_set(self, mock_get_metrics):
-        """Test that k8s_namespace label is included when ATLAN_K8S_NAMESPACE is set."""
-        mock_metrics = Mock()
-        mock_get_metrics.return_value = mock_metrics
-
-        event = self._create_lifecycle_event(ApplicationEventNames.WORKFLOW_START.value)
-
-        with patch("application_sdk.services.eventstore.K8S_NAMESPACE", "production"):
-            EventStore._send_lifecycle_event_to_segment(event)
-
-        metric_record = mock_metrics.segment_client.send_metric.call_args[0][0]
-        assert metric_record.labels["k8s_namespace"] == "production"
-
-    @patch("application_sdk.services.eventstore.get_metrics")
     def test_app_image_excluded_when_empty(self, mock_get_metrics):
         """Test that app_image label is not included when ATLAN_APP_IMAGE is empty."""
         mock_metrics = Mock()
@@ -307,12 +293,10 @@ class TestSendLifecycleEventToSegment:
         event = self._create_lifecycle_event(ApplicationEventNames.WORKFLOW_START.value)
 
         with patch("application_sdk.services.eventstore.APP_IMAGE", ""):
-            with patch("application_sdk.services.eventstore.K8S_NAMESPACE", ""):
-                EventStore._send_lifecycle_event_to_segment(event)
+            EventStore._send_lifecycle_event_to_segment(event)
 
         metric_record = mock_metrics.segment_client.send_metric.call_args[0][0]
         assert "app_image" not in metric_record.labels
-        assert "k8s_namespace" not in metric_record.labels
 
     def test_non_lifecycle_event_skipped(self):
         """Test that non-lifecycle events are not sent to Segment."""
