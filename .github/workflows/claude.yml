@@ -50,7 +50,4 @@ jobs:
           claude_args: |
             --model claude-sonnet-4
             --allowedTools "mcp__github_inline_comment__create_inline_comment"
-          custom_instructions: |
-            When a user asks you to "review" a pull request (e.g. "@claude review",
-            "@claude review this PR", "@claude please review"), execute the /review
-            slash command. Do not attempt a freeform review — always use the skill.
+            --append-system-prompt "CRITICAL INSTRUCTION: When a user asks you to review a pull request (e.g. @claude review, @claude review this PR, @claude please review), you MUST execute the /review slash command. Do NOT attempt a freeform review. Always use the /review skill — no exceptions."
