@@ -46,7 +46,7 @@ class HandlerInterface(ABC):
         return {}
 
     @staticmethod
-    async def get_uiconfig(config_name: str) -> Dict[str, Any]:
+    async def get_uiconfig() -> Dict[str, Any]:
         """
         Static method to get the UI config
         """

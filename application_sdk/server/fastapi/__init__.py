@@ -442,7 +442,7 @@ class APIServer(ServerInterface):
         )
 
         self.workflow_router.add_api_route(
-            "/uiconfigs/{config_name}",
+            "/uiconfigs",
             self.get_uiconfig,
             methods=["GET"],
             response_model=UIConfigResponse,
@@ -735,11 +735,8 @@ class APIServer(ServerInterface):
                 data={},
             )
 
-    async def get_uiconfig(self, config_name: str) -> UIConfigResponse:
-        """Get a UI configuration by its name.
-
-        Args:
-            config_name (str): The name of the UI configuration to retrieve.
+    async def get_uiconfig(self) -> UIConfigResponse:
+        """Get the UI configuration for this application.
 
         Returns:
             UIConfigResponse: Response containing the UI configuration.
@@ -748,7 +745,7 @@ class APIServer(ServerInterface):
             if not self.handler:
                 raise Exception("Handler not initialized")
 
-            uiconfig_data = await self.handler.get_uiconfig(config_name)
+            uiconfig_data = await self.handler.get_uiconfig()
 
             return UIConfigResponse(
                 success=True,
