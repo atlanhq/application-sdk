@@ -25,9 +25,9 @@ from application_sdk.constants import (
     WORKFLOW_UI_PORT,
 )
 from application_sdk.handlers import HandlerInterface
+from application_sdk.observability.duckdb_ui import DuckDBUI
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
-from application_sdk.observability.duckdb_ui import DuckDBUI
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
