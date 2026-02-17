@@ -121,17 +121,29 @@ class TokenExchangeProtocol(BaseProtocol):
         )
 
     def refresh(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
-        """Refresh the access token."""
+        """Refresh the access token.
+
+        If a refresh token is available, attempts refresh token flow first.
+        On failure, falls back to re-authentication using client credentials.
+
+        Raises:
+            CredentialRefreshError: If both refresh and re-authentication fail.
+        """
         refresh_token = get_field_value(credentials, "refresh_token")
 
         if refresh_token:
-            # Try refresh token flow
+            # Try refresh token flow first - fall back to re-auth on failure
+            # This is an intentional fallback pattern: refresh tokens may expire
+            # or be revoked, so we attempt re-authentication as a recovery mechanism
             try:
                 return self._refresh_with_token(credentials, refresh_token)
             except Exception as e:
-                logger.warning(f"Refresh token flow failed: {e}, trying re-auth")
+                logger.info(
+                    f"Refresh token flow failed, falling back to re-authentication: {e}",
+                    extra={"fallback": True, "original_error": str(e)},
+                )
 
-        # Fall back to re-authentication
+        # Fall back to re-authentication (may raise CredentialRefreshError)
         return self._authenticate(credentials)
 
     def validate(self, credentials: Dict[str, Any]) -> ValidationResult:
@@ -156,7 +168,11 @@ class TokenExchangeProtocol(BaseProtocol):
         return ValidationResult(valid=len(errors) == 0, errors=errors)
 
     def _get_valid_token(self, credentials: Dict[str, Any]) -> Optional[str]:
-        """Get a valid access token, refreshing if necessary."""
+        """Get a valid access token, refreshing if necessary.
+
+        Raises:
+            CredentialRefreshError: If token refresh fails and no existing token available.
+        """
         access_token = get_field_value(credentials, "access_token")
         token_expiry = credentials.get("token_expiry", 0)
         buffer = self.config.get("token_expiry_buffer", 60)
@@ -172,9 +188,16 @@ class TokenExchangeProtocol(BaseProtocol):
             credentials.update(updated)
             return updated.get("access_token")
         except Exception as e:
-            logger.error(f"Failed to refresh/obtain token: {e}")
-            # Return existing token as last resort (may fail)
-            return access_token
+            logger.error(f"Failed to refresh/obtain token: {e}", exc_info=True)
+            # If we have an existing token, return it as last resort (may be expired)
+            # Otherwise, re-raise to signal authentication failure
+            if access_token:
+                logger.warning(
+                    "Returning existing token as fallback (may be expired)",
+                    extra={"has_token": True},
+                )
+                return access_token
+            raise CredentialRefreshError(f"Failed to obtain valid token: {e}") from e
 
     def _refresh_with_token(
         self, credentials: Dict[str, Any], refresh_token: str

@@ -18,8 +18,7 @@ Local Development Flow:
     5. SDK reads credentials from local secrets file via Dapr
 """
 
-import warnings
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, Optional, Type
 
 from fastapi import Query, status
 from fastapi.responses import JSONResponse
@@ -143,12 +142,12 @@ async def get_credentials_configmap(
             content=configmap,
         )
     except Exception as e:
-        logger.error(f"Failed to get credentials configmap: {e}")
+        logger.error(f"Failed to get credentials configmap: {e}", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "error": "Internal server error",
-                "message": str(e),
+                "message": "Failed to generate credentials configmap. Check server logs for details.",
             },
         )
 
@@ -175,9 +174,12 @@ async def get_all_credentials_configmaps() -> JSONResponse:
             configmap = handler_class.get_credentials_configmap()
             result["handlers"][handler_id] = configmap
         except Exception as e:
-            logger.error(f"Failed to get configmap for handler '{handler_id}': {e}")
+            logger.error(
+                f"Failed to get configmap for handler '{handler_id}': {e}",
+                exc_info=True,
+            )
             result["handlers"][handler_id] = {
-                "error": str(e),
+                "error": "Failed to generate configmap. Check server logs for details.",
             }
 
     return JSONResponse(
@@ -266,12 +268,12 @@ async def store_credential_input(
         )
 
     except Exception as e:
-        logger.error(f"Failed to store credentials: {e}")
+        logger.error(f"Failed to store credentials: {e}", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "error": "Failed to store credentials",
-                "message": str(e),
+                "message": "An error occurred while storing credentials. Check server logs for details.",
             },
         )
 

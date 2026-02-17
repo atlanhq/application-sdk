@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Any, Callable, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
@@ -716,10 +716,10 @@ class APIServer(ServerInterface):
                 data=config_map_data,
             )
         except Exception as e:
-            logger.error(f"Error fetching configuration map: {e}")
+            logger.error(f"Error fetching configuration map: {e}", exc_info=True)
             return ConfigMapResponse(
                 success=False,
-                message=f"Failed to fetch configuration map: {str(e)}",
+                message="Failed to fetch configuration map. Check server logs for details.",
                 data={},
             )
 
@@ -758,12 +758,12 @@ class APIServer(ServerInterface):
                 },
             )
         except Exception as e:
-            logger.error(f"Error fetching all configmaps: {e}")
+            logger.error(f"Error fetching all configmaps: {e}", exc_info=True)
             return JSONResponse(
                 status_code=500,
                 content={
                     "success": False,
-                    "message": f"Failed to fetch configmaps: {str(e)}",
+                    "message": "Failed to fetch configmaps. Check server logs for details.",
                     "data": {},
                 },
             )
