@@ -304,7 +304,11 @@ class Subscription(BaseModel):
 
 
 class FileUploadResponse(BaseModel):
-    """Response model for file upload endpoint matching heracles format."""
+    """Response model for file upload endpoint matching heracles format.
+
+    Field names use camelCase to stay consistent with the upstream
+    Atlan ``/files`` endpoint contract.
+    """
 
     id: str = Field(..., description="UUID of the file")
     version: str = Field(..., description="Human-readable version string")

@@ -675,6 +675,7 @@ class APIServer(ServerInterface):
         prefix: Optional[str] = Form(
             "workflow_file_upload", description="Prefix for file organization"
         ),
+        # NOTE: camelCase to match the upstream Atlan /files endpoint contract.
         contentType: Optional[str] = Form(None, description="Content type of the file"),
     ) -> FileUploadResponse:
         """Upload a file to the object store."""
