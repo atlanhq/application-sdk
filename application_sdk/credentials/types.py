@@ -56,10 +56,11 @@ class AuthMode(Enum):
     Use these instead of protocols directly for common use cases.
 
     Maps to STATIC_SECRET:
-        API_KEY, API_KEY_QUERY, PAT, BEARER_TOKEN, ATLAN_API_KEY
+        API_KEY, API_KEY_QUERY, API_KEY_HEADER, PAT, BEARER_TOKEN,
+        SERVICE_TOKEN, ATLAN_API_KEY
 
     Maps to IDENTITY_PAIR:
-        BASIC_AUTH, EMAIL_TOKEN
+        BASIC_AUTH, EMAIL_TOKEN, HEADER_PAIR, BODY_CREDENTIALS
 
     Maps to TOKEN_EXCHANGE:
         OAUTH2, OAUTH2_CLIENT_CREDENTIALS, JWT_BEARER, ATLAN_OAUTH
@@ -78,10 +79,12 @@ class AuthMode(Enum):
     """
 
     # Maps to STATIC_SECRET Protocol
-    API_KEY = "api_key"
-    API_KEY_QUERY = "api_key_query"
-    PAT = "pat"
-    BEARER_TOKEN = "bearer_token"
+    API_KEY = "api_key"  # Authorization: Bearer {key}
+    API_KEY_QUERY = "api_key_query"  # ?api_key={key}
+    API_KEY_HEADER = "api_key_header"  # X-API-Key: {key} (no prefix)
+    PAT = "pat"  # Personal Access Token (Authorization: Bearer {key})
+    BEARER_TOKEN = "bearer_token"  # Authorization: Bearer {key}
+    SERVICE_TOKEN = "service_token"  # Authorization: {key} (no prefix, raw token)
 
     # Maps to IDENTITY_PAIR Protocol
     BASIC_AUTH = "basic_auth"

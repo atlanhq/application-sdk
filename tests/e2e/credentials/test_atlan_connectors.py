@@ -569,6 +569,7 @@ BI_TOOL_CONNECTORS: List[ConnectorTestCase] = [
             "client_id": "fake_client_id",
             "client_secret": "fake_client_secret",
             "base_url": "https://fake-instance.cloud.looker.com",
+            "token_expiry": 9999999999,  # Far future, avoids refresh attempt
         },
         expected_auth_failure_codes={401, 403, 404},
         docs_url="https://cloud.google.com/looker/docs/api-auth",

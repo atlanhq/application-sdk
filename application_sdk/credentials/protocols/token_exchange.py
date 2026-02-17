@@ -171,7 +171,9 @@ class TokenExchangeProtocol(BaseProtocol):
         """Get a valid access token, refreshing if necessary.
 
         Raises:
-            CredentialRefreshError: If token refresh fails and no existing token available.
+            CredentialRefreshError: If token refresh fails. Fails fast to surface
+                authentication issues immediately rather than masking them with
+                potentially expired tokens.
         """
         access_token = get_field_value(credentials, "access_token")
         token_expiry = credentials.get("token_expiry", 0)
@@ -182,22 +184,11 @@ class TokenExchangeProtocol(BaseProtocol):
             return access_token
 
         # Token expired or missing - try to refresh
-        try:
-            updated = self.refresh(credentials)
-            # Update the credentials dict in place for future calls
-            credentials.update(updated)
-            return updated.get("access_token")
-        except Exception as e:
-            logger.error(f"Failed to refresh/obtain token: {e}", exc_info=True)
-            # If we have an existing token, return it as last resort (may be expired)
-            # Otherwise, re-raise to signal authentication failure
-            if access_token:
-                logger.warning(
-                    "Returning existing token as fallback (may be expired)",
-                    extra={"has_token": True},
-                )
-                return access_token
-            raise CredentialRefreshError(f"Failed to obtain valid token: {e}") from e
+        # Fail fast: propagate errors immediately to surface auth issues
+        updated = self.refresh(credentials)
+        # Update the credentials dict in place for future calls
+        credentials.update(updated)
+        return updated.get("access_token")
 
     def _refresh_with_token(
         self, credentials: Dict[str, Any], refresh_token: str

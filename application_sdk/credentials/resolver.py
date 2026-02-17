@@ -20,8 +20,10 @@ AUTH_MODE_TO_PROTOCOL: Dict[AuthMode, ProtocolType] = {
     # STATIC_SECRET
     AuthMode.API_KEY: ProtocolType.STATIC_SECRET,
     AuthMode.API_KEY_QUERY: ProtocolType.STATIC_SECRET,
+    AuthMode.API_KEY_HEADER: ProtocolType.STATIC_SECRET,
     AuthMode.PAT: ProtocolType.STATIC_SECRET,
     AuthMode.BEARER_TOKEN: ProtocolType.STATIC_SECRET,
+    AuthMode.SERVICE_TOKEN: ProtocolType.STATIC_SECRET,
     # IDENTITY_PAIR
     AuthMode.BASIC_AUTH: ProtocolType.IDENTITY_PAIR,
     AuthMode.EMAIL_TOKEN: ProtocolType.IDENTITY_PAIR,
@@ -77,6 +79,13 @@ AUTH_MODE_DEFAULTS: Dict[AuthMode, Dict[str, Any]] = {
         "location": "query",
         "param_name": "api_key",
     },
+    AuthMode.API_KEY_HEADER: {
+        # X-API-Key header pattern (no prefix)
+        # Common for many APIs: Datadog, Twilio, etc.
+        "location": "header",
+        "header_name": "X-API-Key",
+        "prefix": "",
+    },
     AuthMode.PAT: {
         "location": "header",
         "header_name": "Authorization",
@@ -86,6 +95,13 @@ AUTH_MODE_DEFAULTS: Dict[AuthMode, Dict[str, Any]] = {
         "location": "header",
         "header_name": "Authorization",
         "prefix": "Bearer ",
+    },
+    AuthMode.SERVICE_TOKEN: {
+        # Raw token in Authorization header without "Bearer " prefix
+        # Used for some internal services or custom auth
+        "location": "header",
+        "header_name": "Authorization",
+        "prefix": "",
     },
     # IDENTITY_PAIR variants
     AuthMode.BASIC_AUTH: {

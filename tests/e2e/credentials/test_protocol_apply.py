@@ -516,11 +516,15 @@ class TestTokenExchangeProtocolApply:
 
     def test_oauth2_bearer_token(self):
         """OAuth2: Access token as Bearer."""
+        import time
+
         cred = Credential(name="test", auth=AuthMode.OAUTH2_CLIENT_CREDENTIALS)
         protocol = CredentialResolver.resolve(cred)
 
-        # After token exchange, we have an access_token
-        result = protocol.apply({"access_token": "eyJxxx"}, {})
+        # After token exchange, we have an access_token with valid expiry
+        result = protocol.apply(
+            {"access_token": "eyJxxx", "token_expiry": time.time() + 3600}, {}
+        )
 
         assert result.headers == {"Authorization": "Bearer eyJxxx"}
 
