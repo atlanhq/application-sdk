@@ -1,0 +1,25 @@
+{
+  "strictness": 3,
+  "commentTypes": ["logic", "syntax", "compatibility"],
+  "patternRepositories": ["atlanhq/atlan-redshift-app"],
+  "rules": [
+    {
+      "id": "cross-repo-breaking-change",
+      "rule": "Check if changes to public SDK interfaces, base classes, or method signatures could break downstream consumers like atlan-redshift-app. Flag any breaking changes to BaseApplication, ClientInterface, HandlerInterface, ActivitiesInterface, WorkflowInterface, ObjectStore, StateStore, SecretStore, EventStore, Reader, or Writer APIs.",
+      "scope": ["application_sdk/**/*.py"],
+      "severity": "high"
+    },
+    {
+      "id": "deprecation-notice",
+      "rule": "When deprecating or removing any public API, ensure a deprecation warning is added first and documented in CHANGELOG. Downstream apps like atlan-redshift-app depend on these interfaces.",
+      "scope": ["application_sdk/**/*.py"],
+      "severity": "high"
+    },
+    {
+      "id": "test-coverage-for-public-api",
+      "rule": "Changes to public SDK APIs must include corresponding test updates. Untested API changes risk silent breakage in downstream applications.",
+      "scope": ["application_sdk/**/*.py"],
+      "severity": "medium"
+    }
+  ]
+}

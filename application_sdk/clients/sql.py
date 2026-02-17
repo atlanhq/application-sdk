@@ -526,6 +526,7 @@ class BaseSQLClient(ClientInterface):
             return cast(Iterator["pd.DataFrame"], result)
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
+            raise
 
     async def get_results(self, query: str) -> "pd.DataFrame":
         """Get all query results as a single pandas DataFrame asynchronously.
