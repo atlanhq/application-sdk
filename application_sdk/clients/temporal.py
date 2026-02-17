@@ -309,9 +309,14 @@ class TemporalWorkflowClient(WorkflowClient):
             if not self.client:
                 raise ValueError("Client is not loaded")
 
+            correlation_fields = {
+                k: v
+                for k, v in workflow_args.items()
+                if k.startswith("atlan-") or k == "trace_id"
+            }
             handle = await self.client.start_workflow(
                 workflow_class,  # type: ignore
-                args=[{"workflow_id": workflow_id}],
+                args=[{"workflow_id": workflow_id, **correlation_fields}],
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
