@@ -63,11 +63,14 @@ class TestReaderDownloadFiles:
         """Test behavior when path is empty."""
         input_instance = MockReader("")
 
-        with patch("os.path.isfile", return_value=False), patch(
-            "os.path.isdir", return_value=False
-        ), patch("glob.glob", return_value=[]), patch(
-            "application_sdk.services.objectstore.ObjectStore.download_prefix",
-            side_effect=Exception("Object store download failed"),
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=False),
+            patch("glob.glob", return_value=[]),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                side_effect=Exception("Object store download failed"),
+            ),
         ):
             with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
                 await download_files(
@@ -94,9 +97,11 @@ class TestReaderDownloadFiles:
         input_instance = MockReader(path)
         expected_files = ["/data/file1.parquet", "/data/file2.parquet"]
 
-        with patch("os.path.isfile", return_value=False), patch(
-            "os.path.isdir", return_value=True
-        ), patch("glob.glob", return_value=expected_files):
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=True),
+            patch("glob.glob", return_value=expected_files),
+        ):
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
@@ -116,9 +121,11 @@ class TestReaderDownloadFiles:
         ]
         expected_files = ["/data/file1.parquet", "/data/file3.parquet"]
 
-        with patch("os.path.isfile", return_value=False), patch(
-            "os.path.isdir", return_value=True
-        ), patch("glob.glob", return_value=all_files):
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=True),
+            patch("glob.glob", return_value=all_files),
+        ):
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
@@ -166,17 +173,21 @@ class TestReaderDownloadFiles:
         path = "/data/test.parquet"
         input_instance = MockReader(path)
 
-        with patch("os.path.isfile", side_effect=[False, True]), patch(
-            "os.path.isdir", return_value=False
-        ), patch("glob.glob", return_value=[]), patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file",
-            new_callable=AsyncMock,
-        ) as mock_download:
+        with (
+            patch("os.path.isfile", side_effect=[False, True]),
+            patch("os.path.isdir", return_value=False),
+            patch("glob.glob", return_value=[]),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore.download_file",
+                new_callable=AsyncMock,
+            ) as mock_download,
+        ):
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
-            expected_destination = os.path.join("./local/tmp/", path)
+            # _as_store_key strips leading "/" so destination uses normalized key
+            expected_destination = os.path.join("./local/tmp/", "data/test.parquet")
             mock_download.assert_called_once_with(
                 source=path, destination=expected_destination
             )
@@ -189,14 +200,18 @@ class TestReaderDownloadFiles:
         input_instance = MockReader(path)
         expected_files = ["/data/file1.parquet", "/data/file2.parquet"]
 
-        expected_destination = os.path.join("./local/tmp/", path)
+        # _as_store_key strips leading "/" so destination uses normalized key
+        expected_destination = os.path.join("./local/tmp/", "data")
 
-        with patch("os.path.isfile", return_value=False), patch(
-            "os.path.isdir", return_value=True
-        ), patch("glob.glob", return_value=[]), patch(
-            "application_sdk.services.objectstore.ObjectStore.download_prefix",
-            new_callable=AsyncMock,
-        ) as mock_download:
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=True),
+            patch("glob.glob", return_value=[]),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                new_callable=AsyncMock,
+            ) as mock_download,
+        ):
             # Mock the file finding function to return empty on first call, then files on second
             with patch(
                 "application_sdk.io.utils.find_local_files_by_extension",
@@ -217,11 +232,10 @@ class TestReaderDownloadFiles:
         path = "/data"
         file_names = ["file1.parquet", "file2.parquet"]
         input_instance = MockReader(path, file_names)
-        # Expected files will be in temporary directory after download
-        # Normalize paths for cross-platform compatibility
+        # _as_store_key strips leading "/" so destinations use normalized keys
         expected_files = [
-            os.path.join("./local/tmp/", os.path.join(path, "file1.parquet")),
-            os.path.join("./local/tmp/", os.path.join(path, "file2.parquet")),
+            os.path.join("./local/tmp/", "data/file1.parquet"),
+            os.path.join("./local/tmp/", "data/file2.parquet"),
         ]
 
         def mock_isfile(p):
@@ -230,15 +244,18 @@ class TestReaderDownloadFiles:
                 return True
             return False
 
-        with patch("os.path.isfile", side_effect=mock_isfile), patch(
-            "os.path.isdir", return_value=True
-        ), patch(
-            "glob.glob",
-            side_effect=[[]],  # Only for initial local check
-        ), patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file",
-            new_callable=AsyncMock,
-        ) as mock_download:
+        with (
+            patch("os.path.isfile", side_effect=mock_isfile),
+            patch("os.path.isdir", return_value=True),
+            patch(
+                "glob.glob",
+                side_effect=[[]],  # Only for initial local check
+            ),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore.download_file",
+                new_callable=AsyncMock,
+            ) as mock_download,
+        ):
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
@@ -247,15 +264,11 @@ class TestReaderDownloadFiles:
             assert mock_download.call_count == 2
             mock_download.assert_any_call(
                 source=os.path.join(path, "file1.parquet"),
-                destination=os.path.join(
-                    "./local/tmp/", os.path.join(path, "file1.parquet")
-                ),
+                destination=os.path.join("./local/tmp/", "data/file1.parquet"),
             )
             mock_download.assert_any_call(
                 source=os.path.join(path, "file2.parquet"),
-                destination=os.path.join(
-                    "./local/tmp/", os.path.join(path, "file2.parquet")
-                ),
+                destination=os.path.join("./local/tmp/", "data/file2.parquet"),
             )
             assert result == expected_files
 
@@ -265,12 +278,15 @@ class TestReaderDownloadFiles:
         path = "/data/test.parquet"
         input_instance = MockReader(path)
 
-        with patch("os.path.isfile", return_value=False), patch(
-            "os.path.isdir", return_value=False
-        ), patch("glob.glob", return_value=[]), patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file",
-            new_callable=AsyncMock,
-            side_effect=Exception("Download failed"),
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=False),
+            patch("glob.glob", return_value=[]),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore.download_file",
+                new_callable=AsyncMock,
+                side_effect=Exception("Download failed"),
+            ),
         ):
             with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
                 await download_files(
@@ -283,17 +299,21 @@ class TestReaderDownloadFiles:
         path = "/data"  # Use directory path
         input_instance = MockReader(path)
 
-        with patch("os.path.isfile", return_value=False), patch(
-            "os.path.isdir", return_value=True
-        ), patch("glob.glob", return_value=[]), patch(
-            "application_sdk.services.objectstore.ObjectStore.download_prefix",
-            new_callable=AsyncMock,
-        ), patch(
-            "application_sdk.io.utils.find_local_files_by_extension",
-            side_effect=[
-                [],
-                [],
-            ],  # Both calls (local check and after download) return []
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=True),
+            patch("glob.glob", return_value=[]),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "application_sdk.io.utils.find_local_files_by_extension",
+                side_effect=[
+                    [],
+                    [],
+                ],  # Both calls (local check and after download) return []
+            ),
         ):
             # Should raise error when no files found after download
             with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
@@ -308,9 +328,11 @@ class TestReaderDownloadFiles:
         input_instance = MockReader(path)
         expected_files = ["/data/subdir/file1.parquet", "/data/file2.parquet"]
 
-        with patch("os.path.isfile", return_value=False), patch(
-            "os.path.isdir", return_value=True
-        ), patch("glob.glob", return_value=expected_files) as mock_glob:
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=True),
+            patch("glob.glob", return_value=expected_files) as mock_glob,
+        ):
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
@@ -327,9 +349,11 @@ class TestReaderDownloadFiles:
         input_instance = MockReader(path)
         expected_files = ["/data/file1.parquet", "/data/file3.parquet"]
 
-        with patch("os.path.isfile", return_value=False), patch(
-            "os.path.isdir", return_value=True
-        ), patch("glob.glob", return_value=expected_files):
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=True),
+            patch("glob.glob", return_value=expected_files),
+        ):
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
@@ -345,9 +369,11 @@ class TestReaderDownloadFiles:
         all_files = ["/data/subdir/file1.parquet", "/data/file2.parquet"]
         expected_files = ["/data/subdir/file1.parquet"]
 
-        with patch("os.path.isfile", return_value=False), patch(
-            "os.path.isdir", return_value=True
-        ), patch("glob.glob", return_value=all_files):
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=True),
+            patch("glob.glob", return_value=all_files),
+        ):
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
@@ -360,9 +386,10 @@ class TestReaderDownloadFiles:
         path = "/data/test.parquet"
         input_instance = MockReader(path)
 
-        with patch("os.path.isfile", return_value=True), patch(
-            "application_sdk.io.utils.logger"
-        ) as mock_logger:
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch("application_sdk.io.utils.logger") as mock_logger,
+        ):
             await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
@@ -377,13 +404,17 @@ class TestReaderDownloadFiles:
         path = "/data/test.parquet"
         input_instance = MockReader(path)
 
-        with patch("os.path.isfile", return_value=False), patch(
-            "os.path.isdir", return_value=False
-        ), patch("glob.glob", return_value=[]), patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file",
-            new_callable=AsyncMock,
-            side_effect=Exception("Download failed"),
-        ), patch("application_sdk.io.utils.logger") as mock_logger:
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=False),
+            patch("glob.glob", return_value=[]),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore.download_file",
+                new_callable=AsyncMock,
+                side_effect=Exception("Download failed"),
+            ),
+            patch("application_sdk.io.utils.logger") as mock_logger,
+        ):
             with pytest.raises(SDKIOError):
                 await download_files(
                     input_instance.path, ".parquet", input_instance.file_names

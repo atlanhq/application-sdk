@@ -102,7 +102,10 @@ async def download_files(
         if path.endswith(file_extension):
             # Single file case (file_names validation already ensures this is valid)
             source_path = path
-            destination_path = os.path.join(TEMPORARY_PATH, source_path)
+            # Use the normalized store key for the local destination to avoid
+            # double-prefixing when path already starts with TEMPORARY_PATH
+            store_key = ObjectStore._as_store_key(source_path)
+            destination_path = os.path.join(TEMPORARY_PATH, store_key)
             await ObjectStore.download_file(
                 source=source_path,
                 destination=destination_path,
@@ -114,7 +117,8 @@ async def download_files(
             for file_name in file_names:
                 file_path = os.path.join(path, file_name)
                 source_path = file_path
-                destination_path = os.path.join(TEMPORARY_PATH, source_path)
+                store_key = ObjectStore._as_store_key(source_path)
+                destination_path = os.path.join(TEMPORARY_PATH, store_key)
                 await ObjectStore.download_file(
                     source=source_path,
                     destination=destination_path,
@@ -123,7 +127,8 @@ async def download_files(
         else:
             # Download entire directory
             source_path = path
-            destination_path = os.path.join(TEMPORARY_PATH, source_path)
+            store_key = ObjectStore._as_store_key(source_path)
+            destination_path = os.path.join(TEMPORARY_PATH, store_key)
             await ObjectStore.download_prefix(
                 source=source_path,
                 destination=destination_path,

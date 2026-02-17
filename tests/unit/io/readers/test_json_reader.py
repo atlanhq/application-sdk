@@ -43,11 +43,13 @@ async def test_not_download_file_that_exists() -> None:
     path = "/data/test.json"  # Path with correct extension
     # Don't use file_names with single file path due to validation
 
-    with patch("os.path.isfile", return_value=True), patch(
-        "os.path.isdir", return_value=False
-    ), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_file"
-    ) as mock_download:
+    with (
+        patch("os.path.isfile", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch(
+            "application_sdk.services.objectstore.ObjectStore.download_file"
+        ) as mock_download,
+    ):
         json_input = JsonFileReader(path=path)  # No file_names
 
         result = await download_files(json_input.path, ".json", json_input.file_names)
@@ -61,47 +63,43 @@ async def test_download_file_invoked_for_missing_files() -> None:
     path = "/local"
     file_names = ["a.json", "b.json"]
 
+    # _as_store_key strips leading "/" so destinations use the normalized key
+    expected_dest_a = os.path.join("./local/tmp/", "local/a.json")
+    expected_dest_b = os.path.join("./local/tmp/", "local/b.json")
+
     def mock_isfile(p):
         # Return False for initial local check, True for downloaded files
-        # Normalize paths for cross-platform comparison
-        expected_paths = [
-            os.path.join("./local/tmp/", os.path.join(path, "a.json")),
-            os.path.join("./local/tmp/", os.path.join(path, "b.json")),
-        ]
-        if p in expected_paths:
+        if p in [expected_dest_a, expected_dest_b]:
             return True
         return False
 
-    with patch("os.path.isfile", side_effect=mock_isfile), patch(
-        "os.path.isdir", return_value=True
-    ), patch("glob.glob", side_effect=[[]]), patch(  # Only for initial local check
-        "application_sdk.services.objectstore.ObjectStore.download_file"
-    ) as mock_download:
+    with (
+        patch("os.path.isfile", side_effect=mock_isfile),
+        patch("os.path.isdir", return_value=True),
+        patch("glob.glob", side_effect=[[]]),
+        patch(  # Only for initial local check
+            "application_sdk.services.objectstore.ObjectStore.download_file"
+        ) as mock_download,
+    ):
         json_input = JsonFileReader(
             path=path, file_names=file_names, dataframe_type=DataframeType.daft
         )
 
         result = await download_files(json_input.path, ".json", json_input.file_names)
 
-        # Each file should be attempted to be downloaded - using correct signature (with destination)
-        # Normalize paths for cross-platform compatibility
+        # Each file should be attempted to be downloaded
         expected_calls = [
             call(
                 source=os.path.join(path, "a.json"),
-                destination=os.path.join("./local/tmp/", os.path.join(path, "a.json")),
+                destination=expected_dest_a,
             ),
             call(
                 source=os.path.join(path, "b.json"),
-                destination=os.path.join("./local/tmp/", os.path.join(path, "b.json")),
+                destination=expected_dest_b,
             ),
         ]
         mock_download.assert_has_calls(expected_calls, any_order=True)
-        # Normalize result paths for comparison
-        expected_result = [
-            os.path.join("./local/tmp/", os.path.join(path, "a.json")),
-            os.path.join("./local/tmp/", os.path.join(path, "b.json")),
-        ]
-        assert result == expected_result
+        assert result == [expected_dest_a, expected_dest_b]
 
 
 @pytest.mark.asyncio
@@ -110,11 +108,14 @@ async def test_download_file_not_invoked_when_file_present() -> None:
     path = "/local"
     file_names = ["exists.json"]
 
-    with patch("os.path.isfile", return_value=False), patch(
-        "os.path.isdir", return_value=True
-    ), patch("glob.glob", return_value=["/local/exists.json"]), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_file"
-    ) as mock_download:
+    with (
+        patch("os.path.isfile", return_value=False),
+        patch("os.path.isdir", return_value=True),
+        patch("glob.glob", return_value=["/local/exists.json"]),
+        patch(
+            "application_sdk.services.objectstore.ObjectStore.download_file"
+        ) as mock_download,
+    ):
         json_input = JsonFileReader(
             path=path, file_names=file_names, dataframe_type=DataframeType.daft
         )
@@ -134,11 +135,14 @@ async def test_download_file_error_propagation() -> None:
     file_names = ["bad.json"]
 
     # Mock no local files found, then download failure
-    with patch("os.path.isfile", return_value=False), patch(
-        "os.path.isdir", return_value=True
-    ), patch("glob.glob", return_value=[]), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_file",
-        side_effect=Exception("Download failed"),
+    with (
+        patch("os.path.isfile", return_value=False),
+        patch("os.path.isdir", return_value=True),
+        patch("glob.glob", return_value=[]),
+        patch(
+            "application_sdk.services.objectstore.ObjectStore.download_file",
+            side_effect=Exception("Download failed"),
+        ),
     ):
         json_input = JsonFileReader(
             path=path, file_names=file_names, dataframe_type=DataframeType.daft
