@@ -1,11 +1,11 @@
+from __future__ import annotations
+
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 
 from typing_extensions import deprecated
 
-from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.base import BaseClient
-from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import APPLICATION_MODE, ENABLE_MCP, ApplicationMode
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.interceptors.models import EventRegistration
@@ -16,10 +16,13 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server import ServerInterface
-from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
-from application_sdk.server.fastapi.models import EventWorkflowTrigger
-from application_sdk.worker import Worker
-from application_sdk.workflows import WorkflowInterface
+
+if TYPE_CHECKING:
+    from application_sdk.activities import ActivitiesInterface
+    from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
+    from application_sdk.server.fastapi.models import EventWorkflowTrigger
+    from application_sdk.worker import Worker
+    from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
 metrics = get_metrics()
@@ -60,7 +63,9 @@ class BaseApplication:
 
         self.worker = None
 
-        self.workflow_client = get_workflow_client(application_name=name)
+        # workflow_client is created lazily via the property to avoid loading
+        # temporalio + grpc at startup (saves ~20 MiB in server mode).
+        self._workflow_client = None
 
         self.application_manifest: Optional[Dict[str, Any]] = application_manifest
         self.bootstrap_event_registration()
@@ -75,7 +80,29 @@ class BaseApplication:
 
             self.mcp_server = MCPServer(application_name=name)
 
+    @property
+    def workflow_client(self):
+        """Lazily create the workflow client on first access.
+
+        This avoids importing temporalio + grpc at startup, saving ~20 MiB
+        in server mode where the client is only needed when workflow APIs
+        (/start, /stop, /status) are actually called.
+        """
+        if self._workflow_client is None:
+            from application_sdk.clients.utils import get_workflow_client
+
+            self._workflow_client = get_workflow_client(
+                application_name=self.application_name
+            )
+        return self._workflow_client
+
+    @workflow_client.setter
+    def workflow_client(self, value):
+        self._workflow_client = value
+
     def bootstrap_event_registration(self):
+        from application_sdk.server.fastapi.models import EventWorkflowTrigger
+
         self.event_subscriptions: Dict[str, EventWorkflowTrigger] = {}
         if self.application_manifest is None:
             logger.warning("No application manifest found, skipping event registration")
@@ -169,6 +196,16 @@ class BaseApplication:
             passthrough_modules (list): The modules to pass through to the worker.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
+        # In SERVER mode, we only need the workflow_client (for start/stop/status APIs).
+        # Skip Worker, activities, thread pool creation, and workflow_client.load()
+        # to save memory. The workflow_client is lazily created and loaded when
+        # workflow APIs (/start, /stop, /status) are actually called.
+        if APPLICATION_MODE == ApplicationMode.SERVER:
+            logger.info(
+                "SERVER mode: skipping worker and activities setup to reduce memory usage"
+            )
+            return
+
         await self.workflow_client.load()
 
         workflow_classes = [
@@ -179,6 +216,9 @@ class BaseApplication:
             workflow_activities.extend(  # type: ignore
                 workflow_class.get_activities(activities_class())  # type: ignore
             )
+
+        # Lazy import: Worker pulls in temporalio which is not needed at module load time
+        from application_sdk.worker import Worker
 
         self.worker = Worker(
             workflow_client=self.workflow_client,
@@ -254,8 +294,8 @@ class BaseApplication:
             ui_enabled (bool): Whether to enable the UI.
             has_configmap (bool): Whether to enable the configmap.
         """
-        if self.workflow_client is None:
-            await self.workflow_client.load()
+        # Lazy import: APIServer and HttpWorkflowTrigger pull in server dependencies
+        from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 
         mcp_http_app: Optional[Any] = None
         lifespan: Optional[Any] = None
@@ -269,11 +309,14 @@ class BaseApplication:
 
         self.server = APIServer(
             lifespan=lifespan,
-            workflow_client=self.workflow_client,
+            workflow_client=None,  # Deferred: resolved lazily on first API call
             ui_enabled=ui_enabled,
             handler=self.handler_class(client=self.client_class()),
             has_configmap=has_configmap,
         )
+        # Store a back-reference so the server can lazily resolve the
+        # workflow client via the application's lazy property when needed.
+        self.server._application = self  # type: ignore[attr-defined]
 
         # Mount MCP at root
         if mcp_http_app:

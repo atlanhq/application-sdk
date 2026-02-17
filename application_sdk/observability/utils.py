@@ -1,13 +1,14 @@
 import os
 
 from pydantic import BaseModel, Field
-from temporalio import activity, workflow
 
 from application_sdk.constants import (
+    APPLICATION_MODE,
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
     OBSERVABILITY_DIR,
     TEMPORARY_PATH,
+    ApplicationMode,
 )
 from application_sdk.observability.context import correlation_context
 
@@ -56,31 +57,36 @@ def get_workflow_context() -> WorkflowContext:
 
     context = WorkflowContext(in_workflow="false", in_activity="false")
 
-    try:
-        workflow_info = workflow.info()
-        if workflow_info:
-            context.workflow_id = workflow_info.workflow_id or ""
-            context.workflow_run_id = workflow_info.run_id or ""
-            context.workflow_type = workflow_info.workflow_type or ""
-            context.namespace = workflow_info.namespace or ""
-            context.task_queue = workflow_info.task_queue or ""
-            context.attempt = str(workflow_info.attempt or 0)
-            context.in_workflow = "true"
-    except Exception:
-        pass
+    # In SERVER mode, workflow/activity context is never available.
+    # Skip importing temporalio to save ~20 MiB memory.
+    if APPLICATION_MODE != ApplicationMode.SERVER:
+        from temporalio import activity, workflow
 
-    try:
-        activity_info = activity.info()
-        if activity_info:
-            context.in_activity = "true"
-            context.workflow_id = activity_info.workflow_id or ""
-            context.workflow_run_id = activity_info.workflow_run_id or ""
-            context.activity_id = activity_info.activity_id or ""
-            context.activity_type = activity_info.activity_type or ""
-            context.task_queue = activity_info.task_queue or ""
-            context.attempt = str(activity_info.attempt or 0)
-    except Exception:
-        pass
+        try:
+            workflow_info = workflow.info()
+            if workflow_info:
+                context.workflow_id = workflow_info.workflow_id or ""
+                context.workflow_run_id = workflow_info.run_id or ""
+                context.workflow_type = workflow_info.workflow_type or ""
+                context.namespace = workflow_info.namespace or ""
+                context.task_queue = workflow_info.task_queue or ""
+                context.attempt = str(workflow_info.attempt or 0)
+                context.in_workflow = "true"
+        except Exception:
+            pass
+
+        try:
+            activity_info = activity.info()
+            if activity_info:
+                context.in_activity = "true"
+                context.workflow_id = activity_info.workflow_id or ""
+                context.workflow_run_id = activity_info.workflow_run_id or ""
+                context.activity_id = activity_info.activity_id or ""
+                context.activity_type = activity_info.activity_type or ""
+                context.task_queue = activity_info.task_queue or ""
+                context.attempt = str(activity_info.attempt or 0)
+        except Exception:
+            pass
 
     # Get correlation context from context variable (atlan- prefixed headers)
     corr_ctx = correlation_context.get()

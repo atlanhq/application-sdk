@@ -1,21 +1,24 @@
+from __future__ import annotations
+
 import asyncio
 import os
 import re
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 from packaging import version
 
-from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.utils import (
     parse_filter_input,
     prepare_query,
     read_sql_files,
 )
 from application_sdk.constants import SQL_QUERIES_PATH, SQL_SERVER_MIN_VERSION
-from application_sdk.handlers import HandlerInterface
+from application_sdk.handlers import HandlerInterface, MetadataType
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.server.fastapi.models import MetadataType
+
+if TYPE_CHECKING:
+    from application_sdk.clients.sql import BaseSQLClient
 
 logger = get_logger(__name__)
 

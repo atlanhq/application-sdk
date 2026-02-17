@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
-from typing import Any, Dict, Optional, Sequence, Type
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Type
 
-from application_sdk.workflows import WorkflowInterface
+if TYPE_CHECKING:
+    from application_sdk.workflows import WorkflowInterface
 
 
 class WorkflowEngineType(Enum):

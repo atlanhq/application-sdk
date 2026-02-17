@@ -4,22 +4,26 @@ This module provides the workflow implementation for extracting metadata from SQ
 including databases, schemas, tables, and columns.
 """
 
+from __future__ import annotations
+
 import asyncio
 from time import time
-from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from typing_extensions import Tuple
 
-from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.activities.metadata_extraction.sql import (
-    BaseSQLMetadataExtractionActivities,
-)
 from application_sdk.constants import APPLICATION_NAME, ENABLE_ATLAN_UPLOAD
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
+
+if TYPE_CHECKING:
+    from application_sdk.activities.common.models import ActivityStatistics
+    from application_sdk.activities.metadata_extraction.sql import (
+        BaseSQLMetadataExtractionActivities,
+    )
 
 logger = get_logger(__name__)
 workflow.logger = logger
@@ -39,11 +43,31 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         application_name (str): Name of the application, set to "sql-connector".
     """
 
-    activities_cls: Type[BaseSQLMetadataExtractionActivities] = (
-        BaseSQLMetadataExtractionActivities
-    )
+    # Default is lazily resolved via _get_activities_cls() to avoid importing
+    # the heavy activities module (which pulls in io, services, dapr) at class
+    # definition time. This saves ~47+ modules in server mode.
+    _activities_cls: Type[BaseSQLMetadataExtractionActivities] | None = None
 
     application_name: str = APPLICATION_NAME
+
+    @classmethod
+    def _get_activities_cls(cls) -> Type[BaseSQLMetadataExtractionActivities]:
+        """Lazily resolve the default activities class."""
+        if cls._activities_cls is None:
+            from application_sdk.activities.metadata_extraction.sql import (
+                BaseSQLMetadataExtractionActivities,
+            )
+
+            cls._activities_cls = BaseSQLMetadataExtractionActivities
+        return cls._activities_cls
+
+    @property
+    def activities_cls(self) -> Type[BaseSQLMetadataExtractionActivities]:
+        return self._get_activities_cls()
+
+    @activities_cls.setter
+    def activities_cls(self, value: Type[BaseSQLMetadataExtractionActivities]) -> None:
+        type(self)._activities_cls = value
 
     @staticmethod
     def get_activities(
@@ -104,6 +128,10 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         )
         if raw_statistics is None:
             return
+
+        # Lazy import: ActivityStatistics is only needed at workflow runtime,
+        # not at class definition time
+        from application_sdk.activities.common.models import ActivityStatistics
 
         activity_statistics = ActivityStatistics.model_validate(raw_statistics)
         transform_activities: List[Any] = []

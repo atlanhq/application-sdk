@@ -1,5 +1,12 @@
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import Any, Dict
+
+
+class MetadataType(str, Enum):
+    DATABASE = "database"
+    SCHEMA = "schema"
+    ALL = "all"
 
 
 class HandlerInterface(ABC):
