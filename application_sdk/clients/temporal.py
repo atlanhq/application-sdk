@@ -273,8 +273,24 @@ class TemporalWorkflowClient(WorkflowClient):
     ) -> Dict[str, Any]:
         """Start a workflow execution.
 
+        Credential Handling:
+            Local development (preferred flow):
+                1. Store credentials via POST /credentials/input (returns credential_guid)
+                2. Pass credential_guid in workflow_args
+                3. SDK creates credential_mapping from declared slots
+
+            Local development (deprecated flow):
+                - Passing "credentials" directly in workflow_args is deprecated
+                - Will be removed in a future version
+
+            Production:
+                - Credentials come from Heracles via JWT in Temporal headers
+                - No credentials in workflow_args
+
         Args:
             workflow_args (Dict[str, Any]): Arguments for the workflow.
+                - credential_guid: (preferred) GUID from /credentials/input
+                - credentials: (deprecated) Raw credentials dict
             workflow_class (Type[WorkflowInterface]): The workflow class to execute.
 
         Returns:
@@ -286,11 +302,61 @@ class TemporalWorkflowClient(WorkflowClient):
             WorkflowFailureError: If the workflow fails to start.
             ValueError: If the client is not loaded.
         """
-        if "credentials" in workflow_args:
-            # remove credentials from workflow_args and add reference to credentials
-            workflow_args["credential_guid"] = await SecretStore.save_secret(
-                workflow_args["credentials"]
+        import warnings
+
+        from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
+
+        # Handle credential_guid (new preferred flow for local development)
+        if "credential_guid" in workflow_args and DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+            credential_guid = workflow_args["credential_guid"]
+
+            # Get slot name from stored mapping or declarations
+            from application_sdk.server.fastapi.routers.credentials import (
+                get_credential_slot_mapping,
             )
+
+            slot_name = get_credential_slot_mapping(credential_guid)
+            if not slot_name:
+                # Fallback to first declared credential slot
+                if hasattr(self, "_credential_declarations") and self._credential_declarations:
+                    slot_name = self._credential_declarations[0].name
+                else:
+                    slot_name = "default"
+
+            # Create credential_mapping if not already present
+            if "credential_mapping" not in workflow_args:
+                workflow_args["credential_mapping"] = {slot_name: credential_guid}
+                logger.debug(
+                    f"Created credential_mapping from credential_guid: {slot_name} -> {credential_guid}"
+                )
+
+        # Handle credentials directly in workflow_args (DEPRECATED)
+        elif "credentials" in workflow_args:
+            warnings.warn(
+                "Passing 'credentials' directly in workflow_args is deprecated. "
+                "Use POST /credentials/input to store credentials first, then pass "
+                "'credential_guid' in workflow_args. This pattern will be removed "
+                "in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+            # Save credentials and create credential_mapping for the interceptor
+            credential_guid = await SecretStore.save_secret(workflow_args["credentials"])
+            workflow_args["credential_guid"] = credential_guid
+
+            # Create credential_mapping if not already present
+            # Use the first declared credential slot name, or "default" as fallback
+            if "credential_mapping" not in workflow_args:
+                slot_name = "default"
+                # Try to get slot name from handler's declared credentials
+                if hasattr(self, "_credential_declarations") and self._credential_declarations:
+                    slot_name = self._credential_declarations[0].name
+                workflow_args["credential_mapping"] = {slot_name: credential_guid}
+                logger.debug(
+                    f"Created credential_mapping: {slot_name} -> {credential_guid}"
+                )
+
             del workflow_args["credentials"]
 
         workflow_id = workflow_args.get("workflow_id")
@@ -386,6 +452,9 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         if not self.client:
             raise ValueError("Client is not loaded")
+
+        # Store credential declarations for use in start_workflow
+        self._credential_declarations = credential_declarations or []
 
         # Always provide an executor if none given
         if activity_executor is None:

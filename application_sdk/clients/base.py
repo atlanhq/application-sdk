@@ -1,3 +1,4 @@
+import warnings
 from typing import Any, Dict, Optional
 
 import httpx
@@ -23,6 +24,32 @@ class BaseClient(ClientInterface):
     This class provides a base implementation for clients that need to connect
     to non-SQL data sources. It implements the ClientInterface and provides
     basic functionality that can be extended by subclasses.
+
+    .. deprecated:: 3.0.0
+        Use the new credential system instead. Define credentials in your handler
+        using ``declare_credentials()`` and access them via ``ctx.http`` for
+        authenticated HTTP requests.
+
+        Example migration::
+
+            # Old pattern (deprecated)
+            class MyClient(BaseClient):
+                async def load(self, **kwargs):
+                    creds = kwargs.get("credentials", {})
+                    self.http_headers = {"Authorization": f"Bearer {creds['token']}"}
+
+                async def fetch_data(self, url):
+                    return await self.execute_http_get_request(url)
+
+            # New pattern (recommended)
+            class MyHandler(HandlerInterface):
+                @classmethod
+                def declare_credentials(cls) -> List[Credential]:
+                    return [Credential(name="api", auth=AuthMode.BEARER_TOKEN)]
+
+            async def my_activity(ctx: CredentialContext):
+                response = await ctx.http.get("api", "/data")
+                return response.json()
 
     Attributes:
         credentials (Dict[str, Any]): Client credentials for authentication.
@@ -97,6 +124,13 @@ class BaseClient(ClientInterface):
             credentials (Dict[str, Any], optional): Client credentials for authentication. Defaults to {}.
             http_headers (HeaderTypes, optional): HTTP headers for all requests. Defaults to {}.
         """
+        warnings.warn(
+            "BaseClient is deprecated. Use the new credential system with "
+            "declare_credentials() and ctx.http instead. "
+            "See the credential migration guide for details.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.credentials = credentials
         self.http_headers = http_headers
 

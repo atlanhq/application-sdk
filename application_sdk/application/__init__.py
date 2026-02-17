@@ -1,3 +1,4 @@
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 
@@ -54,6 +55,8 @@ class BaseApplication:
             server (ServerInterface): The server class for the application.
             application_manifest (Optional[Dict[str, Any]]): Application manifest configuration.
             client_class (Optional[Type[BaseClient]]): Client class for the application.
+                **Deprecated**: Use the new credential system with declare_credentials()
+                and ctx.http instead.
             handler_class (Optional[Type[BaseHandler]]): Handler class for the application.
         """
         self.application_name = name
@@ -67,6 +70,17 @@ class BaseApplication:
 
         self.application_manifest: Optional[Dict[str, Any]] = application_manifest
         self.bootstrap_event_registration()
+
+        # Warn if using deprecated client_class pattern
+        if client_class is not None:
+            warnings.warn(
+                "The client_class parameter is deprecated. Use the new credential "
+                "system with declare_credentials() in your handler and access "
+                "credentials via ctx.http / ctx.credentials in activities. "
+                "See the credential migration guide for details.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
         self.client_class = client_class or BaseClient
         self.handler_class = handler_class or BaseHandler

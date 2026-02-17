@@ -49,12 +49,21 @@ class StaticSecretProtocol(BaseProtocol):
 
     default_fields: List[FieldSpec] = [
         FieldSpec(
+            name="base_url",
+            display_name="Base URL",
+            placeholder="https://api.example.com",
+            help_text="The base URL for API requests",
+            field_type=FieldType.URL,
+            required=True,
+        ),
+        FieldSpec(
             name="api_key",
             display_name="API Key",
+            placeholder="Enter your API key",
             sensitive=True,
             field_type=FieldType.PASSWORD,
             required=True,
-        )
+        ),
     ]
 
     default_config: Dict[str, Any] = {

@@ -443,3 +443,243 @@ class TestCredentialUtils:
         assert exc_info.value.args[0] == CommonError.CREDENTIALS_RESOLUTION_ERROR
         assert "State store error" in str(exc_info.value)
         mock_fetch_single_key.assert_not_called()
+
+
+class TestSecretStoreSaveAndDelete:
+    """Tests for save_secret and delete_secret methods."""
+
+    @pytest.fixture
+    def temp_secrets_file(self, tmp_path):
+        """Create a temporary secrets file for testing."""
+        secrets_file = tmp_path / "secrets.json"
+        secrets_file.write_text("{}")
+        return secrets_file
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.services.secretstore.DEPLOYMENT_NAME", "local")
+    @patch("application_sdk.services.secretstore.LOCAL_SECRETS_FILE")
+    async def test_save_secret_local_mode(self, mock_secrets_file, tmp_path):
+        """Test save_secret writes to local JSON file in local mode."""
+        # Create temp file
+        secrets_file = tmp_path / "secrets.json"
+        secrets_file.write_text("{}")
+        mock_secrets_file.__str__ = Mock(return_value=str(secrets_file))
+
+        # Patch the LOCAL_SECRETS_FILE path
+        with patch(
+            "application_sdk.services.secretstore.LOCAL_SECRETS_FILE",
+            str(secrets_file),
+        ):
+            config = {"api_key": "test-key-123", "base_url": "https://api.example.com"}
+            guid = await SecretStore.save_secret(config)
+
+            # Verify a GUID was returned
+            assert guid is not None
+            assert len(guid) == 36  # UUID format
+
+            # Verify file was updated
+            with open(secrets_file, "r") as f:
+                saved_data = json.load(f)
+
+            assert guid in saved_data
+            assert saved_data[guid] == config
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.services.secretstore.DEPLOYMENT_NAME", "local")
+    @patch("application_sdk.services.secretstore.LOCAL_SECRETS_FILE")
+    async def test_save_secret_local_mode_with_provided_guid(
+        self, mock_secrets_file, tmp_path
+    ):
+        """Test save_secret uses provided GUID in local mode."""
+        secrets_file = tmp_path / "secrets.json"
+        secrets_file.write_text("{}")
+
+        with patch(
+            "application_sdk.services.secretstore.LOCAL_SECRETS_FILE",
+            str(secrets_file),
+        ):
+            config = {"api_key": "test-key-456"}
+            provided_guid = "my-custom-guid-123"
+
+            guid = await SecretStore.save_secret(config, credential_guid=provided_guid)
+
+            assert guid == provided_guid
+
+            with open(secrets_file, "r") as f:
+                saved_data = json.load(f)
+
+            assert provided_guid in saved_data
+            assert saved_data[provided_guid] == config
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.services.statestore.StateStore.save_state_object")
+    @patch("application_sdk.services.secretstore.DEPLOYMENT_NAME", "production")
+    async def test_save_secret_production_mode(self, mock_save_state):
+        """Test save_secret stores in state store in production mode."""
+        mock_save_state.return_value = None
+
+        config = {"api_key": "prod-key-123"}
+        guid = await SecretStore.save_secret(config)
+
+        assert guid is not None
+        mock_save_state.assert_called_once()
+        call_kwargs = mock_save_state.call_args
+        assert call_kwargs[1]["id"] == guid
+        assert call_kwargs[1]["value"] == config
+
+    @patch("application_sdk.services.secretstore.DEPLOYMENT_NAME", "local")
+    @patch("application_sdk.services.secretstore.LOCAL_SECRETS_FILE")
+    def test_delete_secret_local_mode(self, mock_secrets_file, tmp_path):
+        """Test delete_secret removes from local JSON file in local mode."""
+        secrets_file = tmp_path / "secrets.json"
+        initial_data = {
+            "secret-to-delete": {"api_key": "delete-me"},
+            "secret-to-keep": {"api_key": "keep-me"},
+        }
+        secrets_file.write_text(json.dumps(initial_data))
+
+        with patch(
+            "application_sdk.services.secretstore.LOCAL_SECRETS_FILE",
+            str(secrets_file),
+        ):
+            result = SecretStore.delete_secret("secret-to-delete")
+
+            assert result is True
+
+            with open(secrets_file, "r") as f:
+                saved_data = json.load(f)
+
+            assert "secret-to-delete" not in saved_data
+            assert "secret-to-keep" in saved_data
+
+    @patch("application_sdk.services.secretstore.DEPLOYMENT_NAME", "local")
+    @patch("application_sdk.services.secretstore.LOCAL_SECRETS_FILE")
+    def test_delete_secret_local_mode_not_found(self, mock_secrets_file, tmp_path):
+        """Test delete_secret returns False when secret not found."""
+        secrets_file = tmp_path / "secrets.json"
+        secrets_file.write_text("{}")
+
+        with patch(
+            "application_sdk.services.secretstore.LOCAL_SECRETS_FILE",
+            str(secrets_file),
+        ):
+            result = SecretStore.delete_secret("nonexistent-secret")
+
+            assert result is False
+
+    @patch("application_sdk.services.secretstore.DEPLOYMENT_NAME", "production")
+    def test_delete_secret_production_mode(self):
+        """Test delete_secret skips deletion in production mode."""
+        # Production mode should skip deletion and return True
+        result = SecretStore.delete_secret("any-secret-key")
+
+        assert result is True
+
+    @patch("application_sdk.services.secretstore.DEPLOYMENT_NAME", "local")
+    @patch("application_sdk.services.secretstore.LOCAL_SECRETS_FILE")
+    def test_delete_secret_file_not_exists(self, mock_secrets_file, tmp_path):
+        """Test delete_secret returns False when file doesn't exist."""
+        nonexistent_file = tmp_path / "nonexistent.json"
+
+        with patch(
+            "application_sdk.services.secretstore.LOCAL_SECRETS_FILE",
+            str(nonexistent_file),
+        ):
+            result = SecretStore.delete_secret("any-key")
+
+            assert result is False
+
+
+class TestLocalSecretsFileOperations:
+    """Tests for local secrets file operations."""
+
+    def test_save_secret_to_local_file_creates_directory(self, tmp_path):
+        """Test _save_secret_to_local_file creates directory if needed."""
+        nested_file = tmp_path / "nested" / "dir" / "secrets.json"
+
+        with patch(
+            "application_sdk.services.secretstore.LOCAL_SECRETS_FILE",
+            str(nested_file),
+        ):
+            SecretStore._save_secret_to_local_file(
+                "test-key", {"api_key": "test-value"}
+            )
+
+            assert nested_file.exists()
+            with open(nested_file, "r") as f:
+                data = json.load(f)
+            assert data["test-key"] == {"api_key": "test-value"}
+
+    def test_save_secret_to_local_file_updates_existing(self, tmp_path):
+        """Test _save_secret_to_local_file updates existing secrets."""
+        secrets_file = tmp_path / "secrets.json"
+        secrets_file.write_text(json.dumps({"existing": {"key": "value"}}))
+
+        with patch(
+            "application_sdk.services.secretstore.LOCAL_SECRETS_FILE",
+            str(secrets_file),
+        ):
+            SecretStore._save_secret_to_local_file("new-key", {"api_key": "new-value"})
+
+            with open(secrets_file, "r") as f:
+                data = json.load(f)
+
+            # Both existing and new should be present
+            assert data["existing"] == {"key": "value"}
+            assert data["new-key"] == {"api_key": "new-value"}
+
+    def test_save_secret_to_local_file_handles_corrupt_file(self, tmp_path):
+        """Test _save_secret_to_local_file handles corrupt JSON gracefully."""
+        secrets_file = tmp_path / "secrets.json"
+        secrets_file.write_text("not valid json {{{")
+
+        with patch(
+            "application_sdk.services.secretstore.LOCAL_SECRETS_FILE",
+            str(secrets_file),
+        ):
+            SecretStore._save_secret_to_local_file("new-key", {"api_key": "value"})
+
+            with open(secrets_file, "r") as f:
+                data = json.load(f)
+
+            # Should start fresh when file is corrupt
+            assert data["new-key"] == {"api_key": "value"}
+
+    def test_delete_secret_from_local_file_success(self, tmp_path):
+        """Test _delete_secret_from_local_file removes secret successfully."""
+        secrets_file = tmp_path / "secrets.json"
+        secrets_file.write_text(
+            json.dumps(
+                {
+                    "key1": {"data": "value1"},
+                    "key2": {"data": "value2"},
+                }
+            )
+        )
+
+        with patch(
+            "application_sdk.services.secretstore.LOCAL_SECRETS_FILE",
+            str(secrets_file),
+        ):
+            result = SecretStore._delete_secret_from_local_file("key1")
+
+            assert result is True
+
+            with open(secrets_file, "r") as f:
+                data = json.load(f)
+
+            assert "key1" not in data
+            assert "key2" in data
+
+    def test_delete_secret_from_local_file_not_found(self, tmp_path):
+        """Test _delete_secret_from_local_file returns False for missing key."""
+        secrets_file = tmp_path / "secrets.json"
+        secrets_file.write_text(json.dumps({"other-key": {"data": "value"}}))
+
+        with patch(
+            "application_sdk.services.secretstore.LOCAL_SECRETS_FILE",
+            str(secrets_file),
+        ):
+            result = SecretStore._delete_secret_from_local_file("nonexistent")
+
+            assert result is False

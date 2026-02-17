@@ -3,10 +3,18 @@ SQL client implementation for database connections.
 
 This module provides SQL client classes for both synchronous and asynchronous
 database operations, supporting batch processing and server-side cursors.
+
+.. deprecated:: 3.0.0
+    The BaseSQLClient and client_class pattern is deprecated.
+    Use the new credential system with ``declare_credentials()`` and
+    ``ctx.credentials`` instead. For database connections, use
+    ``ctx.credentials.materialize("slot_name")`` to get credential values
+    and pass them to your database driver.
 """
 
 import asyncio
 import concurrent
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
     TYPE_CHECKING,
@@ -78,7 +86,18 @@ class BaseSQLClient(ClientInterface):
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
                 Defaults to USE_SERVER_SIDE_CURSOR.
             credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
+
+        .. deprecated:: 3.0.0
+            Use the new credential system with declare_credentials() and
+            ctx.credentials.materialize() for database connections.
         """
+        warnings.warn(
+            "BaseSQLClient is deprecated. Use the new credential system with "
+            "declare_credentials() and ctx.credentials.materialize() for database "
+            "connections. See the credential migration guide for details.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
         self.chunk_size = chunk_size

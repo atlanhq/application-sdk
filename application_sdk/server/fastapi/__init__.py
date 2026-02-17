@@ -426,6 +426,12 @@ class APIServer(ServerInterface):
             response_model=ConfigMapResponse,
         )
 
+        self.workflow_router.add_api_route(
+            "/configmap",
+            self.get_all_configmaps,
+            methods=["GET"],
+        )
+
         self.dapr_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
@@ -656,6 +662,9 @@ class APIServer(ServerInterface):
     async def get_configmap(self, config_map_id: str) -> ConfigMapResponse:
         """Get a configuration map by its ID.
 
+        Auto-generates configmap from declared credentials if available,
+        otherwise falls back to handler's get_configmap method.
+
         Args:
             config_map_id (str): The ID of the configuration map to retrieve.
 
@@ -666,7 +675,25 @@ class APIServer(ServerInterface):
             if not self.handler:
                 raise Exception("Handler not initialized")
 
-            # Call the getConfigmap method on the workflow class
+            # First, check if this is a credential configmap request
+            # Auto-generate from declared credentials if available
+            if hasattr(self.handler, "declare_credentials"):
+                from application_sdk.credentials import CredentialResolver
+
+                credentials = self.handler.declare_credentials()
+                for cred in credentials:
+                    if cred.name == config_map_id:
+                        logger.info(
+                            f"Auto-generating configmap for credential: {config_map_id}"
+                        )
+                        config_map_data = CredentialResolver.get_configmap(cred)
+                        return ConfigMapResponse(
+                            success=True,
+                            message="Configuration map fetched successfully",
+                            data=config_map_data,
+                        )
+
+            # Fall back to handler's get_configmap method
             config_map_data = await self.handler.get_configmap(config_map_id)
 
             return ConfigMapResponse(
@@ -680,6 +707,51 @@ class APIServer(ServerInterface):
                 success=False,
                 message=f"Failed to fetch configuration map: {str(e)}",
                 data={},
+            )
+
+    async def get_all_configmaps(self) -> JSONResponse:
+        """Get all credential configmaps from declared credentials.
+
+        Returns configmaps for all credentials declared via handler's
+        declare_credentials() method.
+
+        Returns:
+            JSON response with all credential configmaps.
+        """
+        try:
+            if not self.handler:
+                return JSONResponse(
+                    status_code=200,
+                    content={"success": True, "data": {}, "message": "No handler"},
+                )
+
+            result: Dict[str, Any] = {}
+
+            # Get configmaps from declared credentials
+            if hasattr(self.handler, "declare_credentials"):
+                from application_sdk.credentials import CredentialResolver
+
+                credentials = self.handler.declare_credentials()
+                for cred in credentials:
+                    result[cred.name] = CredentialResolver.get_configmap(cred)
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "success": True,
+                    "message": "All configmaps fetched successfully",
+                    "data": result,
+                },
+            )
+        except Exception as e:
+            logger.error(f"Error fetching all configmaps: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "message": f"Failed to fetch configmaps: {str(e)}",
+                    "data": {},
+                },
             )
 
     async def get_workflow_config(

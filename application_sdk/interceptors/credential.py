@@ -83,12 +83,46 @@ class CredentialWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             return await super().execute_workflow(input)
 
         finally:
-            # Always clean up credentials
+            # Clean up secrets from secret store (local JSON file or production store)
+            await self._cleanup_secrets(workflow_id)
+
+            # Clean up in-memory credential data
             self._store.cleanup(workflow_id)
             logger.debug(
                 f"Cleaned up credentials for workflow {workflow_id}",
                 extra={"workflow_id": workflow_id},
             )
+
+    async def _cleanup_secrets(self, workflow_id: str) -> None:
+        """Clean up workflow-scoped secrets from the secret store.
+
+        In local mode, deletes credentials from the JSON secrets file.
+        In production, secrets may be managed externally and not deleted.
+
+        Args:
+            workflow_id: The workflow ID.
+        """
+        from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
+        from application_sdk.services.secretstore import SecretStore
+
+        if DEPLOYMENT_NAME != LOCAL_ENVIRONMENT:
+            # Production: secrets are managed externally
+            return
+
+        # Get credential mapping to find GUIDs to delete
+        credential_mapping = self._store.get_credential_mapping(workflow_id)
+        for slot_name, credential_guid in credential_mapping.items():
+            try:
+                SecretStore.delete_secret(credential_guid)
+                logger.debug(
+                    f"Deleted secret for slot '{slot_name}' (guid: {credential_guid})",
+                    extra={"workflow_id": workflow_id, "slot_name": slot_name},
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to delete secret for slot '{slot_name}': {e}",
+                    extra={"workflow_id": workflow_id, "slot_name": slot_name},
+                )
 
     async def _bootstrap_credentials(
         self,
@@ -192,8 +226,12 @@ class CredentialWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     ) -> None:
         """Bootstrap credentials in local mode from workflow config.
 
-        In local mode, credentials are stored in the local StateStore and
-        the mapping is passed directly in the workflow config.
+        In local mode, credentials are stored in a local JSON file that serves
+        as a Dapr-compatible secret store. The credential mapping is passed
+        in the workflow config or stored in StateStore with the workflow config.
+
+        The read path is unified: credentials are always fetched via
+        SecretStore.get_secret(), which reads from the JSON file in local mode.
 
         Expected workflow config structure:
         {
@@ -208,21 +246,64 @@ class CredentialWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             input: Workflow execution input.
         """
         # Extract workflow config from args
-        if not input.args:
-            logger.debug(f"No workflow args for local credential bootstrap: {workflow_id}")
-            return
+        workflow_config: Dict[str, Any] = {}
 
-        workflow_config = input.args[0] if input.args else {}
-        if not isinstance(workflow_config, dict):
-            logger.warning(
-                f"Workflow args[0] is not a dict for workflow {workflow_id}. "
-                f"Expected dict with credential_mapping, got {type(workflow_config).__name__}. "
-                f"Skipping credential bootstrap.",
-                extra={"workflow_id": workflow_id, "args_type": type(workflow_config).__name__},
-            )
-            return
+        if input.args:
+            workflow_config = input.args[0] if input.args else {}
+            if not isinstance(workflow_config, dict):
+                logger.warning(
+                    f"Workflow args[0] is not a dict for workflow {workflow_id}. "
+                    f"Expected dict with credential_mapping, got {type(workflow_config).__name__}. "
+                    f"Skipping credential bootstrap.",
+                    extra={
+                        "workflow_id": workflow_id,
+                        "args_type": type(workflow_config).__name__,
+                    },
+                )
+                return
 
         credential_mapping = workflow_config.get("credential_mapping", {})
+
+        # If credential_mapping not in args, try to fetch from StateStore
+        # This handles the case where workflow is started with just workflow_id
+        # and the full config (including credential_mapping) is in StateStore
+        if not credential_mapping and workflow_id:
+            try:
+                from application_sdk.services.statestore import StateStore, StateType
+
+                stored_config = await StateStore.get_state(
+                    workflow_id, StateType.WORKFLOWS
+                )
+                if stored_config and isinstance(stored_config, dict):
+                    credential_mapping = stored_config.get("credential_mapping", {})
+
+                    # Also check for credential_guid (single credential case)
+                    # and create credential_mapping from it using first declared slot
+                    if not credential_mapping and stored_config.get("credential_guid"):
+                        credential_guid = stored_config["credential_guid"]
+                        # Use first declared credential slot name, or "default"
+                        slot_name = "default"
+                        if self._credential_declarations:
+                            slot_name = self._credential_declarations[0].name
+                        credential_mapping = {slot_name: credential_guid}
+                        logger.debug(
+                            f"Created credential_mapping from credential_guid: {slot_name} -> {credential_guid}",
+                            extra={"workflow_id": workflow_id},
+                        )
+
+                    if credential_mapping:
+                        logger.debug(
+                            f"Fetched credential_mapping from StateStore for {workflow_id}",
+                            extra={
+                                "workflow_id": workflow_id,
+                                "slots": list(credential_mapping.keys()),
+                            },
+                        )
+            except Exception as e:
+                logger.debug(
+                    f"Could not fetch workflow config from StateStore: {e}",
+                    extra={"workflow_id": workflow_id},
+                )
         if not credential_mapping:
             logger.debug(
                 f"No credential_mapping in workflow config for {workflow_id}",
@@ -232,7 +313,10 @@ class CredentialWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
         logger.debug(
             f"Bootstrapping credentials (local mode) for workflow {workflow_id}",
-            extra={"workflow_id": workflow_id, "slots": list(credential_mapping.keys())},
+            extra={
+                "workflow_id": workflow_id,
+                "slots": list(credential_mapping.keys()),
+            },
         )
 
         # Store the mapping
@@ -243,7 +327,8 @@ class CredentialWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
         for slot_name, credential_guid in credential_mapping.items():
             try:
-                # Fetch credentials from local StateStore
+                # Fetch credentials from local secrets file via unified get_secret() path
+                # This reads from Dapr (local.file secretstore → JSON file)
                 credentials = SecretStore.get_secret(credential_guid)
                 if not credentials:
                     logger.warning(
@@ -256,11 +341,14 @@ class CredentialWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 declaration = self._find_declaration(slot_name)
                 if declaration:
                     protocol = CredentialResolver.resolve(declaration)
+                    # Apply default values from declaration for missing fields
+                    credentials = self._apply_default_values(credentials, declaration)
                 else:
                     # Default to connection protocol if no declaration
                     from application_sdk.credentials.protocols.connection import (
                         ConnectionProtocol,
                     )
+
                     protocol = ConnectionProtocol()
 
                 # Create handle
@@ -375,8 +463,8 @@ class CredentialWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         self._store.set_raw_credentials(workflow_id, slot_name, credentials)
 
         # Create HTTP client with base URL if configured
+        # Note: declaration was already fetched above
         base_url = self._get_base_url(slot_name, credentials)
-        declaration = self._find_declaration(slot_name)
         timeout = declaration.timeout if declaration else 30.0
         max_retries = declaration.max_retries if declaration else 1
 
@@ -438,6 +526,43 @@ class CredentialWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             if decl.name == slot_name:
                 return decl
         return None
+
+    def _apply_default_values(
+        self,
+        credentials: Dict[str, Any],
+        declaration: Credential,
+    ) -> Dict[str, Any]:
+        """Apply default values from credential declaration for missing fields.
+
+        When credentials are submitted (e.g., from Credential-v2 widget), some
+        fields may be omitted if they have default values in the declaration.
+        This method fills in those defaults.
+
+        Args:
+            credentials: Credentials from secret store.
+            declaration: Credential declaration with field specs.
+
+        Returns:
+            Credentials with default values applied for missing fields.
+        """
+        if not declaration.fields:
+            return credentials
+
+        result = dict(credentials)
+
+        for field_name, field_spec in declaration.fields.items():
+            # Only apply default if field is missing and has a default value
+            if field_name not in result and field_spec.default_value is not None:
+                result[field_name] = field_spec.default_value
+                logger.debug(
+                    f"Applied default value for field '{field_name}'",
+                    extra={
+                        "slot_name": declaration.name,
+                        "field_name": field_name,
+                    },
+                )
+
+        return result
 
     def _get_base_url(
         self, slot_name: str, credentials: Dict[str, Any]

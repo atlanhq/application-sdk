@@ -280,3 +280,72 @@ class CredentialResolver:
             result["description"] = credential.description
 
         return result
+
+    @classmethod
+    def get_configmap(cls, credential: Credential) -> Dict[str, Any]:
+        """Generate app-playground compatible configmap from credential declaration.
+
+        This generates the JSON schema format expected by the app-playground
+        UI for rendering credential input forms.
+
+        Args:
+            credential: The Credential declaration.
+
+        Returns:
+            Dictionary in app-playground configmap format with properties and steps.
+        """
+        schema = cls.get_credential_schema(credential)
+        fields_list = schema.get("fields", [])
+
+        # Build properties from fields (fields_list is a list of field dicts)
+        properties: Dict[str, Any] = {}
+        property_names = []
+
+        for field_spec in fields_list:
+            field_name = field_spec.get("name", "unknown")
+
+            # Determine widget type
+            widget = "text"
+            if field_spec.get("sensitive", False):
+                widget = "password"
+            elif field_spec.get("field_type") == "url":
+                widget = "text"
+            elif field_spec.get("field_type") == "email":
+                widget = "email"
+
+            prop: Dict[str, Any] = {
+                "type": "string",
+                "ui": {
+                    "widget": widget,
+                    "label": field_spec.get("display_name", field_name),
+                    "placeholder": field_spec.get("placeholder", ""),
+                    "hidden": False,
+                },
+            }
+
+            if field_spec.get("help_text"):
+                prop["ui"]["help"] = field_spec["help_text"]
+
+            # Add default value if specified
+            if field_spec.get("default_value"):
+                prop["default"] = field_spec["default_value"]
+
+            properties[field_name] = prop
+            property_names.append(field_name)
+
+        return {
+            "id": credential.name,
+            "name": credential.name,
+            "description": credential.description or f"{credential.name} credentials",
+            "config": {
+                "properties": properties,
+                "steps": [
+                    {
+                        "id": "credentials",
+                        "title": "Credentials",
+                        "description": f"Configure {credential.name} credentials",
+                        "properties": property_names,
+                    }
+                ],
+            },
+        }

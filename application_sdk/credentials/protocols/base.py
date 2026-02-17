@@ -262,7 +262,7 @@ class BaseProtocol(ABC):
             else:
                 result.append(default_field)
 
-        # Add extra fields
+        # Add extra fields at the end
         result.extend(extra_fields)
 
         return result

@@ -2,23 +2,38 @@
 
 This module provides endpoints for:
 - Getting credential configmap schema from handler declarations
+- Storing credentials for local development (simulates Vault)
 - Validating credential configurations
 
-These endpoints are used by the frontend to:
-- Render credential input forms
+These endpoints are used by the frontend (Credential-v2 widget) to:
+- Render credential input forms from declare_credentials()
+- Store credentials locally before workflow start
 - Configure credential profiles with proper field mappings
+
+Local Development Flow:
+    1. App-playground fetches configmap from GET /credentials/configmap
+    2. User fills Credential-v2 widget
+    3. App-playground saves credentials via POST /credentials/input
+    4. App-playground starts workflow with credential_guid
+    5. SDK reads credentials from local secrets file via Dapr
 """
 
-from typing import Any, Dict, Optional, Type
+import warnings
+from typing import Any, Dict, List, Optional, Type
 
 from fastapi import Query, status
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 
+from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+# Local credential storage for simulating production Vault
+# Maps credential_guid -> slot_name for local development
+_local_credential_slots: Dict[str, str] = {}
 
 # Create a router instance
 router = APIRouter(
@@ -169,6 +184,108 @@ async def get_all_credentials_configmaps() -> JSONResponse:
         status_code=status.HTTP_200_OK,
         content=result,
     )
+
+
+@router.post("/input")
+async def store_credential_input(
+    payload: Dict[str, Any],
+    slot_name: Optional[str] = Query(None, description="Credential slot name"),
+) -> JSONResponse:
+    """Store credentials for local development (simulates Vault storage).
+
+    This endpoint is used by the Credential-v2 widget in app-playground to
+    store credentials before starting a workflow. It simulates the production
+    flow where credentials are stored in Vault during Phase 1.
+
+    Local development only - returns 403 in production.
+
+    Args:
+        payload: Credential data to store (e.g., {"base_url": "...", "api_key": "..."})
+        slot_name: Optional credential slot name (from declare_credentials).
+            If not provided, uses the first declared slot.
+
+    Returns:
+        JSON response with the credential_guid to use in workflow start.
+
+    Example:
+        POST /credentials/input?slot_name=atlan
+        Body: {"base_url": "https://mycompany.atlan.com", "api_key": "my-api-key"}
+
+        Response:
+        {
+            "credential_guid": "abc-123-def-456",
+            "slot_name": "atlan",
+            "message": "Credentials stored successfully"
+        }
+
+    Usage in workflow start:
+        POST /workflows/v1/start
+        Body: {"credential_guid": "abc-123-def-456", ...}
+    """
+    if DEPLOYMENT_NAME != LOCAL_ENVIRONMENT:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={
+                "error": "Not allowed",
+                "message": "Credential input is only available in local development mode. "
+                "In production, credentials are managed via Heracles/Vault.",
+            },
+        )
+
+    try:
+        from application_sdk.services.secretstore import SecretStore
+
+        # Determine slot name from handler declarations if not provided
+        if not slot_name and _handler_registry:
+            handler_class = next(iter(_handler_registry.values()))
+            if hasattr(handler_class, "declare_credentials"):
+                declarations = handler_class.declare_credentials()
+                if declarations:
+                    slot_name = declarations[0].name
+
+        if not slot_name:
+            slot_name = "default"
+
+        # Save credentials to local secrets file
+        credential_guid = await SecretStore.save_secret(payload)
+
+        # Track slot mapping for this credential
+        _local_credential_slots[credential_guid] = slot_name
+
+        logger.info(
+            f"Stored credentials for slot '{slot_name}' with GUID: {credential_guid}"
+        )
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "credential_guid": credential_guid,
+                "slot_name": slot_name,
+                "message": "Credentials stored successfully. Use credential_guid in workflow start.",
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to store credentials: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": "Failed to store credentials",
+                "message": str(e),
+            },
+        )
+
+
+def get_credential_slot_mapping(credential_guid: str) -> Optional[str]:
+    """Get the slot name for a stored credential GUID.
+
+    Args:
+        credential_guid: The credential GUID from /credentials/input.
+
+    Returns:
+        The slot name or None if not found.
+    """
+    return _local_credential_slots.get(credential_guid)
 
 
 def get_credentials_router() -> APIRouter:
