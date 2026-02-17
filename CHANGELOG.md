@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.0.0 (February 17, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.3...v3.0.0
+
+### Features
+
+- add /review skill for structured Claude PR reviews (#1059) (by @fyzanshaik-atlan in [65e3903](https://github.com/atlanhq/application-sdk/commit/65e3903))
+
+### Bug Fixes
+
+- restore pandas extra compatibility (#1037) (by @fyzanshaik-atlan in [8425922](https://github.com/atlanhq/application-sdk/commit/8425922))
+- use --append-system-prompt for Claude review skill routing (#1060) (by @fyzanshaik-atlan in [f59f0f4](https://github.com/atlanhq/application-sdk/commit/f59f0f4))
+- add missing allowedTools for /review slash command (#1061) (by @fyzanshaik-atlan in [697f79c](https://github.com/atlanhq/application-sdk/commit/697f79c))
+
+
 ## v2.3.3 (February 04, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.2...v2.3.3
