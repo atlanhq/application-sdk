@@ -6,6 +6,7 @@ Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.3...v2.4
 
 ### Features
 
+- add root_path parameter to APIServer.start() for reverse proxy support (#1058) (by @rashi-j in [edc99bc](https://github.com/atlanhq/application-sdk/commit/edc99bc))
 - add /review skill for structured Claude PR reviews (#1059) (by @fyzanshaik-atlan in [65e3903](https://github.com/atlanhq/application-sdk/commit/65e3903))
 
 ### Bug Fixes
