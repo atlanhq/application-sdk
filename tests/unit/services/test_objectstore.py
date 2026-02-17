@@ -1,5 +1,6 @@
 """Unit tests for ObjectStore services."""
 
+import json
 import os
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -19,11 +20,14 @@ class TestObjectStore:
         test_file_content = b"test content"
         m = mock_open(read_data=test_file_content)
 
-        with patch("builtins.open", m), patch(
-            "os.path.exists", return_value=True
-        ), patch("os.path.isfile", return_value=True), patch(
-            "application_sdk.services.objectstore.ObjectStore._cleanup_local_path"
-        ) as mock_cleanup:
+        with (
+            patch("builtins.open", m),
+            patch("os.path.exists", return_value=True),
+            patch("os.path.isfile", return_value=True),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore._cleanup_local_path"
+            ) as mock_cleanup,
+        ):
             await ObjectStore.upload_file(
                 source="/tmp/test.txt",
                 destination="/prefix/test.txt",
@@ -41,8 +45,11 @@ class TestObjectStore:
             "./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456/test.txt"
         )
 
-        with patch("builtins.open", mock_open(read_data=b"content")), patch(
-            "application_sdk.services.objectstore.ObjectStore._cleanup_local_path"
+        with (
+            patch("builtins.open", mock_open(read_data=b"content")),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore._cleanup_local_path"
+            ),
         ):
             await ObjectStore.upload_file(
                 source="/tmp/test.txt",
@@ -62,8 +69,11 @@ class TestObjectStore:
         """Test upload_file keeps already-relative object store destinations unchanged."""
         destination = "datasets/sales/2024/test.txt"
 
-        with patch("builtins.open", mock_open(read_data=b"content")), patch(
-            "application_sdk.services.objectstore.ObjectStore._cleanup_local_path"
+        with (
+            patch("builtins.open", mock_open(read_data=b"content")),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore._cleanup_local_path"
+            ),
         ):
             await ObjectStore.upload_file(
                 source="/tmp/test.txt",
@@ -78,11 +88,15 @@ class TestObjectStore:
         mock_client = MagicMock()
         mock_dapr_client.return_value.__enter__.return_value = mock_client
 
-        with patch("os.walk") as mock_walk, patch("os.path.isdir") as mock_isdir, patch(
-            "os.path.exists", return_value=True
-        ), patch("builtins.open", mock_open(read_data=b"x")), patch(
-            "application_sdk.services.objectstore.ObjectStore._cleanup_local_path"
-        ) as mock_cleanup:
+        with (
+            patch("os.walk") as mock_walk,
+            patch("os.path.isdir") as mock_isdir,
+            patch("os.path.exists", return_value=True),
+            patch("builtins.open", mock_open(read_data=b"x")),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore._cleanup_local_path"
+            ) as mock_cleanup,
+        ):
             mock_isdir.return_value = True
             mock_walk.return_value = [("/input", [], ["file1.txt", "file2.txt"])]
 
@@ -100,9 +114,11 @@ class TestObjectStore:
     )
     async def test_download_file_success(self, mock_get_content: AsyncMock) -> None:
         mock_get_content.return_value = b"abc"
-        with patch("builtins.open", mock_open()) as m, patch(
-            "os.path.exists", return_value=True
-        ), patch("os.path.dirname", return_value="/tmp"):
+        with (
+            patch("builtins.open", mock_open()) as m,
+            patch("os.path.exists", return_value=True),
+            patch("os.path.dirname", return_value="/tmp"),
+        ):
             await ObjectStore.download_file(
                 source="/prefix/test.txt",
                 destination="/tmp/test.txt",
@@ -121,9 +137,11 @@ class TestObjectStore:
         mock_get_content.return_value = b"abc"
         source = "./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456/test.txt"
 
-        with patch("builtins.open", mock_open()), patch(
-            "os.path.exists", return_value=True
-        ), patch("os.path.dirname", return_value="/tmp"):
+        with (
+            patch("builtins.open", mock_open()),
+            patch("os.path.exists", return_value=True),
+            patch("os.path.dirname", return_value="/tmp"),
+        ):
             await ObjectStore.download_file(
                 source=source,
                 destination="/tmp/test.txt",
@@ -613,6 +631,15 @@ class TestObjectStore:
                 "",
                 ["/full/path/to/file.txt"],
             ),
+            # 14: Prefix with trailing "/" - only matching directory files returned
+            (
+                [
+                    "artifacts/orders/file1.json",
+                    "artifacts/orders/file2.json",
+                ],
+                "orders/",
+                ["orders/file1.json", "orders/file2.json"],
+            ),
         ],
     )
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
@@ -644,7 +671,7 @@ class TestObjectStore:
     async def test_list_files_normalizes_temporary_prefix_for_binding(
         self, mock_invoke: AsyncMock
     ) -> None:
-        """Test list_files strips temporary prefix for metadata/data payload."""
+        """Test list_files strips temporary prefix and appends trailing slash for Dapr query."""
         import orjson
 
         mock_invoke.return_value = orjson.dumps(
@@ -656,11 +683,13 @@ class TestObjectStore:
 
         mock_invoke.assert_called_once()
         call_kwargs = mock_invoke.call_args.kwargs
+        # _as_store_key strips temp prefix and trailing slash, then
+        # list_files re-appends "/" to prevent sibling directory matches
         assert call_kwargs["metadata"]["prefix"] == (
-            "artifacts/apps/my-app/workflows/wf-123/run-456"
+            "artifacts/apps/my-app/workflows/wf-123/run-456/"
         )
         assert call_kwargs["data"] == (
-            b'{"prefix": "artifacts/apps/my-app/workflows/wf-123/run-456"}'
+            b'{"prefix": "artifacts/apps/my-app/workflows/wf-123/run-456/"}'
         )
 
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
@@ -674,6 +703,37 @@ class TestObjectStore:
 
         # Assert
         assert result == []
+
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_list_files_appends_trailing_slash_to_prefix(
+        self, mock_invoke: AsyncMock
+    ) -> None:
+        """Test that list_files appends '/' to prefix to prevent matching sibling directories."""
+        import orjson
+
+        mock_invoke.return_value = orjson.dumps(["artifacts/orders/file1.json"])
+
+        await ObjectStore.list_files(prefix="orders")
+
+        # Verify the Dapr binding was called with "orders/" not "orders"
+        call_kwargs = mock_invoke.call_args[1]
+        assert call_kwargs["metadata"]["prefix"] == "orders/"
+        sent_data = json.loads(call_kwargs["data"].decode("utf-8"))
+        assert sent_data["prefix"] == "orders/"
+
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_list_files_preserves_existing_trailing_slash(
+        self, mock_invoke: AsyncMock
+    ) -> None:
+        """Test that list_files does not double-append '/' if prefix already has one."""
+        import orjson
+
+        mock_invoke.return_value = orjson.dumps(["artifacts/orders/file1.json"])
+
+        await ObjectStore.list_files(prefix="orders/")
+
+        call_kwargs = mock_invoke.call_args[1]
+        assert call_kwargs["metadata"]["prefix"] == "orders/"
 
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
     async def test_list_files_malformed_json(self, mock_invoke: AsyncMock) -> None:

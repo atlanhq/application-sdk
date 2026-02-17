@@ -95,15 +95,22 @@ class ObjectStore:
         """
         try:
             normalized_prefix = cls._as_store_key(prefix)
+
+            # Ensure prefix ends with "/" for the object store query to prevent
+            # matching sibling directories (e.g. "orders" matching "orders_archive")
+            query_prefix = normalized_prefix
+            if normalized_prefix and not normalized_prefix.endswith("/"):
+                query_prefix = normalized_prefix + "/"
+
             data = (
-                json.dumps({"prefix": normalized_prefix}).encode("utf-8")
+                json.dumps({"prefix": query_prefix}).encode("utf-8")
                 if normalized_prefix
                 else ""
             )
 
             response_data = await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_LIST_OPERATION,
-                metadata=cls._create_list_metadata(normalized_prefix),
+                metadata=cls._create_list_metadata(query_prefix),
                 data=data,
                 store_name=store_name,
             )
