@@ -94,6 +94,5 @@ async def test_tables_check_failure(sql_handler: BaseSQLHandler) -> None:
         result = await sql_handler.tables_check(payload={})
         assert result["success"] is False
         assert "Tables check failed" in result["failureMessage"]
-        assert (
-            "'count'" in result["error"]
-        )  # KeyError's string representation includes quotes
+        # KeyError's string representation includes quotes, now in failureMessage
+        assert "'count'" in result["failureMessage"]

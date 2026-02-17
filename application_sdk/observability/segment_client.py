@@ -16,6 +16,7 @@ from application_sdk.constants import (
     SEGMENT_WRITE_KEY,
 )
 from application_sdk.observability.models import MetricRecord
+from application_sdk.version import __version__
 
 if TYPE_CHECKING:
     pass  # Reserved for future type-checking-only imports
@@ -294,6 +295,7 @@ class SegmentClient:
         event_properties = {
             "value": metric_record.value,
             "metric_type": metric_record.type.value,
+            "sdk_version": __version__,
             **metric_record.labels,
         }
 

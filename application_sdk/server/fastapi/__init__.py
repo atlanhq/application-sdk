@@ -628,12 +628,24 @@ class APIServer(ServerInterface):
             await self.handler.load(body.credentials)
             preflight_check = await self.handler.preflight_check(body.model_dump())
 
-            # Record successful preflight check
+            # Determine overall success based on individual check results (dynamic)
+            # Guard against None or empty results
+            if not preflight_check:
+                all_checks_passed = False
+            else:
+                check_results = [
+                    value.get("success", True)
+                    for value in preflight_check.values()
+                    if isinstance(value, dict) and "success" in value
+                ]
+                all_checks_passed = bool(check_results) and all(check_results)
+
+            # Record preflight check result
             metrics.record_metric(
                 name="preflight_checks_total",
                 value=1.0,
                 metric_type=MetricType.COUNTER,
-                labels={"status": "success"},
+                labels={"status": "success" if all_checks_passed else "failed"},
                 description="Total number of preflight checks",
             )
 
@@ -647,7 +659,9 @@ class APIServer(ServerInterface):
                 description="Preflight check duration in seconds",
             )
 
-            return PreflightCheckResponse(success=True, data=preflight_check)
+            return PreflightCheckResponse(
+                success=all_checks_passed, data=preflight_check
+            )
         except Exception as e:
             # Record failed preflight check
             metrics.record_metric(
@@ -903,12 +917,15 @@ class APIServer(ServerInterface):
         self,
         host: str = APP_HOST,
         port: int = APP_PORT,
+        root_path: str = "",
     ) -> None:
         """Start the FastAPI application server.
 
         Args:
             host (str, optional): Host address to bind to. Defaults to "0.0.0.0".
             port (int, optional): Port to listen on. Defaults to 8000.
+            root_path (str, optional): ASGI root_path passed to uvicorn. When set,
+                uvicorn prepends this to scope["path"] at the protocol level. Defaults to "".
         """
         if self.ui_enabled:
             self.register_ui_routes()
@@ -919,6 +936,7 @@ class APIServer(ServerInterface):
                 app=self.app,
                 host=host,
                 port=port,
+                root_path=root_path,
             )
         )
         await server.serve()
