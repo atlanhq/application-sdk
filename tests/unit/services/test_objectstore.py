@@ -1,5 +1,6 @@
 """Unit tests for ObjectStore services."""
 
+import json
 import os
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -510,6 +511,15 @@ class TestObjectStore:
                 "",
                 ["/full/path/to/file.txt"],
             ),
+            # 14: Prefix with trailing "/" - only matching directory files returned
+            (
+                [
+                    "artifacts/orders/file1.json",
+                    "artifacts/orders/file2.json",
+                ],
+                "orders/",
+                ["orders/file1.json", "orders/file2.json"],
+            ),
         ],
     )
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
@@ -548,6 +558,37 @@ class TestObjectStore:
 
         # Assert
         assert result == []
+
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_list_files_appends_trailing_slash_to_prefix(
+        self, mock_invoke: AsyncMock
+    ) -> None:
+        """Test that list_files appends '/' to prefix to prevent matching sibling directories."""
+        import orjson
+
+        mock_invoke.return_value = orjson.dumps(["artifacts/orders/file1.json"])
+
+        await ObjectStore.list_files(prefix="orders")
+
+        # Verify the Dapr binding was called with "orders/" not "orders"
+        call_kwargs = mock_invoke.call_args[1]
+        assert call_kwargs["metadata"]["prefix"] == "orders/"
+        sent_data = json.loads(call_kwargs["data"].decode("utf-8"))
+        assert sent_data["prefix"] == "orders/"
+
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_list_files_preserves_existing_trailing_slash(
+        self, mock_invoke: AsyncMock
+    ) -> None:
+        """Test that list_files does not double-append '/' if prefix already has one."""
+        import orjson
+
+        mock_invoke.return_value = orjson.dumps(["artifacts/orders/file1.json"])
+
+        await ObjectStore.list_files(prefix="orders/")
+
+        call_kwargs = mock_invoke.call_args[1]
+        assert call_kwargs["metadata"]["prefix"] == "orders/"
 
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
     async def test_list_files_malformed_json(self, mock_invoke: AsyncMock) -> None:
