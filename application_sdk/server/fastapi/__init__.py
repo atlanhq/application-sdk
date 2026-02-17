@@ -835,12 +835,15 @@ class APIServer(ServerInterface):
         self,
         host: str = APP_HOST,
         port: int = APP_PORT,
+        root_path: str = "",
     ) -> None:
         """Start the FastAPI application server.
 
         Args:
             host (str, optional): Host address to bind to. Defaults to "0.0.0.0".
             port (int, optional): Port to listen on. Defaults to 8000.
+            root_path (str, optional): ASGI root_path passed to uvicorn. When set,
+                uvicorn prepends this to scope["path"] at the protocol level. Defaults to "".
         """
         if self.ui_enabled:
             self.register_ui_routes()
@@ -851,6 +854,7 @@ class APIServer(ServerInterface):
                 app=self.app,
                 host=host,
                 port=port,
+                root_path=root_path,
             )
         )
         await server.serve()
