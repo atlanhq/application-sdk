@@ -84,11 +84,19 @@ class ObjectStore:
             Exception: If there's an error listing files from the object store.
         """
         try:
-            data = json.dumps({"prefix": prefix}).encode("utf-8") if prefix else ""
+            # Ensure prefix ends with "/" for the object store query to prevent
+            # matching sibling directories (e.g. "orders" matching "orders_archive")
+            query_prefix = prefix
+            if prefix and not prefix.endswith("/"):
+                query_prefix = prefix + "/"
+
+            data = (
+                json.dumps({"prefix": query_prefix}).encode("utf-8") if prefix else ""
+            )
 
             response_data = await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_LIST_OPERATION,
-                metadata=cls._create_list_metadata(prefix),
+                metadata=cls._create_list_metadata(query_prefix),
                 data=data,
                 store_name=store_name,
             )

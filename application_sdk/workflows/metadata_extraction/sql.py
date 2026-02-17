@@ -16,7 +16,7 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
-from application_sdk.constants import APPLICATION_NAME, ENABLE_ATLAN_UPLOAD
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
@@ -255,24 +255,6 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 description="Total execution time of SQL metadata extraction workflow in seconds",
                 unit="s",
             )
-
-    async def run_exit_activities(self, workflow_args: Dict[str, Any]) -> None:
-        """Run the exit activity for the workflow."""
-        retry_policy = RetryPolicy(
-            maximum_attempts=6,
-            backoff_coefficient=2,
-        )
-        if ENABLE_ATLAN_UPLOAD:
-            workflow_args["typename"] = "atlan-upload"
-            await workflow.execute_activity_method(
-                self.activities_cls.upload_to_atlan,
-                args=[workflow_args],
-                retry_policy=retry_policy,
-                start_to_close_timeout=self.default_start_to_close_timeout,
-                heartbeat_timeout=self.default_heartbeat_timeout,
-            )
-        else:
-            logger.info("Atlan upload skipped for workflow (disabled)")
 
     def get_fetch_functions(
         self,
