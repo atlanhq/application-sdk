@@ -49,5 +49,5 @@ jobs:
           anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           claude_args: |
             --model claude-sonnet-4
-            --allowedTools "mcp__github_inline_comment__create_inline_comment"
-            --append-system-prompt "CRITICAL INSTRUCTION: When a user asks you to review a pull request (e.g. @claude review, @claude review this PR, @claude please review), you MUST execute the /review slash command. Do NOT attempt a freeform review. Always use the /review skill — no exceptions."
+            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(git show:*),Bash(git blame:*),mcp__github_inline_comment__create_inline_comment"
+            --append-system-prompt "When a user comment contains '/review' or asks you to review a PR, you MUST invoke the /review slash command. Do not attempt a freeform review."
