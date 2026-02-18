@@ -5,12 +5,6 @@ import threading
 from time import time
 from typing import Any, Dict, Optional
 
-from opentelemetry import metrics
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.resources import Resource
-
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
     METRICS_BATCH_SIZE,
@@ -123,6 +117,14 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             Exception: If setup fails, logs error and continues without OTLP
         """
         try:
+            from opentelemetry import metrics as otel_metrics
+            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+                OTLPMetricExporter,
+            )
+            from opentelemetry.sdk.metrics import MeterProvider
+            from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+            from opentelemetry.sdk.resources import Resource
+
             # Get workflow node name for Argo environment
             workflow_node_name = OTEL_WF_NODE_NAME
 
@@ -163,7 +165,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             )
 
             # Set global meter provider
-            metrics.set_meter_provider(self.meter_provider)
+            otel_metrics.set_meter_provider(self.meter_provider)
 
             # Create meter
             self.meter = self.meter_provider.get_meter(SERVICE_NAME)

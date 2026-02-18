@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 from typing_extensions import deprecated
 
@@ -22,8 +22,24 @@ from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
-metrics = get_metrics()
-traces = get_traces()
+
+
+class _LazyMetricsProxy:
+    """Lazy proxy for metrics adapter initialization."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(get_metrics(), name)
+
+
+class _LazyTracesProxy:
+    """Lazy proxy for traces adapter initialization."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(get_traces(), name)
+
+
+metrics = cast(Any, _LazyMetricsProxy())
+traces = cast(Any, _LazyTracesProxy())
 
 
 class BaseApplication:

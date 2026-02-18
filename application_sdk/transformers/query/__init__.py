@@ -1,10 +1,10 @@
+from __future__ import annotations
+
 import textwrap
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 
-import daft
 import yaml
-from daft.functions import to_struct, when
 from pyatlan.model.enums import AtlanConnectorType
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -15,6 +15,27 @@ from application_sdk.transformers.common.utils import (
 )
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    import daft
+
+
+def _import_daft() -> Any:
+    import daft
+
+    return daft
+
+
+def to_struct(*args: Any, **kwargs: Any) -> Any:
+    from daft.functions import to_struct as _to_struct
+
+    return _to_struct(*args, **kwargs)
+
+
+def when(*args: Any, **kwargs: Any) -> Any:
+    from daft.functions import when as _when
+
+    return _when(*args, **kwargs)
 
 
 class QueryBasedTransformer(TransformerInterface):
@@ -216,6 +237,7 @@ class QueryBasedTransformer(TransformerInterface):
             logger.error("ERROR: prefix is None in _build_struct!")
             raise ValueError("prefix cannot be None in _build_struct")
 
+        daft = _import_daft()
         struct_fields = []
         non_null_fields = []
 
@@ -296,6 +318,8 @@ class QueryBasedTransformer(TransformerInterface):
             daft.DataFrame: DataFrame with columns grouped into structs
         """
         try:
+            daft = _import_daft()
+
             # Get all column names
             columns = dataframe.column_names
             logger.debug("=== DEBUG: get_grouped_dataframe_by_prefix ===")
@@ -371,6 +395,8 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             Tuple[daft.DataFrame, str]: DataFrame with default attributes added and the entity SQL template
         """
+        daft = _import_daft()
+
         # prepare default attributes
         default_attributes = {
             "connection_qualified_name": daft.lit(connection_qualified_name),
@@ -419,6 +445,8 @@ class QueryBasedTransformer(TransformerInterface):
     ) -> Optional[daft.DataFrame]:
         """Transform records using SQL executed through Daft"""
         try:
+            daft = _import_daft()
+
             if dataframe.count_rows() == 0:
                 return None
 
