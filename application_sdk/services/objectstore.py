@@ -29,6 +29,10 @@ class ObjectStore:
     OBJECT_LIST_OPERATION = "list"
     OBJECT_DELETE_OPERATION = "delete"
 
+    # Central path normalizer for all object-store operations.
+    # Accepts either local TEMPORARY_PATH-style paths or object-store keys.
+    # Always returns a relative key (no leading/trailing "/"), and maps temp-root
+    # "." to "" so root-prefix operations never emit malformed "./" keys.
     @staticmethod
     def _as_store_key(path: str) -> str:
         """Normalize a local or object-store path into a clean object store key.
