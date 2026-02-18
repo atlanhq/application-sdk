@@ -799,12 +799,32 @@ class TestObjectStore:
         )
         assert result == "artifacts/apps/default/workflows/wf123/file.json"
 
+    def test_as_store_key_temporary_root_path(self) -> None:
+        """Test _as_store_key maps temp root path to object store root key."""
+        assert ObjectStore._as_store_key("./local/tmp/") == ""
+        assert ObjectStore._as_store_key("./local/tmp") == ""
+
     def test_as_store_key_idempotent_for_relative_key(self) -> None:
         """Test _as_store_key keeps relative object store keys unchanged."""
         result = ObjectStore._as_store_key(
             "artifacts/apps/default/workflows/wf123/file.json"
         )
         assert result == "artifacts/apps/default/workflows/wf123/file.json"
+
+    @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
+    async def test_list_files_temporary_root_uses_store_root(
+        self, mock_invoke: AsyncMock
+    ) -> None:
+        """Test list_files temp root input queries object store root (not './')."""
+        import orjson
+
+        mock_invoke.return_value = orjson.dumps(["artifacts/orders/file1.json"])
+
+        await ObjectStore.list_files(prefix="./local/tmp/")
+
+        call_kwargs = mock_invoke.call_args.kwargs
+        assert call_kwargs["metadata"] == {}
+        assert call_kwargs["data"] == ""
 
     @patch(
         "application_sdk.services.objectstore.ObjectStore.list_files",

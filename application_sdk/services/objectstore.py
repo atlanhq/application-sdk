@@ -51,7 +51,9 @@ class ObjectStore:
 
         normalized = get_object_store_prefix(path)
         normalized = normalized.replace("\\", "/").replace(os.sep, "/")
-        return normalized.strip("/")
+        normalized = normalized.strip("/")
+        # TEMPORARY_PATH root resolves to "." via os.path.relpath; treat as store root.
+        return "" if normalized == "." else normalized
 
     @classmethod
     def _create_file_metadata(cls, key: str) -> dict[str, str]:
