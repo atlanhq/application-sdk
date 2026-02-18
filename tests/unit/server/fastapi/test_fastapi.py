@@ -1,5 +1,6 @@
+import asyncio
 from typing import Any, Dict
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -909,3 +910,40 @@ class TestMessageHandlerCallbackInvocation:
             assert response_data["status"] == "SUCCESS"
             assert response_data["items_count"] == 42
             assert response_data["metadata"]["source"] == "test"
+
+
+class TestServerLifecycleShutdown:
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.Server")
+    async def test_start_handles_keyboard_interrupt(self, mock_server_class):
+        """Test that KeyboardInterrupt triggers explicit shutdown without re-raising."""
+        mock_server = Mock()
+        mock_server.should_exit = False
+        mock_server.serve = AsyncMock(side_effect=KeyboardInterrupt)
+        mock_server.shutdown = AsyncMock()
+        mock_server_class.return_value = mock_server
+
+        app = APIServer(ui_enabled=False)
+        await app.start()
+
+        assert mock_server.should_exit is True
+        mock_server.shutdown.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.Server")
+    async def test_start_re_raises_cancelled_error_after_shutdown(
+        self, mock_server_class
+    ):
+        """Test that cancellation triggers shutdown and preserves cancellation semantics."""
+        mock_server = Mock()
+        mock_server.should_exit = False
+        mock_server.serve = AsyncMock(side_effect=asyncio.CancelledError)
+        mock_server.shutdown = AsyncMock()
+        mock_server_class.return_value = mock_server
+
+        app = APIServer(ui_enabled=False)
+        with pytest.raises(asyncio.CancelledError):
+            await app.start()
+
+        assert mock_server.should_exit is True
+        mock_server.shutdown.assert_awaited_once()

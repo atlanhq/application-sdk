@@ -140,18 +140,24 @@ class BaseApplication:
         Raises:
             ValueError: If APPLICATION_MODE is not a valid ApplicationMode value.
         """
+        is_local_mode = APPLICATION_MODE == ApplicationMode.LOCAL
+
         if APPLICATION_MODE in (ApplicationMode.LOCAL, ApplicationMode.WORKER):
             await self._start_worker(
-                daemon=APPLICATION_MODE == ApplicationMode.LOCAL,
+                daemon=is_local_mode,
             )
 
         if APPLICATION_MODE in (ApplicationMode.LOCAL, ApplicationMode.SERVER):
-            await self._setup_server(
-                workflow_class=workflow_class,
-                ui_enabled=ui_enabled,
-                has_configmap=has_configmap,
-            )
-            await self._start_server()
+            try:
+                await self._setup_server(
+                    workflow_class=workflow_class,
+                    ui_enabled=ui_enabled,
+                    has_configmap=has_configmap,
+                )
+                await self._start_server()
+            finally:
+                if is_local_mode:
+                    await self._stop_worker()
 
     async def setup_workflow(
         self,
@@ -225,6 +231,16 @@ class BaseApplication:
         if self.worker is None:
             raise ValueError("Worker not initialized")
         await self.worker.start(daemon=daemon)
+
+    async def _stop_worker(self):
+        """Stop the worker gracefully if it is initialized."""
+        if self.worker is None:
+            return
+
+        try:
+            await self.worker.stop()
+        except Exception as e:
+            logger.warning(f"Failed to stop worker cleanly: {e}")
 
     @deprecated("Use application.start(). Deprecated since v2.3.0.")
     @observability(logger=logger, metrics=metrics, traces=traces)

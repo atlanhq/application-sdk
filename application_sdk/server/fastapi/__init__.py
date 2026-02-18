@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 from typing import Any, Callable, List, Optional, Type
@@ -857,4 +858,16 @@ class APIServer(ServerInterface):
                 root_path=root_path,
             )
         )
-        await server.serve()
+        try:
+            await server.serve()
+        except KeyboardInterrupt:
+            # uvicorn may re-raise SIGINT after returning from serve(); ensure
+            # we perform shutdown explicitly only when it has not started yet.
+            if not server.should_exit:
+                server.should_exit = True
+                await server.shutdown()
+        except asyncio.CancelledError:
+            if not server.should_exit:
+                server.should_exit = True
+                await server.shutdown()
+            raise

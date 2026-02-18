@@ -193,6 +193,8 @@ class Worker:
         self.workflow_client = workflow_client
         self.workflow_worker: Optional[TemporalWorker] = None
         self._shutdown_initiated = False
+        self._worker_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._worker_thread: Optional[threading.Thread] = None
         self.workflow_activities = workflow_activities
         self.workflow_classes = workflow_classes
         self.passthrough_modules = list(
@@ -248,10 +250,10 @@ class Worker:
             3. Worker exits early if activities finish, or at timeout
         """
         if daemon:
-            worker_thread = threading.Thread(
+            self._worker_thread = threading.Thread(
                 target=lambda: asyncio.run(self.start(daemon=False)), daemon=True
             )
-            worker_thread.start()
+            self._worker_thread.start()
             return
 
         if not self.workflow_client:
@@ -266,6 +268,7 @@ class Worker:
 
             await EventStore.publish_event(worker_creation_event)
 
+        self._worker_loop = asyncio.get_running_loop()
         try:
             worker = self.workflow_client.create_worker(
                 activities=self.workflow_activities,
@@ -279,6 +282,11 @@ class Worker:
             logger.info(
                 f"Starting worker with task queue: {self.workflow_client.worker_task_queue}"
             )
+            if self._shutdown_initiated:
+                logger.info(
+                    "Worker shutdown requested before startup completed, skipping run"
+                )
+                return
 
             # Set up signal handlers and run worker
             self._setup_signal_handlers()
@@ -290,3 +298,35 @@ class Worker:
         except Exception as e:
             logger.error(f"Error starting worker: {e}")
             raise e
+        finally:
+            self._worker_loop = None
+
+    async def stop(self) -> None:
+        """Stop the worker gracefully from the current event loop.
+
+        This supports both:
+        - worker running in the same event loop (WORKER mode)
+        - worker running in a daemon thread with its own loop (LOCAL mode)
+        """
+        self._shutdown_initiated = True
+
+        if not self.workflow_worker:
+            logger.debug("Worker stop requested before worker initialization")
+            return
+
+        worker_loop = self._worker_loop
+        current_loop = asyncio.get_running_loop()
+
+        if worker_loop and worker_loop.is_running() and worker_loop is not current_loop:
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self._shutdown_worker(), worker_loop
+                )
+                await asyncio.wrap_future(future)
+                return
+            except RuntimeError:
+                logger.debug(
+                    "Worker loop is unavailable; attempting shutdown in current loop"
+                )
+
+        await self._shutdown_worker()

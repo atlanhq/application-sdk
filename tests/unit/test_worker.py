@@ -351,3 +351,36 @@ class TestWorkerGracefulShutdown:
         )
 
         assert worker._shutdown_initiated is False
+
+    async def test_stop_calls_shutdown_worker_in_same_loop(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that stop() awaits shutdown when running in the same event loop."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+        worker.workflow_worker = Mock()
+        worker._worker_loop = asyncio.get_running_loop()
+        worker._shutdown_worker = AsyncMock()
+
+        await worker.stop()
+
+        worker._shutdown_worker.assert_awaited_once()
+        assert worker._shutdown_initiated is True
+
+    async def test_stop_noop_when_worker_not_initialized(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that stop() is a safe no-op when worker has not started yet."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+
+        await worker.stop()
+
+        assert worker.workflow_worker is None
+        assert worker._shutdown_initiated is True
