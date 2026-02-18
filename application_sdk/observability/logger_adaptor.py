@@ -277,12 +277,12 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     "<blue>[{level}]</blue>"
                     "<magenta>{extra[_trace_id_str]}</magenta> "
                     "<cyan>{extra[logger_name]}</cyan>"
-                    " - <level>{message}</level>\n"
+                    " - <level>{message}</level>\n{exception}"
                 )
             return (
                 "{time:YYYY-MM-DD HH:mm:ss} [{level}]"
                 "{extra[_trace_id_str]} {extra[logger_name]}"
-                " - {message}\n"
+                " - {message}\n{exception}"
             )
 
         self.logger.add(
