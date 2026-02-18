@@ -318,15 +318,16 @@ class Worker:
         current_loop = asyncio.get_running_loop()
 
         if worker_loop and worker_loop.is_running() and worker_loop is not current_loop:
+            shutdown_coro = self._shutdown_worker()
             try:
-                future = asyncio.run_coroutine_threadsafe(
-                    self._shutdown_worker(), worker_loop
-                )
+                future = asyncio.run_coroutine_threadsafe(shutdown_coro, worker_loop)
                 await asyncio.wrap_future(future)
                 return
             except RuntimeError:
-                logger.debug(
-                    "Worker loop is unavailable; attempting shutdown in current loop"
+                shutdown_coro.close()
+                logger.warning(
+                    "Worker loop is unavailable; worker shutdown may not complete cleanly"
                 )
+                return
 
         await self._shutdown_worker()

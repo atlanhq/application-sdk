@@ -384,3 +384,27 @@ class TestWorkerGracefulShutdown:
 
         assert worker.workflow_worker is None
         assert worker._shutdown_initiated is True
+
+    async def test_stop_cross_loop_runtimeerror_does_not_fallback_to_current_loop(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Test that stop() returns safely when cross-loop scheduling fails."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+        worker.workflow_worker = Mock()
+        worker._worker_loop = Mock(
+            spec=asyncio.AbstractEventLoop, is_running=Mock(return_value=True)
+        )
+        worker._shutdown_worker = AsyncMock()
+
+        with patch(
+            "application_sdk.worker.asyncio.run_coroutine_threadsafe",
+            side_effect=RuntimeError("loop closed"),
+        ):
+            await worker.stop()
+
+        worker._shutdown_worker.assert_not_awaited()
+        assert worker._shutdown_initiated is True
