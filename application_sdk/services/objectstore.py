@@ -95,6 +95,7 @@ class ObjectStore:
         Raises:
             Exception: If there's an error listing files from the object store.
         """
+        normalized_prefix = ""
         try:
             normalized_prefix = cls._as_store_key(prefix)
 
