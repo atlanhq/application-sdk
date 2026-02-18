@@ -574,8 +574,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             **kwargs: Additional keyword arguments for context
         """
         try:
+            exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.bind(**kwargs).debug(msg, *args)
+            self.logger.opt(exception=exc_info).bind(**kwargs).debug(msg, *args)
         except Exception as e:
             logging.error(f"Error in debug logging: {e}")
             self._sync_flush()
@@ -589,8 +590,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             **kwargs: Additional keyword arguments for context
         """
         try:
+            exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.bind(**kwargs).info(msg, *args)
+            self.logger.opt(exception=exc_info).bind(**kwargs).info(msg, *args)
         except Exception as e:
             logging.error(f"Error in info logging: {e}")
             self._sync_flush()
@@ -604,8 +606,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             **kwargs: Additional keyword arguments for context
         """
         try:
+            exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.bind(**kwargs).warning(msg, *args)
+            self.logger.opt(exception=exc_info).bind(**kwargs).warning(msg, *args)
         except Exception as e:
             logging.error(f"Error in warning logging: {e}")
             self._sync_flush()
@@ -621,13 +624,29 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         Note: Forces an immediate flush of logs when called.
         """
         try:
+            exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.bind(**kwargs).error(msg, *args)
+            self.logger.opt(exception=exc_info).bind(**kwargs).error(msg, *args)
             # Force flush on error logs
             self._sync_flush()
         except Exception as e:
             logging.error(f"Error in error logging: {e}")
             self._sync_flush()
+
+    def exception(self, msg: str, *args: Any, **kwargs: Any):
+        """Log an error level message with the current exception traceback.
+
+        Equivalent to error() with exc_info=True. Matches the interface of
+        logging.Logger.exception() so that callers such as the Temporal SDK
+        (activity.logger.exception(...)) work correctly.
+
+        Args:
+            msg (str): Message to log
+            *args: Additional positional arguments
+            **kwargs: Additional keyword arguments for context
+        """
+        kwargs.setdefault("exc_info", True)
+        self.error(msg, *args, **kwargs)
 
     def critical(self, msg: str, *args: Any, **kwargs: Any):
         """Log a critical level message.
@@ -640,8 +659,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         Note: Forces an immediate flush of logs when called.
         """
         try:
+            exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.bind(**kwargs).critical(msg, *args)
+            self.logger.opt(exception=exc_info).bind(**kwargs).critical(msg, *args)
             # Force flush on critical logs
             self._sync_flush()
         except Exception as e:
