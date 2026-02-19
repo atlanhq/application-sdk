@@ -484,6 +484,14 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     else:
                         attributes[key] = str(value)
 
+        # Add OpenTelemetry semantic exception attributes if traceback is embedded
+        # in the log message as escaped or real newlines.
+        if isinstance(record.get("message"), str):
+            for key, value in self._extract_exception_attributes(
+                record["message"]
+            ).items():
+                attributes.setdefault(key, value)
+
         return LogRecord(
             timestamp=int(record["timestamp"] * 1e9),
             observed_timestamp=time_ns(),
@@ -495,6 +503,39 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             body=record["message"],
             attributes=attributes,
         )
+
+    def _extract_exception_attributes(self, message: str) -> Dict[str, str]:
+        """Extract OTEL semantic exception attributes from a log message.
+
+        Supports both escaped newlines (``\\n``) and real newlines.
+        """
+        normalized = message.replace("\\n", "\n")
+        marker = "\nTraceback "
+        if marker not in normalized:
+            return {}
+
+        _, stack_tail = normalized.split(marker, 1)
+        stacktrace = f"Traceback {stack_tail}".rstrip()
+        if not stacktrace:
+            return {}
+
+        attrs: Dict[str, str] = {"exception.stacktrace": stacktrace}
+
+        lines = [line.strip() for line in stacktrace.splitlines() if line.strip()]
+        if not lines:
+            return attrs
+
+        last_line = lines[-1]
+        if ": " in last_line:
+            exc_type, exc_message = last_line.split(": ", 1)
+            if exc_type:
+                attrs["exception.type"] = exc_type
+            if exc_message:
+                attrs["exception.message"] = exc_message
+        else:
+            attrs["exception.type"] = last_line
+
+        return attrs
 
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic log flushing.
