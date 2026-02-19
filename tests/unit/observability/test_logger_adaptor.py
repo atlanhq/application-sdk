@@ -611,8 +611,8 @@ def test_exception_keeps_explicit_exc_info(logger_adapter: AtlanLoggerAdapter):
     mock_error.assert_called_once_with("Something failed", exc_info=False)
 
 
-def test_warning_with_exc_info_emits_inline_traceback(capsys: pytest.CaptureFixture[str]):
-    """warning(..., exc_info=True) should keep traceback on a single physical line."""
+def test_warning_with_exc_info_emits_traceback(capsys: pytest.CaptureFixture[str]):
+    """warning(..., exc_info=True) should render traceback in stderr output."""
     with create_logger_adapter() as logger_adapter:
         try:
             raise ValueError("traceback-check")
@@ -620,14 +620,9 @@ def test_warning_with_exc_info_emits_inline_traceback(capsys: pytest.CaptureFixt
             logger_adapter.warning("Completing activity as failed", exc_info=True)
 
     stderr = capsys.readouterr().err
-    matching_lines = [
-        line
-        for line in stderr.splitlines()
-        if "Completing activity as failed" in line
-    ]
-    assert len(matching_lines) == 1
-    assert "\\nTraceback (most recent call last):" in matching_lines[0]
-    assert "ValueError: traceback-check" in matching_lines[0]
+    assert "Completing activity as failed" in stderr
+    assert "Traceback (most recent call last):" in stderr
+    assert "ValueError: traceback-check" in stderr
 
 
 def test_log_record_model_extracts_exception_attrs_from_loguru_record():

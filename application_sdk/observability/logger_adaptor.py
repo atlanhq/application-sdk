@@ -316,7 +316,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             )
             stacktrace = _format_exception_stacktrace(record.get("exception"))
             record["extra"]["_exception_inline"] = (
-                f"\\n{stacktrace.replace('\n', '\\\\n')}" if stacktrace else ""
+                f"\n{stacktrace}" if stacktrace else ""
             )
 
             if colorize:
