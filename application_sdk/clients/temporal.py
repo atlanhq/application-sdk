@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional, Sequence, Type
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
-from temporalio.worker import Worker
+from temporalio.worker import Interceptor, Worker
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
@@ -358,6 +358,7 @@ class TemporalWorkflowClient(WorkflowClient):
         max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
         activity_executor: Optional[ThreadPoolExecutor] = None,
         auto_start_token_refresh: bool = True,
+        custom_interceptors: Sequence[Interceptor] = (),
     ) -> Worker:
         """Create a Temporal worker with automatic token refresh and graceful shutdown.
 
@@ -369,6 +370,8 @@ class TemporalWorkflowClient(WorkflowClient):
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
             auto_start_token_refresh (bool): Whether to automatically start token refresh.
                 Set to False if you've already started it via load().
+            custom_interceptors (Sequence[Interceptor]): Custom interceptors to append
+                after the SDK's built-in interceptors.
         Returns:
             Worker: The created worker instance.
 
@@ -442,7 +445,8 @@ class TemporalWorkflowClient(WorkflowClient):
                 EventInterceptor(),
                 CleanupInterceptor(),
                 RedisLockInterceptor(activities_dict),
-            ],
+            ]
+            + list(custom_interceptors),
         )
 
     async def get_workflow_run_status(
