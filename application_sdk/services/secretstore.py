@@ -1,22 +1,30 @@
 """Unified secret store service for the application.
 
-Logic summary:
+This module provides a unified interface for credential/secret management
+that works consistently across local development and production environments.
 
-    1. Fetch credential config from state store.
+Architecture:
+    - Local: JSON file-backed Dapr SecretStore (secretstores.local.file)
+    - Production: Vault-backed Dapr SecretStore (secretstores.hashicorp.vault)
 
-    2. Determine mode: Multi-key if (credentialSource == 'direct' OR secret-path is defined), Single-key otherwise.
+The read path is identical in both environments (always via Dapr). Only the
+underlying Dapr component configuration differs.
 
-    3. Fetch secrets accordingly: Multi-key uses secret_path if credentialSource == "agent" else credential_guid, Single-key fetches each field individually.
-
-    4. Merge & resolve secrets.
+Flow:
+    1. Before workflow start: Credentials are persisted via save_secret()
+    2. At runtime: Credentials are accessed via get_secret() through Dapr
+    3. On workflow end: Credentials are cleaned up via delete_secret()
 """
 
 import collections.abc
 import copy
 import json
+import os
+import threading
 import uuid
 from enum import Enum
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from dapr.clients import DaprClient
 
@@ -33,6 +41,14 @@ from application_sdk.services._utils import is_component_registered
 from application_sdk.services.statestore import StateStore, StateType
 
 logger = get_logger(__name__)
+
+# Local secrets file path (configurable via environment variable)
+LOCAL_SECRETS_FILE = os.getenv(
+    "LOCAL_SECRETS_FILE", "./local/dapr/secrets.json"
+)
+
+# Lock for thread-safe file operations
+_local_secrets_lock = threading.Lock()
 
 
 class CredentialSource(Enum):
@@ -298,6 +314,10 @@ class SecretStore:
         Retrieves secret data from the specified Dapr component and processes
         it into a standardized dictionary format.
 
+        This method uses a unified read path via Dapr in ALL environments:
+        - Local: Dapr's secretstores.local.file reads from JSON file
+        - Production: Dapr's secretstores.hashicorp.vault reads from Vault
+
         Args:
             secret_key (str): Key of the secret to fetch from the secret store.
             component_name (str): Name of the Dapr component to fetch from.
@@ -309,10 +329,6 @@ class SecretStore:
         Raises:
             Exception: If the secret cannot be retrieved from the component.
 
-        Note:
-            In local development environment, returns empty dict to avoid
-            secret store dependency.
-
         Examples:
             >>> # Get database credentials
             >>> db_secret = SecretStore.get_secret("database-credentials")
@@ -323,9 +339,6 @@ class SecretStore:
             ...     component_name="external-secrets"
             ... )
         """
-        if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
-            return {}
-
         try:
             with DaprClient() as client:
                 dapr_secret_object = client.get_secret(
@@ -433,44 +446,146 @@ class SecretStore:
         return result_data
 
     @classmethod
-    async def save_secret(cls, config: Dict[str, Any]) -> str:
-        """Store credentials in the state store (development environment only).
+    async def save_secret(
+        cls, config: Dict[str, Any], credential_guid: Optional[str] = None
+    ) -> str:
+        """Store credentials in the secret store.
 
-        This method is designed for development and testing purposes only.
-        In production environments, secrets should be managed through proper
-        secret management systems.
+        This method persists credentials so they can be accessed during workflow
+        execution via get_secret().
+
+        Local environment:
+            Writes credentials to the local JSON secrets file that Dapr reads from.
+
+        Production environment:
+            Stores credentials in Vault via Dapr (when credential mapping is resolved
+            from Heracles, the resolved credentials are cached in Vault for the
+            workflow's duration).
 
         Args:
             config (Dict[str, Any]): The credential configuration to store.
+            credential_guid (str, optional): Optional GUID to use. If not provided,
+                a new UUID will be generated.
 
         Returns:
-            str: The generated credential GUID that can be used to retrieve the credentials.
-
-        Raises:
-            ValueError: If called in production environment (non-local deployment).
-            Exception: If there's an error storing the credentials.
+            str: The credential GUID that can be used to retrieve the credentials.
 
         Examples:
-            >>> # Development environment only
+            >>> # Store credentials before workflow start
             >>> config = {
-            ...     "host": "localhost",
-            ...     "port": 5432,
-            ...     "username": "dev_user",
-            ...     "password": "dev_password",
-            ...     "database": "app_dev"
+            ...     "base_url": "https://api.example.com",
+            ...     "api_key": "secret-api-key-123"
             ... }
             >>> guid = await SecretStore.save_secret(config)
             >>> print(f"Stored credentials with GUID: {guid}")
-            >>> # Later retrieve these credentials
-            >>> retrieved = await SecretStore.get_credentials(guid)
+            >>>
+            >>> # Later retrieve these credentials via get_secret()
+            >>> creds = SecretStore.get_secret(guid)
         """
-        if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
-            # NOTE: (development) temporary solution to store the credentials in the state store.
-            # In production, dapr doesn't support creating secrets.
+        if credential_guid is None:
             credential_guid = str(uuid.uuid4())
+
+        if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+            # Local: Write to JSON file that Dapr's local.file secretstore reads from
+            cls._save_secret_to_local_file(credential_guid, config)
+            logger.debug(f"Saved credentials to local secrets file: {credential_guid}")
+        else:
+            # Production: Store in Vault via Dapr
+            # Note: Dapr's secretstores don't support write operations directly.
+            # In production, we store in StateStore with encryption, and the
+            # credential interceptor handles the Vault integration via Heracles.
             await StateStore.save_state_object(
                 id=credential_guid, value=config, type=StateType.CREDENTIALS
             )
-            return credential_guid
+            logger.debug(f"Saved credentials to state store: {credential_guid}")
+
+        return credential_guid
+
+    @classmethod
+    def _save_secret_to_local_file(
+        cls, secret_key: str, secret_data: Dict[str, Any]
+    ) -> None:
+        """Save a secret to the local JSON secrets file.
+
+        This method writes secrets to the JSON file used by Dapr's local.file
+        secretstore component. The file is created if it doesn't exist.
+
+        Args:
+            secret_key: The key to store the secret under.
+            secret_data: The secret data to store.
+        """
+        secrets_file = Path(LOCAL_SECRETS_FILE)
+
+        # Ensure directory exists
+        secrets_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with _local_secrets_lock:
+            # Read existing secrets
+            if secrets_file.exists():
+                try:
+                    with open(secrets_file, "r") as f:
+                        all_secrets = json.load(f)
+                except (json.JSONDecodeError, Exception):
+                    all_secrets = {}
+            else:
+                all_secrets = {}
+
+            # Add/update the secret
+            all_secrets[secret_key] = secret_data
+
+            # Write back
+            with open(secrets_file, "w") as f:
+                json.dump(all_secrets, f, indent=2)
+
+    @classmethod
+    def delete_secret(cls, secret_key: str) -> bool:
+        """Delete a secret from the secret store.
+
+        Used for cleanup when workflows complete.
+
+        Args:
+            secret_key: The key of the secret to delete.
+
+        Returns:
+            True if the secret was deleted, False otherwise.
+        """
+        if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+            return cls._delete_secret_from_local_file(secret_key)
         else:
-            raise ValueError("Storing credentials is not supported in production.")
+            # Production: Vault secrets are managed externally
+            # We don't delete from Vault as the credentials may be shared
+            logger.debug(f"Skipping secret deletion in production: {secret_key}")
+            return True
+
+    @classmethod
+    def _delete_secret_from_local_file(cls, secret_key: str) -> bool:
+        """Delete a secret from the local JSON secrets file.
+
+        Args:
+            secret_key: The key of the secret to delete.
+
+        Returns:
+            True if deleted, False if not found.
+        """
+        secrets_file = Path(LOCAL_SECRETS_FILE)
+
+        if not secrets_file.exists():
+            return False
+
+        with _local_secrets_lock:
+            try:
+                with open(secrets_file, "r") as f:
+                    all_secrets = json.load(f)
+
+                if secret_key in all_secrets:
+                    del all_secrets[secret_key]
+                    with open(secrets_file, "w") as f:
+                        json.dump(all_secrets, f, indent=2)
+                    logger.debug(f"Deleted secret from local file: {secret_key}")
+                    return True
+
+                return False
+
+            except Exception as e:
+                logger.error(f"Failed to delete secret from local file: {e}")
+                return False

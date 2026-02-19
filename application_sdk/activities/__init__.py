@@ -11,6 +11,21 @@ Example:
     ...     async def my_activity(self, workflow_args: Dict[str, Any]) -> None:
     ...         state = await self._get_state(workflow_args)
     ...         await state.handler.do_something()
+
+Credential Context Access:
+    Activities can access credentials through the CredentialContext:
+
+    >>> from application_sdk.activities import get_credential_context
+    >>>
+    >>> async def my_activity():
+    ...     ctx = get_credential_context()
+    ...
+    ...     # Make authenticated HTTP requests
+    ...     response = await ctx.http.get("api", "https://api.example.com/data")
+    ...
+    ...     # Or materialize credentials for SDK usage
+    ...     creds = await ctx.credentials.materialize("database")
+    ...     password = creds.get("password")
 """
 
 import os
@@ -31,6 +46,11 @@ from application_sdk.activities.common.utils import (
 from application_sdk.common.error_codes import OrchestratorError
 from application_sdk.common.file_converter import FileType, convert_data_files
 from application_sdk.constants import TEMPORARY_PATH
+
+# Re-export credential context accessor for convenience
+from application_sdk.credentials.context import (
+    get_credential_context as get_credential_context,
+)
 from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 
