@@ -2,6 +2,7 @@ import asyncio
 import logging
 import sys
 import threading
+import traceback as tb_module
 from time import time_ns
 from typing import Any, Dict, Optional, Tuple
 
@@ -277,12 +278,12 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     "<blue>[{level}]</blue>"
                     "<magenta>{extra[_trace_id_str]}</magenta> "
                     "<cyan>{extra[logger_name]}</cyan>"
-                    " - <level>{message}</level>\n{exception}"
+                    " - <level>{message}</level>\n"
                 )
             return (
                 "{time:YYYY-MM-DD HH:mm:ss} [{level}]"
                 "{extra[_trace_id_str]} {extra[logger_name]}"
-                " - {message}\n{exception}"
+                " - {message}\n"
             )
 
         self.logger.add(
@@ -565,6 +566,28 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
         return msg, kwargs
 
+    def _format_exc_inline(self, exc_info: Any) -> Optional[str]:
+        """Render exception info as a single-line string with escaped newlines.
+
+        This keeps traceback content on one physical log line so line-oriented
+        stream parsers can keep the whole payload together.
+        """
+        if exc_info is True:
+            exc_info = sys.exc_info()
+        elif isinstance(exc_info, BaseException):
+            exc_info = (type(exc_info), exc_info, exc_info.__traceback__)
+
+        if (
+            isinstance(exc_info, tuple)
+            and len(exc_info) == 3
+            and exc_info[0] is not None
+        ):
+            formatted = "".join(
+                tb_module.format_exception(exc_info[0], exc_info[1], exc_info[2])
+            ).rstrip()
+            return formatted.replace("\n", "\\n")
+        return None
+
     def debug(self, msg: str, *args: Any, **kwargs: Any):
         """Log a debug level message.
 
@@ -576,7 +599,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         try:
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.opt(exception=exc_info).bind(**kwargs).debug(msg, *args)
+            if exc_info:
+                inline_tb = self._format_exc_inline(exc_info)
+                if inline_tb:
+                    msg = f"{msg}\\n{inline_tb}"
+            self.logger.bind(**kwargs).debug(msg, *args)
         except Exception as e:
             logging.error(f"Error in debug logging: {e}")
             self._sync_flush()
@@ -592,7 +619,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         try:
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.opt(exception=exc_info).bind(**kwargs).info(msg, *args)
+            if exc_info:
+                inline_tb = self._format_exc_inline(exc_info)
+                if inline_tb:
+                    msg = f"{msg}\\n{inline_tb}"
+            self.logger.bind(**kwargs).info(msg, *args)
         except Exception as e:
             logging.error(f"Error in info logging: {e}")
             self._sync_flush()
@@ -608,7 +639,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         try:
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.opt(exception=exc_info).bind(**kwargs).warning(msg, *args)
+            if exc_info:
+                inline_tb = self._format_exc_inline(exc_info)
+                if inline_tb:
+                    msg = f"{msg}\\n{inline_tb}"
+            self.logger.bind(**kwargs).warning(msg, *args)
         except Exception as e:
             logging.error(f"Error in warning logging: {e}")
             self._sync_flush()
@@ -626,7 +661,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         try:
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.opt(exception=exc_info).bind(**kwargs).error(msg, *args)
+            if exc_info:
+                inline_tb = self._format_exc_inline(exc_info)
+                if inline_tb:
+                    msg = f"{msg}\\n{inline_tb}"
+            self.logger.bind(**kwargs).error(msg, *args)
             # Force flush on error logs
             self._sync_flush()
         except Exception as e:
@@ -661,7 +700,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         try:
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.opt(exception=exc_info).bind(**kwargs).critical(msg, *args)
+            if exc_info:
+                inline_tb = self._format_exc_inline(exc_info)
+                if inline_tb:
+                    msg = f"{msg}\\n{inline_tb}"
+            self.logger.bind(**kwargs).critical(msg, *args)
             # Force flush on critical logs
             self._sync_flush()
         except Exception as e:

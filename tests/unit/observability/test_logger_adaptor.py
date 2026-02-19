@@ -567,14 +567,12 @@ class TestCorrelationContextIntegration:
                     assert self.WORKFLOW_NODE_HEADER in kwargs
 
 
-def test_warning_forwards_exc_info_to_loguru_opt(logger_adapter: AtlanLoggerAdapter):
-    """warning() should pass exc_info to loguru via opt(exception=...)."""
-    exc_info = (RuntimeError, RuntimeError("boom"), None)
+def test_warning_inlines_exc_info_in_message(logger_adapter: AtlanLoggerAdapter):
+    """warning() should append escaped traceback to a single log message."""
+    exc_info = (RuntimeError, RuntimeError("boom"), mock.MagicMock())
     mock_loguru = mock.MagicMock()
-    mock_opt = mock.MagicMock()
     mock_bound = mock.MagicMock()
-    mock_loguru.opt.return_value = mock_opt
-    mock_opt.bind.return_value = mock_bound
+    mock_loguru.bind.return_value = mock_bound
 
     logger_adapter.logger = mock_loguru
 
@@ -582,12 +580,18 @@ def test_warning_forwards_exc_info_to_loguru_opt(logger_adapter: AtlanLoggerAdap
         logger_adapter,
         "process",
         return_value=("Processed warning message", {"logger_name": "test_logger"}),
-    ):
+    ), mock.patch.object(
+        logger_adapter,
+        "_format_exc_inline",
+        return_value="Traceback (most recent call last):\\nRuntimeError: boom",
+    ) as mock_format_inline:
         logger_adapter.warning("Original warning message", exc_info=exc_info)
 
-    mock_loguru.opt.assert_called_once_with(exception=exc_info)
-    mock_opt.bind.assert_called_once_with(logger_name="test_logger")
-    mock_bound.warning.assert_called_once_with("Processed warning message")
+    mock_format_inline.assert_called_once_with(exc_info)
+    mock_loguru.bind.assert_called_once_with(logger_name="test_logger")
+    mock_bound.warning.assert_called_once_with(
+        "Processed warning message\\nTraceback (most recent call last):\\nRuntimeError: boom"
+    )
 
 
 def test_exception_defaults_exc_info_true(logger_adapter: AtlanLoggerAdapter):
@@ -606,8 +610,8 @@ def test_exception_keeps_explicit_exc_info(logger_adapter: AtlanLoggerAdapter):
     mock_error.assert_called_once_with("Something failed", exc_info=False)
 
 
-def test_warning_with_exc_info_emits_traceback(capsys: pytest.CaptureFixture[str]):
-    """warning(..., exc_info=True) should include traceback in stderr logs."""
+def test_warning_with_exc_info_emits_inline_traceback(capsys: pytest.CaptureFixture[str]):
+    """warning(..., exc_info=True) should keep traceback on a single physical line."""
     with create_logger_adapter() as logger_adapter:
         try:
             raise ValueError("traceback-check")
@@ -615,5 +619,11 @@ def test_warning_with_exc_info_emits_traceback(capsys: pytest.CaptureFixture[str
             logger_adapter.warning("Completing activity as failed", exc_info=True)
 
     stderr = capsys.readouterr().err
-    assert "Completing activity as failed" in stderr
-    assert "ValueError: traceback-check" in stderr
+    matching_lines = [
+        line
+        for line in stderr.splitlines()
+        if "Completing activity as failed" in line
+    ]
+    assert len(matching_lines) == 1
+    assert "\\nTraceback (most recent call last):" in matching_lines[0]
+    assert "ValueError: traceback-check" in matching_lines[0]
