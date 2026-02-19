@@ -22,7 +22,7 @@ Example:
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 if TYPE_CHECKING:
     from application_sdk.credentials.protocols.base import BaseProtocol
@@ -60,10 +60,11 @@ class AuthMode(Enum):
         SERVICE_TOKEN, ATLAN_API_KEY
 
     Maps to IDENTITY_PAIR:
-        BASIC_AUTH, EMAIL_TOKEN, HEADER_PAIR, BODY_CREDENTIALS
+        BASIC_AUTH, EMAIL_TOKEN, HEADER_PAIR, BODY_CREDENTIALS,
+        API_KEY_SECRET, DIGEST_AUTH
 
     Maps to TOKEN_EXCHANGE:
-        OAUTH2, OAUTH2_CLIENT_CREDENTIALS, JWT_BEARER, ATLAN_OAUTH
+        OAUTH2, OAUTH2_CLIENT_CREDENTIALS, OAUTH2_PASSWORD, JWT_BEARER, ATLAN_OAUTH
 
     Maps to REQUEST_SIGNING:
         AWS_SIGV4, HMAC
@@ -87,15 +88,18 @@ class AuthMode(Enum):
     SERVICE_TOKEN = "service_token"  # Authorization: {key} (no prefix, raw token)
 
     # Maps to IDENTITY_PAIR Protocol
-    BASIC_AUTH = "basic_auth"
-    EMAIL_TOKEN = "email_token"
+    BASIC_AUTH = "basic_auth"  # RFC 7617: Authorization: Basic base64(user:pass)
+    EMAIL_TOKEN = "email_token"  # Atlassian-style: Basic base64(email:token)
     HEADER_PAIR = "header_pair"  # Two separate custom headers (e.g., Plaid)
     BODY_CREDENTIALS = "body_credentials"  # Credentials in JSON request body
+    API_KEY_SECRET = "api_key_secret"  # AWS-style: access_key_id + secret_access_key
+    DIGEST_AUTH = "digest_auth"  # RFC 7616: HTTP Digest Authentication
 
     # Maps to TOKEN_EXCHANGE Protocol
-    OAUTH2 = "oauth2"
-    OAUTH2_CLIENT_CREDENTIALS = "oauth2_client_credentials"
-    JWT_BEARER = "jwt_bearer"
+    OAUTH2 = "oauth2"  # Authorization code flow
+    OAUTH2_CLIENT_CREDENTIALS = "oauth2_client_credentials"  # Client credentials flow
+    OAUTH2_PASSWORD = "oauth2_password"  # Resource owner password grant (legacy)
+    JWT_BEARER = "jwt_bearer"  # RFC 7523: JWT Bearer assertion
 
     # Maps to REQUEST_SIGNING Protocol
     AWS_SIGV4 = "aws_sigv4"
@@ -241,7 +245,11 @@ class Credential:
         base_url_field: Name of the field containing the base URL (for dynamic URLs).
             If set, base URL is read from credentials at runtime.
         timeout: Default HTTP timeout in seconds (default: 30.0).
-        max_retries: Maximum retry attempts on auth failure (default: 1).
+        max_retries: Maximum retry attempts on auth failure (default: 3).
+        retry_status_codes: HTTP status codes that trigger auth retry (default: {401, 403}).
+            Add additional codes like 429 for rate limiting if needed.
+        token_expiry_buffer: For TOKEN_EXCHANGE auth modes, refresh token this many
+            seconds before expiry (default: 60). Set higher for slow token endpoints.
 
     Example:
         >>> # Simple: Just auth mode
@@ -317,7 +325,10 @@ class Credential:
         None  # Field name in credentials for dynamic base URL
     )
     timeout: float = 30.0
-    max_retries: int = 1
+    max_retries: int = 3
+    retry_status_codes: Optional[Set[int]] = field(default_factory=lambda: {401, 403})
+    # Token exchange configuration
+    token_expiry_buffer: int = 60  # Seconds before expiry to refresh token
 
     def __post_init__(self) -> None:
         """Validate credential configuration."""
@@ -371,8 +382,14 @@ class Credential:
         if self.timeout != 30.0:
             result["timeout"] = self.timeout
 
-        if self.max_retries != 1:
+        if self.max_retries != 3:
             result["max_retries"] = self.max_retries
+
+        if self.retry_status_codes != {401, 403}:
+            result["retry_status_codes"] = list(self.retry_status_codes or [])
+
+        if self.token_expiry_buffer != 60:
+            result["token_expiry_buffer"] = self.token_expiry_buffer
 
         # Fields will be computed by the resolver based on protocol + customizations
         # This is handled in get_credential_schema()

@@ -90,8 +90,10 @@ Single secret value added to request header or query parameter.
 |----------|-------------|------------------|----------|
 | `API_KEY` | Generic API key | `Authorization: Bearer {key}` | Most SaaS APIs |
 | `API_KEY_QUERY` | API key in query | `?api_key={key}` | OpenWeatherMap, legacy APIs |
+| `API_KEY_HEADER` | X-API-Key header (no prefix) | `X-API-Key: {key}` | Datadog, Twilio, many APIs |
 | `PAT` | Personal Access Token | `Authorization: Bearer {key}` | GitHub, GitLab |
 | `BEARER_TOKEN` | OAuth Bearer token | `Authorization: Bearer {key}` | Pre-obtained tokens |
+| `SERVICE_TOKEN` | Raw token (no Bearer prefix) | `Authorization: {key}` | Internal services, custom auth |
 | `ATLAN_API_KEY` | Atlan API key | `Authorization: Bearer {key}` | Atlan platform |
 
 #### Default Fields
@@ -175,10 +177,12 @@ Two values (identity + secret) combined for authentication.
 
 | AuthMode | Identity Field | Secret Field | Encoding | Use Case |
 |----------|---------------|--------------|----------|----------|
-| `BASIC_AUTH` | `username` | `password` | Base64 | HTTP Basic Auth |
-| `EMAIL_TOKEN` | `email` | `api_token` | Base64 | Jira, Confluence |
+| `BASIC_AUTH` | `username` | `password` | Base64 | HTTP Basic Auth (RFC 7617) |
+| `EMAIL_TOKEN` | `email` | `api_token` | Base64 | Jira, Confluence, Atlassian |
 | `HEADER_PAIR` | `client_id` | `secret` | Raw headers | Plaid, custom APIs |
 | `BODY_CREDENTIALS` | `client_id` | `secret` | JSON body | Some OAuth APIs |
+| `API_KEY_SECRET` | `access_key_id` | `secret_access_key` | Header pair | AWS-style, MinIO, DigitalOcean |
+| `DIGEST_AUTH` | `username` | `password` | Digest | Enterprise APIs (RFC 7616) |
 
 #### Configuration Options
 
@@ -279,8 +283,7 @@ Credential(
 
 #### Missing/Improvements
 
-- [ ] **DIGEST_AUTH**: HTTP Digest Authentication support
-- [ ] **NTLM_AUTH**: Windows NTLM authentication
+- [ ] **NTLM_AUTH**: Windows NTLM authentication (enterprise)
 - [ ] **Custom Encoding**: Support for non-Base64 encodings
 
 ---
@@ -295,6 +298,7 @@ Exchange credentials for temporary access token with automatic refresh.
 |----------|------------|----------|
 | `OAUTH2` | `authorization_code` | User-authorized apps |
 | `OAUTH2_CLIENT_CREDENTIALS` | `client_credentials` | Server-to-server |
+| `OAUTH2_PASSWORD` | `password` | Legacy systems (Salesforce classic) |
 | `JWT_BEARER` | `urn:ietf:params:oauth:grant-type:jwt-bearer` | Service accounts |
 | `ATLAN_OAUTH` | `client_credentials` | Atlan OAuth clients |
 
@@ -732,18 +736,72 @@ FieldSpec(
 
 ---
 
+## Credential Class Configuration
+
+### HTTP Client Settings
+
+```python
+Credential(
+    name="api",
+    auth=AuthMode.API_KEY,
+    base_url="https://api.example.com",
+
+    # Retry Configuration
+    max_retries=3,                        # Max retry attempts (default: 3)
+    retry_status_codes={401, 403, 429},   # Codes that trigger retry (default: {401, 403})
+
+    # Token Exchange Settings (for OAuth modes)
+    token_expiry_buffer=60,               # Refresh token this many seconds before expiry (default: 60)
+
+    # Timeout
+    timeout=30.0,                         # HTTP timeout in seconds (default: 30.0)
+)
+```
+
+### Retry Configuration
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_retries` | `int` | `3` | Maximum retry attempts on auth failure |
+| `retry_status_codes` | `set` | `{401, 403}` | HTTP status codes that trigger auth retry |
+
+**Example: Add rate limiting retry**
+```python
+Credential(
+    name="rate_limited_api",
+    auth=AuthMode.API_KEY,
+    retry_status_codes={401, 403, 429},  # Include 429 for rate limiting
+    max_retries=5,                        # More retries for rate-limited APIs
+)
+```
+
+### Token Expiry Configuration
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `token_expiry_buffer` | `int` | `60` | Seconds before expiry to refresh token |
+
+**Example: Slow token endpoint**
+```python
+Credential(
+    name="slow_oauth",
+    auth=AuthMode.OAUTH2_CLIENT_CREDENTIALS,
+    token_expiry_buffer=300,  # Refresh 5 minutes early for slow endpoints
+)
+```
+
+---
+
 ## Missing Features & Improvements
 
 ### New Auth Modes to Add
 
 | Proposed Mode | Protocol | Description | Priority |
 |---------------|----------|-------------|----------|
-| `API_KEY_HEADER` | STATIC_SECRET | Dedicated `X-API-Key` header | Medium |
 | `OAUTH2_PKCE` | TOKEN_EXCHANGE | PKCE flow for mobile/SPA | High |
 | `OAUTH2_DEVICE_CODE` | TOKEN_EXCHANGE | Device authorization | Medium |
 | `GCP_SERVICE_ACCOUNT` | REQUEST_SIGNING | GCP service account | High |
 | `AZURE_MANAGED_IDENTITY` | TOKEN_EXCHANGE | Azure managed identity | High |
-| `DIGEST_AUTH` | IDENTITY_PAIR | HTTP Digest auth | Low |
 | `NTLM_AUTH` | IDENTITY_PAIR | Windows NTLM | Low |
 | `WEBSOCKET_AUTH` | STATIC_SECRET | WebSocket authentication | Medium |
 

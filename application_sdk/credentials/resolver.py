@@ -29,9 +29,12 @@ AUTH_MODE_TO_PROTOCOL: Dict[AuthMode, ProtocolType] = {
     AuthMode.EMAIL_TOKEN: ProtocolType.IDENTITY_PAIR,
     AuthMode.HEADER_PAIR: ProtocolType.IDENTITY_PAIR,
     AuthMode.BODY_CREDENTIALS: ProtocolType.IDENTITY_PAIR,
+    AuthMode.API_KEY_SECRET: ProtocolType.IDENTITY_PAIR,
+    AuthMode.DIGEST_AUTH: ProtocolType.IDENTITY_PAIR,
     # TOKEN_EXCHANGE
     AuthMode.OAUTH2: ProtocolType.TOKEN_EXCHANGE,
     AuthMode.OAUTH2_CLIENT_CREDENTIALS: ProtocolType.TOKEN_EXCHANGE,
+    AuthMode.OAUTH2_PASSWORD: ProtocolType.TOKEN_EXCHANGE,
     AuthMode.JWT_BEARER: ProtocolType.TOKEN_EXCHANGE,
     # REQUEST_SIGNING
     AuthMode.AWS_SIGV4: ProtocolType.REQUEST_SIGNING,
@@ -128,12 +131,34 @@ AUTH_MODE_DEFAULTS: Dict[AuthMode, Dict[str, Any]] = {
         "identity_field": "client_id",
         "secret_field": "secret",
     },
+    AuthMode.API_KEY_SECRET: {
+        # AWS-style access key + secret key pair
+        # Used by AWS, DigitalOcean Spaces, MinIO, Wasabi, etc.
+        "encoding": "none",  # Not base64 encoded, sent as separate headers
+        "location": "header_pair",
+        "identity_field": "access_key_id",
+        "secret_field": "secret_access_key",
+        "identity_header": "X-Access-Key-Id",
+        "secret_header": "X-Secret-Access-Key",
+    },
+    AuthMode.DIGEST_AUTH: {
+        # RFC 7616: HTTP Digest Authentication
+        # Used by some enterprise APIs, SIP, WebDAV
+        "encoding": "digest",
+        "identity_field": "username",
+        "secret_field": "password",
+    },
     # TOKEN_EXCHANGE variants
     AuthMode.OAUTH2: {
         "grant_type": "authorization_code",
     },
     AuthMode.OAUTH2_CLIENT_CREDENTIALS: {
         "grant_type": "client_credentials",
+    },
+    AuthMode.OAUTH2_PASSWORD: {
+        # Resource Owner Password Grant (RFC 6749 Section 4.3)
+        # Legacy but still used by some APIs (Salesforce, some enterprise)
+        "grant_type": "password",
     },
     AuthMode.JWT_BEARER: {
         "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",

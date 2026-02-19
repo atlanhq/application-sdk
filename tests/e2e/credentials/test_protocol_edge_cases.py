@@ -468,3 +468,107 @@ class TestNewAuthModes:
 
         assert protocol.config.get("grant_type") == "client_credentials"
         assert protocol.config.get("token_endpoint_auth_method") == "client_secret_post"
+
+    def test_api_key_secret_mode(self):
+        """API_KEY_SECRET should use two headers for key+secret pair."""
+        cred = Credential(name="s3_compatible", auth=AuthMode.API_KEY_SECRET)
+        protocol = CredentialResolver.resolve(cred)
+
+        result = protocol.apply(
+            {"access_key_id": "AKIAIOSFODNN7EXAMPLE", "secret_access_key": "secret123"},
+            {},
+        )
+
+        assert result.headers == {
+            "X-Access-Key-Id": "AKIAIOSFODNN7EXAMPLE",
+            "X-Secret-Access-Key": "secret123",
+        }
+
+    def test_digest_auth_mode(self):
+        """DIGEST_AUTH should use digest encoding."""
+        cred = Credential(name="enterprise_api", auth=AuthMode.DIGEST_AUTH)
+        protocol = CredentialResolver.resolve(cred)
+
+        assert protocol.config.get("encoding") == "digest"
+        assert protocol.config.get("identity_field") == "username"
+        assert protocol.config.get("secret_field") == "password"
+
+    def test_oauth2_password_mode(self):
+        """OAUTH2_PASSWORD should use password grant type."""
+        cred = Credential(name="legacy_api", auth=AuthMode.OAUTH2_PASSWORD)
+        protocol = CredentialResolver.resolve(cred)
+
+        assert protocol.config.get("grant_type") == "password"
+
+
+class TestCredentialConfigFields:
+    """Test new Credential configuration fields."""
+
+    def test_default_retry_status_codes(self):
+        """Default retry_status_codes should be {401, 403}."""
+        cred = Credential(name="test", auth=AuthMode.API_KEY)
+
+        assert cred.retry_status_codes == {401, 403}
+
+    def test_custom_retry_status_codes(self):
+        """Custom retry_status_codes should include additional codes."""
+        cred = Credential(
+            name="test",
+            auth=AuthMode.API_KEY,
+            retry_status_codes={401, 403, 429, 500, 502, 503},
+        )
+
+        assert 429 in cred.retry_status_codes
+        assert 500 in cred.retry_status_codes
+
+    def test_default_max_retries(self):
+        """Default max_retries should be 3."""
+        cred = Credential(name="test", auth=AuthMode.API_KEY)
+
+        assert cred.max_retries == 3
+
+    def test_custom_max_retries(self):
+        """Custom max_retries should be settable."""
+        cred = Credential(name="test", auth=AuthMode.API_KEY, max_retries=5)
+
+        assert cred.max_retries == 5
+
+    def test_default_token_expiry_buffer(self):
+        """Default token_expiry_buffer should be 60 seconds."""
+        cred = Credential(name="test", auth=AuthMode.OAUTH2_CLIENT_CREDENTIALS)
+
+        assert cred.token_expiry_buffer == 60
+
+    def test_custom_token_expiry_buffer(self):
+        """Custom token_expiry_buffer for slow token endpoints."""
+        cred = Credential(
+            name="slow_oauth",
+            auth=AuthMode.OAUTH2_CLIENT_CREDENTIALS,
+            token_expiry_buffer=300,  # 5 minutes for slow endpoints
+        )
+
+        assert cred.token_expiry_buffer == 300
+
+    def test_to_dict_includes_custom_retry_codes(self):
+        """to_dict should include non-default retry_status_codes."""
+        cred = Credential(
+            name="test",
+            auth=AuthMode.API_KEY,
+            retry_status_codes={401, 403, 429},
+        )
+
+        result = cred.to_dict()
+
+        assert "retry_status_codes" in result
+        assert set(result["retry_status_codes"]) == {401, 403, 429}
+
+    def test_to_dict_excludes_default_values(self):
+        """to_dict should exclude default values to reduce noise."""
+        cred = Credential(name="test", auth=AuthMode.API_KEY)
+
+        result = cred.to_dict()
+
+        # Defaults should not be in output
+        assert "retry_status_codes" not in result
+        assert "token_expiry_buffer" not in result
+        assert "max_retries" not in result
