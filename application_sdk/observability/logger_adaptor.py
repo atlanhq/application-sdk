@@ -115,11 +115,18 @@ class LogRecordModel(BaseModel):
         ).items():
             setattr(extra, key, value)
 
+        # Keep stacktrace in message body for OTEL/S3 consumers
+        # (e.g., LogRank/Mothership) while console rendering remains independent.
+        log_message = message.record["message"]
+        stacktrace = getattr(extra, "exception.stacktrace", None)
+        if stacktrace:
+            log_message = f"{log_message}\n{stacktrace}"
+
         return cls(
             timestamp=message.record["time"].timestamp(),
             level=message.record["level"].name,
             logger_name=message.record["extra"].get("logger_name", ""),
-            message=message.record["message"],
+            message=log_message,
             file=str(message.record["file"].path),
             line=message.record["line"],
             function=message.record["function"],
@@ -460,11 +467,16 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             ).items():
                 setattr(extra, key, value)
 
+            log_message = record.record["message"]
+            stacktrace = getattr(extra, "exception.stacktrace", None)
+            if stacktrace:
+                log_message = f"{log_message}\n{stacktrace}"
+
             return LogRecordModel(
                 timestamp=record.record["time"].timestamp(),
                 level=record.record["level"].name,
                 logger_name=record.record["extra"].get("logger_name", ""),
-                message=record.record["message"],
+                message=log_message,
                 file=str(record.record["file"].path),
                 line=record.record["line"],
                 function=record.record["function"],
