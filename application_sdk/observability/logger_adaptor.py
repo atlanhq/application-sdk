@@ -314,10 +314,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             record["extra"]["_trace_id_str"] = (
                 f" trace_id={trace_id}" if trace_id else ""
             )
-            stacktrace = _format_exception_stacktrace(record.get("exception"))
-            record["extra"]["_exception_inline"] = (
-                f"\n{stacktrace}" if stacktrace else ""
-            )
 
             if colorize:
                 return (
@@ -325,12 +321,12 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     "<blue>[{level}]</blue>"
                     "<magenta>{extra[_trace_id_str]}</magenta> "
                     "<cyan>{extra[logger_name]}</cyan>"
-                    " - <level>{message}</level>{extra[_exception_inline]}\n"
+                    " - <level>{message}</level>\n{exception}"
                 )
             return (
                 "{time:YYYY-MM-DD HH:mm:ss} [{level}]"
                 "{extra[_trace_id_str]} {extra[logger_name]}"
-                " - {message}{extra[_exception_inline]}\n"
+                " - {message}\n{exception}"
             )
 
         self.logger.add(
