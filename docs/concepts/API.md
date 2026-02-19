@@ -7,9 +7,10 @@ This document provides comprehensive documentation for all APIs exposed by the A
 1. [Server Management APIs](#server-management-apis)
 2. [Workflow Management APIs](#workflow-management-apis)
 3. [Authentication & Metadata APIs](#authentication-metadata-apis)
-4. [Configuration Management APIs](#configuration-management-apis)
-5. [UI & Documentation APIs](#ui-documentation-apis)
-6. [Error Handling](#error-handling)
+4. [File Management APIs](#file-management-apis)
+5. [Configuration Management APIs](#configuration-management-apis)
+6. [UI & Documentation APIs](#ui-documentation-apis)
+7. [Error Handling](#error-handling)
 
 ---
 
@@ -327,6 +328,65 @@ This document provides comprehensive documentation for all APIs exposed by the A
     "successMessage": "Successfully checked",
     "failureMessage": ""
   }
+}
+```
+
+---
+
+## File Management APIs
+
+### Upload File
+**Endpoint:** `POST /workflows/v1/file`
+**Description:** Upload a file to the object store for use in workflows and activities.
+
+The endpoint accepts multipart form data. Files are stored with a UUID-based key to prevent collisions and path traversal.
+
+**Note:** Request and response field names use camelCase (e.g., `contentType`, `fileName`) to stay consistent with the upstream Atlan `/files` endpoint contract.
+
+**Request:** Multipart form data with the following fields:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `file` | file | **required** | The file to upload |
+| `filename` | string | *optional* | Original filename. Falls back to the filename from the multipart upload |
+| `prefix` | string | *optional* | Prefix for file organization in the object store. Default: `"workflow_file_upload"` |
+| `contentType` | string | *optional* | MIME type of the file. Falls back to the content type from the multipart upload, then `"application/octet-stream"` |
+
+**Example Request:**
+```bash
+curl -X POST "http://localhost:8000/workflows/v1/file" \
+  -F "file=@/path/to/data.csv" \
+  -F "filename=data.csv" \
+  -F "prefix=workflow_file_upload" \
+  -F "contentType=text/csv"
+```
+
+**Response:**
+```json
+{
+  "id": "977f156b-9c78-4bfc-bd74-f603f18c078a",
+  "version": "977f156b",
+  "isActive": true,
+  "createdAt": 1764265919324,
+  "updatedAt": 1764265919324,
+  "fileName": "977f156b-9c78-4bfc-bd74-f603f18c078a.csv",
+  "rawName": "data.csv",
+  "key": "workflow_file_upload/977f156b-9c78-4bfc-bd74-f603f18c078a.csv",
+  "extension": ".csv",
+  "contentType": "text/csv",
+  "fileSize": 39144,
+  "isEncrypted": false,
+  "redirectUrl": "",
+  "isUploaded": true,
+  "uploadedAt": "2024-01-01T00:00:00Z",
+  "isArchived": false
+}
+```
+
+**Error Response:**
+```json
+{
+  "detail": "File upload failed: <error message>"
 }
 ```
 

@@ -14,7 +14,7 @@ from application_sdk.server.fastapi import (
     PreflightCheckRequest,
     PreflightCheckResponse,
 )
-from application_sdk.server.fastapi.models import Subscription
+from application_sdk.server.fastapi.models import FileUploadResponse, Subscription
 from application_sdk.test_utils.hypothesis.strategies.server.fastapi import (
     payload_strategy,
 )
@@ -338,6 +338,354 @@ class TestServer:
 
         # Assert
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.upload_file_to_object_store")
+    async def test_upload_file_success(self, mock_upload_file):
+        """Test successful file upload endpoint."""
+        # Arrange
+        file_content = b"test file content"
+        expected_response = FileUploadResponse(
+            id="977f156b-9c78-4bfc-bd74-f603f18c078a",
+            version="weathered-firefly-9025",
+            isActive=True,
+            createdAt=1764265919324,
+            updatedAt=1764265919324,
+            fileName="28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            rawName="ddls_export.csv",
+            key="28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            extension=".csv",
+            contentType="text/csv",
+            fileSize=39144,
+            isEncrypted=False,
+            redirectUrl="",
+            isUploaded=True,
+            uploadedAt="2024-01-01T00:00:00Z",
+            isArchived=False,
+        )
+        mock_upload_file.return_value = expected_response
+
+        # Act
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.csv", file_content, "text/csv")}
+            data = {
+                "filename": "test.csv",  # Explicitly provide filename
+                "prefix": "workflow_file_upload",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["id"] == expected_response.id
+        assert response_data["key"] == expected_response.key
+        assert response_data["fileName"] == expected_response.fileName
+        mock_upload_file.assert_called_once()
+        call_kwargs = mock_upload_file.call_args[1]
+        # Verify UploadFile-like object is passed (starlette test client uses its own UploadFile class)
+        assert hasattr(call_kwargs["file"], "filename")
+        assert hasattr(call_kwargs["file"], "read")
+        assert call_kwargs["file"].filename == "test.csv"
+        assert call_kwargs["filename"] == "test.csv"  # Should use provided filename
+        assert call_kwargs["prefix"] == "workflow_file_upload"
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.upload_file_to_object_store")
+    async def test_upload_file_with_json_file(self, mock_upload_file):
+        """Test file upload with jsonFile field."""
+        # Arrange
+        file_content = b'{"test": "json"}'
+        expected_response = FileUploadResponse(
+            id="test-id",
+            version="test-version",
+            isActive=True,
+            createdAt=1764265919324,
+            updatedAt=1764265919324,
+            fileName="test-id.json",
+            rawName="test.json",
+            key="test-id.json",
+            extension=".json",
+            contentType="application/json",
+            fileSize=len(file_content),
+            isEncrypted=False,
+            redirectUrl="",
+            isUploaded=True,
+            uploadedAt="2024-01-01T00:00:00Z",
+            isArchived=False,
+        )
+        mock_upload_file.return_value = expected_response
+
+        # Act
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.json", file_content, "application/json")}
+            data = {
+                "prefix": "workflow_file_upload",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        mock_upload_file.assert_called_once()
+        call_kwargs = mock_upload_file.call_args[1]
+        # Verify UploadFile-like object is passed (starlette test client uses its own UploadFile class)
+        assert hasattr(call_kwargs["file"], "filename")
+        assert hasattr(call_kwargs["file"], "read")
+        assert call_kwargs["file"].filename == "test.json"
+        assert call_kwargs["prefix"] == "workflow_file_upload"
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.upload_file_to_object_store")
+    async def test_upload_file_no_handler(self, mock_upload_file):
+        """Test file upload works even when handler is not initialized."""
+        # Arrange
+        file_content = b"test content"
+        expected_response = FileUploadResponse(
+            id="test-id",
+            version="test-version",
+            isActive=True,
+            createdAt=1764265919324,
+            updatedAt=1764265919324,
+            fileName="test-id.csv",
+            rawName="test.csv",
+            key="test-id.csv",
+            extension=".csv",
+            contentType="text/csv",
+            fileSize=len(file_content),
+            isEncrypted=False,
+            redirectUrl="",
+            isUploaded=True,
+            uploadedAt="2024-01-01T00:00:00Z",
+            isArchived=False,
+        )
+        mock_upload_file.return_value = expected_response
+        app_no_handler = APIServer(handler=None)
+
+        # Act
+        transport = ASGITransport(app=app_no_handler.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.csv", file_content, "text/csv")}
+            data = {
+                "prefix": "workflow_file_upload",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert - file upload no longer requires handler
+        assert response.status_code == 200
+        mock_upload_file.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_upload_file_missing_file(self):
+        """Test file upload when file field is missing."""
+        # Arrange
+        # Act
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            data = {
+                "prefix": "workflow_file_upload",
+                "force": "false",
+                "excludePrefix": "false",
+                "isJsonFile": "false",
+            }
+            response = await ac.post("/workflows/v1/file", data=data)
+
+        # Assert
+        assert response.status_code == 422  # FastAPI validation error
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.upload_file_to_object_store")
+    async def test_upload_file_utility_error(self, mock_upload_file):
+        """Test file upload when utility function raises an error."""
+        # Arrange
+        mock_upload_file.side_effect = Exception("Upload failed")
+
+        # Act
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            file_content = b"test content"
+            files = {"file": ("test.csv", file_content, "text/csv")}
+            data = {
+                "prefix": "workflow_file_upload",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 500
+        assert "File upload failed" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.upload_file_to_object_store")
+    async def test_upload_file_default_prefix(self, mock_upload_file):
+        """Test file upload with default prefix when prefix is not provided."""
+        # Arrange
+        file_content = b"test file content"
+        expected_response = FileUploadResponse(
+            id="977f156b-9c78-4bfc-bd74-f603f18c078a",
+            version="weathered-firefly-9025",
+            isActive=True,
+            createdAt=1764265919324,
+            updatedAt=1764265919324,
+            fileName="28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            rawName="ddls_export.csv",
+            key="28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            extension=".csv",
+            contentType="text/csv",
+            fileSize=39144,
+            isEncrypted=False,
+            redirectUrl="",
+            isUploaded=True,
+            uploadedAt="2024-01-01T00:00:00Z",
+            isArchived=False,
+        )
+        mock_upload_file.return_value = expected_response
+
+        # Act - no prefix provided, should default to "workflow_file_upload"
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.csv", file_content, "text/csv")}
+            data = {}
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        mock_upload_file.assert_called_once()
+        call_kwargs = mock_upload_file.call_args[1]
+        assert call_kwargs["prefix"] == "workflow_file_upload"
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.upload_file_to_object_store")
+    async def test_upload_file_with_custom_prefix(self, mock_upload_file):
+        """Test file upload with custom prefix."""
+        # Arrange
+        file_content = b"test file content"
+        expected_response = FileUploadResponse(
+            id="977f156b-9c78-4bfc-bd74-f603f18c078a",
+            version="weathered-firefly-9025",
+            isActive=True,
+            createdAt=1764265919324,
+            updatedAt=1764265919324,
+            fileName="28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            rawName="ddls_export.csv",
+            key="28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+            extension=".csv",
+            contentType="text/csv",
+            fileSize=39144,
+            isEncrypted=False,
+            redirectUrl="",
+            isUploaded=True,
+            uploadedAt="2024-01-01T00:00:00Z",
+            isArchived=False,
+        )
+        mock_upload_file.return_value = expected_response
+
+        # Act - include custom prefix
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.csv", file_content, "text/csv")}
+            data = {
+                "prefix": "custom_prefix",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        mock_upload_file.assert_called_once()
+        call_kwargs = mock_upload_file.call_args[1]
+        # Verify UploadFile-like object is passed (starlette test client uses its own UploadFile class)
+        assert hasattr(call_kwargs["file"], "filename")
+        assert hasattr(call_kwargs["file"], "read")
+        assert call_kwargs["filename"] is None  # Not provided in form data
+        assert call_kwargs["prefix"] == "custom_prefix"
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.upload_file_to_object_store")
+    async def test_upload_file_with_explicit_content_type(self, mock_upload_file):
+        """Test file upload with explicitly provided content type."""
+        # Arrange
+        file_content = b"certificate content"
+        expected_response = FileUploadResponse(
+            id="test-id",
+            version="test-version",
+            isActive=True,
+            createdAt=1764265919324,
+            updatedAt=1764265919324,
+            fileName="test-id.cer",
+            rawName="dev-atlan-anaplan.cer",
+            key="workflow_file_upload/test-id.cer",
+            extension=".cer",
+            contentType="application/x-x509-ca-cert",
+            fileSize=len(file_content),
+            isEncrypted=False,
+            redirectUrl="",
+            isUploaded=True,
+            uploadedAt="2024-01-01T00:00:00Z",
+            isArchived=False,
+        )
+        mock_upload_file.return_value = expected_response
+
+        # Act - include explicit content type
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("dev-atlan-anaplan.cer", file_content, "text/plain")}
+            data = {
+                "filename": "dev-atlan-anaplan.cer",
+                "prefix": "workflow_file_upload",
+                "contentType": "application/x-x509-ca-cert",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["contentType"] == "application/x-x509-ca-cert"
+        mock_upload_file.assert_called_once()
+        call_kwargs = mock_upload_file.call_args[1]
+        # Verify explicit content type is passed
+        assert call_kwargs["content_type"] == "application/x-x509-ca-cert"
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.server.fastapi.upload_file_to_object_store")
+    async def test_upload_file_content_type_fallback(self, mock_upload_file):
+        """Test file upload with content type fallback to file.content_type."""
+        # Arrange
+        file_content = b"test file content"
+        expected_response = FileUploadResponse(
+            id="test-id",
+            version="test-version",
+            isActive=True,
+            createdAt=1764265919324,
+            updatedAt=1764265919324,
+            fileName="test-id.csv",
+            rawName="test.csv",
+            key="workflow_file_upload/test-id.csv",
+            extension=".csv",
+            contentType="text/csv",
+            fileSize=len(file_content),
+            isEncrypted=False,
+            redirectUrl="",
+            isUploaded=True,
+            uploadedAt="2024-01-01T00:00:00Z",
+            isArchived=False,
+        )
+        mock_upload_file.return_value = expected_response
+
+        # Act - don't provide explicit content type, should use file.content_type
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            files = {"file": ("test.csv", file_content, "text/csv")}
+            data = {
+                "filename": "test.csv",
+                "prefix": "workflow_file_upload",
+            }
+            response = await ac.post("/workflows/v1/file", files=files, data=data)
+
+        # Assert
+        assert response.status_code == 200
+        mock_upload_file.assert_called_once()
+        call_kwargs = mock_upload_file.call_args[1]
+        # Verify content_type is None (will fallback to file.content_type in utils)
+        assert call_kwargs["content_type"] is None
 
 
 class TestMessagingRouterRegistration:
