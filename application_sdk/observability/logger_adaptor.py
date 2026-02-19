@@ -106,8 +106,14 @@ class LogRecordModel(BaseModel):
             if k != "logger_name" and hasattr(extra, k):
                 setattr(extra, k, v)
             # Include atlan- prefixed fields as extra attributes (correlation context)
-            elif k.startswith("atlan-") and v is not None:
+            elif (
+                k.startswith("atlan-") or k.startswith("exception.")
+            ) and v is not None:
                 setattr(extra, k, str(v))
+        for key, value in _extract_exception_attributes(
+            message.record.get("exception")
+        ).items():
+            setattr(extra, key, value)
 
         return cls(
             timestamp=message.record["time"].timestamp(),
@@ -124,6 +130,43 @@ class LogRecordModel(BaseModel):
         """Pydantic model configuration for LogRecordModel."""
 
         arbitrary_types_allowed = True
+
+
+def _format_exception_stacktrace(exception: Any) -> str:
+    """Format a Loguru exception record into a traceback string."""
+    if exception is None:
+        return ""
+    exc_type = getattr(exception, "type", None)
+    exc_value = getattr(exception, "value", None)
+    exc_traceback = getattr(exception, "traceback", None)
+    if exc_type is None:
+        return ""
+    return "".join(tb_module.format_exception(exc_type, exc_value, exc_traceback)).rstrip()
+
+
+def _extract_exception_attributes(exception: Any) -> Dict[str, str]:
+    """Extract OTEL semantic exception attributes from a Loguru exception record."""
+    if exception is None:
+        return {}
+
+    exc_type = getattr(exception, "type", None)
+    exc_value = getattr(exception, "value", None)
+    if exc_type is None:
+        return {}
+
+    module = getattr(exc_type, "__module__", None)
+    qualname = getattr(exc_type, "__qualname__", getattr(exc_type, "__name__", None))
+    type_name = f"{module}.{qualname}" if module and qualname else str(exc_type)
+
+    attrs: Dict[str, str] = {"exception.type": type_name}
+    if exc_value is not None:
+        attrs["exception.message"] = str(exc_value)
+
+    stacktrace = _format_exception_stacktrace(exception)
+    if stacktrace:
+        attrs["exception.stacktrace"] = stacktrace
+
+    return attrs
 
 
 # Re-exported from context.py for backward compatibility:
@@ -271,6 +314,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             record["extra"]["_trace_id_str"] = (
                 f" trace_id={trace_id}" if trace_id else ""
             )
+            stacktrace = _format_exception_stacktrace(record.get("exception"))
+            record["extra"]["_exception_inline"] = (
+                f"\\n{stacktrace.replace('\n', '\\\\n')}" if stacktrace else ""
+            )
 
             if colorize:
                 return (
@@ -278,12 +325,12 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     "<blue>[{level}]</blue>"
                     "<magenta>{extra[_trace_id_str]}</magenta> "
                     "<cyan>{extra[logger_name]}</cyan>"
-                    " - <level>{message}</level>\n"
+                    " - <level>{message}</level>{extra[_exception_inline]}\n"
                 )
             return (
                 "{time:YYYY-MM-DD HH:mm:ss} [{level}]"
                 "{extra[_trace_id_str]} {extra[logger_name]}"
-                " - {message}\n"
+                " - {message}{extra[_exception_inline]}\n"
             )
 
         self.logger.add(
@@ -408,6 +455,14 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             for k, v in record.record["extra"].items():
                 if k != "logger_name" and hasattr(extra, k):
                     setattr(extra, k, v)
+                elif (
+                    k.startswith("atlan-") or k.startswith("exception.")
+                ) and v is not None:
+                    setattr(extra, k, str(v))
+            for key, value in _extract_exception_attributes(
+                record.record.get("exception")
+            ).items():
+                setattr(extra, key, value)
 
             return LogRecordModel(
                 timestamp=record.record["time"].timestamp(),
@@ -426,6 +481,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             for k, v in record.get("extra", {}).items():
                 if hasattr(extra, k):
                     setattr(extra, k, v)
+                elif (
+                    k.startswith("atlan-") or k.startswith("exception.")
+                ) and v is not None:
+                    setattr(extra, k, str(v))
             record["extra"] = extra
             return LogRecordModel(**record).model_dump()
 
@@ -484,14 +543,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     else:
                         attributes[key] = str(value)
 
-        # Add OpenTelemetry semantic exception attributes if traceback is embedded
-        # in the log message as escaped or real newlines.
-        if isinstance(record.get("message"), str):
-            for key, value in self._extract_exception_attributes(
-                record["message"]
-            ).items():
-                attributes.setdefault(key, value)
-
         return LogRecord(
             timestamp=int(record["timestamp"] * 1e9),
             observed_timestamp=time_ns(),
@@ -503,39 +554,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             body=record["message"],
             attributes=attributes,
         )
-
-    def _extract_exception_attributes(self, message: str) -> Dict[str, str]:
-        """Extract OTEL semantic exception attributes from a log message.
-
-        Supports both escaped newlines (``\\n``) and real newlines.
-        """
-        normalized = message.replace("\\n", "\n")
-        marker = "\nTraceback "
-        if marker not in normalized:
-            return {}
-
-        _, stack_tail = normalized.split(marker, 1)
-        stacktrace = f"Traceback {stack_tail}".rstrip()
-        if not stacktrace:
-            return {}
-
-        attrs: Dict[str, str] = {"exception.stacktrace": stacktrace}
-
-        lines = [line.strip() for line in stacktrace.splitlines() if line.strip()]
-        if not lines:
-            return attrs
-
-        last_line = lines[-1]
-        if ": " in last_line:
-            exc_type, exc_message = last_line.split(": ", 1)
-            if exc_type:
-                attrs["exception.type"] = exc_type
-            if exc_message:
-                attrs["exception.message"] = exc_message
-        else:
-            attrs["exception.type"] = last_line
-
-        return attrs
 
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic log flushing.
@@ -607,28 +625,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
         return msg, kwargs
 
-    def _format_exc_inline(self, exc_info: Any) -> Optional[str]:
-        """Render exception info as a single-line string with escaped newlines.
-
-        This keeps traceback content on one physical log line so line-oriented
-        stream parsers can keep the whole payload together.
-        """
-        if exc_info is True:
-            exc_info = sys.exc_info()
-        elif isinstance(exc_info, BaseException):
-            exc_info = (type(exc_info), exc_info, exc_info.__traceback__)
-
-        if (
-            isinstance(exc_info, tuple)
-            and len(exc_info) == 3
-            and exc_info[0] is not None
-        ):
-            formatted = "".join(
-                tb_module.format_exception(exc_info[0], exc_info[1], exc_info[2])
-            ).rstrip()
-            return formatted.replace("\n", "\\n")
-        return None
-
     def debug(self, msg: str, *args: Any, **kwargs: Any):
         """Log a debug level message.
 
@@ -640,11 +636,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         try:
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
+            bound_logger = self.logger.bind(**kwargs)
             if exc_info:
-                inline_tb = self._format_exc_inline(exc_info)
-                if inline_tb:
-                    msg = f"{msg}\\n{inline_tb}"
-            self.logger.bind(**kwargs).debug(msg, *args)
+                bound_logger.opt(exception=exc_info).debug(msg, *args)
+            else:
+                bound_logger.debug(msg, *args)
         except Exception as e:
             logging.error(f"Error in debug logging: {e}")
             self._sync_flush()
@@ -660,11 +656,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         try:
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
+            bound_logger = self.logger.bind(**kwargs)
             if exc_info:
-                inline_tb = self._format_exc_inline(exc_info)
-                if inline_tb:
-                    msg = f"{msg}\\n{inline_tb}"
-            self.logger.bind(**kwargs).info(msg, *args)
+                bound_logger.opt(exception=exc_info).info(msg, *args)
+            else:
+                bound_logger.info(msg, *args)
         except Exception as e:
             logging.error(f"Error in info logging: {e}")
             self._sync_flush()
@@ -680,11 +676,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         try:
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
+            bound_logger = self.logger.bind(**kwargs)
             if exc_info:
-                inline_tb = self._format_exc_inline(exc_info)
-                if inline_tb:
-                    msg = f"{msg}\\n{inline_tb}"
-            self.logger.bind(**kwargs).warning(msg, *args)
+                bound_logger.opt(exception=exc_info).warning(msg, *args)
+            else:
+                bound_logger.warning(msg, *args)
         except Exception as e:
             logging.error(f"Error in warning logging: {e}")
             self._sync_flush()
@@ -702,11 +698,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         try:
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
+            bound_logger = self.logger.bind(**kwargs)
             if exc_info:
-                inline_tb = self._format_exc_inline(exc_info)
-                if inline_tb:
-                    msg = f"{msg}\\n{inline_tb}"
-            self.logger.bind(**kwargs).error(msg, *args)
+                bound_logger.opt(exception=exc_info).error(msg, *args)
+            else:
+                bound_logger.error(msg, *args)
             # Force flush on error logs
             self._sync_flush()
         except Exception as e:
@@ -741,11 +737,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         try:
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
+            bound_logger = self.logger.bind(**kwargs)
             if exc_info:
-                inline_tb = self._format_exc_inline(exc_info)
-                if inline_tb:
-                    msg = f"{msg}\\n{inline_tb}"
-            self.logger.bind(**kwargs).critical(msg, *args)
+                bound_logger.opt(exception=exc_info).critical(msg, *args)
+            else:
+                bound_logger.critical(msg, *args)
             # Force flush on critical logs
             self._sync_flush()
         except Exception as e:
