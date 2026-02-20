@@ -56,7 +56,6 @@ from application_sdk.common.incremental.helpers import (
     download_s3_prefix_with_structure,
     get_persistent_artifacts_path,
     get_persistent_s3_prefix,
-    is_incremental_run,
 )
 from application_sdk.common.incremental.marker import (
     fetch_marker_from_storage,
@@ -330,7 +329,6 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             Statistics about the extracted tables, or None if extraction failed.
         """
         args = IncrementalWorkflowArgs.model_validate(workflow_args)
-        inc_enabled = is_incremental_run(workflow_args)
 
         # Save original SQL template on first access to prevent mutation across runs
         # (Temporal reuses activity instances, so self.fetch_table_sql must not be
@@ -338,7 +336,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         if self._original_fetch_table_sql is None:
             self._original_fetch_table_sql = self.fetch_table_sql
 
-        if inc_enabled and self.incremental_table_sql:
+        if args.is_incremental_ready() and self.incremental_table_sql:
             resolved_sql = self._resolve_common_placeholders(
                 self.incremental_table_sql, workflow_args
             )
@@ -379,9 +377,9 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         Returns:
             Statistics about the extracted columns, or None if skipped.
         """
-        inc_enabled = is_incremental_run(workflow_args)
+        args = IncrementalWorkflowArgs.model_validate(workflow_args)
 
-        if inc_enabled:
+        if args.is_incremental_ready():
             logger.info("Skipping generic column extraction for incremental run")
             return None
 

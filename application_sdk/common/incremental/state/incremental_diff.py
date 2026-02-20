@@ -161,39 +161,12 @@ def create_incremental_diff(
     return result
 
 
-def _get_next_chunk_index(dest_dir: Path) -> int:
-    """Get the next available chunk index for output files.
-
-    Args:
-        dest_dir: Path to destination directory
-
-    Returns:
-        Next available chunk index
-    """
-    if not dest_dir.exists():
-        return 0
-
-    existing_files = list(dest_dir.glob("chunk-*.json"))
-    if not existing_files:
-        return 0
-
-    indices = []
-    for f in existing_files:
-        try:
-            idx = int(f.stem.split("-")[-1])
-            indices.append(idx)
-        except (ValueError, IndexError):
-            # Skip files with non-standard naming (e.g., "chunk-foo.json")
-            pass
-
-    return max(indices) + 1 if indices else 0
-
 
 def _filter_entities_by_qualified_names(
     source_dir: Path,
     dest_dir: Path,
     valid_qualified_names: Set[str],
-    start_chunk_idx: Optional[int] = None,
+    start_chunk_idx: int = 0,
     conn: DuckDBConnection = None,
 ) -> Optional[int]:
     """Filter entities (tables, schemas, etc.) by qualified name using DuckDB COPY TO.
@@ -202,7 +175,7 @@ def _filter_entities_by_qualified_names(
         source_dir: Path to source entity JSON files
         dest_dir: Path to write filtered files
         valid_qualified_names: Set of qualified names to include
-        start_chunk_idx: Starting chunk index (None to auto-detect)
+        start_chunk_idx: Starting chunk index for output files (default: 0)
         conn: Optional DuckDB connection to reuse. If None, creates a new connection.
 
     Returns:
@@ -262,12 +235,7 @@ def _filter_entities_by_qualified_names(
         if count == 0:
             return None
 
-        chunk_idx = (
-            start_chunk_idx
-            if start_chunk_idx is not None
-            else _get_next_chunk_index(dest_dir)
-        )
-        dest_file = dest_dir.joinpath(f"chunk-{chunk_idx}.json")
+        dest_file = dest_dir.joinpath(f"chunk-{start_chunk_idx}.json")
 
         dest_file_str = str(dest_file).replace("'", "''")
         active_conn.execute(
