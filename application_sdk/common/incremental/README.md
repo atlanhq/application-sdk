@@ -190,7 +190,7 @@ Serves as an extra "current-state" sort of snapshot that contains only the chang
        async def resolve_database_placeholders(self, query, workflow_args):
            # Replace {marker_timestamp}, {system_schema} with Oracle-specific values
            pass
-       
+
        async def prepare_column_extraction_queries(self, workflow_args):
            # Generate Oracle-specific column queries for batched extraction
            pass

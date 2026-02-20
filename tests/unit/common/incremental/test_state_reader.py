@@ -10,9 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from application_sdk.common.incremental.state.state_reader import (
-    download_current_state,
-)
+from application_sdk.common.incremental.state.state_reader import download_current_state
 
 
 class TestDownloadCurrentState:

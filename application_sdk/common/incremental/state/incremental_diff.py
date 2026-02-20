@@ -161,7 +161,6 @@ def create_incremental_diff(
     return result
 
 
-
 def _filter_entities_by_qualified_names(
     source_dir: Path,
     dest_dir: Path,
