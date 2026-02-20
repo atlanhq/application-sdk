@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional, Sequence, Type
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
-from temporalio.worker import Worker
+from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
@@ -22,6 +22,8 @@ from application_sdk.constants import (
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
+    TEMPORAL_DEPLOYMENT_NAME,
+    TEMPORAL_WORKER_BUILD_ID,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
@@ -419,6 +421,23 @@ class TemporalWorkflowClient(WorkflowClient):
                 "Auto-registered lock management activities for @needs_lock decorated activities"
             )
 
+        # Configure worker with versioning options for worker controller
+        use_worker_versioning = False
+        deployment_config = None
+        if not TEMPORAL_WORKER_BUILD_ID or not TEMPORAL_DEPLOYMENT_NAME:
+            logger.warning(
+                "TEMPORAL_WORKER_BUILD_ID or TEMPORAL_DEPLOYMENT_NAME is not set, worker controller will not work"
+            )
+        else:
+            use_worker_versioning = True
+            deployment_config = WorkerDeploymentConfig(
+                use_worker_versioning=True,
+                version=WorkerDeploymentVersion(
+                    deployment_name=TEMPORAL_DEPLOYMENT_NAME,
+                    build_id=TEMPORAL_WORKER_BUILD_ID,
+                ),
+            )
+
         # Create activities lookup dict for interceptors
         activities_dict = {getattr(a, "__name__", str(a)): a for a in final_activities}
 
@@ -443,6 +462,8 @@ class TemporalWorkflowClient(WorkflowClient):
                 CleanupInterceptor(),
                 RedisLockInterceptor(activities_dict),
             ],
+            deployment_config=deployment_config,
+            use_worker_versioning=use_worker_versioning,
         )
 
     async def get_workflow_run_status(

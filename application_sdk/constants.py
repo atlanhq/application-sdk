@@ -327,3 +327,7 @@ APPLICATION_MODE = ApplicationMode(os.getenv("APPLICATION_MODE", "LOCAL").upper(
 os.environ["DO_NOT_TRACK"] = "true"
 os.environ["SCARF_NO_ANALYTICS"] = "true"
 os.environ["DAFT_ANALYTICS_ENABLED"] = "0"
+
+# Worker Versioning Configuration for Temporal Worker Controller
+TEMPORAL_WORKER_BUILD_ID = os.getenv("TEMPORAL_WORKER_BUILD_ID", "")
+TEMPORAL_DEPLOYMENT_NAME = os.getenv("TEMPORAL_DEPLOYMENT_NAME", "")
