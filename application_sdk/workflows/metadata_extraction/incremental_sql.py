@@ -54,12 +54,12 @@ class IncrementalSQLMetadataExtractionWorkflow(BaseSQLMetadataExtractionWorkflow
             Must be a subclass of IncrementalSQLMetadataExtractionActivities.
     """
 
-    activities_cls: Type[IncrementalSQLMetadataExtractionActivities] = (
+    activities_cls: Type[IncrementalSQLMetadataExtractionActivities] = (  # type: ignore
         IncrementalSQLMetadataExtractionActivities
     )
 
     @staticmethod
-    def get_activities(
+    def get_activities(  # type: ignore
         activities: IncrementalSQLMetadataExtractionActivities,
     ) -> Sequence[Callable[..., Any]]:
         """Register all activities used by this workflow.

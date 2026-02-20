@@ -855,7 +855,8 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
                     logger.info(f"Processing dataframe: (typename={typename})")
 
                     transform_metadata = state.transformer.transform_metadata(
-                        dataframe=dataframe, **workflow_args
+                        dataframe=dataframe,  # type: ignore
+                        **workflow_args,
                     )
                     await transformed_output.write(transform_metadata)
 
