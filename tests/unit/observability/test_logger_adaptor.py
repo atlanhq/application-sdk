@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from datetime import datetime
+import sys
 from typing import Dict, Generator
 from unittest import mock
 
@@ -8,7 +9,11 @@ from hypothesis import given
 from hypothesis import strategies as st
 from loguru import logger
 
-from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
+from application_sdk.observability.logger_adaptor import (
+    AtlanLoggerAdapter,
+    LogRecordModel,
+    get_logger,
+)
 from application_sdk.test_utils.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
@@ -565,3 +570,196 @@ class TestCorrelationContextIntegration:
                     assert kwargs["workflow_id"] == self.WORKFLOW_ID
                     assert self.WORKFLOW_NAME_HEADER in kwargs
                     assert self.WORKFLOW_NODE_HEADER in kwargs
+
+
+def test_warning_inlines_exc_info_in_message(logger_adapter: AtlanLoggerAdapter):
+    """warning() should pass exc_info to loguru via opt(exception=...)."""
+    exc_info = (RuntimeError, RuntimeError("boom"), None)
+    mock_loguru = mock.MagicMock()
+    mock_opt = mock.MagicMock()
+    mock_bound = mock.MagicMock()
+    mock_loguru.bind.return_value = mock_bound
+    mock_bound.opt.return_value = mock_opt
+
+    logger_adapter.logger = mock_loguru
+
+    with mock.patch.object(
+        logger_adapter,
+        "process",
+        return_value=("Processed warning message", {"logger_name": "test_logger"}),
+    ):
+        logger_adapter.warning("Original warning message", exc_info=exc_info)
+
+    mock_loguru.bind.assert_called_once_with(logger_name="test_logger")
+    mock_bound.opt.assert_called_once_with(exception=exc_info)
+    mock_opt.warning.assert_called_once_with("Processed warning message")
+
+
+def test_exception_defaults_exc_info_true(logger_adapter: AtlanLoggerAdapter):
+    """exception() should behave like logging.Logger.exception()."""
+    with mock.patch.object(logger_adapter, "error") as mock_error:
+        logger_adapter.exception("Something failed")
+
+    mock_error.assert_called_once_with("Something failed", exc_info=True)
+
+
+def test_exception_keeps_explicit_exc_info(logger_adapter: AtlanLoggerAdapter):
+    """exception() should not override caller-provided exc_info."""
+    with mock.patch.object(logger_adapter, "error") as mock_error:
+        logger_adapter.exception("Something failed", exc_info=False)
+
+    mock_error.assert_called_once_with("Something failed", exc_info=False)
+
+
+def test_warning_with_exc_info_emits_traceback(capsys: pytest.CaptureFixture[str]):
+    """warning(..., exc_info=True) should render traceback in stderr output."""
+    with create_logger_adapter() as logger_adapter:
+        try:
+            raise ValueError("traceback-check")
+        except ValueError:
+            logger_adapter.warning("Completing activity as failed", exc_info=True)
+
+    stderr = capsys.readouterr().err
+    assert "Completing activity as failed" in stderr
+    assert "Traceback (most recent call last):" in stderr
+    assert "ValueError: traceback-check" in stderr
+
+
+def test_log_record_model_extracts_exception_attrs_from_loguru_record():
+    """Structured exception attributes should come from record['exception']."""
+    try:
+        raise ValueError("traceback-check")
+    except ValueError:
+        exc_type, exc_value, exc_tb = sys.exc_info()
+
+    test_message = mock.MagicMock()
+    level_mock = mock.MagicMock()
+    level_mock.name = "WARNING"
+    test_message.record = {
+        "time": datetime.now(),
+        "level": level_mock,
+        "extra": {"logger_name": "test_logger"},
+        "message": "Completing activity as failed",
+        "file": mock.MagicMock(path="worker.py"),
+        "line": 10,
+        "function": "run",
+        "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
+    }
+
+    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    assert model["message"].startswith("Completing activity as failed\nTraceback")
+    assert model["extra"]["exception.type"] == "builtins.ValueError"
+    assert model["extra"]["exception.message"] == "traceback-check"
+    assert "Traceback (most recent call last):" in model["extra"]["exception.stacktrace"]
+
+
+def test_log_record_model_extracts_nested_exception_type():
+    """Nested exception types should use module.qualname."""
+    class OuterError(Exception):
+        class InnerError(Exception):
+            pass
+
+    try:
+        raise OuterError.InnerError("nested-boom")
+    except OuterError.InnerError:
+        exc_type, exc_value, exc_tb = sys.exc_info()
+
+    test_message = mock.MagicMock()
+    level_mock = mock.MagicMock()
+    level_mock.name = "ERROR"
+    test_message.record = {
+        "time": datetime.now(),
+        "level": level_mock,
+        "extra": {"logger_name": "test_logger"},
+        "message": "failed",
+        "file": mock.MagicMock(path="worker.py"),
+        "line": 11,
+        "function": "run",
+        "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
+    }
+
+    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    assert model["message"].startswith("failed\nTraceback")
+    assert model["extra"]["exception.type"].endswith(".OuterError.InnerError")
+    assert model["extra"]["exception.message"] == "nested-boom"
+
+
+def test_otel_body_includes_stacktrace_from_loguru_record(
+    logger_adapter: AtlanLoggerAdapter,
+):
+    """OTEL body should include stacktrace when created from a loguru exception record."""
+    try:
+        raise RuntimeError("otlp-body-check")
+    except RuntimeError:
+        exc_type, exc_value, exc_tb = sys.exc_info()
+
+    test_message = mock.MagicMock()
+    level_mock = mock.MagicMock()
+    level_mock.name = "ERROR"
+    test_message.record = {
+        "time": datetime.now(),
+        "level": level_mock,
+        "extra": {"logger_name": "test_logger"},
+        "message": "Query failed",
+        "file": mock.MagicMock(path="worker.py"),
+        "line": 12,
+        "function": "run",
+        "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
+    }
+
+    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    otel_record = logger_adapter._create_log_record(model)
+
+    assert otel_record.body.startswith("Query failed\nTraceback")
+    assert "RuntimeError: otlp-body-check" in otel_record.body
+
+
+def test_create_log_record_uses_structured_exception_attributes(
+    logger_adapter: AtlanLoggerAdapter,
+):
+    """OTEL log record should preserve structured exception attributes from extra."""
+    record = {
+        "timestamp": 1739971200.0,
+        "level": "WARNING",
+        "message": "Completing activity as failed\\nTraceback ...",
+        "file": "worker.py",
+        "line": 10,
+        "function": "run",
+        "extra": {
+            "exception.type": "ValueError",
+            "exception.message": "traceback-check",
+            "exception.stacktrace": "Traceback (most recent call last):\n...",
+        },
+    }
+
+    otel_record = logger_adapter._create_log_record(record)
+    assert otel_record.body == record["message"]
+    assert otel_record.attributes["exception.type"] == "ValueError"
+    assert otel_record.attributes["exception.message"] == "traceback-check"
+    assert (
+        "Traceback (most recent call last):"
+        in otel_record.attributes["exception.stacktrace"]
+    )
+
+
+def test_create_log_record_does_not_parse_exception_from_message(
+    logger_adapter: AtlanLoggerAdapter,
+):
+    """OTEL exception attributes should come from structured extra, not body parsing."""
+    record = {
+        "timestamp": 1739971200.0,
+        "level": "WARNING",
+        "message": (
+            "Completing activity as failed\\nTraceback (most recent call last):\\n"
+            "ValueError: traceback-check"
+        ),
+        "file": "worker.py",
+        "line": 10,
+        "function": "run",
+        "extra": {},
+    }
+
+    otel_record = logger_adapter._create_log_record(record)
+    assert "exception.type" not in otel_record.attributes
+    assert "exception.message" not in otel_record.attributes
+    assert "exception.stacktrace" not in otel_record.attributes
