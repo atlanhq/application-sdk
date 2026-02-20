@@ -1,0 +1,34 @@
+# Primary OTEL Collector Configuration
+# Simulates the DaemonSet/central collector
+# Just receives logs and prints them to console (debug exporter)
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 100
+
+exporters:
+  # Debug exporter - prints logs to console
+  debug:
+    verbosity: detailed
+    sampling_initial: 10
+    sampling_thereafter: 50
+
+service:
+  telemetry:
+    logs:
+      level: info
+
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
