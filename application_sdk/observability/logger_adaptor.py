@@ -1,15 +1,10 @@
 import asyncio
-import gzip
 import logging
-import os
-import socket
 import sys
 import threading
-from datetime import datetime
 from time import time_ns
 from typing import Any, Dict, List, Optional, Tuple
 
-import orjson
 from loguru import logger
 from opentelemetry._logs import LogRecord, SeverityNumber
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
@@ -21,8 +16,7 @@ from pydantic import BaseModel, Field
 
 from application_sdk.constants import (
     APPLICATION_NAME,
-    ENABLE_ATLAN_UPLOAD,
-    ENABLE_OBSERVABILITY_DAPR_SINK,
+    ENABLE_LOG_SINK,
     ENABLE_OTLP_LOGS,
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
@@ -39,10 +33,9 @@ from application_sdk.constants import (
     OTEL_WF_NODE_NAME,
     SERVICE_NAME,
     SERVICE_VERSION,
-    UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.context import correlation_context, request_context
-from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.observability import AtlanParquetObservability
 from application_sdk.observability.utils import (
     get_observability_dir,
     get_workflow_context,
@@ -205,7 +198,7 @@ SEVERITY_MAPPING = {
 }
 
 
-class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
+class AtlanLoggerAdapter(AtlanParquetObservability[LogRecordModel]):
     """A custom logger adapter for Atlan that extends AtlanObservability.
 
     This adapter provides enhanced logging capabilities including:
@@ -303,7 +296,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         )
 
         # Add sink for parquet logging only if Dapr sink is enabled
-        if ENABLE_OBSERVABILITY_DAPR_SINK:
+        if ENABLE_LOG_SINK:
             self.logger.add(self.parquet_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
             # Start flush task only if Dapr sink is enabled
             if not AtlanLoggerAdapter._flush_task_started:
@@ -751,68 +744,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             logging.error(f"Error during sync flush: {e}")
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
-        """Flush records to jsonl.gz files and upload to object store.
-
-        Overrides the base class parquet implementation to write compressed
-        JSON Lines files instead.
-        """
-        if not ENABLE_OBSERVABILITY_DAPR_SINK:
+        """Flush log records as parquet files."""
+        if not ENABLE_LOG_SINK:
             return
-        try:
-            # Group records by partition
-            partition_records: Dict[str, List[Dict[str, Any]]] = {}
-            for record in records:
-                record_time = datetime.fromtimestamp(record["timestamp"])
-                partition_path = self._get_partition_path(record_time)
-                if partition_path not in partition_records:
-                    partition_records[partition_path] = []
-                partition_records[partition_path].append(record)
-
-            hostname = socket.gethostname()
-
-            for partition_path, partition_data in partition_records.items():
-                try:
-                    timestamp_ns = time_ns()
-                    custom_filename = (
-                        f"{timestamp_ns}_{hostname}_{APPLICATION_NAME}_logs.jsonl.gz"
-                    )
-
-                    os.makedirs(partition_path, exist_ok=True)
-                    file_path = os.path.join(partition_path, custom_filename)
-
-                    with gzip.open(file_path, "wb") as f:
-                        for record in partition_data:
-                            f.write(orjson.dumps(record) + b"\n")
-
-                    # Lazy imports for upload
-                    from application_sdk.activities.common.utils import (
-                        get_object_store_prefix,
-                    )
-                    from application_sdk.services.objectstore import ObjectStore
-
-                    if ENABLE_ATLAN_UPLOAD:
-                        await ObjectStore.upload_file(
-                            source=file_path,
-                            store_name=UPSTREAM_OBJECT_STORE_NAME,
-                            destination=get_object_store_prefix(file_path),
-                            retain_local_copy=True,
-                        )
-                    await ObjectStore.upload_file(
-                        source=file_path,
-                        destination=get_object_store_prefix(file_path),
-                    )
-
-                except Exception as partition_error:
-                    logging.error(
-                        f"Error processing partition {partition_path}: {str(partition_error)}"
-                    )
-
-            # Clean up old records if enabled
-            if self._cleanup_enabled:
-                await self._check_and_cleanup()
-
-        except Exception as e:
-            logging.error(f"Error flushing records batch: {e}")
+        await super()._flush_records(records)
 
     def tracing(self, msg: str, *args: Any, **kwargs: Any):
         """Log a trace-specific message with trace context.

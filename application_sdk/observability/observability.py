@@ -366,88 +366,17 @@ class AtlanObservability(Generic[T], ABC):
         except Exception as e:
             logging.error(f"Error buffering log: {e}")
 
+    @abstractmethod
     async def _flush_records(self, records: List[Dict[str, Any]]):
-        """Flush records to parquet file and upload to object store.
+        """Flush records to persistent storage and upload to object store.
 
         Args:
             records: List of records to flush
 
-        This method:
-        - Groups records by partition (year/month/day)
-        - Writes parquet files with descriptive filenames encoding app identity
-        - Handles dual upload (deployment store + upstream for SDR)
-        - Provides robust error handling per partition
-        - Cleans up old records if enabled
+        Subclasses must implement this to define their storage format
+        (e.g. parquet, jsonl.gz).
         """
-        if not ENABLE_OBSERVABILITY_DAPR_SINK:
-            return
-        try:
-            # Group records by partition
-            partition_records: Dict[str, List[Dict[str, Any]]] = {}
-            for record in records:
-                record_time = datetime.fromtimestamp(record["timestamp"])
-                partition_path = self._get_partition_path(record_time)
-
-                if partition_path not in partition_records:
-                    partition_records[partition_path] = []
-                partition_records[partition_path].append(record)
-
-            # Determine suffix from file type
-            if self.file_name == LOG_FILE_NAME:
-                suffix = "logs"
-            elif self.file_name == METRICS_FILE_NAME:
-                suffix = "metrics"
-            elif self.file_name == TRACES_FILE_NAME:
-                suffix = "traces"
-            else:
-                suffix = "data"
-
-            hostname = socket.gethostname()
-
-            for partition_path, partition_data in partition_records.items():
-                try:
-                    df = pd.DataFrame(partition_data)
-
-                    # Build unique filename: {timestamp_ns}_{hostname}_{app}_{suffix}.parquet
-                    timestamp_ns = time_ns()
-                    custom_filename = (
-                        f"{timestamp_ns}_{hostname}_{APPLICATION_NAME}_{suffix}.parquet"
-                    )
-
-                    os.makedirs(partition_path, exist_ok=True)
-                    file_path = os.path.join(partition_path, custom_filename)
-                    df.to_parquet(file_path, index=False, compression="snappy")
-
-                    # Lazy imports for upload
-                    from application_sdk.activities.common.utils import (
-                        get_object_store_prefix,
-                    )
-                    from application_sdk.services.objectstore import ObjectStore
-
-                    # Dual upload: upstream (SDR) + deployment store
-                    if ENABLE_ATLAN_UPLOAD:
-                        await ObjectStore.upload_file(
-                            source=file_path,
-                            store_name=UPSTREAM_OBJECT_STORE_NAME,
-                            destination=get_object_store_prefix(file_path),
-                            retain_local_copy=True,
-                        )
-                    await ObjectStore.upload_file(
-                        source=file_path,
-                        destination=get_object_store_prefix(file_path),
-                    )
-
-                except Exception as partition_error:
-                    logging.error(
-                        f"Error processing partition {partition_path}: {str(partition_error)}"
-                    )
-
-            # Clean up old records if enabled
-            if self._cleanup_enabled:
-                await self._check_and_cleanup()
-
-        except Exception as e:
-            logging.error(f"Error flushing records batch: {e}")
+        pass
 
     async def _check_and_cleanup(self):
         """Check if cleanup is needed and perform it if necessary.
@@ -599,6 +528,105 @@ class AtlanObservability(Generic[T], ABC):
 
         except Exception as e:
             logging.error(f"Error adding record: {e}")
+
+
+class AtlanParquetObservability(AtlanObservability[T]):
+    """Intermediate class that flushes observability records as Parquet files.
+
+    Subclasses (logs, metrics, traces) inherit this to get parquet-based
+    storage. The master toggle ENABLE_OBSERVABILITY_DAPR_SINK gates all
+    writes; per-signal flags (ENABLE_LOG_SINK, etc.) are checked by each
+    leaf subclass before calling super().
+    """
+
+    async def _flush_records(self, records: List[Dict[str, Any]]):
+        """Flush records as parquet files and upload to object store.
+
+        Args:
+            records: List of records to flush
+
+        This method:
+        - Checks master toggle before any I/O
+        - Groups records by partition (year/month/day)
+        - Converts timestamp from float seconds to int64 nanoseconds
+        - Writes parquet files with descriptive filenames encoding app identity
+        - Handles dual upload (deployment store + upstream for SDR)
+        - Provides robust error handling per partition
+        - Cleans up old records if enabled
+        """
+        if not ENABLE_OBSERVABILITY_DAPR_SINK:
+            return
+        try:
+            # Group records by partition
+            partition_records: Dict[str, List[Dict[str, Any]]] = {}
+            for record in records:
+                record_time = datetime.fromtimestamp(record["timestamp"])
+                partition_path = self._get_partition_path(record_time)
+
+                if partition_path not in partition_records:
+                    partition_records[partition_path] = []
+                partition_records[partition_path].append(record)
+
+            # Determine suffix from file type
+            if self.file_name == LOG_FILE_NAME:
+                suffix = "logs"
+            elif self.file_name == METRICS_FILE_NAME:
+                suffix = "metrics"
+            elif self.file_name == TRACES_FILE_NAME:
+                suffix = "traces"
+            else:
+                suffix = "data"
+
+            hostname = socket.gethostname()
+
+            for partition_path, partition_data in partition_records.items():
+                try:
+                    df = pd.DataFrame(partition_data)
+
+                    # Convert timestamp from float seconds to int64 nanoseconds
+                    # for OTel / S3-Iceberg compatibility
+                    df["timestamp"] = (df["timestamp"] * 1_000_000_000).astype("int64")
+
+                    # Build unique filename: {timestamp_ns}_{hostname}_{app}_{suffix}.parquet
+                    timestamp_ns = time_ns()
+                    custom_filename = (
+                        f"{timestamp_ns}_{hostname}_{APPLICATION_NAME}_{suffix}.parquet"
+                    )
+
+                    os.makedirs(partition_path, exist_ok=True)
+                    file_path = os.path.join(partition_path, custom_filename)
+                    df.to_parquet(file_path, index=False, compression="snappy")
+
+                    # Lazy imports for upload
+                    from application_sdk.activities.common.utils import (
+                        get_object_store_prefix,
+                    )
+                    from application_sdk.services.objectstore import ObjectStore
+
+                    # Dual upload: upstream (SDR) + deployment store
+                    if ENABLE_ATLAN_UPLOAD:
+                        await ObjectStore.upload_file(
+                            source=file_path,
+                            store_name=UPSTREAM_OBJECT_STORE_NAME,
+                            destination=get_object_store_prefix(file_path),
+                            retain_local_copy=True,
+                        )
+                    await ObjectStore.upload_file(
+                        source=file_path,
+                        destination=get_object_store_prefix(file_path),
+                    )
+
+                except Exception as partition_error:
+                    logging.error(
+                        f"Error processing partition {partition_path}: {str(partition_error)}"
+                    )
+
+            # Clean up old records if enabled
+            if self._cleanup_enabled:
+                await self._check_and_cleanup()
+
+        except Exception as e:
+            logging.error(f"Error flushing records batch: {e}")
 
 
 class DuckDBUI:

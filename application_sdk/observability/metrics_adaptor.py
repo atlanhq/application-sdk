@@ -3,7 +3,7 @@ import atexit
 import logging
 import threading
 from time import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from opentelemetry import metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
@@ -12,6 +12,7 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 
 from application_sdk.constants import (
+    ENABLE_METRICS_SINK,
     ENABLE_OTLP_METRICS,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
@@ -33,7 +34,7 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import MetricRecord, MetricType
-from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.observability import AtlanParquetObservability
 from application_sdk.observability.segment_client import SegmentClient
 from application_sdk.observability.utils import (
     get_observability_dir,
@@ -44,7 +45,7 @@ from application_sdk.observability.utils import (
 logger = get_logger(__name__)
 
 
-class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
+class AtlanMetricsAdapter(AtlanParquetObservability[MetricRecord]):
     """A metrics adapter for Atlan that extends AtlanObservability.
 
     This adapter provides functionality for recording, processing, and exporting
@@ -108,6 +109,12 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 AtlanMetricsAdapter._flush_task_started = True
             except Exception as e:
                 logging.error(f"Failed to start metrics flush task: {e}")
+
+    async def _flush_records(self, records: List[Dict[str, Any]]):
+        """Flush metrics records as parquet files."""
+        if not ENABLE_METRICS_SINK:
+            return
+        await super()._flush_records(records)
 
     def _setup_otel_metrics(self):
         """Set up OpenTelemetry metrics exporter and configuration.

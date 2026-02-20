@@ -223,7 +223,7 @@ LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
 LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
 
 # Log Location configuration
-LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.jsonl.gz")
+LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # Hive Partitioning Configuration
 ENABLE_HIVE_PARTITIONING = (
     os.getenv("ATLAN_ENABLE_HIVE_PARTITIONING", "true").lower() == "true"
@@ -270,6 +270,19 @@ TRACES_FILE_NAME = "traces.parquet"
 # Dapr Sink Configuration
 ENABLE_OBSERVABILITY_DAPR_SINK = (
     os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true").lower() == "true"
+)
+# Per-signal sink flags — default to the shared flag when not set explicitly
+ENABLE_LOG_SINK = (
+    os.getenv("ATLAN_ENABLE_LOG_SINK", str(ENABLE_OBSERVABILITY_DAPR_SINK)).lower()
+    == "true"
+)
+ENABLE_METRICS_SINK = (
+    os.getenv("ATLAN_ENABLE_METRICS_SINK", str(ENABLE_OBSERVABILITY_DAPR_SINK)).lower()
+    == "true"
+)
+ENABLE_TRACES_SINK = (
+    os.getenv("ATLAN_ENABLE_TRACES_SINK", str(ENABLE_OBSERVABILITY_DAPR_SINK)).lower()
+    == "true"
 )
 
 # atlan_client configuration (non ATLAN_ prefix are rooted in pyatlan SDK, to be revisited)
