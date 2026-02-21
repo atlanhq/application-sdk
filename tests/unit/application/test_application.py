@@ -506,6 +506,37 @@ class TestApplicationModeStart:
         app.worker.start.assert_called_once_with(daemon=True)
         # In LOCAL mode, server should also be started
         mock_server_instance.start.assert_called_once()
+        # LOCAL mode should stop worker when server exits
+        app.worker.stop.assert_called_once()
+
+    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.application.APIServer")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.LOCAL)
+    async def test_start_local_mode_stops_worker_when_server_fails(
+        self, mock_api_server, mock_get_workflow_client
+    ):
+        """Test that LOCAL mode stops worker even if server startup fails."""
+        mock_workflow_client = AsyncMock()
+        mock_workflow_client.application_name = "test-app"
+        mock_workflow_client.worker_task_queue = "test-app"
+        mock_workflow_client.namespace = "default"
+        mock_workflow_client.host = "localhost"
+        mock_workflow_client.port = "7233"
+        mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
+        mock_get_workflow_client.return_value = mock_workflow_client
+
+        mock_server_instance = AsyncMock()
+        mock_server_instance.start.side_effect = RuntimeError("server start failed")
+        mock_api_server.return_value = mock_server_instance
+
+        app = BaseApplication("test-app", handler_class=MockHandlerClass)
+        app.worker = AsyncMock()
+
+        with pytest.raises(RuntimeError, match="server start failed"):
+            await app.start(MockWorkflowInterface)
+
+        app.worker.start.assert_called_once_with(daemon=True)
+        app.worker.stop.assert_called_once()
 
     @patch("application_sdk.application.get_workflow_client")
     @patch("application_sdk.application.APIServer")

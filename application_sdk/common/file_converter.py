@@ -1,12 +1,26 @@
 from collections import namedtuple
 from enum import Enum
-from typing import List, Optional
-
-import pandas as pd
+from typing import Any, List, Optional, cast
 
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+class _PandasProxy:
+    """Lazy proxy for pandas.
+
+    Keeps the existing `pd.*` call pattern while deferring the pandas import
+    until a pandas attribute is actually used.
+    """
+
+    def __getattr__(self, name: str) -> Any:
+        import pandas
+
+        return getattr(pandas, name)
+
+
+pd = cast(Any, _PandasProxy())
 
 
 def enum_register():

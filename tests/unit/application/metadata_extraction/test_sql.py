@@ -448,6 +448,8 @@ class TestSQLApplicationModeStart:
         app.worker.start.assert_called_once_with(daemon=True)
         # In LOCAL mode, server should also be started
         mock_server_instance.start.assert_called_once()
+        # LOCAL mode should stop worker when server exits
+        app.worker.stop.assert_called_once()
 
     @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
     @patch("application_sdk.application.metadata_extraction.sql.APIServer")

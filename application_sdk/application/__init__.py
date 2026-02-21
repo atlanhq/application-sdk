@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 from typing_extensions import deprecated
 
@@ -12,9 +12,8 @@ from application_sdk.interceptors.models import EventRegistration
 from application_sdk.observability.decorators.observability_decorator import (
     observability,
 )
+from application_sdk.observability.lazy_proxies import LazyMetricsProxy, LazyTracesProxy
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.metrics_adaptor import get_metrics
-from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.server.fastapi.models import EventWorkflowTrigger
@@ -22,8 +21,8 @@ from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
-metrics = get_metrics()
-traces = get_traces()
+metrics = cast(Any, LazyMetricsProxy())
+traces = cast(Any, LazyTracesProxy())
 
 
 class BaseApplication:
@@ -140,18 +139,24 @@ class BaseApplication:
         Raises:
             ValueError: If APPLICATION_MODE is not a valid ApplicationMode value.
         """
+        is_local_mode = APPLICATION_MODE == ApplicationMode.LOCAL
+
         if APPLICATION_MODE in (ApplicationMode.LOCAL, ApplicationMode.WORKER):
             await self._start_worker(
-                daemon=APPLICATION_MODE == ApplicationMode.LOCAL,
+                daemon=is_local_mode,
             )
 
         if APPLICATION_MODE in (ApplicationMode.LOCAL, ApplicationMode.SERVER):
-            await self._setup_server(
-                workflow_class=workflow_class,
-                ui_enabled=ui_enabled,
-                has_configmap=has_configmap,
-            )
-            await self._start_server()
+            try:
+                await self._setup_server(
+                    workflow_class=workflow_class,
+                    ui_enabled=ui_enabled,
+                    has_configmap=has_configmap,
+                )
+                await self._start_server()
+            finally:
+                if is_local_mode:
+                    await self._stop_worker()
 
     async def setup_workflow(
         self,
@@ -225,6 +230,16 @@ class BaseApplication:
         if self.worker is None:
             raise ValueError("Worker not initialized")
         await self.worker.start(daemon=daemon)
+
+    async def _stop_worker(self):
+        """Stop the worker gracefully if it is initialized."""
+        if self.worker is None:
+            return
+
+        try:
+            await self.worker.stop()
+        except Exception as e:
+            logger.warning(f"Failed to stop worker cleanly: {e}")
 
     @deprecated("Use application.start(). Deprecated since v2.3.0.")
     @observability(logger=logger, metrics=metrics, traces=traces)

@@ -3,15 +3,9 @@ import logging
 import sys
 import threading
 from time import time_ns
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
 
 from loguru import logger
-from opentelemetry._logs import LogRecord, SeverityNumber
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.trace.span import TraceFlags
 from pydantic import BaseModel, Field
 
 from application_sdk.constants import (
@@ -39,6 +33,9 @@ from application_sdk.observability.utils import (
     get_observability_dir,
     get_workflow_context,
 )
+
+if TYPE_CHECKING:
+    from opentelemetry._logs import LogRecord as OTelLogRecord
 
 
 class LogExtraModel(BaseModel):
@@ -314,6 +311,15 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         # OTLP handler setup
         if ENABLE_OTLP_LOGS:
             try:
+                from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+                    OTLPLogExporter,
+                )
+                from opentelemetry.sdk._logs import LoggerProvider
+                from opentelemetry.sdk._logs._internal.export import (
+                    BatchLogRecordProcessor,
+                )
+                from opentelemetry.sdk.resources import Resource
+
                 # Get workflow node name for Argo environment
                 workflow_node_name = OTEL_WF_NODE_NAME
 
@@ -447,7 +453,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         if ENABLE_OTLP_LOGS:
             self._send_to_otel(record)
 
-    def _create_log_record(self, record: dict) -> LogRecord:
+    def _create_log_record(self, record: dict) -> "OTelLogRecord":
         """Create an OpenTelemetry LogRecord from a dictionary.
 
         Args:
@@ -456,6 +462,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         Returns:
             LogRecord: OpenTelemetry LogRecord object with mapped severity and attributes.
         """
+        from opentelemetry._logs import LogRecord, SeverityNumber
+        from opentelemetry.trace.span import TraceFlags
+
         severity_number = SEVERITY_MAPPING.get(
             record["level"], SeverityNumber.UNSPECIFIED
         )
@@ -799,6 +808,17 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 _logger_instances: Dict[str, AtlanLoggerAdapter] = {}
 
 
+class _DefaultLoggerProxy:
+    """Lazy proxy for the module-level default logger.
+
+    This preserves backward compatibility for `default_logger` imports while
+    avoiding eager logger initialization at module import time.
+    """
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(get_logger(), name)
+
+
 def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
     """Get or create an instance of AtlanLoggerAdapter.
     Args:
@@ -818,5 +838,5 @@ def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
     return _logger_instances[name]
 
 
-# Initialize the default logger
-default_logger = get_logger()  # Use a different name instead of redefining 'logger'
+# Backward-compatible symbol; actual logger is created only when first used.
+default_logger = cast(AtlanLoggerAdapter, _DefaultLoggerProxy())
