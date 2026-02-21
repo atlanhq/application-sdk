@@ -3,7 +3,7 @@ import logging
 import sys
 import threading
 from time import time_ns
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 from opentelemetry._logs import LogRecord, SeverityNumber
@@ -15,7 +15,8 @@ from opentelemetry.trace.span import TraceFlags
 from pydantic import BaseModel, Field
 
 from application_sdk.constants import (
-    ENABLE_OBSERVABILITY_DAPR_SINK,
+    APPLICATION_NAME,
+    ENABLE_LOG_SINK,
     ENABLE_OTLP_LOGS,
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
@@ -34,7 +35,7 @@ from application_sdk.constants import (
     SERVICE_VERSION,
 )
 from application_sdk.observability.context import correlation_context, request_context
-from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.observability import AtlanParquetObservability
 from application_sdk.observability.utils import (
     get_observability_dir,
     get_workflow_context,
@@ -73,8 +74,10 @@ class LogExtraModel(BaseModel):
     heartbeat_timeout: Optional[str] = None
     # Other fields
     log_type: Optional[str] = None
+    app_name: Optional[str] = None
     # Trace context
     trace_id: Optional[str] = None
+    correlation_id: Optional[str] = None
 
 
 class LogRecordModel(BaseModel):
@@ -195,7 +198,7 @@ SEVERITY_MAPPING = {
 }
 
 
-class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
+class AtlanLoggerAdapter(AtlanParquetObservability[LogRecordModel]):
     """A custom logger adapter for Atlan that extends AtlanObservability.
 
     This adapter provides enhanced logging capabilities including:
@@ -293,7 +296,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         )
 
         # Add sink for parquet logging only if Dapr sink is enabled
-        if ENABLE_OBSERVABILITY_DAPR_SINK:
+        if ENABLE_LOG_SINK:
             self.logger.add(self.parquet_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
             # Start flush task only if Dapr sink is enabled
             if not AtlanLoggerAdapter._flush_task_started:
@@ -526,6 +529,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         - Adds correlation context if available
         """
         kwargs["logger_name"] = self.logger_name
+        kwargs["app_name"] = APPLICATION_NAME
 
         # Get request context
         ctx = request_context.get()
@@ -558,6 +562,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             # Add trace_id if present (for log format display)
             if "trace_id" in corr_ctx and corr_ctx["trace_id"]:
                 kwargs["trace_id"] = str(corr_ctx["trace_id"])
+                kwargs["correlation_id"] = str(corr_ctx["trace_id"])
             # Add atlan-* headers for OTEL
             for key, value in corr_ctx.items():
                 if key.startswith("atlan-") and value:
@@ -737,6 +742,12 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     loop.close()
         except Exception as e:
             logging.error(f"Error during sync flush: {e}")
+
+    async def _flush_records(self, records: List[Dict[str, Any]]):
+        """Flush log records as parquet files."""
+        if not ENABLE_LOG_SINK:
+            return
+        await super()._flush_records(records)
 
     def tracing(self, msg: str, *args: Any, **kwargs: Any):
         """Log a trace-specific message with trace context.

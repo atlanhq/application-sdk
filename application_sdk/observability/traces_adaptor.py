@@ -2,7 +2,7 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from application_sdk.constants import (
     ENABLE_OTLP_TRACES,
+    ENABLE_TRACES_SINK,
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
@@ -28,7 +29,7 @@ from application_sdk.constants import (
     TRACES_RETENTION_DAYS,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.observability import AtlanParquetObservability
 from application_sdk.observability.utils import get_observability_dir
 
 
@@ -65,7 +66,7 @@ class TraceRecord(BaseModel):
     duration_ms: float
 
 
-class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
+class AtlanTracesAdapter(AtlanParquetObservability[TraceRecord]):
     """A traces adapter for Atlan that extends AtlanObservability.
 
     This adapter provides functionality for recording, processing, and exporting
@@ -115,6 +116,12 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 AtlanTracesAdapter._flush_task_started = True
             except Exception as e:
                 logging.error(f"Failed to start traces flush task: {e}")
+
+    async def _flush_records(self, records: List[Dict[str, Any]]):
+        """Flush trace records as parquet files."""
+        if not ENABLE_TRACES_SINK:
+            return
+        await super()._flush_records(records)
 
     def _setup_otel_traces(self):
         """Set up OpenTelemetry traces exporter and configuration.
