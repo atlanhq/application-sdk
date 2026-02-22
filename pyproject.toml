@@ -83,6 +83,10 @@ mcp = [
     "fastmcp>=2.12.3,<2.15.0",
 ]
 
+incremental = [
+    "rocksdict>=0.3.0",
+]
+
 # Development dependencies - Install using: uv sync --group dev
 [dependency-groups]
 dev = [
@@ -150,6 +154,7 @@ reportPossiblyUnboundVariable = "information"
 reportFunctionMemberAccess = "warning"
 reportArgumentType = "warning"
 reportGeneralTypeIssues = "warning"
+reportInvalidTypeForm = "warning"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

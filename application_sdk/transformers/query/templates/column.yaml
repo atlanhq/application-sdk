@@ -217,6 +217,9 @@ columns:
       source_query: is_identity
     identity_cycle:
       source_query: identity_cycle
+    incremental_state:
+      source_query: COALESCE(incremental_state, '')
+      source_columns: [incremental_state]
   typeName:
     source_query: "'Column'"
   status:

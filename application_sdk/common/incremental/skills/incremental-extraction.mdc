@@ -1,0 +1,118 @@
+---
+description: Use this rule when implementing or modifying incremental metadata extraction in a connector app using the Application SDK. Applies to activities, workflows, SQL templates, and state management.
+globs: "**/incremental**,**/extract_*_incremental*"
+alwaysApply: false
+---
+
+# Incremental Extraction Development Rules
+
+## Architecture
+
+### Single Inheritance Chain (MANDATORY)
+```
+BaseSQLMetadataExtractionActivities (SDK)
+    └── IncrementalSQLMetadataExtractionActivities (SDK)
+            └── YourDatabaseActivities (App)
+
+BaseSQLMetadataExtractionWorkflow (SDK)
+    └── IncrementalSQLMetadataExtractionWorkflow (SDK)
+            └── YourDatabaseWorkflow (App)
+```
+
+### SDK vs App Contract
+- **SDK provides**: Workflow orchestration, state management, marker management, Daft/DuckDB analysis, parallel batch execution, ancestral column merge
+- **App provides**: `build_incremental_column_sql()` (abstract, MUST implement), `resolve_database_placeholders()` (optional), `incremental_table_sql` (class attribute), SQL templates
+
+### Methods You MUST NOT Override
+- `execute_column_batch()` - Concrete in SDK, calls `build_incremental_column_sql()` + `run_column_query()`
+- `run_column_query()` - SDK handles execution
+- `fetch_incremental_marker()` / `update_incremental_marker()` - SDK marker management
+- `read_current_state()` / `write_current_state()` - SDK state management
+- `prepare_column_extraction_queries()` - SDK Daft/DuckDB analysis
+- `execute_single_column_batch()` - SDK batch orchestration
+
+### Method You MUST Implement
+- `build_incremental_column_sql(table_ids, workflow_args) -> str` - Build database-specific SQL for column extraction
+
+## SQL Template Rules
+
+### Incremental Table SQL (`extract_table_incremental.sql`)
+- MUST include `incremental_state` column with values: `CREATED`, `UPDATED`, `NO CHANGE`
+- MUST use `{marker_timestamp}` placeholder (SDK resolves it automatically)
+- MAY use database-specific placeholders resolved by `resolve_database_placeholders()`
+
+### Incremental Column SQL (`extract_column_incremental.sql`)
+- MUST include a placeholder for table IDs that `build_incremental_column_sql()` replaces
+- Oracle pattern: `--TABLE_FILTER_CTE--` → CTE with `FROM dual UNION ALL`
+- ClickHouse pattern: `{table_ids_in_clause}` → `WHERE IN (...)`
+- PostgreSQL pattern: `{table_ids_array}` → `ANY(ARRAY[...])`
+
+### Placeholder Resolution Order
+1. SDK automatic: `{marker_timestamp}`
+2. App override: `resolve_database_placeholders()` for `{system_schema}`, etc.
+3. App method: `build_incremental_column_sql()` for table ID injection
+
+## State Mutation Prevention (CRITICAL)
+
+Temporal reuses activity instances across workflow runs. NEVER permanently
+modify class-level SQL attributes:
+
+```python
+# BAD - breaks on next run!
+self.fetch_table_sql = resolved_sql
+
+# GOOD - SDK handles via _original_fetch_table_sql internally
+# Just set the class attributes and let SDK manage state
+```
+
+## SQL Escaping (MANDATORY)
+
+Always escape single quotes in table IDs:
+```python
+safe_id = table_id.replace("'", "''")
+```
+
+Always validate table_ids is non-empty:
+```python
+if not table_ids:
+    raise ValueError("No table IDs provided for column extraction")
+```
+
+## Testing Rules
+
+- Test `build_incremental_column_sql()` - this is YOUR business logic
+- Test `resolve_database_placeholders()` if you override it
+- Use `YourActivities.__new__(YourActivities)` to create test instances
+- Call `build_incremental_column_sql` (public name), NOT any private alias
+- Do NOT test SDK methods (execute_column_batch, run_column_query, etc.)
+
+## Dependencies
+
+```toml
+# pyproject.toml
+dependencies = [
+    "atlan-application-sdk[daft,iam-auth,sqlalchemy,tests,workflows,pandas]==X.Y.Z",
+    "rocksdict>=0.3.0",
+]
+```
+
+## Configuration Parameters
+
+| Parameter | Default | Type | Validation |
+|-----------|---------|------|------------|
+| `incremental-extraction` | `false` | bool (from string) | ConfigMap toggle |
+| `column-batch-size` | `25000` | int | gt=0 |
+| `column-chunk-size` | `100000` | int | gt=0 |
+| `copy-workers` | `3` | int | gt=0 |
+| `system-schema-name` | `SYS` | str | Database-specific |
+| `prepone-marker-timestamp` | `true` | bool | Handle clock drift |
+| `prepone-marker-hours` | `3` | int | Hours to move marker back |
+
+## Workflow Prerequisites for Incremental Mode
+
+All three must be true:
+1. `incremental-extraction` = `true`
+2. `marker_timestamp` exists (from previous run's marker.txt)
+3. `current_state_available` = `true` (previous state exists in S3)
+
+If any is false → full extraction runs instead (graceful fallback).
