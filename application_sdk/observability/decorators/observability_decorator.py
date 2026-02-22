@@ -87,7 +87,7 @@ def _record_error_observability(
     duration_ms = (time.time() - start_time) * 1000
 
     # Debug logging for error case
-    logger.error(f"Error in function {func_name}: {str(error)}")
+    logger.error(f"Error in function {func_name}: {str(error)}", exc_info=error)
 
     try:
         # Record failure trace
@@ -134,7 +134,7 @@ def _record_error_observability(
         )
 
     # Log error
-    logger.error(f"Error in {func_name}: {str(error)}")
+    logger.error(f"Error in {func_name}: {str(error)}", exc_info=error)
 
 
 def observability(

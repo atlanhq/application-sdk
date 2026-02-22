@@ -317,7 +317,7 @@ class AtlanObservability(Generic[T], ABC):
         if buffer_copy:
             await self._flush_records(buffer_copy)
 
-    async def parquet_sink(self, message: Any):
+    def parquet_sink(self, message: Any):
         """Process and buffer a log message for parquet storage.
 
         Args:
@@ -358,7 +358,11 @@ class AtlanObservability(Generic[T], ABC):
                     buffer_copy = None
 
             if buffer_copy is not None:
-                await self._flush_records(buffer_copy)
+                try:
+                    asyncio.create_task(self._flush_records(buffer_copy))
+                except RuntimeError:
+                    with self._buffer_lock:
+                        self._buffer.extend(buffer_copy)
         except Exception as e:
             logging.error(f"Error buffering log: {e}")
 
@@ -561,7 +565,8 @@ class AtlanObservability(Generic[T], ABC):
         This method:
         - Processes the record
         - Adds it to the buffer
-        - Triggers flush if needed
+        - Triggers async flush if buffer threshold is reached
+        - Falls back to periodic flush if no event loop is available
         - Exports the record
         """
         try:
@@ -582,9 +587,15 @@ class AtlanObservability(Generic[T], ABC):
                 else:
                     buffer_copy = None
 
-            # Flush if needed
+            # Flush if needed — try async dispatch, fall back to periodic flush
             if buffer_copy is not None:
-                asyncio.create_task(self._flush_records(buffer_copy))
+                try:
+                    asyncio.create_task(self._flush_records(buffer_copy))
+                except RuntimeError:
+                    # No running event loop (e.g. Temporal activity thread).
+                    # Put records back so the periodic flush picks them up.
+                    with self._buffer_lock:
+                        self._buffer.extend(buffer_copy)
 
             # Export the record
             self.export_record(record)
