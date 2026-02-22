@@ -91,7 +91,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
         )
 
         # Should attempt to download the file
-        # _as_store_key strips leading "/" so destination uses normalized key
+        # as_store_key strips leading "/" so destination uses normalized key
         expected_destination = os.path.join("./local/tmp/", "local/test.parquet")
         mock_download.assert_called_once_with(
             source=path, destination=expected_destination

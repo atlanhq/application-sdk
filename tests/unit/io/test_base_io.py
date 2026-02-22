@@ -186,7 +186,7 @@ class TestReaderDownloadFiles:
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
-            # _as_store_key strips leading "/" so destination uses normalized key
+            # as_store_key strips leading "/" so destination uses normalized key
             expected_destination = os.path.join("./local/tmp/", "data/test.parquet")
             mock_download.assert_called_once_with(
                 source=path, destination=expected_destination
@@ -200,7 +200,7 @@ class TestReaderDownloadFiles:
         input_instance = MockReader(path)
         expected_files = ["/data/file1.parquet", "/data/file2.parquet"]
 
-        # _as_store_key strips leading "/" so destination uses normalized key
+        # as_store_key strips leading "/" so destination uses normalized key
         expected_destination = os.path.join("./local/tmp/", "data")
 
         with (
@@ -232,7 +232,7 @@ class TestReaderDownloadFiles:
         path = "/data"
         file_names = ["file1.parquet", "file2.parquet"]
         input_instance = MockReader(path, file_names)
-        # _as_store_key strips leading "/" so destinations use normalized keys
+        # as_store_key strips leading "/" so destinations use normalized keys
         expected_files = [
             os.path.join("./local/tmp/", "data/file1.parquet"),
             os.path.join("./local/tmp/", "data/file2.parquet"),

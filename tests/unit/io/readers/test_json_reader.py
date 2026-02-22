@@ -63,7 +63,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
     path = "/local"
     file_names = ["a.json", "b.json"]
 
-    # _as_store_key strips leading "/" so destinations use the normalized key
+    # as_store_key strips leading "/" so destinations use the normalized key
     expected_dest_a = os.path.join("./local/tmp/", "local/a.json")
     expected_dest_b = os.path.join("./local/tmp/", "local/b.json")
 

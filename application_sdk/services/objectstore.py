@@ -8,7 +8,6 @@ import orjson
 from dapr.clients import DaprClient
 from temporalio import activity
 
-from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
     DAPR_MAX_GRPC_MESSAGE_LENGTH,
@@ -31,18 +30,22 @@ class ObjectStore:
     OBJECT_DELETE_OPERATION = "delete"
 
     # Central path normalizer for all object-store operations.
-    # Accepts either local TEMPORARY_PATH-style paths or object-store keys.
+    # Accepts local TEMPORARY_PATH-style paths, absolute paths, or object-store keys.
     # Always returns a relative key (no leading/trailing "/"), and maps temp-root
     # "." to "" so root-prefix operations never emit malformed "./" keys.
     @staticmethod
-    def _as_store_key(path: str) -> str:
+    def as_store_key(path: str) -> str:
         """Normalize a local or object-store path into a clean object store key.
 
-        Accepts either local SDK temporary paths (e.g., ``./local/tmp/artifacts/...``)
-        or already-relative object store keys (e.g., ``artifacts/...``).
+        Accepts any of:
 
-        Strips the ``./local/tmp/`` prefix when present, converts backslashes to
-        forward slashes, and removes leading/trailing slashes.
+        - Local SDK temporary paths (e.g., ``./local/tmp/artifacts/...``)
+        - Absolute paths (e.g., ``/data/test.parquet`` becomes ``data/test.parquet``)
+        - Already-relative object store keys (e.g., ``artifacts/...``)
+
+        Strips the ``TEMPORARY_PATH`` prefix when the path falls under it,
+        strips leading/trailing slashes for absolute or relative paths,
+        converts backslashes to forward slashes, and normalizes separators.
 
         Args:
             path: The path to normalize.
@@ -54,7 +57,21 @@ class ObjectStore:
         if not path:
             return ""
 
-        normalized = get_object_store_prefix(path)
+        # Inline normalization (avoids cross-layer import from activities/)
+        abs_path = os.path.abspath(path)
+        abs_temp_path = os.path.abspath(TEMPORARY_PATH)
+        try:
+            common_path = os.path.commonpath([abs_path, abs_temp_path])
+            if common_path == abs_temp_path:
+                normalized = os.path.relpath(abs_path, abs_temp_path).replace(
+                    os.path.sep, "/"
+                )
+            else:
+                normalized = path.strip("/")
+        except ValueError:
+            # os.path.commonpath can raise ValueError on Windows with different drives
+            normalized = path.strip("/")
+
         normalized = normalized.replace("\\", "/").replace(os.sep, "/")
         normalized = normalized.strip("/")
         # TEMPORARY_PATH root resolves to "." via os.path.relpath; treat as store root.
@@ -102,7 +119,7 @@ class ObjectStore:
         """
         normalized_prefix = ""
         try:
-            normalized_prefix = cls._as_store_key(prefix)
+            normalized_prefix = cls.as_store_key(prefix)
 
             # Ensure prefix ends with "/" for the object store query to prevent
             # matching sibling directories (e.g. "orders" matching "orders_archive")
@@ -190,7 +207,7 @@ class ObjectStore:
         Raises:
             Exception: If there's an error getting the file from the object store.
         """
-        normalized_key = cls._as_store_key(key)
+        normalized_key = cls.as_store_key(key)
         try:
             data = json.dumps({"key": normalized_key}).encode("utf-8")
 
@@ -246,7 +263,7 @@ class ObjectStore:
         Raises:
             Exception: If there's an error deleting the file from the object store.
         """
-        normalized_key = cls._as_store_key(key)
+        normalized_key = cls.as_store_key(key)
         try:
             data = json.dumps({"key": normalized_key}).encode("utf-8")
 
@@ -274,7 +291,7 @@ class ObjectStore:
         Raises:
             Exception: If there's an error deleting files from the object store.
         """
-        normalized_prefix = cls._as_store_key(prefix)
+        normalized_prefix = cls.as_store_key(prefix)
         try:
             # First, list all files under the prefix
             try:
@@ -343,7 +360,7 @@ class ObjectStore:
             ...     destination="reports/2024/january/report.pdf"
             ... )
         """
-        normalized_destination = cls._as_store_key(destination)
+        normalized_destination = cls.as_store_key(destination)
         try:
             with SafeFileOps.open(source, "rb") as f:
                 file_content = f.read()
@@ -447,7 +464,7 @@ class ObjectStore:
         if not SafeFileOps.isdir(source):
             raise ValueError(f"The provided path '{source}' is not a valid directory.")
 
-        normalized_destination = cls._as_store_key(destination)
+        normalized_destination = cls.as_store_key(destination)
         try:
             for root, _, files in os.walk(source):
                 # Skip subdirectories if not recursive
@@ -459,7 +476,7 @@ class ObjectStore:
                     # Calculate relative path from the base directory
                     relative_path = os.path.relpath(file_path, source)
                     # Create store key by combining prefix with relative path
-                    store_key = cls._as_store_key(
+                    store_key = cls.as_store_key(
                         os.path.join(normalized_destination, relative_path)
                     )
                     await cls.upload_file(
@@ -500,7 +517,7 @@ class ObjectStore:
             ...     destination="/tmp/downloaded_report.pdf"
             ... )
         """
-        normalized_source = cls._as_store_key(source)
+        normalized_source = cls.as_store_key(source)
         # Ensure directory exists
 
         if not SafeFileOps.exists(os.path.dirname(destination)):
@@ -533,7 +550,7 @@ class ObjectStore:
             destination: Local directory where files will be saved.
             store_name: Name of the Dapr object store binding to use.
         """
-        normalized_source = cls._as_store_key(source)
+        normalized_source = cls.as_store_key(source)
         try:
             # List all files under the prefix
             file_list = await cls.list_files(normalized_source, store_name)
