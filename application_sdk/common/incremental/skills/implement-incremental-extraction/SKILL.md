@@ -70,8 +70,8 @@ BaseSQLMetadataExtractionWorkflow (SDK)
 | **Workflow orchestration** | 4-phase execution, parallel batching, retry policies | Nothing (inherited) |
 | **Marker management** | S3 fetch/persist, timestamp normalization, prepone logic | Nothing (inherited) |
 | **State management** | Current-state read/write, S3 upload/download, ancestral merge | Nothing (inherited) |
-| **Table extraction** | Switching between full/incremental SQL, placeholder resolution | `incremental_table_sql` template, `resolve_database_placeholders()` |
-| **Column extraction** | Table analysis (Daft), backfill detection (DuckDB), batching, parallel execution | `build_incremental_column_sql()` - the SQL building strategy |
+| **Table extraction** | Switching between full/incremental SQL, placeholder resolution, auto-loading `incremental_table_sql` from `app/sql/` | `extract_table_incremental.sql` file, `resolve_database_placeholders()` (optional) |
+| **Column extraction** | Table analysis (Daft), backfill detection (DuckDB), batching, parallel execution, auto-loading `incremental_column_sql` from `app/sql/` | `build_incremental_column_sql()` - the SQL building strategy, `extract_column_incremental.sql` file |
 | **SQL execution** | Query execution, result counting, output path management | Nothing (inherited) |
 
 ### Workflow 4-Phase Execution
@@ -142,20 +142,18 @@ from application_sdk.activities.metadata_extraction.incremental import (
     IncrementalSQLMetadataExtractionActivities,
 )
 
-# Load SQL templates from app/sql/ directory
-queries = load_queries("app/sql")
-
 class YourDBActivities(IncrementalSQLMetadataExtractionActivities):
     sql_client_class = YourDBClient
 
-    # Full extraction SQL
-    fetch_database_sql = queries.get("EXTRACT_DATABASE")
-    fetch_schema_sql = queries.get("EXTRACT_SCHEMA")
-    fetch_table_sql = queries.get("EXTRACT_TABLE")
-    fetch_column_sql = queries.get("EXTRACT_COLUMN")
-
-    # Incremental SQL (NEW - only this is needed for incremental)
-    incremental_table_sql = queries.get("EXTRACT_TABLE_INCREMENTAL")
+    # All SQL queries are auto-loaded from app/sql/ by the SDK:
+    #   fetch_database_sql          ← extract_database.sql
+    #   fetch_schema_sql            ← extract_schema.sql
+    #   fetch_table_sql             ← extract_table.sql
+    #   fetch_column_sql            ← extract_column.sql
+    #   incremental_table_sql       ← extract_table_incremental.sql
+    #   incremental_column_sql      ← extract_column_incremental.sql
+    #
+    # No need to set these manually — just place the SQL files in app/sql/.
 
     def build_incremental_column_sql(self, table_ids, workflow_args):
         """Build SQL for incremental column extraction."""
