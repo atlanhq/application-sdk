@@ -6,7 +6,7 @@ in a declarative, data-driven manner.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, Optional, Set, Union
 
 
 class APIType(Enum):
@@ -93,6 +93,18 @@ class Scenario:
         description: Optional human-readable description of what this tests.
         skip: If True, this scenario will be skipped during test execution.
         skip_reason: Reason for skipping (shown in test output).
+        expected_data: Optional path to a JSON file containing expected metadata output.
+            When set, the framework will poll for workflow completion and compare
+            actual extracted metadata against the expected baseline.
+        extracted_output_base_path: Optional base directory where connector writes
+            extracted output. Falls back to the class-level attribute if not set.
+        strict_comparison: If True, extra assets in actual output that are not in
+            the expected JSON will cause the test to fail. Defaults to True.
+        workflow_timeout: Seconds to wait for workflow completion. Defaults to 300.
+        polling_interval: Seconds between workflow status polls. Defaults to 10.
+        ignored_fields: Set of attribute field names to skip during comparison
+            (e.g., dynamic fields like qualifiedName that change between runs).
+            If not provided, a default set of dynamic fields is used.
     """
 
     name: str
@@ -106,6 +118,12 @@ class Scenario:
     description: str = ""
     skip: bool = False
     skip_reason: str = ""
+    expected_data: Optional[str] = None
+    extracted_output_base_path: Optional[str] = None
+    strict_comparison: bool = True
+    workflow_timeout: int = 300
+    polling_interval: int = 10
+    ignored_fields: Optional[Set[str]] = None
 
     def __post_init__(self):
         """Validate the scenario after initialization."""
@@ -124,6 +142,12 @@ class Scenario:
 
         if not self.assert_that:
             raise ValueError("Scenario must have at least one assertion")
+
+        if self.expected_data and self.api.lower() != "workflow":
+            raise ValueError(
+                "expected_data can only be set for workflow scenarios, "
+                f"but api is '{self.api}'"
+            )
 
     @property
     def api_type(self) -> APIType:
@@ -163,6 +187,10 @@ class ScenarioResult:
         if not self.success and self.error:
             msg += f" - Error: {self.error}"
         elif not self.success:
-            failed = [k for k, v in self.assertion_results.items() if not v.get("passed", False)]
+            failed = [
+                k
+                for k, v in self.assertion_results.items()
+                if not v.get("passed", False)
+            ]
             msg += f" - Failed assertions: {failed}"
         return msg

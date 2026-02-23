@@ -31,7 +31,7 @@ Example (simplified - no helper functions needed):
 
 import os
 import time
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Type
 
 import pytest
 import requests as http_requests
@@ -39,8 +39,9 @@ import requests as http_requests
 from application_sdk.observability.logger_adaptor import get_logger
 
 from .client import IntegrationTestClient
-from .lazy import Lazy, evaluate_if_lazy
-from .models import Scenario, ScenarioResult
+from .comparison import compare_metadata, load_actual_output, load_expected_data
+from .lazy import evaluate_if_lazy
+from .models import APIType, Scenario, ScenarioResult
 
 logger = get_logger(__name__)
 
@@ -77,7 +78,7 @@ def _auto_discover_credentials() -> Dict[str, Any]:
 
     for key, value in os.environ.items():
         if key.startswith(prefix):
-            field_name = key[len(prefix):].lower()
+            field_name = key[len(prefix) :].lower()
             # Auto-convert numeric values (e.g., port)
             if value.isdigit():
                 value = int(value)
@@ -158,6 +159,8 @@ class BaseIntegrationTest:
         default_metadata: Default metadata for preflight/workflow tests.
         default_connection: Default connection info for workflow tests.
         skip_server_check: Set True to skip the server health check.
+        extracted_output_base_path: Base directory where connector writes extracted
+            output. Used for metadata output validation when scenarios set expected_data.
 
     Hooks:
         setup_test_environment: Called before any tests run.
@@ -183,6 +186,9 @@ class BaseIntegrationTest:
 
     # Skip server health check (useful for debugging)
     skip_server_check: bool = False
+
+    # Base path for extracted output (used by metadata output validation)
+    extracted_output_base_path: str = ""
 
     # Internal state
     client: IntegrationTestClient
@@ -356,7 +362,9 @@ class BaseIntegrationTest:
             logger.debug(f"API response for {scenario.name}: {response}")
 
             # Step 3: Validate assertions with rich error messages
-            assertion_results = self._validate_assertions(response, scenario.assert_that)
+            assertion_results = self._validate_assertions(
+                response, scenario.assert_that
+            )
             result.assertion_results = assertion_results
 
             # Check if all assertions passed
@@ -377,6 +385,10 @@ class BaseIntegrationTest:
                 )
                 logger.error(error_msg)
                 raise AssertionError(error_msg)
+
+            # Step 4: Validate metadata output if expected_data is set
+            if scenario.expected_data and scenario.api_type == APIType.WORKFLOW:
+                self._validate_workflow_output(scenario, response)
 
             logger.info(f"Scenario {scenario.name} passed")
 
@@ -441,6 +453,131 @@ class BaseIntegrationTest:
                 }
 
         return results
+
+    def _validate_workflow_output(
+        self, scenario: Scenario, response: Dict[str, Any]
+    ) -> None:
+        """Validate workflow output against expected metadata baseline.
+
+        Polls for workflow completion, loads actual and expected output,
+        and compares them to produce a gap report.
+
+        Args:
+            scenario: The scenario with expected_data set.
+            response: The workflow start API response containing workflow_id/run_id.
+
+        Raises:
+            AssertionError: If metadata validation fails.
+        """
+        # Extract workflow_id and run_id from response
+        data = response.get("data", {})
+        workflow_id = data.get("workflow_id")
+        run_id = data.get("run_id")
+
+        if not workflow_id or not run_id:
+            raise AssertionError(
+                f"Cannot validate workflow output for scenario '{scenario.name}': "
+                f"response missing workflow_id or run_id"
+            )
+
+        # Poll for workflow completion
+        logger.info(
+            f"Waiting for workflow completion: {workflow_id}/{run_id} "
+            f"(timeout={scenario.workflow_timeout}s)"
+        )
+        final_status = self._poll_workflow_completion(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            timeout=scenario.workflow_timeout,
+            interval=scenario.polling_interval,
+        )
+
+        if final_status != "COMPLETED":
+            raise AssertionError(
+                f"Workflow did not complete successfully for scenario "
+                f"'{scenario.name}': status={final_status}"
+            )
+
+        # Resolve extracted output base path
+        base_path = (
+            scenario.extracted_output_base_path or self.extracted_output_base_path
+        )
+        if not base_path:
+            raise AssertionError(
+                f"Cannot validate workflow output for scenario '{scenario.name}': "
+                f"extracted_output_base_path not set on scenario or test class"
+            )
+
+        # Load actual and expected data
+        logger.info(f"Loading actual output from {base_path}/{workflow_id}/{run_id}")
+        actual = load_actual_output(base_path, workflow_id, run_id)
+
+        logger.info(f"Loading expected data from {scenario.expected_data}")
+        expected = load_expected_data(scenario.expected_data)
+
+        # Compare
+        gap_report = compare_metadata(
+            expected=expected,
+            actual=actual,
+            strict=scenario.strict_comparison,
+            ignored_fields=scenario.ignored_fields,
+        )
+
+        if gap_report.has_gaps:
+            raise AssertionError(
+                f"Metadata validation failed for scenario '{scenario.name}':\n\n"
+                + gap_report.format_report()
+            )
+
+        logger.info(
+            f"Metadata validation passed for scenario '{scenario.name}': "
+            f"{len(actual)} assets match expected baseline"
+        )
+
+    def _poll_workflow_completion(
+        self,
+        workflow_id: str,
+        run_id: str,
+        timeout: int,
+        interval: int,
+    ) -> str:
+        """Poll the workflow status until completion or timeout.
+
+        Args:
+            workflow_id: The workflow ID.
+            run_id: The run ID.
+            timeout: Maximum seconds to wait.
+            interval: Seconds between polls.
+
+        Returns:
+            str: The final workflow status (e.g., "COMPLETED", "FAILED").
+
+        Raises:
+            TimeoutError: If the workflow does not complete within the timeout.
+        """
+        start_time = time.time()
+
+        while True:
+            status_response = self.client.get_workflow_status(workflow_id, run_id)
+
+            if not status_response.get("success", False):
+                logger.warning(f"Workflow status check failed: {status_response}")
+                # Continue polling — transient failures are possible
+            else:
+                current_status = status_response.get("data", {}).get("status", "")
+                logger.debug(f"Workflow status: {current_status}")
+
+                if current_status != "RUNNING":
+                    return current_status
+
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                raise TimeoutError(
+                    f"Workflow {workflow_id}/{run_id} did not complete "
+                    f"within {timeout}s (elapsed: {elapsed:.0f}s)"
+                )
+
+            time.sleep(interval)
 
     def _get_nested_value(self, data: Dict[str, Any], path: str) -> Any:
         """Get a value from a nested dictionary using dot notation.
@@ -508,6 +645,7 @@ def _generate_individual_tests(test_class: Type[BaseIntegrationTest]) -> None:
         def make_test(s: Scenario):
             def test_method(self):
                 self._execute_scenario(s)
+
             test_method.__doc__ = s.description or f"Test scenario: {s.name}"
             return test_method
 
