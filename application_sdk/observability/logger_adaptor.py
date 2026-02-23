@@ -108,7 +108,7 @@ class LogRecordModel(BaseModel):
         for k, v in message.record["extra"].items():
             if k != "logger_name" and hasattr(extra, k):
                 setattr(extra, k, v)
-            # Include atlan- prefixed and exception. prefixed fields as extra attributes
+            # Include atlan- prefixed fields as extra attributes
             elif k.startswith("atlan-") and v is not None:
                 setattr(extra, k, str(v))
         for key, value in _extract_exception_attributes(
@@ -161,13 +161,13 @@ def _extract_exception_attributes(exception: Any) -> Dict[str, str]:
     qualname = getattr(exc_type, "__qualname__", getattr(exc_type, "__name__", None))
     type_name = f"{module}.{qualname}" if module and qualname else str(exc_type)
 
-    attrs: Dict[str, str] = {"exception.type": type_name}
+    attrs: Dict[str, str] = {"exception_type": type_name}
     if exc_value is not None:
-        attrs["exception.message"] = str(exc_value)
+        attrs["exception_message"] = str(exc_value)
 
     stacktrace = _format_exception_stacktrace(exception)
     if stacktrace:
-        attrs["exception.stacktrace"] = stacktrace
+        attrs["exception_stacktrace"] = stacktrace
 
     return attrs
 
@@ -454,9 +454,7 @@ class AtlanLoggerAdapter(AtlanParquetObservability[LogRecordModel]):
             for k, v in record.record["extra"].items():
                 if k != "logger_name" and hasattr(extra, k):
                     setattr(extra, k, v)
-                elif (
-                    k.startswith("atlan-") or k.startswith("exception.")
-                ) and v is not None:
+                elif k.startswith("atlan-") and v is not None:
                     setattr(extra, k, str(v))
             for key, value in _extract_exception_attributes(
                 record.record.get("exception")
@@ -480,9 +478,7 @@ class AtlanLoggerAdapter(AtlanParquetObservability[LogRecordModel]):
             for k, v in record.get("extra", {}).items():
                 if hasattr(extra, k):
                     setattr(extra, k, v)
-                elif (
-                    k.startswith("atlan-") or k.startswith("exception.")
-                ) and v is not None:
+                elif k.startswith("atlan-") and v is not None:
                     setattr(extra, k, str(v))
             for key, value in _extract_exception_attributes(
                 record.get("exception")
