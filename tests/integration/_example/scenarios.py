@@ -23,7 +23,6 @@ from application_sdk.test_utils.integration import (
     one_of,
 )
 
-
 # =============================================================================
 # Auth Scenarios
 # =============================================================================
@@ -135,6 +134,32 @@ workflow_scenarios = [
         },
         description="Test workflow execution with valid configuration",
     ),
+    # Workflow with metadata output validation
+    # After the workflow completes, the framework compares the actual
+    # extracted metadata against the expected baseline JSON file.
+    # Uncomment and adapt for your connector:
+    #
+    # Scenario(
+    #     name="workflow_with_metadata_validation",
+    #     api="workflow",
+    #     metadata={
+    #         "databases": ["test_db"],
+    #         "include_schemas": ["public"],
+    #     },
+    #     connection={
+    #         "connection_name": "example_test_connection",
+    #         "qualified_name": "default/example/test",
+    #     },
+    #     expected_data="tests/integration/_example/expected/baseline.json",
+    #     strict_comparison=True,
+    #     workflow_timeout=300,
+    #     polling_interval=10,
+    #     assert_that={
+    #         "success": equals(True),
+    #         "data.workflow_id": exists(),
+    #     },
+    #     description="Workflow with metadata output validation against baseline",
+    # ),
     # Invalid credentials
     Scenario(
         name="workflow_invalid_credentials",

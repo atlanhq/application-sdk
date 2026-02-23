@@ -59,67 +59,47 @@ For detailed documentation, see:
 # Models
 # =============================================================================
 
-from .models import APIType, Scenario, ScenarioResult
-
-# =============================================================================
-# Lazy Evaluation
-# =============================================================================
-
-from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
-
-# =============================================================================
-# Assertion DSL
-# =============================================================================
-
-from .assertions import (
-    # Basic assertions
-    equals,
-    not_equals,
-    exists,
-    is_none,
-    is_true,
-    is_false,
-    # Collection assertions
-    one_of,
-    not_one_of,
-    contains,
-    not_contains,
-    has_length,
-    is_empty,
-    is_not_empty,
-    # Numeric assertions
-    greater_than,
-    greater_than_or_equal,
-    less_than,
-    less_than_or_equal,
-    between,
-    # String assertions
-    matches,
-    starts_with,
-    ends_with,
-    # Type assertions
-    is_type,
-    is_dict,
-    is_list,
-    is_string,
-    # Combinators
+from .assertions import (  # Basic assertions; Collection assertions; Numeric assertions; String assertions; Type assertions; Combinators; Custom
     all_of,
     any_of,
-    none_of,
-    # Custom
+    between,
+    contains,
     custom,
+    ends_with,
+    equals,
+    exists,
+    greater_than,
+    greater_than_or_equal,
+    has_length,
+    is_dict,
+    is_empty,
+    is_false,
+    is_list,
+    is_none,
+    is_not_empty,
+    is_string,
+    is_true,
+    is_type,
+    less_than,
+    less_than_or_equal,
+    matches,
+    none_of,
+    not_contains,
+    not_equals,
+    not_one_of,
+    one_of,
+    starts_with,
 )
-
-# =============================================================================
-# Client
-# =============================================================================
-
 from .client import IntegrationTestClient
-
-# =============================================================================
-# Test Runner
-# =============================================================================
-
+from .comparison import (
+    AssetDiff,
+    GapReport,
+    compare_metadata,
+    load_actual_output,
+    load_expected_data,
+)
+from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
+from .models import APIType, Scenario, ScenarioResult
 from .runner import BaseIntegrationTest, generate_test_methods, parametrize_scenarios
 
 # =============================================================================
@@ -171,6 +151,12 @@ __all__ = [
     "any_of",
     "none_of",
     "custom",
+    # Metadata Comparison
+    "AssetDiff",
+    "GapReport",
+    "compare_metadata",
+    "load_actual_output",
+    "load_expected_data",
     # Client
     "IntegrationTestClient",
     # Runner
