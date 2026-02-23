@@ -2,6 +2,7 @@
 
 Tests cover public functions with real business logic:
 - copy_non_column_entities: Entity iteration and parallel copy
+- _copy_columns_from_transformed: Column file copy (no ancestral merge)
 - cleanup_previous_state: Safe cleanup with exception handling
 - prepare_current_state_directory: Idempotent directory cleanup
 - prepare_previous_state: Conditional download with cleanup on failure
@@ -15,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from application_sdk.common.incremental.state.state_writer import (
+    _copy_columns_from_transformed,
     cleanup_previous_state,
     copy_non_column_entities,
     download_transformed_data,
@@ -69,7 +71,7 @@ class TestCopyNonColumnEntities:
             assert "database" not in counts
 
     def test_does_not_copy_columns(self):
-        """Column directory is NOT copied (handled by merge)."""
+        """Column directory is NOT copied (handled separately by _copy_columns_from_transformed)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             transformed = Path(temp_dir) / "transformed"
             state = Path(temp_dir) / "current-state"
@@ -83,6 +85,57 @@ class TestCopyNonColumnEntities:
 
             assert "column" not in counts
             assert not (state / "column").exists()
+
+
+# ---------------------------------------------------------------------------
+# _copy_columns_from_transformed
+# ---------------------------------------------------------------------------
+
+
+class TestCopyColumnsFromTransformed:
+    """Tests for _copy_columns_from_transformed (lightweight column copy)."""
+
+    def test_copies_column_files(self):
+        """Copies column files from transformed to current-state."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            transformed = Path(temp_dir) / "transformed"
+            state = Path(temp_dir) / "current-state"
+            state.mkdir(parents=True)
+
+            col_dir = transformed / "column"
+            col_dir.mkdir(parents=True)
+            (col_dir / "chunk-0.json").write_text("{}")
+            (col_dir / "chunk-1.json").write_text("{}")
+
+            count = _copy_columns_from_transformed(transformed, state)
+
+            assert count == 2
+            assert (state / "column" / "chunk-0.json").exists()
+            assert (state / "column" / "chunk-1.json").exists()
+
+    def test_no_column_dir_returns_zero(self):
+        """Returns 0 when no column directory exists in transformed."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            transformed = Path(temp_dir) / "transformed"
+            transformed.mkdir(parents=True)
+            state = Path(temp_dir) / "current-state"
+            state.mkdir(parents=True)
+
+            count = _copy_columns_from_transformed(transformed, state)
+            assert count == 0
+
+    def test_empty_column_dir_returns_zero(self):
+        """Returns 0 when column directory exists but is empty."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            transformed = Path(temp_dir) / "transformed"
+            state = Path(temp_dir) / "current-state"
+            state.mkdir(parents=True)
+
+            col_dir = transformed / "column"
+            col_dir.mkdir(parents=True)
+
+            count = _copy_columns_from_transformed(transformed, state)
+            assert count == 0
 
 
 # ---------------------------------------------------------------------------

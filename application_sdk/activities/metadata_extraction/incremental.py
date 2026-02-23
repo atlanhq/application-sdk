@@ -504,7 +504,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
     async def write_current_state(
         self, workflow_args: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Create current-state snapshot with ancestral merge and upload to S3.
+        """Create lightweight current-state snapshot and upload to S3.
 
         Args:
             workflow_args: Workflow arguments containing paths and configuration
@@ -517,8 +517,9 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         args = IncrementalWorkflowArgs.model_validate(workflow_args)
 
         logger.info(
-            f"Starting write_current_state with ancestral merge "
-            f"(workflow: {workflow_id}, run: {run_id})"
+            "Starting write_current_state " "(workflow: %s, run: %s)",
+            workflow_id,
+            run_id,
         )
 
         previous_state_dir = None
