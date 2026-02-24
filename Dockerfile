@@ -18,7 +18,7 @@ RUN apk add --no-cache ${DAPR_RUNTIME_PACKAGE}
 RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser
 
 # Set up directories for apps
-RUN mkdir -p /app /home/appuser/.local/bin /home/appuser/.cache/uv && \
+RUN mkdir -p /app /home/appuser/.local/bin && \
     chown -R appuser:appuser /app /home/appuser
 
 # Remove curl and bash (no longer needed) and clean apk cache
@@ -42,8 +42,7 @@ spec: {}
 EOF
 
 # Common environment variables for all apps
-ENV UV_CACHE_DIR=/home/appuser/.cache/uv \
-    XDG_CACHE_HOME=/home/appuser/.cache \
+ENV UV_NO_CACHE=1 \
     ATLAN_DAPR_HTTP_PORT=3500 \
     ATLAN_DAPR_GRPC_PORT=50001 \
     ATLAN_DAPR_METRICS_PORT=3100 \
