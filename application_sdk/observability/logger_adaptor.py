@@ -420,6 +420,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     workflow_logs_exporter = OTLPLogExporter(
                         endpoint=OTEL_WORKFLOW_LOGS_ENDPOINT,
                         timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
+                        insecure=True,
                     )
 
                     workflow_logs_processor = BatchLogRecordProcessor(
