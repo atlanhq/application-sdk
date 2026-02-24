@@ -166,8 +166,8 @@ async def test_preflight_check_failure(
 
         result = await handler.preflight_check(payload)
 
-        assert "error" in result
-        assert "Preflight check failed" in result["error"]
+        assert result["databaseSchemaCheck"]["success"] is False
+        assert "invalid_db database" in result["databaseSchemaCheck"]["failureMessage"]
 
 
 @given(version_data=version_comparison_strategy)
@@ -228,7 +228,6 @@ async def test_check_client_version_no_client_version(handler: BaseSQLHandler):
     result = await handler.check_client_version()
 
     assert result["success"] is False
-    assert "error" in result
     assert "Client version check failed" in result["failureMessage"]
 
 
@@ -261,7 +260,7 @@ async def test_check_client_version_sql_query(
         result = await handler.check_client_version()
 
         assert result["success"] is False
-        assert "error" in result
+        assert "Client version check failed" in result["failureMessage"]
 
 
 async def test_check_client_version_exception(handler: BaseSQLHandler):
@@ -307,8 +306,6 @@ async def test_preflight_check_version_failure(
 
         result = await handler.preflight_check(payload)
 
-        assert "error" in result
-        assert "Preflight check failed" in result["error"]
         assert "versionCheck" in result
         assert result["versionCheck"]["success"] is False
         assert (

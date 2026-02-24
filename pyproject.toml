@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "2.3.3"
+version = "2.4.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -47,6 +47,10 @@ workflows = [
     "temporalio>=1.7.1,<1.22.0",
     "orjson>=3.10.18,<3.12.0",
 ]
+pandas = [
+    "pandas>=2.2.3,<2.4.0",
+    "pyarrow>=20.0.0,<23.0.0",
+]
 daft = [
     "daft>=0.7.1,<0.8.0",
 ]
@@ -77,6 +81,10 @@ distributed_lock = [
 
 mcp = [
     "fastmcp>=2.12.3,<2.15.0",
+]
+
+incremental = [
+    "rocksdict>=0.3.0",
 ]
 
 # Development dependencies - Install using: uv sync --group dev
@@ -146,6 +154,7 @@ reportPossiblyUnboundVariable = "information"
 reportFunctionMemberAccess = "warning"
 reportArgumentType = "warning"
 reportGeneralTypeIssues = "warning"
+reportInvalidTypeForm = "warning"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

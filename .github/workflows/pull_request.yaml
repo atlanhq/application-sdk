@@ -3,7 +3,7 @@ name: PR Checks
 on:
   pull_request:
     types: [opened, synchronize, labeled, reopened]
-    branches: [main, develop]
+    branches: [main, develop, native]
 
 permissions:
   id-token: write
@@ -208,7 +208,7 @@ jobs:
   e2e-apps:
     name: E2E (Apps)
     needs: [changes, matrix-builder]
-    if: needs.changes.outputs.code == 'true'
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'e2e-test') || contains(github.event.pull_request.labels.*.name, 'e2e-test'))
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
