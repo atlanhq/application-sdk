@@ -23,7 +23,7 @@ dependencies = [
     "aiohttp>=3.10.0,<3.14.0",
     "opentelemetry-exporter-otlp==1.39.1",
     "psutil>=7.0.0,<7.3.0",
-    "fastapi[standard]==0.127.0",
+    "fastapi[standard]==0.133.0",
     "pyatlan>=8.0.2,<8.5.0",
     "pydantic>=2.10.6,<2.13.0",
     "loguru>=0.7.3,<0.8.0",
@@ -43,7 +43,7 @@ Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 # Optional dependencies for specific functionality - Install using: uv sync --extra workflows
 [project.optional-dependencies]
 workflows = [
-    "dapr==1.16.0",
+    "dapr==1.16.1",
     "temporalio>=1.7.1,<1.22.0",
     "orjson>=3.10.18,<3.12.0",
 ]
