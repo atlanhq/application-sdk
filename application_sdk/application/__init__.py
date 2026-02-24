@@ -4,6 +4,11 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 from typing_extensions import deprecated
 
 from application_sdk.activities import ActivitiesInterface
+from application_sdk.activities.sdr import (
+    FetchMetadataActivities,
+    PreflightCheckActivities,
+    TestAuthActivities,
+)
 from application_sdk.clients.base import BaseClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import APPLICATION_MODE, ENABLE_MCP, ApplicationMode
@@ -20,6 +25,11 @@ from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.server.fastapi.models import EventWorkflowTrigger
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
+from application_sdk.workflows.sdr import (
+    FetchMetadataWorkflow,
+    PreflightCheckWorkflow,
+    TestAuthWorkflow,
+)
 
 logger = get_logger(__name__)
 metrics = get_metrics()
@@ -160,6 +170,7 @@ class BaseApplication:
         ],
         passthrough_modules: List[str] = [],
         activity_executor: Optional[ThreadPoolExecutor] = None,
+        enable_sdr: bool = True,
     ):
         """
         Set up the workflow client and start the worker for the application.
@@ -168,10 +179,30 @@ class BaseApplication:
             workflow_and_activities_classes (list): The workflow and activities classes for the application.
             passthrough_modules (list): The modules to pass through to the worker.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
+            enable_sdr (bool): Whether to automatically register the three SDR workflows
+                (TestAuthWorkflow, PreflightCheckWorkflow, FetchMetadataWorkflow) using
+                this application's client_class and handler_class. Defaults to True.
+                Set to False only if the app manages SDR workflows manually.
         """
         await self.workflow_client.load()
 
-        workflow_classes = [
+        if enable_sdr:
+            for sdr_activities_class in (
+                TestAuthActivities,
+                PreflightCheckActivities,
+                FetchMetadataActivities,
+            ):
+                sdr_activities_class.client_class = self.client_class
+                sdr_activities_class.handler_class = self.handler_class
+
+            workflow_and_activities_classes = [
+                *workflow_and_activities_classes,
+                (TestAuthWorkflow, TestAuthActivities),
+                (PreflightCheckWorkflow, PreflightCheckActivities),
+                (FetchMetadataWorkflow, FetchMetadataActivities),
+            ]
+
+        workflow_classes: List[Type[WorkflowInterface]] = [
             workflow_class for workflow_class, _ in workflow_and_activities_classes
         ]
         workflow_activities = []
