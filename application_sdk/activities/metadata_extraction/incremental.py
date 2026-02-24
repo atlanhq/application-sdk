@@ -11,16 +11,27 @@ BaseSQLMetadataExtractionActivities with incremental extraction capabilities:
 The SDK provides generic orchestration (table analysis, S3 management, parallel
 execution) while apps provide the SQL-building strategy via build_incremental_column_sql().
 
+SQL File Auto-Loading:
+    The SDK automatically loads SQL queries from the configured SQL_QUERIES_PATH
+    (default: ``app/sql/``). Both base and incremental queries are resolved by
+    file name convention:
+
+    - ``extract_database.sql``          → ``fetch_database_sql``
+    - ``extract_schema.sql``            → ``fetch_schema_sql``
+    - ``extract_table.sql``             → ``fetch_table_sql``
+    - ``extract_column.sql``            → ``fetch_column_sql``
+    - ``extract_table_incremental.sql`` → ``incremental_table_sql``
+    - ``extract_column_incremental.sql`` → ``incremental_column_sql``
+
+    Apps only need to place correctly-named SQL files in ``app/sql/`` and
+    implement ``build_incremental_column_sql()``.
+
 Usage:
     class ClickHouseActivities(IncrementalSQLMetadataExtractionActivities):
         sql_client_class = ClickHouseClient
 
-        # Full extraction queries
-        fetch_table_sql = queries.get("EXTRACT_TABLE")
-        fetch_column_sql = queries.get("EXTRACT_COLUMN")
-
-        # Incremental extraction queries
-        incremental_table_sql = queries.get("EXTRACT_TABLE_INCREMENTAL")
+        # No need to set fetch_table_sql, fetch_column_sql, incremental_table_sql,
+        # or incremental_column_sql — they are auto-loaded from app/sql/.
 
         def build_incremental_column_sql(self, table_ids, workflow_args) -> str:
             # App builds the SQL query for these table_ids
@@ -45,6 +56,7 @@ from application_sdk.activities.common.utils import (
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
     BaseSQLMetadataExtractionActivitiesState,
+    queries,
 )
 
 # Column extraction helpers (generic orchestration utilities)
@@ -118,8 +130,13 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
     Subclasses must implement ``build_incremental_column_sql`` to build the
     SQL query string for a batch of table_ids. Subclasses may optionally
     override ``resolve_database_placeholders`` for database-specific SQL
-    placeholders (default is no-op). Subclasses should set
-    ``incremental_table_sql`` for incremental table extraction.
+    placeholders (default is no-op).
+
+    Incremental SQL queries (``incremental_table_sql``, ``incremental_column_sql``)
+    are auto-loaded from ``app/sql/`` by file name convention
+    (``extract_table_incremental.sql``, ``extract_column_incremental.sql``),
+    following the same pattern as the base class's full extraction queries.
+    Apps can still override these class attributes if needed.
 
     The SDK's default TABLE and COLUMN YAML templates include
     ``incremental_state`` in customAttributes. This field is silently
@@ -127,8 +144,10 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
     extraction.
     """
 
-    # Incremental SQL queries (to be set by subclasses)
-    incremental_table_sql: Optional[str] = None
+    # Incremental SQL queries — auto-loaded from app/sql/ via read_sql_files().
+    # Apps can override these if they need custom query loading.
+    incremental_table_sql: Optional[str] = queries.get("EXTRACT_TABLE_INCREMENTAL")
+    incremental_column_sql: Optional[str] = queries.get("EXTRACT_COLUMN_INCREMENTAL")
 
     # Original SQL templates (saved on first access to prevent mutation across runs)
     _original_fetch_table_sql: Optional[str] = None
