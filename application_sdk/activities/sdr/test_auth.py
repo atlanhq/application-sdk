@@ -9,9 +9,6 @@ from application_sdk.activities.common.utils import auto_heartbeater
 from application_sdk.activities.sdr.utils import create_handler
 from application_sdk.clients import ClientInterface
 from application_sdk.handlers import HandlerInterface
-from application_sdk.observability.logger_adaptor import get_logger
-
-logger = get_logger(__name__)
 
 
 class TestAuthActivities(ActivitiesInterface):
@@ -42,10 +39,7 @@ class TestAuthActivities(ActivitiesInterface):
         Returns:
             True if authentication succeeds.
         """
-        logger.info("Starting test_auth activity")
         handler = await create_handler(
             self.client_class, self.handler_class, workflow_args
         )
-        result = await handler.test_auth()
-        logger.info("test_auth completed: %s", result)
-        return result
+        return await handler.test_auth()

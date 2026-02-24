@@ -31,6 +31,7 @@ class TestAuthWorkflow(WorkflowInterface[TestAuthActivities]):
         activities: TestAuthActivities,
     ) -> Sequence[Callable[..., Any]]:
         return [
+            activities.get_workflow_args,
             activities.test_auth,
         ]
 

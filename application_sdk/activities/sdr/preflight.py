@@ -9,9 +9,6 @@ from application_sdk.activities.common.utils import auto_heartbeater
 from application_sdk.activities.sdr.utils import create_handler
 from application_sdk.clients import ClientInterface
 from application_sdk.handlers import HandlerInterface
-from application_sdk.observability.logger_adaptor import get_logger
-
-logger = get_logger(__name__)
 
 
 class PreflightCheckActivities(ActivitiesInterface):
@@ -43,13 +40,7 @@ class PreflightCheckActivities(ActivitiesInterface):
         Returns:
             A dict of preflight check results.
         """
-        logger.info("Starting preflight activity")
         handler = await create_handler(
             self.client_class, self.handler_class, workflow_args
         )
-        result = await handler.preflight_check(workflow_args)
-        logger.info(
-            "preflight completed with checks: %s",
-            {k: v.get("success") for k, v in result.items()},
-        )
-        return result
+        return await handler.preflight_check(workflow_args)

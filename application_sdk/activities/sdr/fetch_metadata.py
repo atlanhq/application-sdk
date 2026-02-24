@@ -9,9 +9,6 @@ from application_sdk.activities.common.utils import auto_heartbeater
 from application_sdk.activities.sdr.utils import create_handler
 from application_sdk.clients import ClientInterface
 from application_sdk.handlers import HandlerInterface
-from application_sdk.observability.logger_adaptor import get_logger
-
-logger = get_logger(__name__)
 
 
 class FetchMetadataActivities(ActivitiesInterface):
@@ -44,10 +41,7 @@ class FetchMetadataActivities(ActivitiesInterface):
         Returns:
             A list of metadata dictionaries for UI filter population.
         """
-        logger.info("Starting fetch_metadata activity")
         handler = await create_handler(
             self.client_class, self.handler_class, workflow_args
         )
-        result = await handler.fetch_metadata()
-        logger.info("fetch_metadata completed with %d items", len(result))
-        return result
+        return await handler.fetch_metadata()

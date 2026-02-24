@@ -31,6 +31,7 @@ class FetchMetadataWorkflow(WorkflowInterface[FetchMetadataActivities]):
         activities: FetchMetadataActivities,
     ) -> Sequence[Callable[..., Any]]:
         return [
+            activities.get_workflow_args,
             activities.fetch_metadata,
         ]
 

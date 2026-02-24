@@ -31,6 +31,7 @@ class PreflightCheckWorkflow(WorkflowInterface[PreflightCheckActivities]):
         activities: PreflightCheckActivities,
     ) -> Sequence[Callable[..., Any]]:
         return [
+            activities.get_workflow_args,
             activities.preflight,
         ]
 
