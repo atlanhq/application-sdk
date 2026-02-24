@@ -1,0 +1,167 @@
+# Workflow Logs OTEL Collector - Tenant deployment manifest
+# Phase 1: SDK -> OTel -> Kafka pipeline for workflow log observability
+#
+# Receives OTLP logs from SDK workers (via OTEL_WORKFLOW_LOGS_ENDPOINT)
+# and exports to Kafka topic (workflow-logs) for downstream consumption
+# by the LH Observability Service (Phase 2).
+#
+# Prerequisites:
+#   1. Kafka topic 'workflow-logs' created (see kafka-topic-create.sh)
+#   2. platform-temporal namespace exists
+#
+# Deploy: kubectl apply -f workflow-logs-collector.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workflow-logs-collector-config
+  namespace: platform-temporal
+data:
+  collector-config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+
+      batch:
+        timeout: 5s
+        send_batch_size: 200
+        send_batch_max_size: 500
+
+    exporters:
+      kafka:
+        brokers:
+          - kafka-0.kafka-headless.kafka.svc.cluster.local:9092
+          - kafka-1.kafka-headless.kafka.svc.cluster.local:9092
+          - kafka-2.kafka-headless.kafka.svc.cluster.local:9092
+        topic: workflow-logs
+        encoding: otlp_json
+        protocol_version: "2.1.0"
+        producer:
+          compression: lz4
+          max_message_bytes: 1048576
+          required_acks: 1
+          flush_max_messages: 500
+
+      # Debug exporter for initial verification (can be removed after stable)
+      debug:
+        verbosity: basic
+        sampling_initial: 5
+        sampling_thereafter: 200
+
+    service:
+      extensions: [health_check]
+      telemetry:
+        metrics:
+          address: 0.0.0.0:8888
+        logs:
+          level: info
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [kafka, debug]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflow-logs-collector
+  namespace: platform-temporal
+  labels:
+    app: workflow-logs-collector
+    component: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workflow-logs-collector
+  template:
+    metadata:
+      labels:
+        app: workflow-logs-collector
+        component: observability
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8888"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: default
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.129.1
+          args:
+            - --config=/etc/otel/collector-config.yaml
+          ports:
+            - containerPort: 4317
+              name: otlp-grpc
+              protocol: TCP
+            - containerPort: 4318
+              name: otlp-http
+              protocol: TCP
+            - containerPort: 13133
+              name: health
+              protocol: TCP
+            - containerPort: 8888
+              name: metrics
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: workflow-logs-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workflow-logs-collector
+  namespace: platform-temporal
+  labels:
+    app: workflow-logs-collector
+    component: observability
+spec:
+  selector:
+    app: workflow-logs-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+  type: ClusterIP
