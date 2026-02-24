@@ -2,49 +2,106 @@ name: Trivy Container Scan for Atlan Apps
 
 description: |
   Runs Trivy security scanner on container images to detect and report vulnerabilities.
-  This action uses Trivy to scan the container image for vulnerabilities and report them as a SARIF file.
-  The SARIF file can be uploaded to the GitHub Security tab for further analysis.
+  Builds the Docker image with Chainguard base image authentication and scans it.
+  Results are uploaded to the GitHub Security tab.
 
 inputs:
+  chainguard-username:
+    description: Chainguard registry username
+    required: true
+  chainguard-password:
+    description: Chainguard registry password
+    required: true
+  github-token:
+    description: GitHub token for Docker build secrets
+    required: true
+  fail-on-vulns:
+    description: Whether to fail if HIGH/CRITICAL vulnerabilities with fixes are found
+    required: false
+    default: 'false'
   skip-files:
     description: Comma-separated list of files or directories to be skipped
     required: false
-  github-token:
-    required: true
-    description: The GitHub token to use for the action.
+
+outputs:
+  results-file:
+    description: Path to the JSON results file
+    value: ${{ steps.scan.outputs.results-file }}
 
 runs:
   using: "composite"
   steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
 
-    - name: Build and push docker image
+    - name: Log in to Chainguard Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: cgr.dev
+        username: ${{ inputs.chainguard-username }}
+        password: ${{ inputs.chainguard-password }}
+
+    - name: Build Docker image
       uses: docker/build-push-action@v6
       with:
         context: .
         file: ./Dockerfile
         push: false
+        load: true
+        tags: trivy-scan-target:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
         secrets: |
           "PRIVATE_REPO_ACCESS_TOKEN=${{ inputs.github-token }}"
-        tags: "docker-trivy-tag"
 
-    - name: Post Trivy scan results as PR comment
+    - name: Run Trivy scan (JSON)
+      id: scan
       uses: aquasecurity/trivy-action@0.33.1
       with:
-        image-ref: "docker-trivy-tag:latest"
-        ignore-unfixed: true
-        format: "sarif"
-        output: "trivy-results.sarif"
-        severity: "CRITICAL,HIGH"
-        exit-code: "0" # Don't fail here since we already failed above if needed
-        skip-files: "${{ inputs.skip-files }}"
+        image-ref: 'trivy-scan-target:latest'
+        format: 'json'
+        output: 'trivy-container-results.json'
+        severity: 'CRITICAL,HIGH'
+        scanners: 'vuln'
       env:
         TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
-        GITHUB_TOKEN: ${{ inputs.github-token }}
 
-    - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v3
+    - name: Set results file output
+      shell: bash
+      run: echo "results-file=trivy-container-results.json" >> $GITHUB_OUTPUT
+
+    - name: Run Trivy scan (SARIF)
+      uses: aquasecurity/trivy-action@0.33.1
       with:
-        sarif_file: "trivy-results.sarif"
+        image-ref: 'trivy-scan-target:latest'
+        format: 'sarif'
+        output: 'trivy-container-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        scanners: 'vuln'
+        skip-files: ${{ inputs.skip-files }}
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+    - name: Upload scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      continue-on-error: true
+      with:
+        sarif_file: 'trivy-container-results.sarif'
+        category: 'trivy-container'
+
+    - name: Fail on HIGH/CRITICAL vulnerabilities (with fix available)
+      if: inputs.fail-on-vulns == 'true'
+      uses: aquasecurity/trivy-action@0.33.1
+      with:
+        image-ref: 'trivy-scan-target:latest'
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '1'
+        scanners: 'vuln'
+        ignore-unfixed: true
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1

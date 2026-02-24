@@ -47,7 +47,7 @@ runs:
         fi
 
     - name: Trigger E2E Integrations Tests
-      uses: codex-/return-dispatch@v2
+      uses: codex-/return-dispatch@v3
       id: return_dispatch
       with:
         token: "${{ inputs.github-token }}"
@@ -56,7 +56,7 @@ runs:
         owner: "atlanhq"
         workflow: "e2e-integration-test.yaml"
         workflow_timeout_seconds: 300
-        workflow_job_steps_retry_seconds: 20
+        workflow_job_steps_retry_seconds: 60
         distinct_id: "${{ env.distinct_id }}"
 
     - name: Check the test logs using the below run URL
@@ -69,20 +69,22 @@ runs:
       shell: bash
       run: |
         repo_owner="atlanhq"
-        repo_name="${{ matrix.repo_name }}"
+        repo_name="${{ inputs.repo-name }}"
         run_id="${{steps.return_dispatch.outputs.run_id}}"
 
         echo "Checking status of workflow run $run_id in $repo_name"
 
         status="in_progress"
         start_time=$(date +%s)
-        timeout=300
-        while [[ "$status" == "in_progress" || "$status" == "queued" ]]; do
+        timeout=600
+        while [[ "$status" == "in_progress" || "$status" == "queued" || "$status" == "pending" || "$status" == "waiting" ]]; do
           sleep 30
           response=$(curl -s -H "Authorization: Bearer ${{ inputs.github-token }}" \
             https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id)
           status=$(echo $response | jq -r '.status')
           conclusion=$(echo $response | jq -r '.conclusion')
+
+          echo "Status: $status, Conclusion: $conclusion"
 
           current_time=$(date +%s)
           elapsed_time=$((current_time - start_time))

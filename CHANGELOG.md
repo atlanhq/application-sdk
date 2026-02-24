@@ -1,5 +1,46 @@
 # Changelog
 
+## v2.4.0 (February 17, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.3...v2.4.0
+
+### Features
+
+- add root_path parameter to APIServer.start() for reverse proxy support (#1058) (by @rashi-j in [edc99bc](https://github.com/atlanhq/application-sdk/commit/edc99bc))
+- add /review skill for structured Claude PR reviews (#1059) (by @fyzanshaik-atlan in [65e3903](https://github.com/atlanhq/application-sdk/commit/65e3903))
+
+### Bug Fixes
+
+- restore pandas extra compatibility (#1037) (by @fyzanshaik-atlan in [8425922](https://github.com/atlanhq/application-sdk/commit/8425922))
+- use --append-system-prompt for Claude review skill routing (#1060) (by @fyzanshaik-atlan in [f59f0f4](https://github.com/atlanhq/application-sdk/commit/f59f0f4))
+- add missing allowedTools for /review slash command (#1061) (by @fyzanshaik-atlan in [697f79c](https://github.com/atlanhq/application-sdk/commit/697f79c))
+- Standardized preflight check response format to use per-check success fields with consolidated error messages in failureMessage, removing top-level error field (#1052) (by @chaitanyaatlan in [d2bd860](https://github.com/atlanhq/application-sdk/commit/d2bd860))
+
+
+## v2.3.3 (February 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.2...v2.3.3
+
+### Improvements
+
+- refactor(segment): enable Segment based on write key presence (#1027) (by @janakiram-g in [d22e457](https://github.com/atlanhq/application-sdk/commit/d22e457))
+
+### Bug Fixes
+
+- improve dependabot config and skip tests for workflow-only PRs (#1026) (by @fyzanshaik-atlan in [3cf3830](https://github.com/atlanhq/application-sdk/commit/3cf3830))
+
+
+## v2.3.2 (February 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.1...v2.3.2
+
+### Bug Fixes
+
+- update codeowner (#954) (by @OnkarVO7 in [3a29977](https://github.com/atlanhq/application-sdk/commit/3a29977))
+- align daft writer behavior with pandas to prevent data loss (BLDX-305) (#953) (by @fyzanshaik-atlan in [1a73d02](https://github.com/atlanhq/application-sdk/commit/1a73d02))
+- tune dependabot settings to reduce noise (#1008) (by @fyzanshaik-atlan in [50e09ac](https://github.com/atlanhq/application-sdk/commit/50e09ac))
+
+
 ## v2.3.1 (January 28, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.0...v2.3.1
