@@ -82,7 +82,7 @@ STATE_STORE_PATH_TEMPLATE = (
 
 # Observability Constants
 #: Directory for storing observability data
-OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observability"
+OBSERVABILITY_DIR = "artifacts/apps/observability"
 
 # Workflow Client Constants
 #: Host address for the Temporal server
@@ -223,7 +223,7 @@ LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
 LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
 
 # Log Location configuration
-LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
+LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.jsonl.gz")
 # Hive Partitioning Configuration
 ENABLE_HIVE_PARTITIONING = (
     os.getenv("ATLAN_ENABLE_HIVE_PARTITIONING", "true").lower() == "true"
@@ -244,7 +244,7 @@ METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
 # Segment Configuration
 #: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
 SEGMENT_API_URL = os.getenv("ATLAN_SEGMENT_API_URL", "https://api.segment.io/v1/batch")
-#: Segment write key for authentication. If set, Segment metrics are automatically enabled.
+#: Segment write key for authentication
 SEGMENT_WRITE_KEY = os.getenv("ATLAN_SEGMENT_WRITE_KEY", "")
 #: Default user ID for Segment events
 SEGMENT_DEFAULT_USER_ID = "atlan.automation"
