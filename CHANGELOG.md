@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.4.1 (February 24, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.4.0...v2.4.1
+
+### Features
+
+- file upload/download support via FastAPI bindings | PART-255 (#1046) (by @prateek11rai in [326962d](https://github.com/atlanhq/application-sdk/commit/326962d))
+
+
 ## v2.4.0 (February 17, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.3...v2.4.0
