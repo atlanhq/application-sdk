@@ -4,10 +4,7 @@ from typing import Any, Dict, Type
 
 from application_sdk.clients import ClientInterface
 from application_sdk.handlers import HandlerInterface
-from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.secretstore import SecretStore
-
-logger = get_logger(__name__)
 
 
 async def create_handler(

@@ -26,7 +26,9 @@ class TestCreateHandler:
         )
 
         mock_client_class.assert_called_once()
-        mock_handler_class.assert_called_once_with(client=mock_client_class())
+        mock_handler_class.assert_called_once_with(
+            client=mock_client_class.return_value
+        )
         mock_secret_store.get_credentials.assert_awaited_once_with(
             credential_guid="guid-123"
         )

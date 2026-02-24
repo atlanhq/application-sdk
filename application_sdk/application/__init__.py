@@ -205,19 +205,11 @@ class BaseApplication:
         workflow_classes: List[Type[WorkflowInterface]] = [
             workflow_class for workflow_class, _ in workflow_and_activities_classes
         ]
-        # Activities are collected from every (workflow, activities) pair above,
-        # but a Temporal worker cannot register two activities with the same
-        # name — it raises "More than one activity named …" at startup.
-        #
-        # This happens because get_workflow_args (decorated with @activity.defn)
-        # is defined on ActivitiesInterface and inherited by every activities
-        # subclass. When multiple pairs are registered (e.g. the main connector
-        # workflow + three SDR workflows), each pair's get_activities() returns
-        # its own bound copy of get_workflow_args. They all share the same
-        # Temporal activity name, so we must register only the first one.
-        #
-        # dict.setdefault keeps the first activity function seen for each name
-        # and silently skips later duplicates.
+        # Deduplicate by Temporal activity name. get_workflow_args is defined
+        # on ActivitiesInterface and inherited by every subclass, so each
+        # pair's get_activities() returns its own copy under the same name.
+        # Temporal rejects duplicate names on a worker, so we keep only the
+        # first occurrence via dict.setdefault.
         activities_by_name: Dict[str, Any] = {}
         for workflow_class, activities_class in workflow_and_activities_classes:
             for activity_fn in workflow_class.get_activities(activities_class()):  # type: ignore[arg-type]
