@@ -367,8 +367,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 except Exception as e:
                     logging.error(f"Failed to start flush task: {e}")
 
-        # OTLP handler setup
-        if ENABLE_OTLP_LOGS:
+        # OTLP handler setup — two independent exporters controlled by separate flags:
+        #   ENABLE_OTLP_LOGS: primary exporter → host DaemonSet → central ClickHouse
+        #   ENABLE_WORKFLOW_LOGS_EXPORT: secondary exporter → tenant collector → Kafka
+        # Either or both can be enabled independently.
+        if ENABLE_OTLP_LOGS or ENABLE_WORKFLOW_LOGS_EXPORT:
             try:
                 # Get workflow node name for Argo environment
                 workflow_node_name = OTEL_WF_NODE_NAME
@@ -398,24 +401,26 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     resource=Resource.create(resource_attributes)
                 )
 
-                # Primary exporter (existing - sends to DaemonSet/central collector)
-                exporter = OTLPLogExporter(
-                    endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                    timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                )
+                # Primary exporter: host DaemonSet → central ClickHouse/Grafana
+                if ENABLE_OTLP_LOGS:
+                    exporter = OTLPLogExporter(
+                        endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
+                        timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
+                    )
 
-                batch_processor = BatchLogRecordProcessor(
-                    exporter,
-                    schedule_delay_millis=OTEL_BATCH_DELAY_MS,
-                    max_export_batch_size=OTEL_BATCH_SIZE,
-                    max_queue_size=OTEL_QUEUE_SIZE,
-                )
+                    batch_processor = BatchLogRecordProcessor(
+                        exporter,
+                        schedule_delay_millis=OTEL_BATCH_DELAY_MS,
+                        max_export_batch_size=OTEL_BATCH_SIZE,
+                        max_queue_size=OTEL_QUEUE_SIZE,
+                    )
 
-                self.logger_provider.add_log_record_processor(batch_processor)
+                    self.logger_provider.add_log_record_processor(batch_processor)
+                    logging.info(
+                        f"OTLP primary exporter enabled: {OTEL_EXPORTER_OTLP_ENDPOINT}"
+                    )
 
-                # Secondary exporter for workflow logs (optional dual export)
-                # Sends to tenant-level collector for S3 archival and live streaming
-                # Requires both ENABLE_WORKFLOW_LOGS_EXPORT=true and OTEL_WORKFLOW_LOGS_ENDPOINT set
+                # Secondary exporter: tenant collector → Kafka (workflow logs)
                 if ENABLE_WORKFLOW_LOGS_EXPORT and OTEL_WORKFLOW_LOGS_ENDPOINT:
                     workflow_logs_exporter = OTLPLogExporter(
                         endpoint=OTEL_WORKFLOW_LOGS_ENDPOINT,
@@ -434,10 +439,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                         workflow_logs_processor
                     )
                     logging.info(
-                        f"Dual OTEL export enabled: workflow logs also sent to {OTEL_WORKFLOW_LOGS_ENDPOINT}"
+                        f"OTLP workflow logs exporter enabled: {OTEL_WORKFLOW_LOGS_ENDPOINT}"
                     )
 
-                # Add OTLP sink
+                # Add OTLP sink — single entry point for all OTEL export
                 self.logger.add(self.otlp_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
 
             except Exception as e:
@@ -532,21 +537,14 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         raise ValueError(f"Unsupported record format: {type(record)}")
 
     def export_record(self, record: Any) -> None:
-        """Export a log record to external systems.
+        """No-op for logger. OTEL export is handled by otlp_sink registered with Loguru.
 
-        Args:
-            record (Any): Log record to export.
-
-        This method:
-        - Converts the record to LogRecordModel if needed
-        - Sends the record to OpenTelemetry if enabled
+        This exists only to satisfy the abstract contract from AtlanObservability.
+        Previously this called _send_to_otel(), but that caused duplicate OTEL
+        emissions when both parquet_sink (which calls add_record → export_record)
+        and otlp_sink were registered as Loguru sinks.
         """
-        if not isinstance(record, LogRecordModel):
-            record = LogRecordModel(**self.process_record(record))
-
-        # Send to OpenTelemetry if enabled
-        if ENABLE_OTLP_LOGS:
-            self._send_to_otel(record)
+        pass
 
     def _create_log_record(self, record: dict) -> LogRecord:
         """Create an OpenTelemetry LogRecord from a dictionary.

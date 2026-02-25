@@ -564,10 +564,12 @@ class AtlanObservability(Generic[T], ABC):
 
         This method:
         - Processes the record
-        - Adds it to the buffer
+        - Adds it to the buffer for parquet/S3 storage
         - Triggers async flush if buffer threshold is reached
         - Falls back to periodic flush if no event loop is available
-        - Exports the record
+
+        Note: OTEL export is handled separately by the otlp_sink registered
+        with Loguru. This method only handles buffering for parquet/S3.
         """
         try:
             # Process the record
@@ -596,9 +598,6 @@ class AtlanObservability(Generic[T], ABC):
                     # Put records back so the periodic flush picks them up.
                     with self._buffer_lock:
                         self._buffer.extend(buffer_copy)
-
-            # Export the record
-            self.export_record(record)
 
         except Exception as e:
             logging.error(f"Error adding record: {e}")
