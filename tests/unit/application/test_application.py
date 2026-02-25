@@ -452,6 +452,72 @@ class TestBaseApplication:
         with pytest.raises(ValueError, match="Application server not initialized"):
             await app.start_server()
 
+    @patch("application_sdk.application.get_workflow_client")
+    async def test_setup_workflow_with_sdr_enabled(self, mock_get_workflow_client):
+        """Test that SDR workflows and activities are registered when enable_sdr=True."""
+        mock_workflow_client = AsyncMock()
+        mock_workflow_client.application_name = "test-app"
+        mock_workflow_client.worker_task_queue = "test-app"
+        mock_workflow_client.namespace = "default"
+        mock_workflow_client.host = "localhost"
+        mock_workflow_client.port = "7233"
+        mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
+        mock_get_workflow_client.return_value = mock_workflow_client
+
+        from application_sdk.workflows.sdr import (
+            FetchMetadataWorkflow,
+            PreflightCheckWorkflow,
+            TestAuthWorkflow,
+        )
+
+        app = BaseApplication(
+            "test-app",
+            client_class=MockClientClass,
+            handler_class=MockHandlerClass,
+        )
+
+        await app.setup_workflow(
+            [(MockWorkflowInterface, MockActivitiesInterface)],
+            enable_sdr=True,
+        )
+
+        assert app.worker is not None
+        registered_workflows = app.worker.workflow_classes
+        assert TestAuthWorkflow in registered_workflows
+        assert PreflightCheckWorkflow in registered_workflows
+        assert FetchMetadataWorkflow in registered_workflows
+
+    @patch("application_sdk.application.get_workflow_client")
+    async def test_setup_workflow_with_sdr_disabled(self, mock_get_workflow_client):
+        """Test that SDR workflows are not registered when enable_sdr=False."""
+        mock_workflow_client = AsyncMock()
+        mock_workflow_client.application_name = "test-app"
+        mock_workflow_client.worker_task_queue = "test-app"
+        mock_workflow_client.namespace = "default"
+        mock_workflow_client.host = "localhost"
+        mock_workflow_client.port = "7233"
+        mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
+        mock_get_workflow_client.return_value = mock_workflow_client
+
+        from application_sdk.workflows.sdr import (
+            FetchMetadataWorkflow,
+            PreflightCheckWorkflow,
+            TestAuthWorkflow,
+        )
+
+        app = BaseApplication("test-app")
+
+        await app.setup_workflow(
+            [(MockWorkflowInterface, MockActivitiesInterface)],
+            enable_sdr=False,
+        )
+
+        assert app.worker is not None
+        registered_workflows = app.worker.workflow_classes
+        assert TestAuthWorkflow not in registered_workflows
+        assert PreflightCheckWorkflow not in registered_workflows
+        assert FetchMetadataWorkflow not in registered_workflows
+
 
 class TestApplicationModeStart:
     """Test cases for split architecture based on APPLICATION_MODE."""
