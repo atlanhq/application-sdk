@@ -31,6 +31,7 @@ from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import ENABLE_ATLAN_UPLOAD, UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.io.utils import (
+    PARQUET_FILE_EXTENSION,
     estimate_dataframe_record_size,
     is_empty_dataframe,
     path_gen,
@@ -435,6 +436,7 @@ class Writer(ABC):
             **kwargs: Additional parameters (currently unused for pandas DataFrames).
         """
         try:
+            is_parquet_write = self.extension == PARQUET_FILE_EXTENSION
             if self.chunk_start is None:
                 self.chunk_part = 0
             if len(dataframe) == 0:
@@ -444,9 +446,11 @@ class Writer(ABC):
 
             for i in range(0, len(dataframe), self.buffer_size):
                 chunk = dataframe[i : i + self.buffer_size]
+                estimated_chunk_bytes = chunk_size_bytes * len(chunk)
 
                 if (
-                    self.current_buffer_size_bytes + chunk_size_bytes
+                    not is_parquet_write
+                    and self.current_buffer_size_bytes + estimated_chunk_bytes
                     > self.max_file_size_bytes
                 ):
                     output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
@@ -455,13 +459,22 @@ class Writer(ABC):
                         self.chunk_part += 1
 
                 self.current_buffer_size += len(chunk)
-                self.current_buffer_size_bytes += chunk_size_bytes * len(chunk)
-                await self._flush_buffer(chunk, self.chunk_part)
+                self.current_buffer_size_bytes += estimated_chunk_bytes
+                current_chunk_part = self.chunk_part
+                await self._flush_buffer(chunk, current_chunk_part)
+
+                # Parquet writes are not append-safe, so each flushed chunk must
+                # be uploaded and then rotated to a new part to avoid overwrite.
+                if is_parquet_write:
+                    output_file_name = f"{self.path}/{path_gen(self.chunk_count, current_chunk_part, extension=self.extension)}"
+                    if os.path.exists(output_file_name):
+                        await self._upload_file(output_file_name)
+                        self.chunk_part += 1
 
                 del chunk
                 gc.collect()
 
-            if self.current_buffer_size_bytes > 0:
+            if not is_parquet_write and self.current_buffer_size_bytes > 0:
                 # Finally upload the final file to the object store
                 output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
                 if os.path.exists(output_file_name):
@@ -652,10 +665,9 @@ class Writer(ABC):
         self.current_buffer_size_bytes = 0
 
     async def _flush_buffer(self, chunk: "pd.DataFrame", chunk_part: int):
-        """Flush the current buffer to a JSON file.
+        """Flush the current buffer to a file chunk.
 
-        This method combines all DataFrames in the buffer, writes them to a JSON file,
-        and uploads the file to the object store.
+        This method writes the provided DataFrame chunk to a file on disk.
 
         Note:
             If the buffer is empty or has no records, the method returns without writing.

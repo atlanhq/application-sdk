@@ -177,7 +177,6 @@ def estimate_dataframe_record_size(
         sample_file = sample.to_json(orient="records", lines=True)
     elif file_extension == PARQUET_FILE_EXTENSION:
         sample_file = sample.to_parquet(index=False, compression="snappy")
-        compression_factor = 0.01
     else:
         raise ValueError(f"Unsupported file extension: {file_extension}")
 
