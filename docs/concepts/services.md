@@ -33,6 +33,15 @@ The services module provides unified interfaces for interacting with external st
    await ObjectStore.delete_prefix(prefix, store_name=None)
    ```
 
+   **Path Handling (Important):**
+   - For object-store key/prefix arguments (`destination`, `source`, `key`, `prefix`), `ObjectStore` accepts both:
+     - SDK temporary local workflow paths, such as `./local/tmp/artifacts/apps/...`
+     - Relative object-store keys/prefixes, such as `artifacts/apps/...`
+   - Temporary local prefixes are automatically normalized to object-store keys before Dapr calls.
+   - Local filesystem arguments are unchanged:
+     - `upload_file(source=...)` / `upload_prefix(source=...)` remain local paths to read from.
+     - `download_file(destination=...)` / `download_prefix(destination=...)` remain local paths to write to.
+
    **Usage Examples:**
    ```python
    from application_sdk.services.objectstore import ObjectStore
@@ -58,6 +67,12 @@ The services module provides unified interfaces for interacting with external st
 
    # Delete all files with a prefix (e.g., cleanup after workflow)
    await ObjectStore.delete_prefix("workflows/wf123/")
+
+   # Also valid: temp-prefixed workflow path is normalized internally
+   await ObjectStore.upload_file(
+       source="/local/path/data.json",
+       destination="./local/tmp/artifacts/apps/my-app/workflows/wf123/run456/data.json"
+   )
    ```
 
 ### 2. **`StateStore` (`application_sdk.services.statestore`)**
@@ -576,7 +591,8 @@ async def upload_to_atlan(self, workflow_args: Dict[str, Any]) -> ActivityStatis
     It only runs if ENABLE_ATLAN_UPLOAD is set to true.
     """
     # Use workflow-specific prefix to migrate only the current workflow's data
-    migration_prefix = get_object_store_prefix(workflow_args["output_path"])
+    # ObjectStore normalizes the path internally (strips ./local/tmp/, fixes slashes)
+    migration_prefix = workflow_args["output_path"]
 
     # AtlanStorage handles the bucket cloning from customer environment to Atlan
     upload_stats = await AtlanStorage.migrate_from_objectstore_to_atlan(migration_prefix)

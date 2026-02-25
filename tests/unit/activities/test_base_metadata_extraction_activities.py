@@ -33,18 +33,13 @@ class TestUploadToAtlan:
     @patch(
         "application_sdk.activities.metadata_extraction.base.AtlanStorage.migrate_from_objectstore_to_atlan"
     )
-    @patch(
-        "application_sdk.activities.metadata_extraction.base.get_object_store_prefix"
-    )
     async def test_upload_to_atlan_success(
         self,
-        mock_get_prefix,
         mock_migrate,
         activities,
         workflow_args,
     ):
         """Test successful upload to Atlan."""
-        mock_get_prefix.return_value = "test-workflow/output"
         mock_migrate.return_value = MigrationSummary(
             total_files=10,
             migrated_files=10,
@@ -60,24 +55,18 @@ class TestUploadToAtlan:
         assert result.chunk_count == 10
         assert result.typename == "atlan-upload-completed"
 
-        mock_get_prefix.assert_called_once_with(workflow_args["output_path"])
-        mock_migrate.assert_called_once_with(prefix="test-workflow/output")
+        mock_migrate.assert_called_once_with(prefix=workflow_args["output_path"])
 
     @patch(
         "application_sdk.activities.metadata_extraction.base.AtlanStorage.migrate_from_objectstore_to_atlan"
     )
-    @patch(
-        "application_sdk.activities.metadata_extraction.base.get_object_store_prefix"
-    )
     async def test_upload_to_atlan_with_failures(
         self,
-        mock_get_prefix,
         mock_migrate,
         activities,
         workflow_args,
     ):
         """Test upload to Atlan with some failures raises ActivityError."""
-        mock_get_prefix.return_value = "test-workflow/output"
         mock_migrate.return_value = MigrationSummary(
             total_files=10,
             migrated_files=8,
@@ -98,18 +87,13 @@ class TestUploadToAtlan:
     @patch(
         "application_sdk.activities.metadata_extraction.base.AtlanStorage.migrate_from_objectstore_to_atlan"
     )
-    @patch(
-        "application_sdk.activities.metadata_extraction.base.get_object_store_prefix"
-    )
     async def test_upload_to_atlan_no_files(
         self,
-        mock_get_prefix,
         mock_migrate,
         activities,
         workflow_args,
     ):
         """Test upload to Atlan with no files to migrate."""
-        mock_get_prefix.return_value = "test-workflow/output"
         mock_migrate.return_value = MigrationSummary(
             total_files=0,
             migrated_files=0,

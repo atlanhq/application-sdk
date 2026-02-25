@@ -203,13 +203,8 @@ class TestParquetFileWriterWriteDataframe:
         """Test successful DataFrame writing."""
         with patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "pandas.DataFrame.to_parquet"
-        ) as mock_to_parquet, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_upload, patch("pandas.DataFrame.to_parquet") as mock_to_parquet:
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
 
             parquet_output = ParquetFileWriter(
                 path=os.path.join(base_output_path, "test"),
@@ -236,13 +231,8 @@ class TestParquetFileWriterWriteDataframe:
         """Test DataFrame writing with custom path generation."""
         with patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "pandas.DataFrame.to_parquet"
-        ) as mock_to_parquet, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_upload, patch("pandas.DataFrame.to_parquet") as mock_to_parquet:
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
 
             parquet_output = ParquetFileWriter(
                 path=base_output_path,
@@ -304,11 +294,8 @@ class TestParquetFileWriterWriteDaftDataframe:
         """Test successful daft DataFrame writing."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_upload:
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -346,12 +333,9 @@ class TestParquetFileWriterWriteDaftDataframe:
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.services.objectstore.ObjectStore.delete_prefix"
-        ) as mock_delete, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_delete:
             mock_upload.return_value = AsyncMock()
             mock_delete.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -380,18 +364,15 @@ class TestParquetFileWriterWriteDaftDataframe:
             )
 
             # Check that delete_prefix was called for overwrite mode
-            mock_delete.assert_called_once_with(prefix="test/output/path")
+            mock_delete.assert_called_once_with(prefix=base_output_path)
 
     @pytest.mark.asyncio
     async def test_write_with_default_parameters(self, base_output_path: str):
         """Test daft DataFrame writing with default parameters (uses method default write_mode='append')."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_upload:
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -422,11 +403,8 @@ class TestParquetFileWriterWriteDaftDataframe:
         """Test that DAPR limit is properly configured."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_upload:
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -481,11 +459,8 @@ class TestParquetFileWriterMetrics:
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.io.parquet.get_metrics"
-        ) as mock_get_metrics, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_get_metrics:
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_metrics = MagicMock()
             mock_get_metrics.return_value = mock_metrics
 
@@ -505,11 +480,8 @@ class TestParquetFileWriterMetrics:
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.io.parquet.get_metrics"
-        ) as mock_get_metrics, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_get_metrics:
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
             mock_metrics = MagicMock()
@@ -679,12 +651,9 @@ class TestParquetFileWriterConsolidation:
             "daft.execution_config_ctx"
         ) as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_upload:
             # Setup mocks
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -775,12 +744,9 @@ class TestParquetFileWriterConsolidation:
             "daft.execution_config_ctx"
         ) as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_upload:
             # Setup mocks
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -953,12 +919,9 @@ class TestParquetFileWriterConsolidation:
             "daft.execution_config_ctx"
         ) as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_upload:
             # Setup mocks
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
@@ -1082,12 +1045,9 @@ class TestParquetFileWriterConsolidation:
             "daft.execution_config_ctx"
         ) as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_upload:
             # Setup mocks
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 

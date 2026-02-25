@@ -7,7 +7,6 @@ from typing import Any, Dict
 
 from temporalio import activity
 
-from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -136,7 +135,7 @@ class StateStore:
         state_file_path = build_state_store_path(id, type)
         try:
             object_store_content = await ObjectStore.get_content(
-                get_object_store_prefix(state_file_path),
+                state_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
                 suppress_error=True,
             )
@@ -205,7 +204,7 @@ class StateStore:
             # save the state to the object store
             await ObjectStore.upload_file(
                 source=state_file_path,
-                destination=get_object_store_prefix(state_file_path),
+                destination=state_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
@@ -281,7 +280,7 @@ class StateStore:
             # save the state to the object store
             await ObjectStore.upload_file(
                 source=state_file_path,
-                destination=get_object_store_prefix(state_file_path),
+                destination=state_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
             logger.info(
