@@ -1,6 +1,6 @@
 """Utility functions for SDR activities."""
 
-from typing import Any, Dict, Type
+from typing import Any, Dict, Tuple, Type
 
 from application_sdk.clients import ClientInterface
 from application_sdk.handlers import HandlerInterface
@@ -11,12 +11,16 @@ async def create_handler(
     client_class: Type[ClientInterface],
     handler_class: Type[HandlerInterface],
     workflow_args: Dict[str, Any],
-) -> HandlerInterface:
+) -> Tuple[ClientInterface, HandlerInterface]:
     """Create and load a handler from credentials in workflow_args.
 
     Supports two credential modes:
     - credential_guid: fetches credentials from SecretStore then calls handler.load()
     - credentials: calls handler.load() with the dict directly
+
+    Returns the client alongside the handler so callers can close it
+    in a ``finally`` block (SQL clients hold connection-pool resources
+    that must be explicitly disposed).
 
     Args:
         client_class: The client class to instantiate.
@@ -24,7 +28,8 @@ async def create_handler(
         workflow_args: Must contain either 'credential_guid' or 'credentials'.
 
     Returns:
-        A loaded handler instance.
+        A (client, handler) tuple.  Callers should ``await client.close()``
+        when done.
 
     Raises:
         ValueError: If neither 'credential_guid' nor 'credentials' is present.
@@ -53,4 +58,4 @@ async def create_handler(
             "workflow_args must contain either 'credential_guid' or 'credentials'."
         )
 
-    return handler
+    return client, handler

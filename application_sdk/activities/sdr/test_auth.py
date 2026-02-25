@@ -39,7 +39,10 @@ class TestAuthActivities(ActivitiesInterface):
         Returns:
             True if authentication succeeds.
         """
-        handler = await create_handler(
+        client, handler = await create_handler(
             self.client_class, self.handler_class, workflow_args
         )
-        return await handler.test_auth()
+        try:
+            return await handler.test_auth()
+        finally:
+            await client.close()

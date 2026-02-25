@@ -25,7 +25,7 @@ class TestCreateHandler:
 
         workflow_args = {"credential_guid": "guid-123"}
 
-        result = await create_handler(  # type: ignore[arg-type]
+        client, handler = await create_handler(  # type: ignore[arg-type]
             mock_client_class,
             mock_handler_class,
             workflow_args,
@@ -41,7 +41,8 @@ class TestCreateHandler:
         mock_handler_instance.load.assert_awaited_once_with(
             {"username": "test", "password": "secret"}
         )
-        assert result is mock_handler_instance
+        assert client is mock_client_class.return_value
+        assert handler is mock_handler_instance
 
     @pytest.mark.asyncio
     async def test_create_handler_with_credentials_dict(self):
@@ -53,14 +54,15 @@ class TestCreateHandler:
         creds = {"username": "test", "password": "secret"}
         workflow_args = {"credentials": creds}
 
-        result = await create_handler(  # type: ignore[arg-type]
+        client, handler = await create_handler(  # type: ignore[arg-type]
             mock_client_class,
             mock_handler_class,
             workflow_args,
         )
 
         mock_handler_instance.load.assert_awaited_once_with(creds)
-        assert result is mock_handler_instance
+        assert client is mock_client_class.return_value
+        assert handler is mock_handler_instance
 
     @pytest.mark.asyncio
     async def test_create_handler_raises_without_credentials(self):
@@ -86,7 +88,7 @@ class TestCreateHandler:
         creds = {"username": "test", "password": "secret"}
         workflow_args = {"credentials": creds}
 
-        result = await create_handler(  # type: ignore[arg-type]
+        client, handler = await create_handler(  # type: ignore[arg-type]
             mock_client_class,
             mock_handler_class,
             workflow_args,
@@ -95,4 +97,5 @@ class TestCreateHandler:
         # Client is assigned to handler.sql_client (SQL path)
         assert mock_handler_instance.sql_client == mock_client_class.return_value
         mock_handler_instance.load.assert_awaited_once_with(creds)
-        assert result is mock_handler_instance
+        assert client is mock_client_class.return_value
+        assert handler is mock_handler_instance

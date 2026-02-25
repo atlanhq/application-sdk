@@ -40,7 +40,10 @@ class PreflightCheckActivities(ActivitiesInterface):
         Returns:
             A dict of preflight check results.
         """
-        handler = await create_handler(
+        client, handler = await create_handler(
             self.client_class, self.handler_class, workflow_args
         )
-        return await handler.preflight_check(workflow_args)
+        try:
+            return await handler.preflight_check(workflow_args)
+        finally:
+            await client.close()
