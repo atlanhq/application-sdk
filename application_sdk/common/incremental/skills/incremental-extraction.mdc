@@ -21,7 +21,7 @@ BaseSQLMetadataExtractionWorkflow (SDK)
 
 ### SDK vs App Contract
 - **SDK provides**: Workflow orchestration, state management, marker management, Daft/DuckDB analysis, parallel batch execution, ancestral column merge
-- **App provides**: `build_incremental_column_sql()` (abstract, MUST implement), `resolve_database_placeholders()` (optional), `incremental_table_sql` (class attribute), SQL templates
+- **App provides**: `build_incremental_column_sql()` (abstract, MUST implement), `resolve_database_placeholders()` (optional), SQL files in `app/sql/` (auto-loaded by SDK)
 
 ### Methods You MUST NOT Override
 - `execute_column_batch()` - Concrete in SDK, calls `build_incremental_column_sql()` + `run_column_query()`

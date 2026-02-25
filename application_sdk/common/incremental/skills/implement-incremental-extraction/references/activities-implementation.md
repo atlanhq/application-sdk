@@ -14,26 +14,20 @@ from application_sdk.activities.metadata_extraction.incremental import (
 )
 from application_sdk.common.incremental.models import IncrementalWorkflowArgs
 
-# Load SQL templates from your app's sql/ directory
-queries = load_queries("app/sql")
-
-
 class YourDBActivities(IncrementalSQLMetadataExtractionActivities):
     """Activities for YourDB incremental metadata extraction."""
 
     sql_client_class = YourDBClient
 
-    # ─── Full Extraction SQL (from app/sql/*.sql files) ──────────────
-    fetch_database_sql = queries.get("EXTRACT_DATABASE")
-    fetch_schema_sql = queries.get("EXTRACT_SCHEMA")
-    fetch_table_sql = queries.get("EXTRACT_TABLE")
-    fetch_column_sql = queries.get("EXTRACT_COLUMN")
-
-    # ─── Incremental SQL ─────────────────────────────────────────────
-    incremental_table_sql = queries.get("EXTRACT_TABLE_INCREMENTAL")
-    # Note: incremental_column_sql is loaded separately for use in
-    # build_incremental_column_sql() since it needs dynamic table_id injection
-    incremental_column_sql = queries.get("EXTRACT_COLUMN_INCREMENTAL")
+    # All SQL queries are auto-loaded from app/sql/ by the SDK:
+    #   fetch_database_sql          ← extract_database.sql
+    #   fetch_schema_sql            ← extract_schema.sql
+    #   fetch_table_sql             ← extract_table.sql
+    #   fetch_column_sql            ← extract_column.sql
+    #   incremental_table_sql       ← extract_table_incremental.sql
+    #   incremental_column_sql      ← extract_column_incremental.sql
+    #
+    # No need to set these manually — just place the SQL files in app/sql/.
 ```
 
 ## Required Method: `build_incremental_column_sql()`
