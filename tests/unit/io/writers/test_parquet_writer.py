@@ -276,6 +276,82 @@ class TestParquetFileWriterWriteDataframe:
                 await parquet_output.write(sample_dataframe)
 
 
+class TestParquetFileWriterDataIntegrity:
+    """Validate persisted parquet row counts for large writes."""
+
+    @staticmethod
+    def _count_parquet_rows(path: str) -> int:
+        parquet_files = [f for f in os.listdir(path) if f.endswith(".parquet")]
+        total_rows = 0
+        for file_name in parquet_files:
+            file_path = os.path.join(path, file_name)
+            total_rows += len(pd.read_parquet(file_path))
+        return total_rows
+
+    @pytest.mark.asyncio
+    async def test_single_large_write_persists_all_rows(self, base_output_path: str):
+        """Single write() of a large DataFrame should persist all rows."""
+        total_rows = 10037
+        dataframe = pd.DataFrame(
+            {
+                "id": range(total_rows),
+                "value": [f"value_{i}" for i in range(total_rows)],
+            }
+        )
+
+        parquet_output = ParquetFileWriter(
+            path=base_output_path,
+            buffer_size=5000,
+            use_consolidation=False,
+            dataframe_type=DataframeType.pandas,
+        )
+
+        with patch.object(parquet_output, "_upload_file", new=AsyncMock()):
+            await parquet_output.write(dataframe)
+
+        persisted_rows = self._count_parquet_rows(parquet_output.path)
+        assert persisted_rows == total_rows, (
+            f"Expected {total_rows} rows on disk, found {persisted_rows}. "
+            f"Writer reported {parquet_output.total_record_count} rows."
+        )
+
+    @pytest.mark.asyncio
+    async def test_batched_write_with_consolidation_persists_all_rows(
+        self, base_output_path: str
+    ):
+        """write_batches() with consolidation should persist all rows."""
+        pytest.importorskip("daft")
+
+        total_rows = 10037
+        dataframe = pd.DataFrame(
+            {
+                "id": range(total_rows),
+                "value": [f"value_{i}" for i in range(total_rows)],
+            }
+        )
+
+        parquet_output = ParquetFileWriter(
+            path=os.path.join(base_output_path, "batched"),
+            chunk_size=100000,
+            buffer_size=5000,
+            use_consolidation=True,
+            dataframe_type=DataframeType.pandas,
+        )
+
+        def batched_dataframes() -> Generator[pd.DataFrame, None, None]:
+            yield dataframe.iloc[:4000].copy()
+            yield dataframe.iloc[4000:8000].copy()
+            yield dataframe.iloc[8000:].copy()
+
+        with patch(
+            "application_sdk.io.parquet.ObjectStore.upload_file", new_callable=AsyncMock
+        ):
+            await parquet_output.write_batches(batched_dataframes())
+
+        persisted_rows = self._count_parquet_rows(parquet_output.path)
+        assert persisted_rows == total_rows
+
+
 class TestParquetFileWriterWriteDaftDataframe:
     """Test ParquetFileWriter daft DataFrame writing via _write_daft_dataframe.
 
