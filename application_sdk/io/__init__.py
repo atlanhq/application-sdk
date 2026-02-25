@@ -450,7 +450,7 @@ class Writer(ABC):
 
                 if (
                     not is_parquet_write
-                    and self.current_buffer_size_bytes + estimated_chunk_bytes
+                    and self.current_buffer_size_bytes + chunk_size_bytes
                     > self.max_file_size_bytes
                 ):
                     output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
