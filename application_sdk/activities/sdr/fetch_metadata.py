@@ -44,4 +44,9 @@ class FetchMetadataActivities(ActivitiesInterface):
         handler = await create_handler(
             self.client_class, self.handler_class, workflow_args
         )
-        return await handler.fetch_metadata()
+        # Forward workflow_args as kwargs so each handler implementation can
+        # extract the parameters it needs.  For example, BaseSQLHandler
+        # requires `metadata_type` and optionally `database`, while custom
+        # handlers may expect different keys or none at all.  This mirrors
+        # how the FastAPI server passes request fields to the handler.
+        return await handler.fetch_metadata(**workflow_args)

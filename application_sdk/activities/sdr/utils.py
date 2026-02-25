@@ -30,7 +30,16 @@ async def create_handler(
         ValueError: If neither 'credential_guid' nor 'credentials' is present.
     """
     client = client_class()
-    handler = handler_class(client=client)  # type: ignore[call-arg]
+    # Instantiate the handler without arguments, then assign the client.
+    # BaseHandler expects `client` while BaseSQLHandler expects `sql_client`,
+    # so we cannot pass a single keyword to the constructor.  Both base
+    # classes accept all-optional __init__ params, making no-arg construction
+    # safe, and we set the correct attribute afterwards.
+    handler = handler_class()  # type: ignore[call-arg]
+    if hasattr(handler, "sql_client"):
+        handler.sql_client = client  # type: ignore[assignment]
+    else:
+        handler.client = client  # type: ignore[assignment]
 
     if "credential_guid" in workflow_args:
         credentials = await SecretStore.get_credentials(

@@ -9,16 +9,16 @@ from application_sdk.activities.sdr.test_auth import TestAuthActivities
 
 class TestTestAuthActivities:
     @pytest.fixture
-    def activities(self):
+    def activities(self) -> TestAuthActivities:
         return TestAuthActivities(
-            client_class=MagicMock(),
-            handler_class=MagicMock(),
+            client_class=MagicMock(),  # type: ignore[arg-type]
+            handler_class=MagicMock(),  # type: ignore[arg-type]
         )
 
     @pytest.mark.asyncio
     @patch("application_sdk.activities.sdr.test_auth.create_handler")
     async def test_test_auth_returns_true_on_success(
-        self, mock_create_handler, activities
+        self, mock_create_handler: AsyncMock, activities: TestAuthActivities
     ):
         mock_handler = AsyncMock()
         mock_handler.test_auth.return_value = True
@@ -36,7 +36,7 @@ class TestTestAuthActivities:
     @pytest.mark.asyncio
     @patch("application_sdk.activities.sdr.test_auth.create_handler")
     async def test_test_auth_propagates_exception(
-        self, mock_create_handler, activities
+        self, mock_create_handler: AsyncMock, activities: TestAuthActivities
     ):
         mock_handler = AsyncMock()
         mock_handler.test_auth.side_effect = ConnectionError("auth failed")

@@ -9,16 +9,16 @@ from application_sdk.activities.sdr.preflight import PreflightCheckActivities
 
 class TestPreflightCheckActivities:
     @pytest.fixture
-    def activities(self):
+    def activities(self) -> PreflightCheckActivities:
         return PreflightCheckActivities(
-            client_class=MagicMock(),
-            handler_class=MagicMock(),
+            client_class=MagicMock(),  # type: ignore[arg-type]
+            handler_class=MagicMock(),  # type: ignore[arg-type]
         )
 
     @pytest.mark.asyncio
     @patch("application_sdk.activities.sdr.preflight.create_handler")
     async def test_preflight_returns_check_results(
-        self, mock_create_handler, activities
+        self, mock_create_handler: AsyncMock, activities: PreflightCheckActivities
     ):
         expected = {
             "connectivity": {"success": True},
@@ -40,7 +40,7 @@ class TestPreflightCheckActivities:
     @pytest.mark.asyncio
     @patch("application_sdk.activities.sdr.preflight.create_handler")
     async def test_preflight_propagates_exception(
-        self, mock_create_handler, activities
+        self, mock_create_handler: AsyncMock, activities: PreflightCheckActivities
     ):
         mock_handler = AsyncMock()
         mock_handler.preflight_check.side_effect = RuntimeError("check failed")
