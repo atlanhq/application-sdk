@@ -247,6 +247,7 @@ async def test_create_worker_without_client(
         temporal_client.create_worker(activities, workflow_classes, passthrough_modules)
 
 
+@patch("application_sdk.clients.temporal.TEMPORAL_BUILD_ID", "")
 @patch("application_sdk.clients.temporal.Worker")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
@@ -289,6 +290,44 @@ async def test_create_worker(
     )
 
     assert worker == mock_worker_class.return_value
+
+
+@patch("application_sdk.clients.temporal.TEMPORAL_BUILD_ID", "v1.2.3-abc123")
+@patch("application_sdk.clients.temporal.Worker")
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_create_worker_with_build_id(
+    mock_connect: AsyncMock,
+    mock_worker_class: MagicMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test creating a versioned worker when TEMPORAL_BUILD_ID is set."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+    await temporal_client.load()
+
+    workflow_classes = [MagicMock()]
+    activities = [MagicMock()]
+    passthrough_modules = ["application_sdk"]
+
+    temporal_client.create_worker(activities, workflow_classes, passthrough_modules)
+
+    expected_activities = list(activities) + [publish_event, cleanup]
+    mock_worker_class.assert_called_once_with(
+        temporal_client.client,
+        task_queue=temporal_client.worker_task_queue,
+        workflows=workflow_classes,
+        activities=expected_activities,
+        workflow_runner=ANY,
+        interceptors=ANY,
+        activity_executor=ANY,
+        max_concurrent_activities=ANY,
+        graceful_shutdown_timeout=ANY,
+        build_id="v1.2.3-abc123",
+        use_worker_versioning=True,
+    )
 
 
 def test_get_worker_task_queue(temporal_client: TemporalWorkflowClient):
