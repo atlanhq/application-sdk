@@ -3,12 +3,7 @@ import os
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 
-from application_sdk.constants import (
-    APPLICATION_NAME,
-    DEPLOYMENT_NAME,
-    OBSERVABILITY_DIR,
-    TEMPORARY_PATH,
-)
+from application_sdk.constants import OBSERVABILITY_DIR, TEMPORARY_PATH
 from application_sdk.observability.context import correlation_context
 
 
@@ -34,17 +29,12 @@ class WorkflowContext(BaseModel):
 
 
 def get_observability_dir() -> str:
-    """Build the observability path using deployment name.
+    """Build the observability directory path.
 
     Returns:
-        str: The built observability path using deployment name.
+        str: The observability directory path.
     """
-    return os.path.join(
-        TEMPORARY_PATH,
-        OBSERVABILITY_DIR.format(
-            application_name=APPLICATION_NAME, deployment_name=DEPLOYMENT_NAME
-        ),
-    )
+    return os.path.join(TEMPORARY_PATH, OBSERVABILITY_DIR)
 
 
 def get_workflow_context() -> WorkflowContext:
