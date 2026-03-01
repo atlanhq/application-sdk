@@ -82,7 +82,7 @@ STATE_STORE_PATH_TEMPLATE = (
 
 # Observability Constants
 #: Directory for storing observability data
-OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observability"
+OBSERVABILITY_DIR = "artifacts/apps/observability"
 
 # Workflow Client Constants
 #: Host address for the Temporal server
@@ -270,6 +270,19 @@ TRACES_FILE_NAME = "traces.parquet"
 # Dapr Sink Configuration
 ENABLE_OBSERVABILITY_DAPR_SINK = (
     os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true").lower() == "true"
+)
+# Per-signal sink flags — default to the shared flag when not set explicitly
+ENABLE_LOG_SINK = (
+    os.getenv("ATLAN_ENABLE_LOG_SINK", str(ENABLE_OBSERVABILITY_DAPR_SINK)).lower()
+    == "true"
+)
+ENABLE_METRICS_SINK = (
+    os.getenv("ATLAN_ENABLE_METRICS_SINK", str(ENABLE_OBSERVABILITY_DAPR_SINK)).lower()
+    == "true"
+)
+ENABLE_TRACES_SINK = (
+    os.getenv("ATLAN_ENABLE_TRACES_SINK", str(ENABLE_OBSERVABILITY_DAPR_SINK)).lower()
+    == "true"
 )
 
 # atlan_client configuration (non ATLAN_ prefix are rooted in pyatlan SDK, to be revisited)
