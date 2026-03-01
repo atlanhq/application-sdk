@@ -28,6 +28,35 @@ This template is used for storing persistent state and configuration data includ
 - Application configuration data
 - Persistent key-value data
 
+## ObjectStore Path Semantics
+
+Writers and services in the SDK follow a consistent two-level path model:
+
+1. **Local staging paths** (filesystem): typically under `ATLAN_TEMPORARY_PATH` (default `./local/tmp/`).
+2. **Object store keys/prefixes** (remote): relative keys such as `artifacts/apps/...`.
+
+`ObjectStore` key-based APIs (`upload_file` destination, `download_file` source, `get_content` key, `list_files` prefix, and delete operations) are path-agnostic:
+
+- If you pass `./local/tmp/artifacts/apps/my-app/...`, it is normalized to `artifacts/apps/my-app/...`.
+- If you pass `artifacts/apps/my-app/...`, it is used as-is.
+
+This keeps direct `ObjectStore` usage consistent with `JsonFileWriter` and `ParquetFileWriter` behavior.
+
+### Example
+
+```python
+from application_sdk.services.objectstore import ObjectStore
+
+# workflow_args["output_path"] often contains a local temp-prefixed path
+destination_path = workflow_args["output_path"]  # e.g., ./local/tmp/artifacts/apps/...
+
+# ObjectStore normalizes this to artifacts/apps/... for object storage
+await ObjectStore.upload_file(
+    source="/tmp/my-report.json",
+    destination=f"{destination_path}/my-report.json",
+)
+```
+
 ## Environment-Specific Path Resolution
 
 The actual storage location depends on your deployment environment and object store configuration:
