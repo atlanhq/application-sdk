@@ -22,6 +22,7 @@ from application_sdk.constants import (
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
+    TEMPORAL_BUILD_ID,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
@@ -422,6 +423,14 @@ class TemporalWorkflowClient(WorkflowClient):
         # Create activities lookup dict for interceptors
         activities_dict = {getattr(a, "__name__", str(a)): a for a in final_activities}
 
+        versioning_kwargs: Dict[str, Any] = {}
+        if TEMPORAL_BUILD_ID:
+            versioning_kwargs["build_id"] = TEMPORAL_BUILD_ID
+            versioning_kwargs["use_worker_versioning"] = True
+            logger.info(
+                f"Worker versioning enabled with build_id={TEMPORAL_BUILD_ID}"
+            )
+
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
@@ -443,6 +452,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 CleanupInterceptor(),
                 RedisLockInterceptor(activities_dict),
             ],
+            **versioning_kwargs,
         )
 
     async def get_workflow_run_status(

@@ -103,6 +103,11 @@ WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
 #: Maximum number of activities that can run concurrently
 MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
 
+#: Temporal build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
+#: When set, workers identify themselves with this build ID so the Temporal server can
+#: route tasks to the correct version during versioned deployments.
+TEMPORAL_BUILD_ID = os.getenv("TEMPORAL_BUILD_ID", "")
+
 
 #: Name of the deployment secrets in the secret store
 DEPLOYMENT_SECRET_PATH = os.getenv(
