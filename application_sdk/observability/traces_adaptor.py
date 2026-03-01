@@ -4,12 +4,6 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-from opentelemetry.trace import SpanKind
 from pydantic import BaseModel
 
 from application_sdk.constants import (
@@ -129,6 +123,17 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         Falls back to console-only tracing if setup fails.
         """
         try:
+            from opentelemetry import trace
+            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+                OTLPSpanExporter,
+            )
+            from opentelemetry.sdk.resources import Resource
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import (
+                BatchSpanProcessor,
+                ConsoleSpanExporter,
+            )
+
             # Get workflow node name for Argo environment
             workflow_node_name = OTEL_WF_NODE_NAME
 
@@ -210,6 +215,14 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         - Creates tracer for the service
         """
         try:
+            from opentelemetry import trace
+            from opentelemetry.sdk.resources import Resource
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import (
+                BatchSpanProcessor,
+                ConsoleSpanExporter,
+            )
+
             # Create resource with basic attributes
             resource = Resource.create(
                 {
@@ -326,7 +339,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         # Log to console
         self._log_to_console(record)
 
-    def _str_to_span_kind(self, kind: str) -> SpanKind:
+    def _str_to_span_kind(self, kind: str) -> Any:
         """Convert string kind to OpenTelemetry SpanKind enum.
 
         Args:
@@ -337,6 +350,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
 
         Defaults to INTERNAL if kind is not recognized.
         """
+        from opentelemetry.trace import SpanKind
+
         kind_map = {
             "INTERNAL": SpanKind.INTERNAL,
             "SERVER": SpanKind.SERVER,
@@ -373,6 +388,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             Exception: If sending fails, logs error and continues
         """
         try:
+            from opentelemetry import trace
+
             # Convert string kind to SpanKind enum
             span_kind = self._str_to_span_kind(trace_record.kind)
 

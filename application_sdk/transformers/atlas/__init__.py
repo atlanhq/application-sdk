@@ -4,10 +4,11 @@ This module provides the Atlas transformer implementation for converting metadat
 into Atlas entities using the pyatlan library.
 """
 
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Type
+from __future__ import annotations
 
-import daft
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Dict, Optional, Type
+
 from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -15,6 +16,15 @@ from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.common.utils import process_text
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    import daft
+
+
+def _import_daft() -> Any:
+    import daft
+
+    return daft
 
 
 class AtlasTransformer(TransformerInterface):
@@ -84,6 +94,7 @@ class AtlasTransformer(TransformerInterface):
         self.entity_class_definitions = (
             entity_class_definitions or self.entity_class_definitions
         )
+        daft = _import_daft()
         connection_name = kwargs.get("connection", {}).get("connection_name", None)
         connection_qualified_name = kwargs.get("connection", {}).get(
             "connection_qualified_name", None
