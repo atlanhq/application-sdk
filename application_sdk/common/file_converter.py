@@ -1,3 +1,4 @@
+import os
 from collections import namedtuple
 from enum import Enum
 from typing import List, Optional
@@ -75,9 +76,11 @@ def convert_json_to_parquet(file_path: str) -> Optional[str]:
     """Convert the downloaded files from json to parquet"""
     try:
         logger.info(f"Converting {file_path} to parquet")
+        base_dir = file_path.rsplit("/", 1)[0]
+        os.makedirs(f"{base_dir}/converted_files", exist_ok=True)
         df = pd.read_json(file_path, orient="records", lines=True)
         df = df.loc[:, ~df.where(df.astype(bool)).isna().all(axis=0)]
-        parquet_file_path = file_path.replace(".json", ".parquet")
+        parquet_file_path = f"{base_dir}/converted_files/{file_path.rsplit('/', 1)[1].replace('.json', '.parquet')}"
         df.to_parquet(parquet_file_path)
         return parquet_file_path
     except Exception as e:
@@ -90,8 +93,10 @@ def convert_parquet_to_json(file_path: str) -> Optional[str]:
     """Convert the downloaded files from parquet to json"""
     try:
         logger.info(f"Converting {file_path} to json")
+        base_dir = file_path.rsplit("/", 1)[0]
+        os.makedirs(f"{base_dir}/converted_files", exist_ok=True)
         df = pd.read_parquet(file_path)
-        json_file_path = file_path.replace(".parquet", ".json")
+        json_file_path = f"{base_dir}/converted_files/{file_path.rsplit('/', 1)[1].replace('.parquet', '.json')}"
         df.to_json(json_file_path, orient="records", lines=True)
         return json_file_path
     except Exception as e:
