@@ -1,0 +1,81 @@
+name: Build Atlan App
+
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        required: true
+        type: string
+        description: "Exact commit SHA to build"
+      image_tag:
+        required: true
+        type: string
+        description: "Image tag to use (computed by GM, e.g. 'abc1234abcd')"
+      app_name:
+        required: true
+        type: string
+        description: "App name from app-manifest.yaml (used for image naming)"
+      enable_sdr:
+        required: false
+        type: boolean
+        default: false
+        description: "If true, also push to DockerHub for Self-Deployed Runtime"
+    secrets: inherit
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout caller repo at exact commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute image names
+        id: img
+        run: |
+          echo "ghcr_image=ghcr.io/atlanhq/${{ inputs.app_name }}-main" >> $GITHUB_OUTPUT
+          echo "dockerhub_image=atlanhq/${{ inputs.app_name }}" >> $GITHUB_OUTPUT
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Build and push to GHCR (multi-arch + security scan)
+        uses: atlanhq/application-sdk/.github/actions/secure-build-push-apps@main
+        with:
+          branch: ${{ github.ref_name }}
+          snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
+          snyk-ghcr-integration-id: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
+          snyk-docker-integration-id: ${{ secrets.SNYK_DOCKER_INTEGRATION_ID }}
+          snyk-integration-id: ${{ secrets.SNYK_INTEGRATION_ID }}
+          snyk-org-id: ${{ secrets.SNYK_ORG_ID }}
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.img.outputs.ghcr_image }}:${{ inputs.image_tag }}
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      # --- Conditional DockerHub push for Self-Deployed Runtime apps ---
+      - name: Login to DockerHub
+        if: ${{ inputs.enable_sdr }}
+        uses: docker/login-action@v3
+        with:
+          username: atlanhq
+          password: ${{ secrets.DOCKER_HUB_PAT_RW }}
+
+      - name: Push to DockerHub (SDR)
+        if: ${{ inputs.enable_sdr }}
+        run: |
+          docker buildx imagetools create \
+            ${{ steps.img.outputs.ghcr_image }}:${{ inputs.image_tag }} \
+            --tag ${{ steps.img.outputs.dockerhub_image }}:main-${{ inputs.image_tag }}
