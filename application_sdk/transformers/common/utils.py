@@ -83,8 +83,19 @@ def get_yaml_query_template_path_mappings(
     Returns a dictionary mapping of data assets (TABLE, COLUMN, DATABASE, SCHEMA)
     to the path of the YAML file that contains the SQL query template.
 
+    Template resolution order (later entries override earlier ones by filename):
+        1. SDK default templates (query/templates/)
+        2. App custom templates (custom_templates_path) - if provided
+
+    The SDK default templates include ``incremental_state`` in customAttributes
+    for TABLE and COLUMN. This field is silently skipped when the raw data
+    doesn't contain the column (i.e., during full extraction). Apps with custom
+    templates manage ``incremental_state`` in their own YAML files.
+
     Args:
-        custom_templates_path: The path of the directory containing the YAML files. To be used for custom templates.
+        custom_templates_path: Path to app-specific custom template directory.
+            Templates here override SDK defaults by matching filename.
+        assets: Optional list of asset type names to filter (e.g., ["TABLE", "COLUMN"]).
 
     Returns:
         A dictionary mapping of data assets to the path of the YAML file that contains the SQL query template.

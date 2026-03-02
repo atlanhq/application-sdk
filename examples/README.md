@@ -21,9 +21,9 @@ This folder contains sample applications that demonstrate how to use the Atlan S
 
 Before running any examples, you must set up your development environment. Please follow the OS-specific setup guide:
 
-- [Setup for macOS](../docs/docs/setup/MAC.md)
-- [Setup for Linux](../docs/docs/setup/LINUX.md)
-- [Setup for Windows](../docs/docs/setup/WINDOWS.md)
+- [Setup for macOS](../docs/setup/MAC.md)
+- [Setup for Linux](../docs/setup/LINUX.md)
+- [Setup for Windows](../docs/setup/WINDOWS.md)
 
 ---
 

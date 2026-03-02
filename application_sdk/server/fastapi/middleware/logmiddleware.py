@@ -6,7 +6,9 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
-from application_sdk.observability.logger_adaptor import get_logger, request_context
+from application_sdk.observability.context import request_context
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.server.fastapi.utils import EXCLUDED_LOG_PATHS
 
 logger = get_logger(__name__)
 
@@ -28,31 +30,36 @@ class LogMiddleware(BaseHTTPMiddleware):
         token = request_context.set({"request_id": request_id})
         start_time = time.time()
 
-        self.logger.info(
-            f"Request started for {request.method} {request.url.path}",
-            extra={
-                "method": request.method,
-                "path": request.url.path,
-                "request_id": request_id,
-                "url": str(request.url),
-                "client_host": request.client.host if request.client else None,
-            },
-        )
+        # Skip logging for health check endpoints
+        should_log = request.url.path not in EXCLUDED_LOG_PATHS
+
+        if should_log:
+            self.logger.info(
+                f"Request started for {request.method} {request.url.path}",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "request_id": request_id,
+                    "url": str(request.url),
+                    "client_host": request.client.host if request.client else None,
+                },
+            )
 
         try:
             response = await call_next(request)
             duration = time.time() - start_time
 
-            self.logger.info(
-                f"Request completed for {request.method} {request.url.path} {response.status_code}",
-                extra={
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status_code": response.status_code,
-                    "duration_ms": round(duration * 1000, 2),
-                    "request_id": request_id,
-                },
-            )
+            if should_log:
+                self.logger.info(
+                    f"Request completed for {request.method} {request.url.path} {response.status_code}",
+                    extra={
+                        "method": request.method,
+                        "path": request.url.path,
+                        "status_code": response.status_code,
+                        "duration_ms": round(duration * 1000, 2),
+                        "request_id": request_id,
+                    },
+                )
             return response
 
         except Exception as e:

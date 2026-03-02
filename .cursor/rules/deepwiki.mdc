@@ -1,0 +1,53 @@
+---
+description: SDK development rules using DeepWiki MCP for verification
+globs:
+alwaysApply: true
+---
+# SDK Development with DeepWiki MCP
+
+DeepWiki MCP provides AI-powered documentation and search for public GitHub repositories.
+
+## Available Tools
+
+- read_wiki_structure: Get documentation topics for a repository
+- read_wiki_contents: View repository documentation
+- ask_question: Ask questions about a repository (AI-powered, context-grounded)
+
+## Core Rule: Always Verify with DeepWiki
+
+Never assume SDK implementation details for:
+- atlanhq/atlan-python
+- atlanhq/application-sdk
+
+Always use DeepWiki MCP tools to verify against actual source code and documentation.
+
+## Workflow
+
+1. Use ask_question for specific implementation questions
+2. Use read_wiki_structure to understand available documentation
+3. Use read_wiki_contents to read detailed documentation
+4. Provide answers based on verified information
+
+## When to Use DeepWiki
+
+Use for:
+- SDK API usage and method signatures
+- Error debugging
+- Implementation patterns
+- Parameter types and return values
+- Usage examples from actual code
+
+## Examples
+
+Instead of guessing:
+"How does application-sdk handle authentication?" -> ask_question tool
+"What methods are available in atlan-java Client class?" -> ask_question tool
+"Show me the structure of atlan-python docs" -> read_wiki_structure tool
+
+## Response Format
+
+When using DeepWiki findings:
+- Reference the repository queried
+- Include specific method/class names found
+- Provide code examples when available
+- Link to relevant documentation sections

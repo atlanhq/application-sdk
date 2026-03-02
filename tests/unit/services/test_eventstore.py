@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from application_sdk.constants import EVENT_STORE_NAME
-from application_sdk.events.models import (
+from application_sdk.interceptors.models import (
     ApplicationEventNames,
     Event,
     EventMetadata,

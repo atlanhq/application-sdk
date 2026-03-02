@@ -5,11 +5,10 @@ including workflow ID retrieval, automatic heartbeating, and periodic heartbeat 
 """
 
 import asyncio
-import glob
 import os
 from datetime import timedelta
 from functools import wraps
-from typing import Any, Awaitable, Callable, List, Optional, TypeVar, cast
+from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
 
 from temporalio import activity
 
@@ -230,46 +229,3 @@ async def send_periodic_heartbeat(delay: float, *details: Any) -> None:
     while True:
         await asyncio.sleep(delay)
         activity.heartbeat(*details)
-
-
-def find_local_files_by_extension(
-    path: str,
-    extension: str,
-    file_names: Optional[List[str]] = None,
-) -> List[str]:
-    """Find local files at the specified local path, optionally filtering by file names.
-
-    Args:
-        path (str): Local path to search in (file or directory)
-        extension (str): File extension to filter by (e.g., '.parquet', '.json')
-        file_names (Optional[List[str]]): List of file names (basenames) to filter by, paths are not supported
-
-    Returns:
-        List[str]: List of matching file paths
-
-    Example:
-        >>> find_local_files_by_extension("/data", ".parquet", ["file1.parquet", "file2.parquet"])
-        ['file1.parquet', 'file2.parquet']
-
-        >>> find_local_files_by_extension("/data/single.json", ".json")
-        ['single.json']
-    """
-    if os.path.isfile(path) and path.endswith(extension):
-        # Single file - return it directly
-        return [path]
-
-    elif os.path.isdir(path):
-        # Directory - find all files in directory
-        all_files = glob.glob(
-            os.path.join(path, "**", f"*{extension}"),
-            recursive=True,
-        )
-
-        # Filter by file names if specified
-        if file_names:
-            file_names_set = set(file_names)  # Convert to set for O(1) lookup
-            return [f for f in all_files if os.path.basename(f) in file_names_set]
-        else:
-            return all_files
-
-    return []

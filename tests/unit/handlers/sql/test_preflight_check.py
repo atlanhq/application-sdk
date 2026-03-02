@@ -166,8 +166,8 @@ async def test_preflight_check_failure(
 
         result = await handler.preflight_check(payload)
 
-        assert "error" in result
-        assert "Preflight check failed" in result["error"]
+        assert result["databaseSchemaCheck"]["success"] is False
+        assert "invalid_db database" in result["databaseSchemaCheck"]["failureMessage"]
 
 
 @given(version_data=version_comparison_strategy)
@@ -228,7 +228,6 @@ async def test_check_client_version_no_client_version(handler: BaseSQLHandler):
     result = await handler.check_client_version()
 
     assert result["success"] is False
-    assert "error" in result
     assert "Client version check failed" in result["failureMessage"]
 
 
@@ -242,14 +241,14 @@ async def test_check_client_version_sql_query(
     # Set up SQL query for version
     handler.get_client_version_sql = "SELECT version();"
 
-    # Mock SQLQueryInput.get_dataframe to return a DataFrame with version
+    # Mock SQL client's run_query to return a DataFrame with version
     mock_df = Mock()
     mock_df.to_dict.return_value = {
         "records": [{"version": "PostgreSQL 15.4 on x86_64-pc-linux-gnu"}]
     }
 
     with patch(
-        "application_sdk.inputs.sql_query.SQLQueryInput", new_callable=AsyncMock
+        "application_sdk.clients.sql.BaseSQLClient.run_query", new_callable=AsyncMock
     ) as mock_sql_input:
         # Configure the mock to return our mock dataframe
         mock_instance = mock_sql_input.return_value
@@ -261,7 +260,7 @@ async def test_check_client_version_sql_query(
         result = await handler.check_client_version()
 
         assert result["success"] is False
-        assert "error" in result
+        assert "Client version check failed" in result["failureMessage"]
 
 
 async def test_check_client_version_exception(handler: BaseSQLHandler):
@@ -307,8 +306,6 @@ async def test_preflight_check_version_failure(
 
         result = await handler.preflight_check(payload)
 
-        assert "error" in result
-        assert "Preflight check failed" in result["error"]
         assert "versionCheck" in result
         assert result["versionCheck"]["success"] is False
         assert (

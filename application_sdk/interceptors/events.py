@@ -12,7 +12,7 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
-from application_sdk.events.models import (
+from application_sdk.interceptors.models import (
     ApplicationEventNames,
     Event,
     EventMetadata,
@@ -66,7 +66,7 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         Returns:
             Any: The result of the activity execution.
         """
-        # Extract activity information for tracking
+        import time
 
         start_event = Event(
             event_type=EventTypes.APPLICATION_EVENT.value,
@@ -75,16 +75,18 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         )
         await EventStore.publish_event(start_event)
 
+        start_time = time.time()
         output = None
         try:
             output = await super().execute_activity(input)
         except Exception:
             raise
         finally:
+            duration_ms = (time.time() - start_time) * 1000
             end_event = Event(
                 event_type=EventTypes.APPLICATION_EVENT.value,
                 event_name=ApplicationEventNames.ACTIVITY_END.value,
-                data={},
+                data={"duration_ms": round(duration_ms, 2)},
             )
             await EventStore.publish_event(end_event)
 
@@ -108,6 +110,8 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         Returns:
             Any: The result of the workflow execution.
         """
+        # Record start time (use workflow.time() for deterministic time in workflows)
+        start_time = workflow.time()
 
         # Publish workflow start event via activity
         try:
@@ -140,7 +144,10 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             workflow_state = WorkflowStates.FAILED.value  # Keep as failed
             raise
         finally:
-            # Always publish workflow end event
+            # Calculate duration in milliseconds
+            duration_ms = (workflow.time() - start_time) * 1000
+
+            # Always publish workflow end event with duration
             try:
                 await workflow.execute_activity(
                     publish_event,
@@ -148,7 +155,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                         "metadata": EventMetadata(workflow_state=workflow_state),
                         "event_type": EventTypes.APPLICATION_EVENT.value,
                         "event_name": ApplicationEventNames.WORKFLOW_END.value,
-                        "data": {},
+                        "data": {"duration_ms": round(duration_ms, 2)},
                     },
                     schedule_to_close_timeout=timedelta(seconds=30),
                     retry_policy=RetryPolicy(maximum_attempts=3),

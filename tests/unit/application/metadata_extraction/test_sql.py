@@ -9,6 +9,7 @@ from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
 )
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.constants import ApplicationMode
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.workflows.metadata_extraction.sql import (
@@ -388,3 +389,129 @@ class TestBaseSQLMetadataExtractionApplication:
         handler = call_args[1]["handler"]  # Get handler from kwargs
         assert isinstance(handler, MockSQLHandler)
         assert isinstance(handler.sql_client, MockSQLClient)
+
+
+class TestSQLApplicationModeStart:
+    """Test cases for split architecture based on APPLICATION_MODE in SQL application."""
+
+    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.WORKER)
+    async def test_start_worker_mode_starts_worker_non_daemon(
+        self, mock_get_workflow_client
+    ):
+        """Test that WORKER mode starts worker with daemon=False."""
+        mock_workflow_client = AsyncMock()
+        mock_workflow_client.application_name = "test-app"
+        mock_workflow_client.worker_task_queue = "test-app"
+        mock_workflow_client.namespace = "default"
+        mock_workflow_client.host = "localhost"
+        mock_workflow_client.port = "7233"
+        mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
+        mock_get_workflow_client.return_value = mock_workflow_client
+
+        app = BaseSQLMetadataExtractionApplication(
+            "test-app", client_class=MockSQLClient
+        )
+        app.worker = AsyncMock()
+
+        await app.start(MockSQLMetadataExtractionWorkflow)
+
+        # In WORKER mode, worker should start with daemon=False (main thread)
+        app.worker.start.assert_called_once_with(daemon=False)
+
+    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.LOCAL)
+    async def test_start_local_mode_starts_worker_daemon(
+        self, mock_api_server, mock_get_workflow_client
+    ):
+        """Test that LOCAL mode starts worker with daemon=True and also starts server."""
+        mock_workflow_client = AsyncMock()
+        mock_workflow_client.application_name = "test-app"
+        mock_workflow_client.worker_task_queue = "test-app"
+        mock_workflow_client.namespace = "default"
+        mock_workflow_client.host = "localhost"
+        mock_workflow_client.port = "7233"
+        mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
+        mock_get_workflow_client.return_value = mock_workflow_client
+        mock_server_instance = AsyncMock()
+        mock_api_server.return_value = mock_server_instance
+
+        app = BaseSQLMetadataExtractionApplication(
+            "test-app", client_class=MockSQLClient, handler_class=MockSQLHandler
+        )
+        app.worker = AsyncMock()
+
+        await app.start(MockSQLMetadataExtractionWorkflow)
+
+        # In LOCAL mode, worker should start with daemon=True (background thread)
+        app.worker.start.assert_called_once_with(daemon=True)
+        # In LOCAL mode, server should also be started
+        mock_server_instance.start.assert_called_once()
+
+    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.SERVER)
+    async def test_start_server_mode_starts_server(
+        self, mock_api_server, mock_get_workflow_client
+    ):
+        """Test that SERVER mode sets up and starts server."""
+        mock_workflow_client = AsyncMock()
+        mock_get_workflow_client.return_value = mock_workflow_client
+        mock_server_instance = AsyncMock()
+        mock_api_server.return_value = mock_server_instance
+
+        app = BaseSQLMetadataExtractionApplication(
+            "test-app", client_class=MockSQLClient, handler_class=MockSQLHandler
+        )
+
+        await app.start(MockSQLMetadataExtractionWorkflow)
+
+        # In SERVER mode, server should be set up and started
+        mock_api_server.assert_called_once()
+        mock_server_instance.start.assert_called_once()
+
+    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.WORKER)
+    async def test_worker_mode_does_not_start_server(self, mock_get_workflow_client):
+        """Test that WORKER mode does not set up or start server."""
+        mock_workflow_client = AsyncMock()
+        mock_workflow_client.application_name = "test-app"
+        mock_workflow_client.worker_task_queue = "test-app"
+        mock_workflow_client.namespace = "default"
+        mock_workflow_client.host = "localhost"
+        mock_workflow_client.port = "7233"
+        mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
+        mock_get_workflow_client.return_value = mock_workflow_client
+
+        app = BaseSQLMetadataExtractionApplication(
+            "test-app", client_class=MockSQLClient
+        )
+        app.worker = AsyncMock()
+
+        await app.start(MockSQLMetadataExtractionWorkflow)
+
+        # Server should not be initialized
+        assert app.server is None
+
+    @patch("application_sdk.application.metadata_extraction.sql.get_workflow_client")
+    @patch("application_sdk.application.metadata_extraction.sql.APIServer")
+    @patch("application_sdk.application.APPLICATION_MODE", ApplicationMode.SERVER)
+    async def test_server_mode_does_not_start_worker(
+        self, mock_api_server, mock_get_workflow_client
+    ):
+        """Test that SERVER mode does not start worker."""
+        mock_workflow_client = AsyncMock()
+        mock_get_workflow_client.return_value = mock_workflow_client
+        mock_server_instance = AsyncMock()
+        mock_api_server.return_value = mock_server_instance
+
+        app = BaseSQLMetadataExtractionApplication(
+            "test-app", client_class=MockSQLClient, handler_class=MockSQLHandler
+        )
+        app.worker = AsyncMock()
+
+        await app.start(MockSQLMetadataExtractionWorkflow)
+
+        # Worker should not be started
+        app.worker.start.assert_not_called()

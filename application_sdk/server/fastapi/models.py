@@ -1,11 +1,11 @@
 # Request/Response DTOs for workflows
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel, Field, RootModel
 
-from application_sdk.events.models import Event, EventFilter
+from application_sdk.interceptors.models import Event, EventFilter
 from application_sdk.workflows import WorkflowInterface
 
 
@@ -240,3 +240,113 @@ class EventWorkflowTrigger(WorkflowTrigger):
 
     def should_trigger_workflow(self, event: Event) -> bool:
         return True
+
+
+class Subscription(BaseModel):
+    """Subscription configuration for Dapr messaging.
+
+    Attributes:
+        component_name: Name of the Dapr pubsub component
+        topic: Topic to subscribe to
+        route: Route path for the message handler endpoint
+        handler: Required callback function to handle incoming messages
+        bulk_config: Optional bulk subscribe configuration
+        dead_letter_topic: Optional dead letter topic for failed messages
+
+    Nested Classes:
+        BulkConfig: Configuration for bulk message processing
+        MessageStatus: Status codes for handler responses (SUCCESS, RETRY, DROP)
+    """
+
+    class BulkConfig(BaseModel):
+        """Bulk configuration for Dapr messaging.
+
+        Attributes:
+            enabled: Whether bulk subscribe is enabled
+            max_messages_count: Maximum number of messages to receive in a batch
+            max_await_duration_ms: Maximum time to wait for messages in milliseconds
+        """
+
+        enabled: bool = False
+        max_messages_count: int = Field(
+            default=100, serialization_alias="maxMessagesCount"
+        )
+        max_await_duration_ms: int = Field(
+            default=40, serialization_alias="maxAwaitDurationMs"
+        )
+
+    class MessageStatus(str, Enum):
+        """Status codes for Dapr pub/sub subscription message handler responses.
+
+        Used in subscription handler responses to indicate how Dapr should handle the message.
+        Based on Dapr docs: https://docs.dapr.io/reference/api/pubsub_api/#expected-http-response
+
+        Attributes:
+            SUCCESS: Message was processed successfully.
+            RETRY: Message processing failed, should be retried.
+            DROP: Message should be dropped (sent to dead letter topic if configured).
+        """
+
+        SUCCESS = "SUCCESS"
+        RETRY = "RETRY"
+        DROP = "DROP"
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    component_name: str
+    topic: str
+    route: str
+    handler: Union[
+        Callable[[Any], Any], Callable[[Any], Coroutine[Any, Any, Any]]
+    ]  # Required callback function (sync or async)
+    bulk_config: Optional[BulkConfig] = None
+    dead_letter_topic: Optional[str] = None
+
+
+class FileUploadResponse(BaseModel):
+    """Response model for file upload endpoint matching heracles format.
+
+    Field names use camelCase to stay consistent with the upstream
+    Atlan ``/files`` endpoint contract.
+    """
+
+    id: str = Field(..., description="UUID of the file")
+    version: str = Field(..., description="Human-readable version string")
+    isActive: bool = Field(..., description="Whether the file is active")
+    createdAt: int = Field(..., description="Unix timestamp in milliseconds")
+    updatedAt: int = Field(..., description="Unix timestamp in milliseconds")
+    fileName: str = Field(..., description="UUID + extension")
+    rawName: str = Field(..., description="Original filename")
+    key: str = Field(..., description="Object store key (uuid+extension)")
+    extension: str = Field(..., description="File extension (e.g., '.csv')")
+    contentType: str = Field(..., description="Content type of the file")
+    fileSize: int = Field(..., description="File size in bytes")
+    isEncrypted: bool = Field(..., description="Whether the file is encrypted")
+    redirectUrl: str = Field(..., description="Redirect URL (empty for now)")
+    isUploaded: bool = Field(..., description="Whether the file is uploaded")
+    uploadedAt: str = Field(
+        ..., description="ISO timestamp or '0001-01-01T00:00:00Z' default"
+    )
+    isArchived: bool = Field(..., description="Whether the file is archived")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "id": "977f156b-9c78-4bfc-bd74-f603f18c078a",
+                "version": "weathered-firefly-9025",
+                "isActive": True,
+                "createdAt": 1764265919324,
+                "updatedAt": 1764265919324,
+                "fileName": "28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+                "rawName": "ddls_export.csv",
+                "key": "28bb016e-329f-46e1-b817-3fd315bdd7f0.csv",
+                "extension": ".csv",
+                "contentType": "text/csv",
+                "fileSize": 39144,
+                "isEncrypted": False,
+                "redirectUrl": "",
+                "isUploaded": True,
+                "uploadedAt": "2024-01-01T00:00:00Z",
+                "isArchived": False,
+            }
+        }

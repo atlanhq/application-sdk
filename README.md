@@ -29,8 +29,23 @@ poetry add atlan-application-sdk
 
 ## Getting Started
 
-- Want to develop locally or run examples from this repository? Check out our [Getting Started Guide](docs/docs/guides/getting-started.md) for a step-by-step walkthrough!
-- Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/) folder.
+- Want to develop locally or run examples from this repository? Check out our [Getting Started Guide](docs/guides/getting-started.md) for a step-by-step walkthrough!
+- Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/main/docs/) folder.
+
+## 🐳 Docker
+
+### Pre-built Images (Harbor)
+
+```bash
+# Latest main image
+docker pull registry.atlan.com/public/application-sdk:main-latest
+
+# Versioned image
+docker pull registry.atlan.com/public/application-sdk:main-2.3.1
+
+# Commit-specific image
+docker pull registry.atlan.com/public/application-sdk:sha-49c027f
+```
 
 ## Contributing
 
@@ -38,12 +53,11 @@ poetry add atlan-application-sdk
 
 ## Partner Collaboration
 
-- For information on how to collaborate with Atlan on app development and integrations, please see our [Partner Collaboration Guide](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/guides/partners.md).
+- For information on how to collaborate with Atlan on app development and integrations, please see our [Partner Journey Guide](https://docs.atlan.com/product/capabilities/build-apps/partner-with-us/concepts/partner-journey).
 
 ## Need help?
 We’re here whenever you need us:
 
-- Email: **connect@atlan.com**
 - Issues: [GitHub Issues](https://github.com/atlanhq/application-sdk/issues)
 
 

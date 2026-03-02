@@ -1,0 +1,275 @@
+name: 'Scheduled Trivy Scan'
+
+on:
+  schedule:
+    # Runs twice a week: Monday and Thursday at 09:00 UTC
+    - cron: '0 9 * * 1,4'
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  scan-and-ticket:
+    name: Trivy Scan + Linear Ticket
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: cgr.dev
+          username: ${{ secrets.CHAINGUARD_USERNAME }}
+          password: ${{ secrets.CHAINGUARD_PASSWORD }}
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: '.'
+          file: './Dockerfile'
+          push: false
+          load: true
+          tags: 'application-sdk:trivy-scan'
+
+      # ── Image scan ──
+
+      - name: Trivy image scan (JSON)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: 'application-sdk:trivy-scan'
+          scanners: 'vuln'
+          version: 'v0.69.0'
+          ignore-unfixed: true
+          format: 'json'
+          output: 'trivy-image.json'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+      - name: Trivy image scan (table)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: 'application-sdk:trivy-scan'
+          scanners: 'vuln'
+          version: 'v0.69.0'
+          ignore-unfixed: true
+          format: 'table'
+          output: 'trivy-image.txt'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+      # ── Dependency scan ──
+
+      - name: Trivy dependency scan (JSON)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: fs
+          input: 'uv.lock'
+          scanners: 'vuln'
+          version: 'v0.69.0'
+          ignore-unfixed: true
+          format: 'json'
+          output: 'trivy-deps.json'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+
+      - name: Trivy dependency scan (table)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: fs
+          input: 'uv.lock'
+          scanners: 'vuln'
+          version: 'v0.69.0'
+          ignore-unfixed: true
+          format: 'table'
+          output: 'trivy-deps.txt'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+
+      # ── Parse results ──
+
+      - name: Parse scan results
+        id: parse
+        shell: bash
+        run: |
+          # Count image vulnerabilities
+          IMAGE_VULNS=0
+          if [ -f trivy-image.json ]; then
+            IMAGE_VULNS=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH")] | length' trivy-image.json)
+          fi
+
+          # Count dependency vulnerabilities
+          DEPS_VULNS=0
+          if [ -f trivy-deps.json ]; then
+            DEPS_VULNS=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH")] | length' trivy-deps.json)
+          fi
+
+          TOTAL_VULNS=$((IMAGE_VULNS + DEPS_VULNS))
+
+          echo "image_vulns=$IMAGE_VULNS" >> "$GITHUB_OUTPUT"
+          echo "deps_vulns=$DEPS_VULNS" >> "$GITHUB_OUTPUT"
+          echo "total_vulns=$TOTAL_VULNS" >> "$GITHUB_OUTPUT"
+
+          # Build vulnerability summary for Linear ticket
+          if [ "$TOTAL_VULNS" -gt 0 ]; then
+            {
+              echo 'vuln_summary<<VULN_EOF'
+
+              if [ "$IMAGE_VULNS" -gt 0 ]; then
+                echo "### Docker Image Vulnerabilities ($IMAGE_VULNS)"
+                echo ""
+                echo "| Severity | Package | Installed | Fixed | CVE |"
+                echo "|----------|---------|-----------|-------|-----|"
+                jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | "| \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "N/A") | \(.VulnerabilityID) |"' trivy-image.json | sort -t'|' -k2,2 | head -50
+                echo ""
+              fi
+
+              if [ "$DEPS_VULNS" -gt 0 ]; then
+                echo "### Dependency Vulnerabilities ($DEPS_VULNS)"
+                echo ""
+                echo "| Severity | Package | Installed | Fixed | CVE |"
+                echo "|----------|---------|-----------|-------|-----|"
+                jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | "| \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "N/A") | \(.VulnerabilityID) |"' trivy-deps.json | sort -t'|' -k2,2 | head -50
+                echo ""
+              fi
+
+              echo 'VULN_EOF'
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "vuln_summary=No vulnerabilities found." >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Image vulns: $IMAGE_VULNS, Deps vulns: $DEPS_VULNS, Total: $TOTAL_VULNS"
+
+      # ── Publish summary ──
+
+      - name: Publish workflow summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Scheduled Trivy Scan -- Application SDK"
+            echo ""
+            echo "**Total vulnerabilities:** ${{ steps.parse.outputs.total_vulns }} (CRITICAL,HIGH)"
+            echo ""
+            echo "### Image Scan (application-sdk:trivy-scan)"
+            echo ""
+            if [ -f trivy-image.txt ]; then
+              echo '```'
+              cat trivy-image.txt
+              echo '```'
+            else
+              echo "No image scan output."
+            fi
+            echo ""
+            echo "### Dependency Scan (uv.lock)"
+            echo ""
+            if [ -f trivy-deps.txt ]; then
+              echo '```'
+              cat trivy-deps.txt
+              echo '```'
+            else
+              echo "No dependency scan output."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Create Linear ticket ──
+
+      - name: Create Linear ticket
+        if: ${{ steps.parse.outputs.total_vulns != '0' }}
+        shell: bash
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          TOTAL_VULNS: ${{ steps.parse.outputs.total_vulns }}
+          IMAGE_VULNS: ${{ steps.parse.outputs.image_vulns }}
+          DEPS_VULNS: ${{ steps.parse.outputs.deps_vulns }}
+          VULN_SUMMARY: ${{ steps.parse.outputs.vuln_summary }}
+          TEAM_ID: ${{ secrets.LINEAR_TEAM_ID }}
+        run: |
+          REPO="${{ github.repository }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          DATE=$(date -u +%Y-%m-%d)
+          SERVICE="Application SDK"
+
+          TITLE="[Security] $SERVICE — $TOTAL_VULNS CRITICAL,HIGH vulnerabilities ($DATE)"
+
+          read -r -d '' DESCRIPTION << DESC_EOF || true
+## Scheduled Trivy Scan Results
+
+**Service:** $SERVICE
+**Repository:** [$REPO](${{ github.server_url }}/${{ github.repository }})
+**Scan date:** $DATE
+**Workflow run:** [View logs]($RUN_URL)
+
+---
+
+| Metric | Count |
+|--------|-------|
+| Image vulnerabilities | $IMAGE_VULNS |
+| Dependency vulnerabilities | $DEPS_VULNS |
+| **Total** | **$TOTAL_VULNS** |
+
+$VULN_SUMMARY
+
+---
+
+*This ticket was automatically created by the scheduled Trivy scan workflow.*
+DESC_EOF
+
+          # Build GraphQL mutation
+          MUTATION=$(jq -n \
+            --arg title "$TITLE" \
+            --arg description "$DESCRIPTION" \
+            --arg teamId "$TEAM_ID" \
+            --argjson priority 2 \
+            '{
+              query: "mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier url title } } }",
+              variables: {
+                input: {
+                  title: $title,
+                  description: $description,
+                  teamId: $teamId,
+                  priority: $priority
+                }
+              }
+            }')
+
+          # Call Linear API
+          RESPONSE=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$MUTATION" \
+            https://api.linear.app/graphql)
+
+          # Check response
+          SUCCESS=$(echo "$RESPONSE" | jq -r '.data.issueCreate.success // false')
+          if [ "$SUCCESS" = "true" ]; then
+            ISSUE_ID=$(echo "$RESPONSE" | jq -r '.data.issueCreate.issue.identifier')
+            ISSUE_URL=$(echo "$RESPONSE" | jq -r '.data.issueCreate.issue.url')
+            echo "Linear ticket created: $ISSUE_ID -- $ISSUE_URL"
+            echo "### Linear Ticket Created" >> "$GITHUB_STEP_SUMMARY"
+            echo "**$ISSUE_ID**: [$TITLE]($ISSUE_URL)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Failed to create Linear ticket"
+            echo "$RESPONSE" | jq .
+            echo "### Linear Ticket Creation Failed" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            echo "$RESPONSE" | jq . >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi

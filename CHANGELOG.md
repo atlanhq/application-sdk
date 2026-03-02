@@ -1,5 +1,148 @@
 # Changelog
 
+## v2.4.1 (February 24, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.4.0...v2.4.1
+
+### Features
+
+- file upload/download support via FastAPI bindings | PART-255 (#1046) (by @prateek11rai in [326962d](https://github.com/atlanhq/application-sdk/commit/326962d))
+
+
+## v2.4.0 (February 17, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.3...v2.4.0
+
+### Features
+
+- add root_path parameter to APIServer.start() for reverse proxy support (#1058) (by @rashi-j in [edc99bc](https://github.com/atlanhq/application-sdk/commit/edc99bc))
+- add /review skill for structured Claude PR reviews (#1059) (by @fyzanshaik-atlan in [65e3903](https://github.com/atlanhq/application-sdk/commit/65e3903))
+
+### Bug Fixes
+
+- restore pandas extra compatibility (#1037) (by @fyzanshaik-atlan in [8425922](https://github.com/atlanhq/application-sdk/commit/8425922))
+- use --append-system-prompt for Claude review skill routing (#1060) (by @fyzanshaik-atlan in [f59f0f4](https://github.com/atlanhq/application-sdk/commit/f59f0f4))
+- add missing allowedTools for /review slash command (#1061) (by @fyzanshaik-atlan in [697f79c](https://github.com/atlanhq/application-sdk/commit/697f79c))
+- Standardized preflight check response format to use per-check success fields with consolidated error messages in failureMessage, removing top-level error field (#1052) (by @chaitanyaatlan in [d2bd860](https://github.com/atlanhq/application-sdk/commit/d2bd860))
+
+
+## v2.3.3 (February 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.2...v2.3.3
+
+### Improvements
+
+- refactor(segment): enable Segment based on write key presence (#1027) (by @janakiram-g in [d22e457](https://github.com/atlanhq/application-sdk/commit/d22e457))
+
+### Bug Fixes
+
+- improve dependabot config and skip tests for workflow-only PRs (#1026) (by @fyzanshaik-atlan in [3cf3830](https://github.com/atlanhq/application-sdk/commit/3cf3830))
+
+
+## v2.3.2 (February 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.1...v2.3.2
+
+### Bug Fixes
+
+- update codeowner (#954) (by @OnkarVO7 in [3a29977](https://github.com/atlanhq/application-sdk/commit/3a29977))
+- align daft writer behavior with pandas to prevent data loss (BLDX-305) (#953) (by @fyzanshaik-atlan in [1a73d02](https://github.com/atlanhq/application-sdk/commit/1a73d02))
+- tune dependabot settings to reduce noise (#1008) (by @fyzanshaik-atlan in [50e09ac](https://github.com/atlanhq/application-sdk/commit/50e09ac))
+
+
+## v2.3.1 (January 28, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.0...v2.3.1
+
+### Bug Fixes
+
+- add entrypoint wrapper for SIGTERM forward (#950) (by @anuj-atlan in [7c0b517](https://github.com/atlanhq/application-sdk/commit/7c0b517))
+
+
+## v2.3.0 (January 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.2.0...v2.3.0
+
+### Features
+
+- split worker / server and support graceful shutdown (#944) (by @SanilK2108 in [a551e8e](https://github.com/atlanhq/application-sdk/commit/a551e8e))
+
+### Bug Fixes
+
+- event loop policy for Windows (#927) (by @sachi-atlan in [9df1513](https://github.com/atlanhq/application-sdk/commit/9df1513))
+
+
+## v2.2.0 (January 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.1.1...v2.2.0
+
+### Features
+
+- added Azure specific client authentication (#619) (by @rupali-atlan in [37b2e19](https://github.com/atlanhq/application-sdk/commit/37b2e19))
+- Using Pubsub for message processors (#898) (by @niteesh-atlan in [f87f583](https://github.com/atlanhq/application-sdk/commit/f87f583))
+
+
+## v2.1.1 (January 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.1.0...v2.1.1
+
+### Bug Fixes
+
+- daft struct error (#931) (by @OnkarVO7 in [d64e60b](https://github.com/atlanhq/application-sdk/commit/d64e60b))
+- time based state refresh for each activity (#796) (by @abhishekagrawal-atlan in [3563595](https://github.com/atlanhq/application-sdk/commit/3563595))
+
+
+## v2.1.0 (January 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.0.0...v2.1.0
+
+### Features
+
+- improving the getting started guide (#929) (by @vaibhavatlan in [e04762b](https://github.com/atlanhq/application-sdk/commit/e04762b))
+- add context manager and close() support to Reader classes (#930) (by @inishchith in [c589342](https://github.com/atlanhq/application-sdk/commit/c589342))
+
+### Bug Fixes
+
+- removed logs to avoid infinite logging (#928) (by @sachi-atlan in [5710532](https://github.com/atlanhq/application-sdk/commit/5710532))
+
+
+## v2.0.0 (December 26, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.1.1...v2.0.0
+
+### Bug Fixes
+
+- clean up unnecessary logs (#911) (by @nishantmunjal7 in [d2e2ee7](https://github.com/atlanhq/application-sdk/commit/d2e2ee7))
+
+
+## v1.1.1 (December 17, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.1.0...v1.1.1
+
+### Bug Fixes
+
+- pushing logs to atlan-objectstore (#894) (by @Garavitey in [76fec72](https://github.com/atlanhq/application-sdk/commit/76fec72))
+- windows path normalization for prefix download (#895) (by @inishchith in [df99afe](https://github.com/atlanhq/application-sdk/commit/df99afe))
+
+
+## v1.1.0 (December 12, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.4...v1.1.0
+
+### Features
+
+- Add Atlan Attributes to Temporal Runs (#880) (by @saig214 in [8a85a24](https://github.com/atlanhq/application-sdk/commit/8a85a24))
+
+
+## v1.0.4 (December 11, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.3...v1.0.4
+
+### Bug Fixes
+
+- add automatic gRPC message size limit handling for large file uploads (#878) (by @SanilK2108 in [4d76838](https://github.com/atlanhq/application-sdk/commit/4d76838))
+
+
 ## v1.0.3 (December 09, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v1.0.2...v1.0.3

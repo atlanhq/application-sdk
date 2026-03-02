@@ -20,7 +20,6 @@ from typing import Any, Dict
 
 from dapr.clients import DaprClient
 
-from application_sdk.common.dapr_utils import is_component_registered
 from application_sdk.common.error_codes import CommonError
 from application_sdk.constants import (
     DEPLOYMENT_NAME,
@@ -30,6 +29,7 @@ from application_sdk.constants import (
     SECRET_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services._utils import is_component_registered
 from application_sdk.services.statestore import StateStore, StateType
 
 logger = get_logger(__name__)

@@ -3,7 +3,7 @@ import time
 from typing import Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
-from fastapi import status
+from fastapi import File, Form, HTTPException, UploadFile, status
 from fastapi.applications import FastAPI
 from fastapi.requests import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -39,9 +39,11 @@ from application_sdk.server.fastapi.models import (
     EventWorkflowTrigger,
     FetchMetadataRequest,
     FetchMetadataResponse,
+    FileUploadResponse,
     HttpWorkflowTrigger,
     PreflightCheckRequest,
     PreflightCheckResponse,
+    Subscription,
     TestAuthRequest,
     TestAuthResponse,
     WorkflowConfigRequest,
@@ -52,7 +54,10 @@ from application_sdk.server.fastapi.models import (
     WorkflowTrigger,
 )
 from application_sdk.server.fastapi.routers.server import get_server_router
-from application_sdk.server.fastapi.utils import internal_server_error_handler
+from application_sdk.server.fastapi.utils import (
+    internal_server_error_handler,
+    upload_file_to_object_store,
+)
 from application_sdk.services.statestore import StateStore, StateType
 from application_sdk.workflows import WorkflowInterface
 
@@ -90,12 +95,15 @@ class APIServer(ServerInterface):
     workflow_router: APIRouter
     dapr_router: APIRouter
     events_router: APIRouter
+    subscription_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
     duckdb_ui: DuckDBUI
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
+    # List of subscriptions to be registered
+    subscriptions: List[Subscription] = []
 
     frontend_assets_path: str = "frontend/static"
 
@@ -112,6 +120,7 @@ class APIServer(ServerInterface):
         frontend_templates_path: str = "frontend/templates",
         ui_enabled: bool = True,
         has_configmap: bool = False,
+        subscriptions: List[Subscription] = [],
     ):
         """Initialize the FastAPI application.
 
@@ -138,7 +147,7 @@ class APIServer(ServerInterface):
         self.workflow_router = APIRouter()
         self.dapr_router = APIRouter()
         self.events_router = APIRouter()
-
+        self.subscriptions = subscriptions
         # Set up the application
         error_handler = internal_server_error_handler  # Store as local variable
         self.app.add_exception_handler(
@@ -205,6 +214,7 @@ class APIServer(ServerInterface):
         - Workflow router (/workflows/v1)
         - Pubsub router (/dapr)
         - Events router (/events/v1)
+        - Subscription router (/subscriptions/v1)
         """
         # Register all routes first
         self.register_routes()
@@ -214,6 +224,16 @@ class APIServer(ServerInterface):
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
+
+        # Register subscription routes from subscriptions with handler callbacks
+        subscription_router = APIRouter()
+        for subscription in self.subscriptions:
+            subscription_router.add_api_route(
+                f"/{subscription.route}",
+                subscription.handler,
+                methods=["POST"],
+            )
+        self.app.include_router(subscription_router, prefix="/subscriptions/v1")
 
     def fallback_home(self, request: Request) -> HTMLResponse:
         return self.templates.TemplateResponse(
@@ -400,6 +420,13 @@ class APIServer(ServerInterface):
             response_model=ConfigMapResponse,
         )
 
+        self.workflow_router.add_api_route(
+            "/file",
+            self.upload_file,
+            methods=["POST"],
+            response_model=FileUploadResponse,
+        )
+
         self.dapr_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
@@ -432,6 +459,19 @@ class APIServer(ServerInterface):
         """
 
         subscriptions: List[dict[str, Any]] = []
+        for subscription in self.subscriptions:
+            subscription_dict: dict[str, Any] = {
+                "pubsubname": subscription.component_name,
+                "topic": subscription.topic,
+                "route": f"/subscriptions/v1/{subscription.route}",
+            }
+            if subscription.bulk_config:
+                subscription_dict["bulkSubscribe"] = (
+                    subscription.bulk_config.model_dump(by_alias=True)
+                )
+            if subscription.dead_letter_topic:
+                subscription_dict["deadLetterTopic"] = subscription.dead_letter_topic
+            subscriptions.append(subscription_dict)
         for event_trigger in self.event_triggers:
             filters = [
                 f"({event_filter.path} {event_filter.operator} '{event_filter.value}')"
@@ -583,12 +623,24 @@ class APIServer(ServerInterface):
             await self.handler.load(body.credentials)
             preflight_check = await self.handler.preflight_check(body.model_dump())
 
-            # Record successful preflight check
+            # Determine overall success based on individual check results (dynamic)
+            # Guard against None or empty results
+            if not preflight_check:
+                all_checks_passed = False
+            else:
+                check_results = [
+                    value.get("success", True)
+                    for value in preflight_check.values()
+                    if isinstance(value, dict) and "success" in value
+                ]
+                all_checks_passed = bool(check_results) and all(check_results)
+
+            # Record preflight check result
             metrics.record_metric(
                 name="preflight_checks_total",
                 value=1.0,
                 metric_type=MetricType.COUNTER,
-                labels={"status": "success"},
+                labels={"status": "success" if all_checks_passed else "failed"},
                 description="Total number of preflight checks",
             )
 
@@ -602,7 +654,9 @@ class APIServer(ServerInterface):
                 description="Preflight check duration in seconds",
             )
 
-            return PreflightCheckResponse(success=True, data=preflight_check)
+            return PreflightCheckResponse(
+                success=all_checks_passed, data=preflight_check
+            )
         except Exception as e:
             # Record failed preflight check
             metrics.record_metric(
@@ -613,6 +667,66 @@ class APIServer(ServerInterface):
                 description="Total number of preflight checks",
             )
             raise e
+
+    async def upload_file(
+        self,
+        file: UploadFile = File(..., description="File to upload"),
+        filename: Optional[str] = Form(None, description="Original filename"),
+        prefix: Optional[str] = Form(
+            "workflow_file_upload", description="Prefix for file organization"
+        ),
+        # NOTE: camelCase to match the upstream Atlan /files endpoint contract.
+        contentType: Optional[str] = Form(None, description="Content type of the file"),
+    ) -> FileUploadResponse:
+        """Upload a file to the object store."""
+
+        start_time = time.time()
+        metrics = get_metrics()
+
+        try:
+            response = await upload_file_to_object_store(
+                file=file,
+                filename=filename,
+                prefix=prefix,
+                content_type=contentType,
+            )
+
+            # Record successful upload
+            metrics.record_metric(
+                name="file_uploads_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "success"},
+                description="Total number of file upload requests",
+            )
+
+            # Record upload duration
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="file_upload_duration_seconds",
+                value=duration,
+                metric_type=MetricType.HISTOGRAM,
+                labels={},
+                description="File upload duration in seconds",
+            )
+
+            return response
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Record failed upload
+            metrics.record_metric(
+                name="file_uploads_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "error"},
+                description="Total number of file upload requests",
+            )
+            logger.error(f"File upload failed: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"File upload failed: {str(e)}",
+            )
 
     async def get_configmap(self, config_map_id: str) -> ConfigMapResponse:
         """Get a configuration map by its ID.
@@ -792,12 +906,15 @@ class APIServer(ServerInterface):
         self,
         host: str = APP_HOST,
         port: int = APP_PORT,
+        root_path: str = "",
     ) -> None:
         """Start the FastAPI application server.
 
         Args:
             host (str, optional): Host address to bind to. Defaults to "0.0.0.0".
             port (int, optional): Port to listen on. Defaults to 8000.
+            root_path (str, optional): ASGI root_path passed to uvicorn. When set,
+                uvicorn prepends this to scope["path"] at the protocol level. Defaults to "".
         """
         if self.ui_enabled:
             self.register_ui_routes()
@@ -808,6 +925,7 @@ class APIServer(ServerInterface):
                 app=self.app,
                 host=host,
                 port=port,
+                root_path=root_path,
             )
         )
         await server.serve()

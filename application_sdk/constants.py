@@ -22,6 +22,7 @@ Note:
 
 import os
 from datetime import timedelta
+from enum import Enum
 
 from dotenv import load_dotenv
 
@@ -41,6 +42,8 @@ APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0"))
 APP_PORT = int(os.getenv("ATLAN_APP_HTTP_PORT", "8000"))
 #: Tenant ID for multi-tenant applications
 APP_TENANT_ID = os.getenv("ATLAN_TENANT_ID", "default")
+# Domain Name of the tenant
+DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
 #: Host address for the application's dashboard
 APP_DASHBOARD_HOST = str(os.getenv("ATLAN_APP_DASHBOARD_HOST", "localhost"))
 #: Port number for the application's dashboard
@@ -139,6 +142,14 @@ START_TO_CLOSE_TIMEOUT = timedelta(
     )  # 2 hours
 )
 
+#: Graceful shutdown timeout for workers
+#: This is the maximum time the worker will wait for in-flight activities to complete
+#: before forcing shutdown when receiving SIGTERM/SIGINT signals.
+#: The worker will exit early if all activities complete before this timeout.
+GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = int(
+    os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 12 * 60 * 60)  # 12 hours
+)
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
 USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
@@ -234,6 +245,20 @@ METRICS_CLEANUP_ENABLED = (
 )
 METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
 
+# Segment Configuration
+#: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
+SEGMENT_API_URL = os.getenv("ATLAN_SEGMENT_API_URL", "https://api.segment.io/v1/batch")
+#: Segment write key for authentication. If set, Segment metrics are automatically enabled.
+SEGMENT_WRITE_KEY = os.getenv("ATLAN_SEGMENT_WRITE_KEY", "")
+#: Default user ID for Segment events
+SEGMENT_DEFAULT_USER_ID = "atlan.automation"
+#: Maximum batch size for Segment events
+SEGMENT_BATCH_SIZE = int(os.getenv("ATLAN_SEGMENT_BATCH_SIZE", "100"))
+#: Maximum time to wait before sending a batch (in seconds)
+SEGMENT_BATCH_TIMEOUT_SECONDS = float(
+    os.getenv("ATLAN_SEGMENT_BATCH_TIMEOUT_SECONDS", "10.0")
+)
+
 # Traces Configuration
 ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
 TRACES_BATCH_SIZE = int(os.getenv("ATLAN_TRACES_BATCH_SIZE", "100"))
@@ -248,7 +273,7 @@ TRACES_FILE_NAME = "traces.parquet"
 
 # Dapr Sink Configuration
 ENABLE_OBSERVABILITY_DAPR_SINK = (
-    os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false").lower() == "true"
+    os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true").lower() == "true"
 )
 
 # atlan_client configuration (non ATLAN_ prefix are rooted in pyatlan SDK, to be revisited)
@@ -282,6 +307,58 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
+#: Windows extended-length path prefix
+WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
+
+
+class ApplicationMode(str, Enum):
+    """Application execution mode.
+
+    Determines which components of the application are started:
+    - LOCAL: Starts both the worker (daemon mode) and the server. Used for local development.
+    - WORKER: Starts only the worker (non-daemon mode). Used in production for worker pods.
+    - SERVER: Starts only the server. Used in production for API server pods.
+    """
+
+    LOCAL = "LOCAL"
+    WORKER = "WORKER"
+    SERVER = "SERVER"
+
+
+APPLICATION_MODE = ApplicationMode(os.getenv("APPLICATION_MODE", "LOCAL").upper())
+
+# =============================================================================
+# Incremental Extraction Constants
+# =============================================================================
+
+#: Prefix for storing marker timestamp and current state of a connection in ObjectStore
+#: Example: persistent-artifacts/apps/oracle/connection/1764230875
+PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE = (
+    "persistent-artifacts/apps/{application_name}/connection/{connection_id}"
+)
+
+#: Maximum number of column extraction batch activities to execute in parallel
+#: Controls concurrency during incremental column extraction
+MAX_CONCURRENT_COLUMN_BATCHES = 3
+
+#: Subpath template for per-run incremental diff (under connection prefix)
+#: Full path: {PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE}/{INCREMENTAL_DIFF_SUBPATH_TEMPLATE}
+#: Example: persistent-artifacts/apps/oracle/connection/123456/runs/abc-def-ghi/incremental-diff
+INCREMENTAL_DIFF_SUBPATH_TEMPLATE = "runs/{run_id}/incremental-diff"
+
+#: Format for marker timestamp in incremental extraction
+#: Example: 2025-12-08T10:00:00Z
+MARKER_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+#: Default incremental state for first run (when incremental_state field doesn't exist)
+#: Required by coalesce function in DuckDB
+INCREMENTAL_DEFAULT_STATE = "NO CHANGE"
+
+#: Base folder for DuckDB temp files (each connection gets a unique UUID subfolder)
+DUCKDB_COMMON_TEMP_FOLDER = "/tmp/incremental_duckdb"
+
+#: Default memory limit for DuckDB (fixed for K8s pods)
+DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
 
 # Disable Analytics Configuration for DAFT
 os.environ["DO_NOT_TRACK"] = "true"

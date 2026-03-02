@@ -2,6 +2,7 @@ import asyncio
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
@@ -19,6 +20,7 @@ from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
+    GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
@@ -28,15 +30,18 @@ from application_sdk.constants import (
     WORKFLOW_PORT,
     WORKFLOW_TLS_ENABLED,
 )
-from application_sdk.events.models import (
+from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
+from application_sdk.interceptors.correlation_context import (
+    CorrelationContextInterceptor,
+)
+from application_sdk.interceptors.events import EventInterceptor, publish_event
+from application_sdk.interceptors.lock import RedisLockInterceptor
+from application_sdk.interceptors.models import (
     ApplicationEventNames,
     Event,
     EventTypes,
     WorkerTokenRefreshEventData,
 )
-from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
-from application_sdk.interceptors.events import EventInterceptor, publish_event
-from application_sdk.interceptors.lock import RedisLockInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.eventstore import EventStore
 from application_sdk.services.secretstore import SecretStore
@@ -368,7 +373,7 @@ class TemporalWorkflowClient(WorkflowClient):
         activity_executor: Optional[ThreadPoolExecutor] = None,
         auto_start_token_refresh: bool = True,
     ) -> Worker:
-        """Create a Temporal worker with automatic token refresh.
+        """Create a Temporal worker with automatic token refresh and graceful shutdown.
 
         Args:
             activities (Sequence[CallableType]): Activity functions to register.
@@ -443,7 +448,11 @@ class TemporalWorkflowClient(WorkflowClient):
             ),
             max_concurrent_activities=max_concurrent_activities,
             activity_executor=activity_executor,
+            graceful_shutdown_timeout=timedelta(
+                seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
+            ),
             interceptors=[
+                CorrelationContextInterceptor(),
                 EventInterceptor(),
                 CleanupInterceptor(),
                 RedisLockInterceptor(activities_dict),

@@ -1,0 +1,64 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Test files
+tests/
+*.pyc
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# Development files
+.local/
+.venv/
+venv/
+env/
+.env
+.env.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# CI/CD
+.github/
+
+# Local development
+local/
+temporal.db
+*.db
+*.db-shm
+*.db-wal
+
+# Examples (not needed in base image)
+examples/
+
+# Components (not needed in base image)
+components/
+
+# Note: uv.lock is needed by Dockerfile for uv sync --locked
+# Keep it in build context (don't exclude it)
+
+# Other
+.DS_Store
+*.log
+*.tmp
+
