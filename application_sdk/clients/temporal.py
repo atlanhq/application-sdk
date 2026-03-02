@@ -21,7 +21,6 @@ from application_sdk.constants import (
     DEPLOYMENT_NAME,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
-    TEMPORAL_PROMETHEUS_HOST,
     TEMPORAL_PROMETHEUS_PORT,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
@@ -237,7 +236,7 @@ class TemporalWorkflowClient(WorkflowClient):
             logger.info("Added initial auth token to client connection")
 
         # Configure Temporal runtime with Prometheus metrics
-        prometheus_bind_address = f"{TEMPORAL_PROMETHEUS_HOST}:{TEMPORAL_PROMETHEUS_PORT}"
+        prometheus_bind_address = f"0.0.0.0:{TEMPORAL_PROMETHEUS_PORT}"
         connection_options["runtime"] = Runtime(
             telemetry=TelemetryConfig(
                 metrics=PrometheusConfig(bind_address=prometheus_bind_address)
