@@ -3,7 +3,7 @@ import time
 from typing import Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
-from fastapi import status
+from fastapi import File, Form, HTTPException, UploadFile, status
 from fastapi.applications import FastAPI
 from fastapi.requests import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -39,6 +39,7 @@ from application_sdk.server.fastapi.models import (
     EventWorkflowTrigger,
     FetchMetadataRequest,
     FetchMetadataResponse,
+    FileUploadResponse,
     HttpWorkflowTrigger,
     PreflightCheckRequest,
     PreflightCheckResponse,
@@ -53,7 +54,10 @@ from application_sdk.server.fastapi.models import (
     WorkflowTrigger,
 )
 from application_sdk.server.fastapi.routers.server import get_server_router
-from application_sdk.server.fastapi.utils import internal_server_error_handler
+from application_sdk.server.fastapi.utils import (
+    internal_server_error_handler,
+    upload_file_to_object_store,
+)
 from application_sdk.services.statestore import StateStore, StateType
 from application_sdk.workflows import WorkflowInterface
 
@@ -416,6 +420,13 @@ class APIServer(ServerInterface):
             response_model=ConfigMapResponse,
         )
 
+        self.workflow_router.add_api_route(
+            "/file",
+            self.upload_file,
+            methods=["POST"],
+            response_model=FileUploadResponse,
+        )
+
         self.dapr_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
@@ -656,6 +667,66 @@ class APIServer(ServerInterface):
                 description="Total number of preflight checks",
             )
             raise e
+
+    async def upload_file(
+        self,
+        file: UploadFile = File(..., description="File to upload"),
+        filename: Optional[str] = Form(None, description="Original filename"),
+        prefix: Optional[str] = Form(
+            "workflow_file_upload", description="Prefix for file organization"
+        ),
+        # NOTE: camelCase to match the upstream Atlan /files endpoint contract.
+        contentType: Optional[str] = Form(None, description="Content type of the file"),
+    ) -> FileUploadResponse:
+        """Upload a file to the object store."""
+
+        start_time = time.time()
+        metrics = get_metrics()
+
+        try:
+            response = await upload_file_to_object_store(
+                file=file,
+                filename=filename,
+                prefix=prefix,
+                content_type=contentType,
+            )
+
+            # Record successful upload
+            metrics.record_metric(
+                name="file_uploads_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "success"},
+                description="Total number of file upload requests",
+            )
+
+            # Record upload duration
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="file_upload_duration_seconds",
+                value=duration,
+                metric_type=MetricType.HISTOGRAM,
+                labels={},
+                description="File upload duration in seconds",
+            )
+
+            return response
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Record failed upload
+            metrics.record_metric(
+                name="file_uploads_total",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={"status": "error"},
+                description="Total number of file upload requests",
+            )
+            logger.error(f"File upload failed: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"File upload failed: {str(e)}",
+            )
 
     async def get_configmap(self, config_map_id: str) -> ConfigMapResponse:
         """Get a configuration map by its ID.

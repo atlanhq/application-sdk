@@ -506,6 +506,8 @@ rich-toolkit==0.17.1
     #   fastapi-cloud-cli
 rignore==0.7.6
     # via fastapi-cloud-cli
+rocksdict==0.3.29
+    # via atlan-application-sdk
 rpds-py==0.30.0
     # via
     #   jsonschema

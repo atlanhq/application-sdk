@@ -4,11 +4,7 @@ from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.activities.common.utils import (
-    auto_heartbeater,
-    get_object_store_prefix,
-    get_workflow_id,
-)
+from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.base import BaseClient
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
@@ -133,7 +129,7 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
         """
         # Upload data from object store to Atlan storage
         # Use workflow_id/workflow_run_id as the prefix to migrate specific data
-        migration_prefix = get_object_store_prefix(workflow_args["output_path"])
+        migration_prefix = workflow_args["output_path"]
         logger.info(
             f"Starting migration from object store with prefix: {migration_prefix}"
         )

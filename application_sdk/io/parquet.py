@@ -13,7 +13,6 @@ from typing import (
 
 from temporalio import activity
 
-from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
     DAPR_MAX_GRPC_MESSAGE_LENGTH,
@@ -629,24 +628,20 @@ class ParquetFileWriter(Writer):
             if write_mode == WriteMode.OVERWRITE:
                 # Delete the directory from object store
                 try:
-                    await ObjectStore.delete_prefix(
-                        prefix=get_object_store_prefix(self.path)
-                    )
+                    await ObjectStore.delete_prefix(prefix=self.path)
                 except FileNotFoundError as e:
-                    logger.info(
-                        f"No files found under prefix {get_object_store_prefix(self.path)}: {str(e)}"
-                    )
+                    logger.info(f"No files found under prefix {self.path}: {str(e)}")
             for path in file_paths:
                 if ENABLE_ATLAN_UPLOAD:
                     await ObjectStore.upload_file(
                         source=path,
                         store_name=UPSTREAM_OBJECT_STORE_NAME,
-                        destination=get_object_store_prefix(path),
+                        destination=path,
                         retain_local_copy=True,
                     )
                 await ObjectStore.upload_file(
                     source=path,
-                    destination=get_object_store_prefix(path),
+                    destination=path,
                     retain_local_copy=self.retain_local_copy,
                 )
 
@@ -785,7 +780,7 @@ class ParquetFileWriter(Writer):
                         # Upload consolidated file to object store
                         await ObjectStore.upload_file(
                             source=consolidated_file_path,
-                            destination=get_object_store_prefix(consolidated_file_path),
+                            destination=consolidated_file_path,
                         )
 
                 # Clean up temp consolidated dir
