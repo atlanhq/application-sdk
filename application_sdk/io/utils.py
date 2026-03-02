@@ -159,13 +159,14 @@ async def download_files(
 
 
 def estimate_dataframe_record_size(
-    dataframe: "pd.DataFrame", file_extension: str
+    dataframe: "pd.DataFrame", file_extension: str, compression: str = "snappy"
 ) -> int:
     """Estimate File size of a DataFrame by sampling a few records.
 
     Args:
         dataframe (pd.DataFrame): The DataFrame to estimate the size of.
         file_extension (str): The extension of the file to estimate the size of.
+        compression (str): Parquet compression codec. Defaults to "snappy".
 
     Returns:
         int: The estimated size of the DataFrame in bytes.
@@ -180,7 +181,7 @@ def estimate_dataframe_record_size(
     if file_extension == JSON_FILE_EXTENSION:
         sample_file = sample.to_json(orient="records", lines=True)
     elif file_extension == PARQUET_FILE_EXTENSION:
-        sample_file = sample.to_parquet(index=False, compression="snappy")
+        sample_file = sample.to_parquet(index=False, compression=compression)
         compression_factor = 0.01
     else:
         raise ValueError(f"Unsupported file extension: {file_extension}")
@@ -305,7 +306,7 @@ def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bo
         import daft
 
         if isinstance(dataframe, daft.DataFrame):
-            return dataframe.count_rows() == 0
+            return dataframe.limit(1).count_rows() == 0
     except Exception:
         logger.warning("Module daft not found")
     return True

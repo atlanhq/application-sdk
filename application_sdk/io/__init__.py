@@ -439,7 +439,11 @@ class Writer(ABC):
             if len(dataframe) == 0:
                 return
 
-            chunk_size_bytes = estimate_dataframe_record_size(dataframe, self.extension)
+            chunk_size_bytes = estimate_dataframe_record_size(
+                dataframe,
+                self.extension,
+                compression=getattr(self, "compression", "snappy"),
+            )
 
             for i in range(0, len(dataframe), self.buffer_size):
                 chunk = dataframe[i : i + self.buffer_size]
