@@ -5,6 +5,9 @@ import pytest
 from temporalio.runtime import Runtime
 
 from application_sdk.clients.temporal import TemporalWorkflowClient
+from application_sdk.interceptors.cleanup import cleanup
+from application_sdk.interceptors.events import publish_event
+from application_sdk.workflows import WorkflowInterface
 
 
 @pytest.fixture(autouse=True)
@@ -13,9 +16,6 @@ def mock_runtime():
     with patch("application_sdk.clients.temporal.Runtime") as mock_cls:
         mock_cls.return_value = MagicMock(spec=Runtime)
         yield mock_cls
-from application_sdk.interceptors.cleanup import cleanup
-from application_sdk.interceptors.events import publish_event
-from application_sdk.workflows import WorkflowInterface
 
 
 # Mock workflow class for testing
