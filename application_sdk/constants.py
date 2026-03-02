@@ -82,9 +82,8 @@ STATE_STORE_PATH_TEMPLATE = (
 OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observability"
 
 # Temporal Prometheus Metrics
-#: Hardcoded bind address for Temporal SDK Prometheus metrics endpoint.
-#: All workers expose metrics on this port automatically.
-TEMPORAL_PROMETHEUS_BIND_ADDRESS = "0.0.0.0:9464"
+#: Bind address for Temporal SDK Prometheus metrics endpoint
+TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv("ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464")
 
 # Workflow Client Constants
 #: Host address for the Temporal server
