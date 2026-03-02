@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
+from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import (
@@ -20,6 +21,7 @@ from application_sdk.constants import (
     DEPLOYMENT_NAME,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
+    TEMPORAL_PROMETHEUS_BIND_ADDRESS,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
@@ -232,6 +234,18 @@ class TemporalWorkflowClient(WorkflowClient):
             token = await self.auth_manager.get_access_token()
             connection_options["api_key"] = token
             logger.info("Added initial auth token to client connection")
+
+        # Configure Temporal runtime with Prometheus metrics
+        connection_options["runtime"] = Runtime(
+            telemetry=TelemetryConfig(
+                metrics=PrometheusConfig(
+                    bind_address=TEMPORAL_PROMETHEUS_BIND_ADDRESS
+                )
+            )
+        )
+        logger.info(
+            f"Temporal Prometheus metrics enabled on {TEMPORAL_PROMETHEUS_BIND_ADDRESS}"
+        )
 
         # Create the client
         self.client = await Client.connect(**connection_options)
