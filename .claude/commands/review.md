@@ -23,6 +23,8 @@ Read all of the following files to understand the project's standards. These are
 
 Also use Glob to find any additional `CLAUDE.md` files in subdirectories that are relevant to the changed files.
 
+**BUGBOT.md files**: If changed files are in subdirectories with their own `.cursor/BUGBOT.md` (e.g., `application_sdk/workflows/.cursor/BUGBOT.md`), read those as well for module-specific review criteria.
+
 ## Step 2: Gather PR data
 
 Run these commands in parallel:
@@ -37,7 +39,7 @@ Run these commands in parallel:
 Count the number of changed files from step 2.
 
 **If fewer than 100 files changed:**
-Review all changed files directly. Read each changed file using the Read tool to understand surrounding context beyond the diff.
+Review all changed files directly. Read each changed file using the Read tool to understand surrounding context beyond the diff. Cache these file contents for reuse in later validation steps.
 
 **If 100 or more files changed:**
 This is a large PR. Deploy parallel sub-agents to gather context efficiently:
@@ -47,7 +49,7 @@ This is a large PR. Deploy parallel sub-agents to gather context efficiently:
 
 ## Step 4: Four review passes
 
-Execute four independent review passes. For PRs with fewer than 100 files, do these sequentially. For large PRs, launch agents in parallel.
+Execute four independent review passes **in parallel** using separate tool calls. Each pass operates independently on the file context gathered in Step 3.
 
 ### Pass 1 + 2: CLAUDE.md and standards compliance
 
@@ -95,18 +97,17 @@ For each issue found across all passes, assign a confidence score from 0 to 100:
 - **75**: Highly confident, real and important
 - **100**: Absolutely certain, definitely real
 
-**Validation**: For each finding scored 50 or above, verify it by:
-- Re-reading the relevant code in full context (not just the diff)
+**Filter**: Discard all findings below confidence 80.
+
+**Validation**: For each finding scored **80 or above**, verify it by:
+- Re-reading the relevant code in full context (not just the diff) if not already cached from Step 3
 - Checking if the pattern is intentionally used elsewhere in the codebase
 - For CLAUDE.md violations: confirming the rule applies to this file's directory scope
-
-**Filter**: Discard all findings below confidence 80.
 
 **Always discard (false positives):**
 - Pre-existing issues not introduced in this PR
 - Code that appears buggy but is actually correct in context
 - Pedantic nitpicks a senior engineer would not flag
-- Issues that linters (ruff, isort, pyright) will catch — do not run the linter to verify
 - General code quality concerns not explicitly required in CLAUDE.md or BUGBOT.md
 - Issues silenced in code via lint-ignore comments
 
@@ -143,13 +144,15 @@ sequenceDiagram
     <interactions showing the primary flow affected by this PR>
 ```
 
-<Generate a Mermaid sequence diagram that shows the key interaction flow introduced or modified by this PR. Rules:>
+<Generate a Mermaid sequence diagram **if the change affects architectural flow or component interactions**. Skip for simple bug fixes (typos, off-by-one errors, single-function changes). Rules:>
 <- Maximum 8 participants>
 <- Maximum 15 interactions>
 <- For refactors: show before/after with labeled boxes>
 <- For new features: show the end-to-end flow>
-<- For bug fixes: show the incorrect flow crossed out and the corrected flow>
+<- For bug fixes affecting flow: show the corrected flow>
 <- Use descriptive labels on arrows>
+
+<If skipping the diagram, replace this section with a brief explanation of why it's not needed.>
 
 ### Findings
 
@@ -176,7 +179,7 @@ No issues found. Checked for bugs, security, and CLAUDE.md compliance.
 For each finding in the Findings table, post an inline comment using `mcp__github_inline_comment__create_inline_comment`.
 
 Rules for inline comments:
-- Maximum 10 inline comments total (prioritize by severity)
+- Maximum 10 inline comments total (prioritize by severity), **unless there are more than 10 Critical severity findings**
 - Each comment includes: severity tag, issue description, why it matters (reference the specific rule from BUGBOT.md or .cursor/rules/), and the suggested fix
 - For small, self-contained fixes (< 6 lines): include a committable suggestion block
 - For larger fixes: describe the issue and suggested approach without a suggestion block
