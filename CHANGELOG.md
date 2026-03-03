@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.5.0 (March 03, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.4.1...v2.5.0
+
+### Features
+
+- add temporal prometheus metrics (#1078) (by @anbarasantr in [6dbf1dd](https://github.com/atlanhq/application-sdk/commit/6dbf1dd))
+
+### Bug Fixes
+
+- make ObjectStore upload/download primitives file-type agnostic (#1056) (by @fyzanshaik-atlan in [ba28569](https://github.com/atlanhq/application-sdk/commit/ba28569d09fa14a01f5ab19dcd7802552b058982))
+
+
 ## v2.4.1 (February 24, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.4.0...v2.4.1
