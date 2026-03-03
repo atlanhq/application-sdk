@@ -3,8 +3,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict
 
-import yaml
-
 
 class HandlerInterface(ABC):
     """
@@ -47,21 +45,16 @@ class HandlerInterface(ABC):
         """
         Get the configmap for a given config_map_id.
 
-        Default implementation searches pkl-generated YAML configmaps in
-        contract/generated/ and matches by metadata.name. Apps can override
-        this to read from custom locations.
+        Searches for a matching JSON file in contract/generated/ by filename.
+        JSON files are named by their configmap ID (e.g. atlan-redshift.json).
         """
         contract_dir = Path.cwd() / "contract" / "generated"
         if not contract_dir.exists():
             return {}
 
-        for yaml_file in contract_dir.rglob("*.yaml"):
-            with open(yaml_file) as f:
-                doc = yaml.safe_load(f)
-            if not isinstance(doc, dict):
-                continue
-            if doc.get("metadata", {}).get("name") == config_map_id:
-                config_str = doc.get("data", {}).get("config", "{}")
-                return {"config": json.loads(config_str)}
+        for json_file in contract_dir.rglob("*.json"):
+            if json_file.stem == config_map_id:
+                with open(json_file) as f:
+                    return json.load(f)
 
         return {}
