@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
+from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import (
@@ -22,6 +23,7 @@ from application_sdk.constants import (
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
+    TEMPORAL_PROMETHEUS_BIND_ADDRESS,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
@@ -71,7 +73,32 @@ class TemporalWorkflowClient(WorkflowClient):
         namespace (str): Temporal namespace.
         _token_refresh_task: Background task for token refresh.
         _token_refresh_interval: Interval in seconds for token refresh.
+        _prometheus_runtime: Process-level Runtime singleton for Prometheus metrics.
     """
+
+    _prometheus_runtime: Optional[Runtime] = None
+
+    @classmethod
+    def _get_prometheus_runtime(cls) -> Runtime:
+        """Get or create the process-level Temporal Runtime with Prometheus metrics.
+
+        The Runtime binds a Prometheus metrics endpoint on the configured address.
+        It is created at most once per process — subsequent calls return the same
+        instance. This prevents port-already-in-use errors when load() is called
+        more than once (e.g., after a reconnect or in tests).
+
+        Returns:
+            Runtime: The Temporal Runtime with PrometheusConfig configured.
+        """
+        if cls._prometheus_runtime is None:
+            cls._prometheus_runtime = Runtime(
+                telemetry=TelemetryConfig(
+                    metrics=PrometheusConfig(
+                        bind_address=TEMPORAL_PROMETHEUS_BIND_ADDRESS
+                    )
+                )
+            )
+        return cls._prometheus_runtime
 
     def __init__(
         self,
@@ -237,6 +264,12 @@ class TemporalWorkflowClient(WorkflowClient):
             token = await self.auth_manager.get_access_token()
             connection_options["api_key"] = token
             logger.info("Added initial auth token to client connection")
+
+        # Configure Temporal runtime with Prometheus metrics (process-level singleton)
+        connection_options["runtime"] = self._get_prometheus_runtime()
+        logger.info(
+            f"Temporal Prometheus metrics enabled on {TEMPORAL_PROMETHEUS_BIND_ADDRESS}"
+        )
 
         # Create the client
         self.client = await Client.connect(**connection_options)

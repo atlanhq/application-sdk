@@ -32,6 +32,7 @@ The Application SDK uses environment variables for configuration. These can be s
 | `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | Maximum duration an activity can run before timing out (in seconds) | `7200` | Prevents activities from running indefinitely |
 | `ATLAN_AUTH_ENABLED` | Whether to enable authentication for Temporal workflows | `false` | Used in production deployments with secure Temporal clusters |
 | `ATLAN_DEPLOYMENT_SECRET_PATH` | Path to deployment secrets in secret store | `ATLAN_DEPLOYMENT_SECRETS` | Contains authentication credentials for production |
+| `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | Bind address for the Temporal SDK Prometheus metrics endpoint | `0.0.0.0:9464` | Exposes ~40 built-in Temporal SDK metrics (workflow latency, activity retries, worker capacity, etc.) for Prometheus scraping |
 
 ## SQL Client Configuration
 
