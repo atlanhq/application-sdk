@@ -233,6 +233,7 @@ class Writer(ABC):
     current_buffer_size_bytes: int
     partitions: List[int]
     extension: str
+    compression: str = "snappy"
     dataframe_type: DataframeType
     _is_closed: bool = False
     _statistics: Optional[ActivityStatistics] = None
@@ -442,7 +443,7 @@ class Writer(ABC):
             chunk_size_bytes = estimate_dataframe_record_size(
                 dataframe,
                 self.extension,
-                compression=getattr(self, "compression", "snappy"),
+                compression=self.compression,
             )
 
             for i in range(0, len(dataframe), self.buffer_size):
