@@ -294,9 +294,7 @@ class TestParquetFileWriterWriteDaftDataframe:
         """Test successful daft DataFrame writing."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
+        ) as mock_upload, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
             mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
@@ -337,9 +335,7 @@ class TestParquetFileWriterWriteDaftDataframe:
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.services.objectstore.ObjectStore.delete_prefix"
-        ) as mock_delete, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
+        ) as mock_delete, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
             mock_upload.return_value = AsyncMock()
             mock_delete.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
@@ -379,9 +375,7 @@ class TestParquetFileWriterWriteDaftDataframe:
         """Test daft DataFrame writing with default parameters (uses method default write_mode='append')."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
+        ) as mock_upload, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
             mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
@@ -415,9 +409,7 @@ class TestParquetFileWriterWriteDaftDataframe:
         """Test that DAPR limit is properly configured."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
+        ) as mock_upload, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
             mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
@@ -499,9 +491,7 @@ class TestParquetFileWriterMetrics:
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.io.parquet.get_metrics"
-        ) as mock_get_metrics, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
+        ) as mock_get_metrics, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
             mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
@@ -1152,11 +1142,8 @@ class TestParquetFileWriterCompression:
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "pandas.DataFrame.to_parquet"
-        ) as mock_to_parquet, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_to_parquet:
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
 
             writer = ParquetFileWriter(path=base_output_path, compression="zstd")
 
@@ -1173,11 +1160,8 @@ class TestParquetFileWriterCompression:
         """Test that zstd compression is passed through to daft write_parquet."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
+        ) as mock_upload, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
             mock_read_metadata.return_value.num_rows = 10
@@ -1208,11 +1192,8 @@ class TestParquetFileWriterCompression:
             "daft.execution_config_ctx"
         ) as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload, patch(
-            "application_sdk.io.parquet.get_object_store_prefix"
-        ) as mock_prefix:
+        ) as mock_upload:
             mock_upload.return_value = AsyncMock()
-            mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
 
