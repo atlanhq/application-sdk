@@ -115,18 +115,11 @@ class LogRecordModel(BaseModel):
         ).items():
             setattr(extra, key, value)
 
-        # Keep stacktrace in message body for OTEL/S3 consumers
-        # (e.g., LogRank/Mothership) while console rendering remains independent.
-        log_message = message.record["message"]
-        stacktrace = getattr(extra, "exception.stacktrace", None)
-        if stacktrace:
-            log_message = f"{log_message}\n{stacktrace}"
-
         return cls(
             timestamp=message.record["time"].timestamp(),
             level=message.record["level"].name,
             logger_name=message.record["extra"].get("logger_name", ""),
-            message=log_message,
+            message=message.record["message"],
             file=str(message.record["file"].path),
             line=message.record["line"],
             function=message.record["function"],
@@ -148,7 +141,9 @@ def _format_exception_stacktrace(exception: Any) -> str:
     exc_traceback = getattr(exception, "traceback", None)
     if exc_type is None:
         return ""
-    return "".join(tb_module.format_exception(exc_type, exc_value, exc_traceback)).rstrip()
+    return "".join(
+        tb_module.format_exception(exc_type, exc_value, exc_traceback)
+    ).rstrip()
 
 
 def _extract_exception_attributes(exception: Any) -> Dict[str, str]:
@@ -467,16 +462,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             ).items():
                 setattr(extra, key, value)
 
-            log_message = record.record["message"]
-            stacktrace = getattr(extra, "exception.stacktrace", None)
-            if stacktrace:
-                log_message = f"{log_message}\n{stacktrace}"
-
             return LogRecordModel(
                 timestamp=record.record["time"].timestamp(),
                 level=record.record["level"].name,
                 logger_name=record.record["extra"].get("logger_name", ""),
-                message=log_message,
+                message=record.record["message"],
                 file=str(record.record["file"].path),
                 line=record.record["line"],
                 function=record.record["function"],

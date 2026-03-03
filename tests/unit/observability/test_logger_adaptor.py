@@ -1,6 +1,6 @@
+import sys
 from contextlib import contextmanager
 from datetime import datetime
-import sys
 from typing import Dict, Generator
 from unittest import mock
 
@@ -647,14 +647,18 @@ def test_log_record_model_extracts_exception_attrs_from_loguru_record():
     }
 
     model = LogRecordModel.from_loguru_message(test_message).model_dump()
-    assert model["message"].startswith("Completing activity as failed\nTraceback")
+    assert model["message"] == "Completing activity as failed"
+    assert "Traceback" not in model["message"]
     assert model["extra"]["exception.type"] == "builtins.ValueError"
     assert model["extra"]["exception.message"] == "traceback-check"
-    assert "Traceback (most recent call last):" in model["extra"]["exception.stacktrace"]
+    assert (
+        "Traceback (most recent call last):" in model["extra"]["exception.stacktrace"]
+    )
 
 
 def test_log_record_model_extracts_nested_exception_type():
     """Nested exception types should use module.qualname."""
+
     class OuterError(Exception):
         class InnerError(Exception):
             pass
@@ -679,15 +683,19 @@ def test_log_record_model_extracts_nested_exception_type():
     }
 
     model = LogRecordModel.from_loguru_message(test_message).model_dump()
-    assert model["message"].startswith("failed\nTraceback")
+    assert model["message"] == "failed"
+    assert "Traceback" not in model["message"]
     assert model["extra"]["exception.type"].endswith(".OuterError.InnerError")
     assert model["extra"]["exception.message"] == "nested-boom"
+    assert (
+        "Traceback (most recent call last):" in model["extra"]["exception.stacktrace"]
+    )
 
 
-def test_otel_body_includes_stacktrace_from_loguru_record(
+def test_otel_stacktrace_in_attributes_not_body_from_loguru_record(
     logger_adapter: AtlanLoggerAdapter,
 ):
-    """OTEL body should include stacktrace when created from a loguru exception record."""
+    """OTEL stacktrace should be in attributes only, not appended to body."""
     try:
         raise RuntimeError("otlp-body-check")
     except RuntimeError:
@@ -710,8 +718,13 @@ def test_otel_body_includes_stacktrace_from_loguru_record(
     model = LogRecordModel.from_loguru_message(test_message).model_dump()
     otel_record = logger_adapter._create_log_record(model)
 
-    assert otel_record.body.startswith("Query failed\nTraceback")
-    assert "RuntimeError: otlp-body-check" in otel_record.body
+    assert otel_record.body == "Query failed"
+    assert "Traceback" not in otel_record.body
+    assert "exception.stacktrace" in otel_record.attributes
+    assert (
+        "RuntimeError: otlp-body-check"
+        in otel_record.attributes["exception.stacktrace"]
+    )
 
 
 def test_create_log_record_uses_structured_exception_attributes(
