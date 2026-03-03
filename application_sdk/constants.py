@@ -365,5 +365,6 @@ os.environ["DAFT_ANALYTICS_ENABLED"] = "0"
 # Only these apps will have their version auto-detected and added to OTEL resource attributes
 KNOWN_APP_PACKAGES = [
     "atlan-publish-app",
+    "atlan-mssql-app",
     "atlan-query-intelligence-app",
 ]
