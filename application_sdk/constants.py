@@ -86,7 +86,9 @@ OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observa
 
 # Temporal Prometheus Metrics
 #: Bind address for the Temporal Prometheus metrics endpoint
-TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv("ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464")
+TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
+    "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
+)
 
 # Workflow Client Constants
 #: Host address for the Temporal server

@@ -12,10 +12,17 @@ from application_sdk.workflows import WorkflowInterface
 
 @pytest.fixture(autouse=True)
 def mock_runtime():
-    """Mock Runtime to avoid port conflicts when multiple tests call load()."""
+    """Mock Runtime and reset the class-level singleton for each test.
+
+    Patches the Runtime class to avoid real port binding, and resets
+    TemporalWorkflowClient._prometheus_runtime so each test starts with
+    a fresh singleton state, preventing cross-test interference.
+    """
+    TemporalWorkflowClient._prometheus_runtime = None
     with patch("application_sdk.clients.temporal.Runtime") as mock_cls:
         mock_cls.return_value = MagicMock(spec=Runtime)
         yield mock_cls
+    TemporalWorkflowClient._prometheus_runtime = None
 
 
 # Mock workflow class for testing
