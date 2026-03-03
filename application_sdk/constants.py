@@ -360,3 +360,10 @@ DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
 os.environ["DO_NOT_TRACK"] = "true"
 os.environ["SCARF_NO_ANALYTICS"] = "true"
 os.environ["DAFT_ANALYTICS_ENABLED"] = "0"
+
+# Known app packages for auto-detection of app version
+# Only these apps will have their version auto-detected and added to OTEL resource attributes
+KNOWN_APP_PACKAGES = [
+    "atlan-publish-app",
+    "atlan-query-intelligence-app",
+]
