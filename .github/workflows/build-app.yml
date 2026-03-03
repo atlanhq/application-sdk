@@ -56,7 +56,7 @@ jobs:
       - name: Build and push to GHCR (multi-arch + security scan)
         uses: atlanhq/application-sdk/.github/actions/secure-build-push-apps@main
         with:
-          branch: ${{ github.ref_name }}
+          branch: ${{ github.ref_name }} # NOTE: github.ref_name reflects the caller's branch, not the commit's source branch. Snyk imports may be skipped if the caller triggers from a non-main branch. This is acceptable since GM calls from main.
           snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
           snyk-ghcr-integration-id: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
           snyk-docker-integration-id: ${{ secrets.SNYK_DOCKER_INTEGRATION_ID }}
