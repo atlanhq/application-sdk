@@ -7,6 +7,8 @@ on:
       - main
     paths:
       - 'Dockerfile'
+      - 'pyproject.toml'
+      - 'uv.lock'
       - 'entrypoint.sh'
 
 permissions:
