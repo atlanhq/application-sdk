@@ -23,6 +23,7 @@ from application_sdk.constants import (
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
+    SERVICE_VERSION,
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
@@ -30,6 +31,7 @@ from application_sdk.constants import (
     WORKFLOW_PORT,
     WORKFLOW_TLS_ENABLED,
 )
+from application_sdk.version import __version__ as SDK_VERSION
 from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
 from application_sdk.interceptors.correlation_context import (
     CorrelationContextInterceptor,
@@ -245,7 +247,11 @@ class TemporalWorkflowClient(WorkflowClient):
             telemetry=TelemetryConfig(
                 metrics=PrometheusConfig(
                     bind_address=TEMPORAL_PROMETHEUS_BIND_ADDRESS
-                )
+                ),
+                global_tags={
+                    "service_version": SERVICE_VERSION,
+                    "sdk_version": SDK_VERSION,
+                },
             )
         )
         logger.info(
