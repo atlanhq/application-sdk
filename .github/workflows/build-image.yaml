@@ -4,12 +4,7 @@ on:
   workflow_dispatch:  # Allow manual triggering
   push:
     branches:
-      - main
-    paths:
-      - 'Dockerfile'
-      - 'pyproject.toml'
-      - 'uv.lock'
-      - 'entrypoint.sh'
+      - build-image
 
 permissions:
   contents: read
@@ -91,8 +86,8 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/atlanhq/${{ github.event.repository.name }}-${{ needs.prepare.outputs.lowercase_branch }}:latest
-            ghcr.io/atlanhq/${{ github.event.repository.name }}-${{ needs.prepare.outputs.lowercase_branch }}:${{ needs.prepare.outputs.version }}
+            ghcr.io/atlanhq/${{ github.event.repository.name }}-main:latest
+            ghcr.io/atlanhq/${{ github.event.repository.name }}-main:${{ needs.prepare.outputs.version }}
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
