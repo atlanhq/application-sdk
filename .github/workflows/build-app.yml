@@ -15,6 +15,10 @@ on:
         required: true
         type: string
         description: "App name from app-manifest.yaml (used for image naming)"
+      branch_name:
+        required: true
+        type: string
+        description: "Branch name the commit belongs to (e.g. 'main', 'beta'). Used in image tagging."
       enable_sdr:
         required: false
         type: boolean
@@ -42,9 +46,12 @@ jobs:
         id: img
         env:
           APP_NAME: ${{ inputs.app_name }}
+          BRANCH_NAME: ${{ inputs.branch_name }}
         run: |
-          echo "ghcr_image=ghcr.io/atlanhq/${APP_NAME}-main" >> "$GITHUB_OUTPUT"
+          LOWERCASE_BRANCH=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]')
+          echo "ghcr_image=ghcr.io/atlanhq/${APP_NAME}-${LOWERCASE_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "dockerhub_image=atlanhq/${APP_NAME}" >> "$GITHUB_OUTPUT"
+          echo "lowercase_branch=${LOWERCASE_BRANCH}" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -56,7 +63,7 @@ jobs:
       - name: Build and push to GHCR (multi-arch + security scan)
         uses: atlanhq/application-sdk/.github/actions/secure-build-push-apps@main
         with:
-          branch: ${{ github.ref_name }} # NOTE: github.ref_name reflects the caller's branch, not the commit's source branch. Snyk imports may be skipped if the caller triggers from a non-main branch. This is acceptable since GM calls from main.
+          branch: ${{ inputs.branch_name }}
           snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
           snyk-ghcr-integration-id: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
           snyk-docker-integration-id: ${{ secrets.SNYK_DOCKER_INTEGRATION_ID }}
@@ -68,6 +75,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ${{ steps.img.outputs.ghcr_image }}:${{ inputs.image_tag }}
+            ${{ steps.img.outputs.ghcr_image }}:latest
+          build-args: |
+            ACCESS_TOKEN_USR=${{ github.actor }}
+            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
 
       # --- Conditional DockerHub push for Self-Deployed Runtime apps ---
@@ -84,7 +95,9 @@ jobs:
           GHCR_IMAGE: ${{ steps.img.outputs.ghcr_image }}
           DOCKERHUB_IMAGE: ${{ steps.img.outputs.dockerhub_image }}
           IMAGE_TAG: ${{ inputs.image_tag }}
+          BRANCH: ${{ steps.img.outputs.lowercase_branch }}
         run: |
           docker buildx imagetools create \
             "${GHCR_IMAGE}:${IMAGE_TAG}" \
-            --tag "${DOCKERHUB_IMAGE}:main-${IMAGE_TAG}"
+            --tag "${DOCKERHUB_IMAGE}:${BRANCH}-${IMAGE_TAG}" \
+            --tag "${DOCKERHUB_IMAGE}:${BRANCH}-latest"
