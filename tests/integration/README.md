@@ -38,11 +38,57 @@ scenarios = [
 ### 3. Set Environment Variables
 
 ```bash
-export MY_DB_HOST=localhost
-export MY_DB_USER=test
-export MY_DB_PASSWORD=secret
-export APP_SERVER_URL=http://localhost:8000
+export ATLAN_APPLICATION_NAME=postgres
+export E2E_POSTGRES_HOST=localhost
+export E2E_POSTGRES_USERNAME=admin
+export E2E_POSTGRES_PASSWORD=secret
+export E2E_POSTGRES_PORT=5432
 ```
+
+#### Per-Scenario Credentials
+
+Scenarios that need different credentials (e.g. a restricted user for permission
+tests) can use scenario-specific env vars. The framework checks for these first,
+then falls back to the app-level defaults.
+
+**Naming convention:**
+
+| Scope | Pattern | Example |
+|---|---|---|
+| Scenario-specific (checked first) | `E2E_<SCENARIO_NAME>_<KEY>` | `E2E_PREFLIGHT_MISSING_PERMISSIONS_USERNAME` |
+| App-level default (fallback) | `E2E_<APP_NAME>_<KEY>` | `E2E_POSTGRES_USERNAME` |
+
+Scenario names are matched in uppercase with underscores (matching the `name`
+field on the `Scenario` object).
+
+```bash
+# App-level defaults (used by most scenarios)
+export E2E_POSTGRES_USERNAME=admin
+export E2E_POSTGRES_PASSWORD=secret
+
+# Scenario-specific overrides (only for preflight_missing_permissions)
+export E2E_PREFLIGHT_MISSING_PERMISSIONS_USERNAME=restricted_user
+export E2E_PREFLIGHT_MISSING_PERMISSIONS_PASSWORD=restricted_pass
+```
+
+```python
+Scenario(
+    name="preflight_missing_permissions",
+    api="preflight",
+    # No credentials= override needed — framework auto-resolves:
+    # 1. Looks for E2E_PREFLIGHT_MISSING_PERMISSIONS_* env vars
+    # 2. Falls back to E2E_POSTGRES_* defaults
+    metadata={"databases": ["mydb"]},
+    assert_that={"success": equals(False)},
+)
+```
+
+**Priority order for credential resolution:**
+
+1. `scenario.credentials` — explicit dict on the Scenario (highest)
+2. `cls.default_credentials` — class-level defaults on the test class
+3. `E2E_{SCENARIO_NAME}_*` env vars — scenario-specific overrides
+4. `E2E_{APP_NAME}_*` env vars — app-level defaults (lowest)
 
 ### 4. Run Tests
 
@@ -97,7 +143,7 @@ scenarios = [
             "message": equals("Authentication successful"),
         }
     ),
-    
+
     # Invalid authentication
     Scenario(
         name="auth_invalid_credentials",
@@ -107,7 +153,7 @@ scenarios = [
             "success": equals(False),
         }
     ),
-    
+
     # Preflight check
     Scenario(
         name="preflight_valid",
@@ -120,7 +166,7 @@ scenarios = [
             "success": equals(True),
         }
     ),
-    
+
     # Workflow execution
     Scenario(
         name="workflow_full_extraction",

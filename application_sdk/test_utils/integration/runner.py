@@ -49,18 +49,32 @@ logger = get_logger(__name__)
 _NOT_PROVIDED = object()
 
 
-def _auto_discover_credentials() -> Dict[str, Any]:
+def _auto_discover_credentials(scenario_name: str = "") -> Dict[str, Any]:
     """Auto-discover credentials from E2E_* environment variables.
 
-    Reads ATLAN_APPLICATION_NAME to determine the app name, then
-    finds all E2E_{APP_NAME}_* env vars and builds a credentials dict.
+    Checks for scenario-specific env vars first, then falls back to
+    app-level defaults.
 
-    For example, with ATLAN_APPLICATION_NAME=postgres:
-      E2E_POSTGRES_USERNAME=user  -> {"username": "user"}
-      E2E_POSTGRES_PASSWORD=pass  -> {"password": "pass"}
-      E2E_POSTGRES_HOST=host      -> {"host": "host"}
-      E2E_POSTGRES_PORT=5432      -> {"port": 5432}
-      E2E_POSTGRES_DATABASE=mydb  -> {"database": "mydb"}
+    Resolution order:
+      1. E2E_{SCENARIO_NAME}_* (scenario-specific)
+      2. E2E_{APP_NAME}_*      (app-level default)
+
+    For example, with ATLAN_APPLICATION_NAME=postgres and
+    scenario_name="preflight_missing_permissions":
+
+      Scenario-specific (checked first):
+        E2E_PREFLIGHT_MISSING_PERMISSIONS_USERNAME=restricted_user
+
+      App-level fallback:
+        E2E_POSTGRES_USERNAME=admin
+        E2E_POSTGRES_PASSWORD=secret
+        E2E_POSTGRES_PORT=5432
+
+      Result: {"username": "restricted_user", "password": "secret", "port": 5432}
+
+    Args:
+        scenario_name: The scenario name used to look up scenario-specific
+            env vars. If empty, only app-level defaults are returned.
 
     Returns:
         Dict[str, Any]: Auto-discovered credentials from env vars.
@@ -73,8 +87,48 @@ def _auto_discover_credentials() -> Dict[str, Any]:
         )
         return {}
 
-    prefix = f"E2E_{app_name}_"
-    credentials = {}
+    # Collect app-level defaults: E2E_{APP_NAME}_*
+    app_prefix = f"E2E_{app_name}_"
+    app_credentials = _collect_env_credentials(app_prefix)
+
+    if app_credentials:
+        logger.info(
+            f"Auto-discovered {len(app_credentials)} credential fields "
+            f"from {app_prefix}* env vars: {list(app_credentials.keys())}"
+        )
+    else:
+        logger.warning(
+            f"No {app_prefix}* environment variables found. "
+            f"Set them in your .env file or environment."
+        )
+
+    # Check for scenario-specific overrides: E2E_{SCENARIO_NAME}_*
+    if scenario_name:
+        scenario_prefix = f"E2E_{scenario_name.upper()}_"
+        scenario_credentials = _collect_env_credentials(scenario_prefix)
+
+        if scenario_credentials:
+            logger.info(
+                f"Found {len(scenario_credentials)} scenario-specific credential "
+                f"fields from {scenario_prefix}* env vars: "
+                f"{list(scenario_credentials.keys())}"
+            )
+            # Scenario-specific vars override app-level defaults
+            return {**app_credentials, **scenario_credentials}
+
+    return app_credentials
+
+
+def _collect_env_credentials(prefix: str) -> Dict[str, Any]:
+    """Collect credentials from environment variables matching a prefix.
+
+    Args:
+        prefix: The env var prefix to match (e.g. "E2E_POSTGRES_").
+
+    Returns:
+        Dict[str, Any]: Credentials extracted from matching env vars.
+    """
+    credentials: Dict[str, Any] = {}
 
     for key, value in os.environ.items():
         if key.startswith(prefix):
@@ -83,17 +137,6 @@ def _auto_discover_credentials() -> Dict[str, Any]:
             if value.isdigit():
                 value = int(value)
             credentials[field_name] = value
-
-    if credentials:
-        logger.info(
-            f"Auto-discovered {len(credentials)} credential fields "
-            f"from E2E_{app_name}_* env vars: {list(credentials.keys())}"
-        )
-    else:
-        logger.warning(
-            f"No E2E_{app_name}_* environment variables found. "
-            f"Set them in your .env file or environment."
-        )
 
     return credentials
 
@@ -193,7 +236,6 @@ class BaseIntegrationTest:
     # Internal state
     client: IntegrationTestClient
     _results: List[ScenarioResult]
-    _env_credentials: Dict[str, Any] = {}
 
     def __init_subclass__(cls, **kwargs):
         """Auto-generate individual test methods for each scenario.
@@ -234,8 +276,8 @@ class BaseIntegrationTest:
                     f"{'=' * 60}"
                 )
 
-        # Auto-discover credentials from env vars
-        cls._env_credentials = _auto_discover_credentials()
+        # Validate that app-level credentials are discoverable (early warning)
+        _auto_discover_credentials()
 
         # Initialize the client
         cls.client = IntegrationTestClient(
@@ -276,11 +318,12 @@ class BaseIntegrationTest:
     def _build_scenario_args(self, scenario: Scenario) -> Dict[str, Any]:
         """Build the API args for a scenario.
 
-        Priority order:
+        Priority order for credentials:
         1. scenario.args (full override, backward compat) - used as-is
-        2. scenario.credentials/metadata/connection (per-scenario overrides)
-        3. cls.default_credentials/metadata/connection (class-level defaults)
-        4. Auto-discovered from E2E_* env vars (lowest priority for credentials)
+        2. scenario.credentials (explicit dict override)
+        3. cls.default_credentials (class-level defaults)
+        4. E2E_{SCENARIO_NAME}_* env vars (scenario-specific)
+        5. E2E_{APP_NAME}_* env vars (app-level defaults)
 
         Args:
             scenario: The scenario to build args for.
@@ -297,8 +340,10 @@ class BaseIntegrationTest:
             # Scenario provides explicit credentials - use as-is
             credentials = scenario.credentials
         else:
+            # Discover credentials with scenario-specific overrides
+            env_credentials = _auto_discover_credentials(scenario.name)
             # Merge env vars + class defaults
-            credentials = {**self._env_credentials, **self.default_credentials}
+            credentials = {**env_credentials, **self.default_credentials}
             # Apply build_credentials hook if defined
             if hasattr(self, "build_credentials") and callable(self.build_credentials):
                 credentials = self.build_credentials(credentials)
