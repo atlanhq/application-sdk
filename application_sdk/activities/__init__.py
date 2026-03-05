@@ -13,9 +13,11 @@ Example:
     ...         await state.handler.do_something()
 """
 
+import importlib.util
 import os
 from abc import ABC
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, Generic, Optional, TypeVar
 
 from pydantic import BaseModel
@@ -39,6 +41,31 @@ activity.logger = logger
 
 # Define a custom type for the handler
 HandlerType = TypeVar("HandlerType", bound=HandlerInterface)
+
+
+def _load_config_model() -> Optional[type]:
+    """Dynamically load CustomConfig from a Pkl-generated config.py if it exists.
+
+    Searches contract/generated/ under the current working directory for config.py
+    files containing a CustomConfig Pydantic model. Returns None if not found,
+    allowing apps without Pkl contracts to work unchanged.
+    """
+    generated_dir = Path.cwd() / "contract" / "generated"
+    if not generated_dir.is_dir():
+        return None
+
+    for config_path in generated_dir.rglob("config.py"):
+        try:
+            spec = importlib.util.spec_from_file_location("pkl_config", config_path)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                config_cls = getattr(mod, "CustomConfig", None)
+                if config_cls is not None:
+                    return config_cls
+        except Exception:
+            continue
+    return None
 
 
 class ActivitiesState(BaseModel, Generic[HandlerType]):
@@ -225,6 +252,19 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             for key, value in workflow_config.items():
                 if key.startswith("atlan-") and value:
                     workflow_args[key] = str(value)
+
+            # Opt-in config validation: if a Pkl-generated config.py exists,
+            # validate and add snake_case keys alongside the hyphenated originals.
+            try:
+                config_model = _load_config_model()
+                if config_model:
+                    validated = config_model.model_validate(workflow_args)
+                    # Merge snake_case keys (by_alias=False) into workflow_args
+                    # so apps can use either workflow_args["extraction_method"]
+                    # or workflow_args["extraction-method"]
+                    workflow_args.update(validated.model_dump(by_alias=False))
+            except Exception as e:
+                logger.debug(f"Config validation skipped: {e}")
 
             return workflow_args
 
