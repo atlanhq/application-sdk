@@ -2,6 +2,7 @@ import asyncio
 import logging
 import sys
 import threading
+import traceback as tb_module
 from time import time_ns
 from typing import Any, Dict, Optional, Tuple
 
@@ -39,6 +40,7 @@ from application_sdk.observability.utils import (
     get_observability_dir,
     get_workflow_context,
 )
+from application_sdk.version import __version__ as _SDK_VERSION
 
 
 class LogExtraModel(BaseModel):
@@ -105,8 +107,14 @@ class LogRecordModel(BaseModel):
             if k != "logger_name" and hasattr(extra, k):
                 setattr(extra, k, v)
             # Include atlan- prefixed fields as extra attributes (correlation context)
-            elif k.startswith("atlan-") and v is not None:
+            elif (
+                k.startswith("atlan-") or k.startswith("exception.")
+            ) and v is not None:
                 setattr(extra, k, str(v))
+        for key, value in _extract_exception_attributes(
+            message.record.get("exception")
+        ).items():
+            setattr(extra, key, value)
 
         return cls(
             timestamp=message.record["time"].timestamp(),
@@ -123,6 +131,45 @@ class LogRecordModel(BaseModel):
         """Pydantic model configuration for LogRecordModel."""
 
         arbitrary_types_allowed = True
+
+
+def _format_exception_stacktrace(exception: Any) -> str:
+    """Format a Loguru exception record into a traceback string."""
+    if exception is None:
+        return ""
+    exc_type = getattr(exception, "type", None)
+    exc_value = getattr(exception, "value", None)
+    exc_traceback = getattr(exception, "traceback", None)
+    if exc_type is None:
+        return ""
+    return "".join(
+        tb_module.format_exception(exc_type, exc_value, exc_traceback)
+    ).rstrip()
+
+
+def _extract_exception_attributes(exception: Any) -> Dict[str, str]:
+    """Extract OTEL semantic exception attributes from a Loguru exception record."""
+    if exception is None:
+        return {}
+
+    exc_type = getattr(exception, "type", None)
+    exc_value = getattr(exception, "value", None)
+    if exc_type is None:
+        return {}
+
+    module = getattr(exc_type, "__module__", None)
+    qualname = getattr(exc_type, "__qualname__", getattr(exc_type, "__name__", None))
+    type_name = f"{module}.{qualname}" if module and qualname else str(exc_type)
+
+    attrs: Dict[str, str] = {"exception.type": type_name}
+    if exc_value is not None:
+        attrs["exception.message"] = str(exc_value)
+
+    stacktrace = _format_exception_stacktrace(exception)
+    if stacktrace:
+        attrs["exception.stacktrace"] = stacktrace
+
+    return attrs
 
 
 # Re-exported from context.py for backward compatibility:
@@ -277,12 +324,12 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     "<blue>[{level}]</blue>"
                     "<magenta>{extra[_trace_id_str]}</magenta> "
                     "<cyan>{extra[logger_name]}</cyan>"
-                    " - <level>{message}</level>\n"
+                    " - <level>{message}</level>\n{exception}"
                 )
             return (
                 "{time:YYYY-MM-DD HH:mm:ss} [{level}]"
                 "{extra[_trace_id_str]} {extra[logger_name]}"
-                " - {message}\n"
+                " - {message}\n{exception}"
             )
 
         self.logger.add(
@@ -329,6 +376,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     resource_attributes["service.name"] = SERVICE_NAME
                 if "service.version" not in resource_attributes:
                     resource_attributes["service.version"] = SERVICE_VERSION
+
+                # Auto-inject SDK version
+                resource_attributes["sdk.version"] = _SDK_VERSION
 
                 # Add workflow node name if running in Argo
                 if workflow_node_name:
@@ -407,6 +457,14 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             for k, v in record.record["extra"].items():
                 if k != "logger_name" and hasattr(extra, k):
                     setattr(extra, k, v)
+                elif (
+                    k.startswith("atlan-") or k.startswith("exception.")
+                ) and v is not None:
+                    setattr(extra, k, str(v))
+            for key, value in _extract_exception_attributes(
+                record.record.get("exception")
+            ).items():
+                setattr(extra, key, value)
 
             return LogRecordModel(
                 timestamp=record.record["time"].timestamp(),
@@ -425,6 +483,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             for k, v in record.get("extra", {}).items():
                 if hasattr(extra, k):
                     setattr(extra, k, v)
+                elif (
+                    k.startswith("atlan-") or k.startswith("exception.")
+                ) and v is not None:
+                    setattr(extra, k, str(v))
             record["extra"] = extra
             return LogRecordModel(**record).model_dump()
 
@@ -574,8 +636,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             **kwargs: Additional keyword arguments for context
         """
         try:
+            exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.bind(**kwargs).debug(msg, *args)
+            bound_logger = self.logger.bind(**kwargs)
+            if exc_info:
+                bound_logger.opt(exception=exc_info).debug(msg, *args)
+            else:
+                bound_logger.debug(msg, *args)
         except Exception as e:
             logging.error(f"Error in debug logging: {e}")
             self._sync_flush()
@@ -589,8 +656,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             **kwargs: Additional keyword arguments for context
         """
         try:
+            exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.bind(**kwargs).info(msg, *args)
+            bound_logger = self.logger.bind(**kwargs)
+            if exc_info:
+                bound_logger.opt(exception=exc_info).info(msg, *args)
+            else:
+                bound_logger.info(msg, *args)
         except Exception as e:
             logging.error(f"Error in info logging: {e}")
             self._sync_flush()
@@ -604,8 +676,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             **kwargs: Additional keyword arguments for context
         """
         try:
+            exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.bind(**kwargs).warning(msg, *args)
+            bound_logger = self.logger.bind(**kwargs)
+            if exc_info:
+                bound_logger.opt(exception=exc_info).warning(msg, *args)
+            else:
+                bound_logger.warning(msg, *args)
         except Exception as e:
             logging.error(f"Error in warning logging: {e}")
             self._sync_flush()
@@ -621,13 +698,33 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         Note: Forces an immediate flush of logs when called.
         """
         try:
+            exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.bind(**kwargs).error(msg, *args)
+            bound_logger = self.logger.bind(**kwargs)
+            if exc_info:
+                bound_logger.opt(exception=exc_info).error(msg, *args)
+            else:
+                bound_logger.error(msg, *args)
             # Force flush on error logs
             self._sync_flush()
         except Exception as e:
             logging.error(f"Error in error logging: {e}")
             self._sync_flush()
+
+    def exception(self, msg: str, *args: Any, **kwargs: Any):
+        """Log an error level message with the current exception traceback.
+
+        Equivalent to error() with exc_info=True. Matches the interface of
+        logging.Logger.exception() so that callers such as the Temporal SDK
+        (activity.logger.exception(...)) work correctly.
+
+        Args:
+            msg (str): Message to log
+            *args: Additional positional arguments
+            **kwargs: Additional keyword arguments for context
+        """
+        kwargs.setdefault("exc_info", True)
+        self.error(msg, *args, **kwargs)
 
     def critical(self, msg: str, *args: Any, **kwargs: Any):
         """Log a critical level message.
@@ -640,8 +737,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         Note: Forces an immediate flush of logs when called.
         """
         try:
+            exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
-            self.logger.bind(**kwargs).critical(msg, *args)
+            bound_logger = self.logger.bind(**kwargs)
+            if exc_info:
+                bound_logger.opt(exception=exc_info).critical(msg, *args)
+            else:
+                bound_logger.critical(msg, *args)
             # Force flush on critical logs
             self._sync_flush()
         except Exception as e:
