@@ -1,5 +1,4 @@
 import asyncio
-import importlib.metadata
 import logging
 import sys
 import threading
@@ -19,7 +18,6 @@ from pydantic import BaseModel, Field
 from application_sdk.constants import (
     ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,
-    KNOWN_APP_PACKAGES,
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
     LOG_FILE_NAME,
@@ -172,23 +170,6 @@ def _extract_exception_attributes(exception: Any) -> Dict[str, str]:
         attrs["exception.stacktrace"] = stacktrace
 
     return attrs
-
-
-def _detect_app_version() -> tuple[str, str]:
-    """Detect the host app name and version if it's a known package.
-
-    Iterates through KNOWN_APP_PACKAGES and returns the first match.
-    Returns ("", "") if no known app is detected.
-
-    Returns:
-        tuple[str, str]: A tuple of (app_name, app_version) or ("", "") if not found.
-    """
-    for package_name in KNOWN_APP_PACKAGES:
-        try:
-            return package_name, importlib.metadata.version(package_name)
-        except importlib.metadata.PackageNotFoundError:
-            continue
-    return "", ""
 
 
 # Re-exported from context.py for backward compatibility:
@@ -398,12 +379,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
                 # Auto-inject SDK version
                 resource_attributes["sdk.version"] = _SDK_VERSION
-
-                # Auto-detect app version for known apps
-                app_name, app_version = _detect_app_version()
-                if app_version:
-                    resource_attributes["app.name"] = app_name
-                    resource_attributes["app.version"] = app_version
 
                 # Add workflow node name if running in Argo
                 if workflow_node_name:
