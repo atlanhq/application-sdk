@@ -20,6 +20,7 @@ from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
+    ENABLE_TEMPORAL_OTEL_TRACING,
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
@@ -455,6 +456,54 @@ class TemporalWorkflowClient(WorkflowClient):
         # Create activities lookup dict for interceptors
         activities_dict = {getattr(a, "__name__", str(a)): a for a in final_activities}
 
+        # Build interceptors list dynamically based on tracing configuration
+        interceptors = []
+
+        if ENABLE_TEMPORAL_OTEL_TRACING:
+            from application_sdk.observability.temporal_tracing import (
+                setup_temporal_tracing,
+            )
+
+            setup_temporal_tracing()
+
+            try:
+                from temporalio.contrib.opentelemetry import TracingInterceptor
+
+                interceptors.append(TracingInterceptor())
+                logger.info("Temporal OTel TracingInterceptor enabled")
+            except ImportError as e:
+                logger.warning(
+                    f"Failed to import TracingInterceptor: {e}. "
+                    "Install temporalio[opentelemetry] to enable tracing."
+                )
+
+        interceptors.extend(
+            [
+                CorrelationContextInterceptor(),
+                EventInterceptor(),
+                CleanupInterceptor(),
+                RedisLockInterceptor(activities_dict),
+            ]
+        )
+
+        if ENABLE_TEMPORAL_OTEL_TRACING:
+            try:
+                from application_sdk.interceptors.otel_enrichment import (
+                    OTelEnrichmentInterceptor,
+                )
+
+                interceptors.append(OTelEnrichmentInterceptor())
+                logger.info("Temporal OTel enrichment interceptor enabled")
+            except ImportError as e:
+                logger.warning(f"Failed to import OTelEnrichmentInterceptor: {e}.")
+
+        # Extend passthrough_modules for OTel if tracing is enabled
+        final_passthrough_modules = list(passthrough_modules)
+        if ENABLE_TEMPORAL_OTEL_TRACING:
+            final_passthrough_modules.extend(
+                ["opentelemetry", "temporalio.contrib.opentelemetry"]
+            )
+
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
@@ -462,7 +511,7 @@ class TemporalWorkflowClient(WorkflowClient):
             activities=final_activities,
             workflow_runner=SandboxedWorkflowRunner(
                 restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                    *passthrough_modules
+                    *final_passthrough_modules
                 )
             ),
             max_concurrent_activities=max_concurrent_activities,
@@ -470,12 +519,7 @@ class TemporalWorkflowClient(WorkflowClient):
             graceful_shutdown_timeout=timedelta(
                 seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
             ),
-            interceptors=[
-                CorrelationContextInterceptor(),
-                EventInterceptor(),
-                CleanupInterceptor(),
-                RedisLockInterceptor(activities_dict),
-            ],
+            interceptors=interceptors,
         )
 
     async def get_workflow_run_status(

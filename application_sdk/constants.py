@@ -90,6 +90,14 @@ TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
     "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
 )
 
+#: Enable OpenTelemetry tracing for Temporal activities.
+#: When enabled, only failed activity spans are exported to the OTel collector.
+#: This is opt-in per application via the ENABLE_TEMPORAL_OTEL_TRACING environment variable.
+#: Successful activities do not generate any trace data to avoid spamming the collector.
+ENABLE_TEMPORAL_OTEL_TRACING: bool = (
+    os.getenv("ENABLE_TEMPORAL_OTEL_TRACING", "false").lower() == "true"
+)
+
 # Workflow Client Constants
 #: Host address for the Temporal server
 WORKFLOW_HOST = os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
