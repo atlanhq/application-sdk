@@ -258,6 +258,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
     _flush_task_started = False
     _flush_task = None
+    _initialized = False
 
     def __init__(self, logger_name: str) -> None:
         """Initialize the AtlanLoggerAdapter with enhanced configuration.
@@ -283,6 +284,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         self.logger_name = logger_name
         # Bind the logger name when creating the logger instance
         self.logger = logger
+
+        if AtlanLoggerAdapter._initialized:
+            return
+        AtlanLoggerAdapter._initialized = True
+
         logger.remove()
 
         # Register custom log level for activity

@@ -48,6 +48,8 @@ def create_logger_adapter() -> Generator[AtlanLoggerAdapter, None, None]:
     Yields:
         AtlanLoggerAdapter: A configured logger adapter instance.
     """
+    # Reset initialization flag to allow fresh sink setup for each test
+    AtlanLoggerAdapter._initialized = False
     with mock.patch.dict(
         "os.environ",
         {
