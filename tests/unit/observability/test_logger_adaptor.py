@@ -49,7 +49,7 @@ def create_logger_adapter() -> Generator[AtlanLoggerAdapter, None, None]:
         AtlanLoggerAdapter: A configured logger adapter instance.
     """
     # Reset initialization flag to allow fresh sink setup for each test
-    AtlanLoggerAdapter._initialized = False
+    AtlanLoggerAdapter._reset_for_testing()
     with mock.patch.dict(
         "os.environ",
         {
@@ -904,7 +904,7 @@ class TestTemporalAttributePassthrough:
         model = LogRecordModel.from_loguru_message(test_message).model_dump()
 
         assert model["extra"]["temporal.activity.type"] == "fetch_databases"
-        assert model["extra"]["temporal.activity.attempt"] == "1"
+        assert model["extra"]["temporal.activity.attempt"] == 1  # Preserved as int
         assert model["extra"]["tenant.id"] == "test-tenant"
 
     def test_no_temporal_or_tenant_keys_baseline(
