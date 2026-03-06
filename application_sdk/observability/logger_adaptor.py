@@ -287,7 +287,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
         if AtlanLoggerAdapter._initialized:
             return
-        AtlanLoggerAdapter._initialized = True
 
         logger.remove()
 
@@ -416,6 +415,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
             except Exception as e:
                 logging.error(f"Failed to setup OTLP logging: {str(e)}")
+
+        # Mark initialization complete only after all sinks are successfully added
+        AtlanLoggerAdapter._initialized = True
 
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
         """Parse OpenTelemetry resource attributes from environment variable.
