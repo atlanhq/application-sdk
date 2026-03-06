@@ -106,11 +106,17 @@ class LogRecordModel(BaseModel):
         for k, v in message.record["extra"].items():
             if k != "logger_name" and hasattr(extra, k):
                 setattr(extra, k, v)
-            # Include atlan- prefixed fields as extra attributes (correlation context)
+            # Include atlan-, exception., temporal., tenant. prefixed fields as extra attributes
             elif (
-                k.startswith("atlan-") or k.startswith("exception.")
+                k.startswith("atlan-")
+                or k.startswith("exception.")
+                or k.startswith("temporal.")
+                or k.startswith("tenant.")
             ) and v is not None:
-                setattr(extra, k, str(v))
+                if isinstance(v, (bool, int, float, str, bytes)):
+                    setattr(extra, k, v)
+                else:
+                    setattr(extra, k, str(v))
         for key, value in _extract_exception_attributes(
             message.record.get("exception")
         ).items():
@@ -255,6 +261,16 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
     _flush_task_started = False
     _flush_task = None
+    _initialized = False
+
+    @classmethod
+    def _reset_for_testing(cls) -> None:
+        """Reset initialization state for test isolation.
+
+        This method should only be used in tests to allow fresh sink setup
+        for each test case.
+        """
+        cls._initialized = False
 
     def __init__(self, logger_name: str) -> None:
         """Initialize the AtlanLoggerAdapter with enhanced configuration.
@@ -280,6 +296,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         self.logger_name = logger_name
         # Bind the logger name when creating the logger instance
         self.logger = logger
+
+        if AtlanLoggerAdapter._initialized:
+            return
+
         logger.remove()
 
         # Register custom log level for activity
@@ -408,6 +428,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             except Exception as e:
                 logging.error(f"Failed to setup OTLP logging: {str(e)}")
 
+        # Mark initialization complete only after all sinks are successfully added
+        AtlanLoggerAdapter._initialized = True
+
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
         """Parse OpenTelemetry resource attributes from environment variable.
 
@@ -458,9 +481,15 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 if k != "logger_name" and hasattr(extra, k):
                     setattr(extra, k, v)
                 elif (
-                    k.startswith("atlan-") or k.startswith("exception.")
+                    k.startswith("atlan-")
+                    or k.startswith("exception.")
+                    or k.startswith("temporal.")
+                    or k.startswith("tenant.")
                 ) and v is not None:
-                    setattr(extra, k, str(v))
+                    if isinstance(v, (bool, int, float, str, bytes)):
+                        setattr(extra, k, v)
+                    else:
+                        setattr(extra, k, str(v))
             for key, value in _extract_exception_attributes(
                 record.record.get("exception")
             ).items():
@@ -484,9 +513,15 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 if hasattr(extra, k):
                     setattr(extra, k, v)
                 elif (
-                    k.startswith("atlan-") or k.startswith("exception.")
+                    k.startswith("atlan-")
+                    or k.startswith("exception.")
+                    or k.startswith("temporal.")
+                    or k.startswith("tenant.")
                 ) and v is not None:
-                    setattr(extra, k, str(v))
+                    if isinstance(v, (bool, int, float, str, bytes)):
+                        setattr(extra, k, v)
+                    else:
+                        setattr(extra, k, str(v))
             record["extra"] = extra
             return LogRecordModel(**record).model_dump()
 
@@ -614,16 +649,23 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         except Exception:
             pass
 
-        # Add correlation context (atlan- prefixed keys and trace_id) to kwargs
+        # Add correlation context (atlan-, temporal., tenant. prefixed keys and trace_id) to kwargs
         corr_ctx = correlation_context.get()
         if corr_ctx:
             # Add trace_id if present (for log format display)
             if "trace_id" in corr_ctx and corr_ctx["trace_id"]:
                 kwargs["trace_id"] = str(corr_ctx["trace_id"])
-            # Add atlan-* headers for OTEL
+            # Add atlan-*, temporal.*, tenant.* keys for OTEL
             for key, value in corr_ctx.items():
-                if key.startswith("atlan-") and value:
-                    kwargs[key] = str(value)
+                if (
+                    key.startswith("atlan-")
+                    or key.startswith("temporal.")
+                    or key.startswith("tenant.")
+                ) and value:
+                    if isinstance(value, (bool, int, float, str, bytes)):
+                        kwargs[key] = value
+                    else:
+                        kwargs[key] = str(value)
 
         return msg, kwargs
 
