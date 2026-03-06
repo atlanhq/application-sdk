@@ -106,9 +106,12 @@ class LogRecordModel(BaseModel):
         for k, v in message.record["extra"].items():
             if k != "logger_name" and hasattr(extra, k):
                 setattr(extra, k, v)
-            # Include atlan- prefixed fields as extra attributes (correlation context)
+            # Include atlan-, exception., temporal., tenant. prefixed fields as extra attributes
             elif (
-                k.startswith("atlan-") or k.startswith("exception.")
+                k.startswith("atlan-")
+                or k.startswith("exception.")
+                or k.startswith("temporal.")
+                or k.startswith("tenant.")
             ) and v is not None:
                 setattr(extra, k, str(v))
         for key, value in _extract_exception_attributes(
@@ -458,7 +461,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 if k != "logger_name" and hasattr(extra, k):
                     setattr(extra, k, v)
                 elif (
-                    k.startswith("atlan-") or k.startswith("exception.")
+                    k.startswith("atlan-")
+                    or k.startswith("exception.")
+                    or k.startswith("temporal.")
+                    or k.startswith("tenant.")
                 ) and v is not None:
                     setattr(extra, k, str(v))
             for key, value in _extract_exception_attributes(
@@ -484,7 +490,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 if hasattr(extra, k):
                     setattr(extra, k, v)
                 elif (
-                    k.startswith("atlan-") or k.startswith("exception.")
+                    k.startswith("atlan-")
+                    or k.startswith("exception.")
+                    or k.startswith("temporal.")
+                    or k.startswith("tenant.")
                 ) and v is not None:
                     setattr(extra, k, str(v))
             record["extra"] = extra
