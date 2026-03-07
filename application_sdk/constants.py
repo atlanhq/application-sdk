@@ -282,6 +282,15 @@ ENABLE_OBSERVABILITY_DAPR_SINK = (
     os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true").lower() == "true"
 )
 
+# SDR (Secure Agent / Self-Deployed Runtime) Log Export
+# When enabled, writes observability logs to a centralized S3 prefix that
+# the MDLH S3 pipe can ingest into the shared Iceberg table.
+ENABLE_SDR_LOG_EXPORT = (
+    os.getenv("ATLAN_ENABLE_SDR_LOG_EXPORT", "false").lower() == "true"
+)
+#: S3 prefix for SDR log files (separate from OTel collector path)
+SDR_LOG_S3_PREFIX = "artifacts/apps/observability/sdr-logs"
+
 # atlan_client configuration (non ATLAN_ prefix are rooted in pyatlan SDK, to be revisited)
 ATLAN_API_TOKEN_GUID = os.getenv("API_TOKEN_GUID")
 ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")

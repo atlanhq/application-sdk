@@ -16,11 +16,15 @@ from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    APPLICATION_NAME,
     DEPLOYMENT_OBJECT_STORE_NAME,
     ENABLE_OBSERVABILITY_DAPR_SINK,
+    ENABLE_SDR_LOG_EXPORT,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
+    SDR_LOG_S3_PREFIX,
     STATE_STORE_NAME,
+    TEMPORARY_PATH,
     TRACES_FILE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
@@ -438,12 +442,77 @@ class AtlanObservability(Generic[T], ABC):
                         f"Error processing partition {partition_path}: {str(partition_error)}"
                     )
 
+            # SDR export: write to centralized prefix for MDLH S3 pipe ingestion
+            if ENABLE_SDR_LOG_EXPORT and self.file_name == LOG_FILE_NAME:
+                await self._flush_sdr_records(records)
+
             # Clean up old records if enabled
             if self._cleanup_enabled:
                 await self._check_and_cleanup()
 
         except Exception as e:
             logging.error(f"Error flushing records batch: {e}")
+
+    async def _flush_sdr_records(self, records: List[Dict[str, Any]]):
+        """Flush log records to the SDR centralized S3 prefix for MDLH ingestion.
+
+        Writes Parquet files with a schema matching the Iceberg workflow_logs table.
+        Files are written to artifacts/apps/observability/sdr-logs/ with Hive
+        partitioning (year/month/day/hour) and lexi-sortable filenames.
+
+        The MDLH S3 pipe picks up these files and ingests them into the shared
+        observability.workflow_logs Iceberg table.
+        """
+        try:
+            from application_sdk.io.parquet import ParquetFileWriter
+
+            # Map SDK log records to Iceberg table schema
+            iceberg_records = []
+            for record in records:
+                extra = record.get("extra", {})
+                iceberg_records.append(
+                    {
+                        "timestamp": int(
+                            record["timestamp"] * 1_000_000
+                        ),  # seconds → microseconds
+                        "level": record.get("level", "INFO"),
+                        "message": record.get("message", ""),
+                        "correlation_id": extra.get(
+                            "correlation_id", extra.get("atlan-request-id", "")
+                        ),
+                        "app_name": APPLICATION_NAME,
+                        "logger_name": record.get("logger_name", ""),
+                        "trace_id": extra.get("trace_id", ""),
+                        "span_id": extra.get("span_id", ""),
+                        "exception_type": extra.get("exception_type", ""),
+                        "exception_message": extra.get("exception_message", ""),
+                        "exception_stacktrace": extra.get("exception_stacktrace", ""),
+                    }
+                )
+
+            df = pd.DataFrame(iceberg_records)
+
+            # Build SDR partition path: sdr-logs/year=YYYY/month=MM/day=DD/hour=HH/
+            now = datetime.now()
+            sdr_partition = os.path.join(
+                TEMPORARY_PATH,
+                SDR_LOG_S3_PREFIX,
+                f"year={now.year}",
+                f"month={now.month:02d}",
+                f"day={now.day:02d}",
+                f"hour={now.hour:02d}",
+            )
+            os.makedirs(sdr_partition, exist_ok=True)
+
+            parquet_writer = ParquetFileWriter(
+                path=sdr_partition,
+                chunk_start=0,
+                chunk_part=int(time()),
+            )
+            await parquet_writer._write_dataframe(dataframe=df)
+
+        except Exception as e:
+            logging.error(f"Error flushing SDR records: {e}")
 
     async def _check_and_cleanup(self):
         """Check if cleanup is needed and perform it if necessary.
