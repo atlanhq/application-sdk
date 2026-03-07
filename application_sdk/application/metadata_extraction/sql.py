@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 from typing_extensions import deprecated
 
@@ -11,9 +11,8 @@ from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.observability.decorators.observability_decorator import (
     observability,
 )
+from application_sdk.observability.lazy_proxies import LazyMetricsProxy, LazyTracesProxy
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.metrics_adaptor import get_metrics
-from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.worker import Worker
@@ -23,8 +22,8 @@ from application_sdk.workflows.metadata_extraction.sql import (
 )
 
 logger = get_logger(__name__)
-metrics = get_metrics()
-traces = get_traces()
+metrics = cast(Any, LazyMetricsProxy())
+traces = cast(Any, LazyTracesProxy())
 
 
 class BaseSQLMetadataExtractionApplication(BaseApplication):
