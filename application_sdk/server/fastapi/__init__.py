@@ -54,6 +54,7 @@ from application_sdk.server.fastapi.models import (
     Subscription,
     TestAuthRequest,
     TestAuthResponse,
+    UIConfigResponse,
     WorkflowConfigRequest,
     WorkflowConfigResponse,
     WorkflowData,
@@ -441,6 +442,13 @@ class APIServer(ServerInterface):
         )
 
         self.workflow_router.add_api_route(
+            "/uiconfigs",
+            self.get_uiconfig,
+            methods=["GET"],
+            response_model=UIConfigResponse,
+        )
+
+        self.workflow_router.add_api_route(
             "/schedule",
             self.add_schedule,
             methods=["POST"],
@@ -724,6 +732,31 @@ class APIServer(ServerInterface):
             return ConfigMapResponse(
                 success=False,
                 message=f"Failed to fetch configuration map: {str(e)}",
+                data={},
+            )
+
+    async def get_uiconfig(self) -> UIConfigResponse:
+        """Get the UI configuration for this application.
+
+        Returns:
+            UIConfigResponse: Response containing the UI configuration.
+        """
+        try:
+            if not self.handler:
+                raise Exception("Handler not initialized")
+
+            uiconfig_data = await self.handler.get_uiconfig()
+
+            return UIConfigResponse(
+                success=True,
+                message="UI configuration fetched successfully",
+                data=uiconfig_data,
+            )
+        except Exception as e:
+            logger.error(f"Error fetching UI configuration: {e}")
+            return UIConfigResponse(
+                success=False,
+                message=f"Failed to fetch UI configuration: {str(e)}",
                 data={},
             )
 

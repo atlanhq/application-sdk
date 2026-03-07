@@ -58,3 +58,10 @@ class HandlerInterface(ABC):
                     return json.load(f)
 
         return {}
+
+    @staticmethod
+    async def get_uiconfig() -> Dict[str, Any]:
+        """
+        Static method to get the UI config
+        """
+        return {}
