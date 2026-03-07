@@ -277,7 +277,7 @@ class TestParquetFileWriterWriteDaftDataframe:
     async def test_write_empty(self, base_output_path: str):
         """Test writing an empty daft DataFrame."""
         mock_df = MagicMock()
-        mock_df.count_rows.return_value = 0
+        mock_df.limit.return_value.count_rows.return_value = 0
 
         parquet_output = ParquetFileWriter(
             path=base_output_path,
@@ -294,14 +294,15 @@ class TestParquetFileWriterWriteDaftDataframe:
         """Test successful daft DataFrame writing."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload:
+        ) as mock_upload, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
             mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
+            mock_read_metadata.return_value.num_rows = 1000
 
             # Mock daft DataFrame
             mock_df = MagicMock()
-            mock_df.count_rows.return_value = 1000
+            mock_df.limit.return_value.count_rows.return_value = 1
             mock_result = MagicMock()
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
@@ -321,6 +322,7 @@ class TestParquetFileWriterWriteDaftDataframe:
                 root_dir=parquet_output.path,
                 write_mode="append",  # Uses method default value "append"
                 partition_cols=None,
+                compression="snappy",
             )
 
             # Check that upload_prefix was called
@@ -333,15 +335,16 @@ class TestParquetFileWriterWriteDaftDataframe:
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.services.objectstore.ObjectStore.delete_prefix"
-        ) as mock_delete:
+        ) as mock_delete, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
             mock_upload.return_value = AsyncMock()
             mock_delete.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
+            mock_read_metadata.return_value.num_rows = 500
 
             # Mock daft DataFrame
             mock_df = MagicMock()
-            mock_df.count_rows.return_value = 500
+            mock_df.limit.return_value.count_rows.return_value = 1
             mock_result = MagicMock()
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
@@ -361,6 +364,7 @@ class TestParquetFileWriterWriteDaftDataframe:
                 root_dir=parquet_output.path,
                 write_mode="overwrite",  # Overridden
                 partition_cols=["department", "year"],  # Overridden
+                compression="snappy",
             )
 
             # Check that delete_prefix was called for overwrite mode
@@ -371,14 +375,15 @@ class TestParquetFileWriterWriteDaftDataframe:
         """Test daft DataFrame writing with default parameters (uses method default write_mode='append')."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload:
+        ) as mock_upload, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
             mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
+            mock_read_metadata.return_value.num_rows = 500
 
             # Mock daft DataFrame
             mock_df = MagicMock()
-            mock_df.count_rows.return_value = 500
+            mock_df.limit.return_value.count_rows.return_value = 1
             mock_result = MagicMock()
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
@@ -396,6 +401,7 @@ class TestParquetFileWriterWriteDaftDataframe:
                 root_dir=parquet_output.path,
                 write_mode="append",  # Uses method default value "append"
                 partition_cols=None,
+                compression="snappy",
             )
 
     @pytest.mark.asyncio
@@ -403,14 +409,15 @@ class TestParquetFileWriterWriteDaftDataframe:
         """Test that DAPR limit is properly configured."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload:
+        ) as mock_upload, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
             mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
+            mock_read_metadata.return_value.num_rows = 1000
 
             # Mock daft DataFrame
             mock_df = MagicMock()
-            mock_df.count_rows.return_value = 1000
+            mock_df.limit.return_value.count_rows.return_value = 1
             mock_result = MagicMock()
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
@@ -428,15 +435,19 @@ class TestParquetFileWriterWriteDaftDataframe:
             call_args = mock_ctx.call_args
             assert "parquet_target_filesize" in call_args.kwargs
             assert "default_morsel_size" in call_args.kwargs
+            assert "native_parquet_writer" in call_args.kwargs
             assert call_args.kwargs["parquet_target_filesize"] > 0
             assert call_args.kwargs["default_morsel_size"] > 0
+            assert call_args.kwargs["native_parquet_writer"] is False
 
     @pytest.mark.asyncio
     async def test_write_error_handling(self, base_output_path: str):
         """Test error handling during daft DataFrame writing."""
-        # Test that count_rows error is properly handled
+        # Test that limit/count_rows error is properly handled
         mock_df = MagicMock()
-        mock_df.count_rows.side_effect = Exception("Count rows error")
+        mock_df.limit.return_value.count_rows.side_effect = Exception(
+            "Count rows error"
+        )
 
         parquet_output = ParquetFileWriter(
             path=base_output_path,
@@ -480,16 +491,17 @@ class TestParquetFileWriterMetrics:
             "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.io.parquet.get_metrics"
-        ) as mock_get_metrics:
+        ) as mock_get_metrics, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
             mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
+            mock_read_metadata.return_value.num_rows = 1000
             mock_metrics = MagicMock()
             mock_get_metrics.return_value = mock_metrics
 
             # Mock daft DataFrame
             mock_df = MagicMock()
-            mock_df.count_rows.return_value = 1000
+            mock_df.limit.return_value.count_rows.return_value = 1
             mock_result = MagicMock()
             mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
@@ -1101,3 +1113,207 @@ class TestParquetFileWriterConsolidation:
 
                 # Verify partitions tracking
                 assert len(parquet_output.partitions) == 2
+
+
+class TestParquetFileWriterCompression:
+    """Test ParquetFileWriter compression configuration."""
+
+    def test_default_compression_is_snappy(self, base_output_path: str):
+        """Test that default compression is snappy."""
+        writer = ParquetFileWriter(path=base_output_path)
+        assert writer.compression == "snappy"
+
+    def test_zstd_compression_accepted(self, base_output_path: str):
+        """Test that zstd compression is accepted."""
+        writer = ParquetFileWriter(path=base_output_path, compression="zstd")
+        assert writer.compression == "zstd"
+
+    def test_invalid_compression_rejected(self, base_output_path: str):
+        """Test that unsupported compression raises ValueError."""
+        with pytest.raises(ValueError, match="Unsupported compression"):
+            ParquetFileWriter(path=base_output_path, compression="lz4")
+
+    @pytest.mark.asyncio
+    async def test_zstd_pandas_write(
+        self, base_output_path: str, sample_dataframe: pd.DataFrame
+    ):
+        """Test that zstd compression is passed through to pandas to_parquet."""
+        with patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
+        ) as mock_upload, patch(
+            "pandas.DataFrame.to_parquet"
+        ) as mock_to_parquet:
+            mock_upload.return_value = AsyncMock()
+
+            writer = ParquetFileWriter(path=base_output_path, compression="zstd")
+
+            with patch("os.path.exists", return_value=True):
+                await writer.write(sample_dataframe)
+
+            # Verify to_parquet was called with zstd compression
+            mock_to_parquet.assert_called()
+            call_kwargs = mock_to_parquet.call_args[1]
+            assert call_kwargs["compression"] == "zstd"
+
+    @pytest.mark.asyncio
+    async def test_zstd_daft_write(self, base_output_path: str):
+        """Test that zstd compression is passed through to daft write_parquet."""
+        with patch("daft.execution_config_ctx") as mock_ctx, patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
+        ) as mock_upload, patch("pyarrow.parquet.read_metadata") as mock_read_metadata:
+            mock_upload.return_value = AsyncMock()
+            mock_ctx.return_value.__enter__ = MagicMock()
+            mock_ctx.return_value.__exit__ = MagicMock()
+            mock_read_metadata.return_value.num_rows = 10
+
+            mock_df = MagicMock()
+            mock_df.limit.return_value.count_rows.return_value = 1
+            mock_result = MagicMock()
+            mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
+            mock_df.write_parquet.return_value = mock_result
+
+            writer = ParquetFileWriter(
+                path=base_output_path,
+                dataframe_type=DataframeType.daft,
+                compression="zstd",
+            )
+
+            await writer._write_daft_dataframe(mock_df)
+
+            call_kwargs = mock_df.write_parquet.call_args[1]
+            assert call_kwargs["compression"] == "zstd"
+
+    @pytest.mark.asyncio
+    async def test_zstd_consolidation_write(
+        self, base_output_path: str, mock_consolidation_files
+    ):
+        """Test that zstd compression is passed through during consolidation."""
+        with patch("daft.read_parquet") as mock_read, patch(
+            "daft.execution_config_ctx"
+        ) as mock_ctx, patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
+        ) as mock_upload:
+            mock_upload.return_value = AsyncMock()
+            mock_ctx.return_value.__enter__ = MagicMock()
+            mock_ctx.return_value.__exit__ = MagicMock()
+
+            mock_df = MagicMock()
+            mock_read.return_value = mock_df
+
+            writer = ParquetFileWriter(path=base_output_path, compression="zstd")
+            writer._start_new_temp_folder()
+            writer.current_folder_records = 100
+
+            # Create a dummy parquet file in the temp folder
+            assert writer.current_temp_folder_path is not None
+            temp_file = os.path.join(writer.current_temp_folder_path, "chunk-0.parquet")
+            with open(temp_file, "w") as f:
+                f.write("dummy")
+
+            with mock_consolidation_files(
+                base_output_path, ["consolidated.parquet"]
+            ) as (file_paths, create_mock_result):
+                mock_df.write_parquet.return_value = create_mock_result(file_paths)
+
+                await writer._consolidate_current_folder()
+
+                call_kwargs = mock_df.write_parquet.call_args[1]
+                assert call_kwargs["compression"] == "zstd"
+
+
+class TestParquetFileWriterCompressionCodec:
+    """Verify the requested compression codec is actually written to parquet files.
+
+    These tests exercise real Daft/PyArrow writes (no mocks on the write path)
+    so we catch silent codec changes such as Daft's native writer ignoring the
+    compression parameter.
+    """
+
+    @pytest.mark.asyncio
+    async def test_daft_write_produces_zstd_files(self, base_output_path: str):
+        """Guard: native_parquet_writer=False must honour zstd compression."""
+        import daft
+        import pyarrow.parquet as pq
+
+        writer = ParquetFileWriter(
+            path=base_output_path,
+            dataframe_type=DataframeType.daft,
+            compression="zstd",
+        )
+        df = daft.from_pydict({"a": [1, 2, 3], "b": ["x", "y", "z"]})
+
+        with patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file",
+            new_callable=AsyncMock,
+        ):
+            await writer._write_daft_dataframe(df)
+
+        parquet_files = list(Path(base_output_path).rglob("*.parquet"))
+        assert parquet_files, "No parquet files were written"
+        for pf in parquet_files:
+            meta = pq.read_metadata(str(pf))
+            assert meta.row_group(0).column(0).compression == "ZSTD"
+
+    @pytest.mark.asyncio
+    async def test_daft_write_produces_snappy_files(self, base_output_path: str):
+        """Sanity check: default snappy compression is written correctly."""
+        import daft
+        import pyarrow.parquet as pq
+
+        writer = ParquetFileWriter(
+            path=base_output_path,
+            dataframe_type=DataframeType.daft,
+            compression="snappy",
+        )
+        df = daft.from_pydict({"a": [1, 2, 3], "b": ["x", "y", "z"]})
+
+        with patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file",
+            new_callable=AsyncMock,
+        ):
+            await writer._write_daft_dataframe(df)
+
+        parquet_files = list(Path(base_output_path).rglob("*.parquet"))
+        assert parquet_files, "No parquet files were written"
+        for pf in parquet_files:
+            meta = pq.read_metadata(str(pf))
+            assert meta.row_group(0).column(0).compression == "SNAPPY"
+
+    @pytest.mark.asyncio
+    async def test_pandas_write_produces_zstd_files(
+        self, base_output_path: str, sample_dataframe: pd.DataFrame
+    ):
+        """Verify pandas write path produces zstd-compressed parquet."""
+        import pyarrow.parquet as pq
+
+        writer = ParquetFileWriter(path=base_output_path, compression="zstd")
+
+        with patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file",
+            new_callable=AsyncMock,
+        ):
+            await writer.write(sample_dataframe)
+
+        parquet_files = list(Path(base_output_path).rglob("*.parquet"))
+        assert parquet_files, "No parquet files were written"
+        for pf in parquet_files:
+            meta = pq.read_metadata(str(pf))
+            assert meta.row_group(0).column(0).compression == "ZSTD"
+
+
+class TestEstimateDataframeRecordSize:
+    """Test estimate_dataframe_record_size compression passthrough."""
+
+    def test_compression_passed_to_parquet(self, sample_dataframe: pd.DataFrame):
+        """Test that compression parameter is forwarded to to_parquet."""
+        from application_sdk.io.utils import (
+            PARQUET_FILE_EXTENSION,
+            estimate_dataframe_record_size,
+        )
+
+        with patch("pandas.DataFrame.to_parquet", return_value=b"\x00" * 100) as mock:
+            estimate_dataframe_record_size(
+                sample_dataframe, PARQUET_FILE_EXTENSION, compression="zstd"
+            )
+
+            mock.assert_called_once_with(index=False, compression="zstd")
