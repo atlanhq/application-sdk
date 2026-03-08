@@ -1,0 +1,160 @@
+# Reusable build workflow for Atlan first-party app repos.
+#
+# Zero-input — reads atlan.yaml from the repo, derives everything from GitHub context.
+# Image tag: sha[:7]abcd (e.g. abc1234abcd)
+# Image URI: ghcr.io/atlanhq/{repo-name}-{branch_lower}:{image_tag}
+#
+# Usage in each app repo (.github/workflows/build-image.yaml):
+#
+#   jobs:
+#     build:
+#       uses: atlanhq/application-sdk/.github/workflows/build-app.yml@main
+#       with:
+#         ref: ${{ inputs.ref || github.ref }}
+#       secrets: inherit
+#
+name: Build Atlan App Image
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Branch or SHA to checkout and build (default: caller's ref)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write  # For Snyk SARIF upload
+
+jobs:
+  build:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Read atlan.yaml
+        id: manifest
+        run: |
+          if [ ! -f atlan.yaml ]; then
+            echo "::error::atlan.yaml not found in repo root"
+            exit 1
+          fi
+          DOCKERFILE=$(python3 -c "
+          import yaml, sys
+          try:
+              d = yaml.safe_load(open('atlan.yaml'))
+              print(d.get('dockerfile', './Dockerfile'))
+          except Exception:
+              print('./Dockerfile')
+          ")
+          ENABLE_SDR=$(python3 -c "
+          import yaml, sys
+          try:
+              d = yaml.safe_load(open('atlan.yaml'))
+              val = d.get('registries', {}).get('dockerhub', False)
+              print('true' if val else 'false')
+          except Exception:
+              print('false')
+          ")
+          echo "dockerfile=${DOCKERFILE}" >> "$GITHUB_OUTPUT"
+          echo "enable_sdr=${ENABLE_SDR}" >> "$GITHUB_OUTPUT"
+          echo "Dockerfile path: ${DOCKERFILE}"
+          echo "DockerHub push enabled: ${ENABLE_SDR}"
+
+      - name: Compute image tags
+        id: tags
+        env:
+          REPO: ${{ github.event.repository.name }}
+          SHA: ${{ github.sha }}
+          REF: ${{ inputs.ref || github.ref }}
+        run: |
+          # Extract branch name from ref (refs/heads/main → main, feat/foo → feat-foo)
+          BRANCH=$(echo "$REF" | sed 's|refs/heads/||' | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')
+          # Image tag: first 7 chars of SHA + "abcd" (11 chars total, e.g. abc1234abcd)
+          IMAGE_TAG="${SHA:0:7}abcd"
+          GHCR_BASE="ghcr.io/atlanhq/${REPO}-${BRANCH}"
+          DOCKERHUB_BASE="atlanhq/${REPO}"
+
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "ghcr_base=${GHCR_BASE}" >> "$GITHUB_OUTPUT"
+          echo "ghcr_image=${GHCR_BASE}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "dockerhub_base=${DOCKERHUB_BASE}" >> "$GITHUB_OUTPUT"
+
+          echo "Branch: ${BRANCH}"
+          echo "Image tag: ${IMAGE_TAG}"
+          echo "GHCR image: ${GHCR_BASE}:${IMAGE_TAG}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: steps.manifest.outputs.enable_sdr == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+      - name: Build and push to GHCR (multi-arch)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ steps.manifest.outputs.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.ghcr_image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Snyk container scan
+        continue-on-error: true
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: ${{ steps.tags.outputs.ghcr_image }}
+          args: --severity-threshold=high --file=${{ steps.manifest.outputs.dockerfile }}
+
+      - name: Push to Docker Hub (re-tag, no rebuild)
+        if: steps.manifest.outputs.enable_sdr == 'true'
+        env:
+          GHCR_IMAGE: ${{ steps.tags.outputs.ghcr_image }}
+          DOCKERHUB_BASE: ${{ steps.tags.outputs.dockerhub_base }}
+          IMAGE_TAG: ${{ steps.tags.outputs.image_tag }}
+        run: |
+          # Re-tag GHCR image to DockerHub — no second build needed
+          docker buildx imagetools create \
+            --tag "${DOCKERHUB_BASE}:${IMAGE_TAG}" \
+            "${GHCR_IMAGE}"
+          echo "Pushed to DockerHub: ${DOCKERHUB_BASE}:${IMAGE_TAG}"
+
+      - name: Summary
+        run: |
+          echo "### Build complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ steps.tags.outputs.ghcr_image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | \`${{ steps.tags.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ steps.tags.outputs.branch }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dockerfile | \`${{ steps.manifest.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| DockerHub | \`${{ steps.manifest.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
