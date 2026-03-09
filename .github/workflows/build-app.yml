@@ -27,6 +27,9 @@ on:
     secrets:
       # Declaring the only secrets this template reads.
       # Callers using `secrets: inherit` are safe — all other inherited secrets are unused.
+      ORG_PAT_GITHUB:
+        required: true
+        description: "Org-level PAT for GHCR login — needed to pull private base images from other repos in the org"
       SNYK_TOKEN:
         required: false
         description: "Snyk API token for container scanning (optional — scan is non-blocking)"
@@ -149,7 +152,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Log in to Docker Hub
         if: steps.manifest.outputs.enable_sdr == 'true'
@@ -174,6 +177,9 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            ACCESS_TOKEN_USR=${{ github.actor }}
+            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Snyk container scan
         continue-on-error: true
