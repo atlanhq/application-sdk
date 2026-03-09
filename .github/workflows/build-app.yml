@@ -1,0 +1,216 @@
+# Reusable build workflow for Atlan first-party app repos.
+#
+# Zero-input — reads atlan.yaml from the repo, derives everything from GitHub context.
+# Image tag:  {sha7}abcd  (e.g. abc1234abcd) — immutable, used by deploy systems
+# Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{image_tag}  (branch in tag, not in repo name)
+# Mutable:    ghcr.io/atlanhq/{repo}:{branch}              (always points to latest on branch)
+#
+# Usage in each app repo (.github/workflows/build-image.yaml):
+#
+#   jobs:
+#     build:
+#       uses: atlanhq/application-sdk/.github/workflows/build-app.yml@main
+#       with:
+#         ref: ${{ inputs.ref || github.ref }}
+#       secrets: inherit   # template only reads: SNYK_TOKEN, DOCKER_HUB_USERNAME, DOCKER_HUB_PASSWORD
+#                          # GITHUB_TOKEN is provided automatically and does not need to be passed
+#
+name: Build Atlan App Image
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Branch or SHA to checkout and build (default: caller's ref)"
+        required: false
+        type: string
+    secrets:
+      # Declaring the only secrets this template reads.
+      # Callers using `secrets: inherit` are safe — all other inherited secrets are unused.
+      SNYK_TOKEN:
+        required: false
+        description: "Snyk API token for container scanning (optional — scan is non-blocking)"
+      DOCKER_HUB_USERNAME:
+        required: false
+        description: "DockerHub username — only needed when atlan.yaml registries.dockerhub=true"
+      DOCKER_HUB_PASSWORD:
+        required: false
+        description: "DockerHub password — only needed when atlan.yaml registries.dockerhub=true"
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write  # For Snyk SARIF upload
+
+jobs:
+  build:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Read atlan.yaml
+        id: manifest
+        run: |
+          if [ ! -f atlan.yaml ]; then
+            echo "::error::atlan.yaml not found in repo root"
+            exit 1
+          fi
+
+          # Parse once, write all outputs — avoids opening/parsing atlan.yaml three separate times
+          python3 - <<'PYEOF'
+          import yaml, sys, os
+
+          try:
+              with open('atlan.yaml') as f:
+                  d = yaml.safe_load(f) or {}
+          except yaml.YAMLError as e:
+              print(f'::error::atlan.yaml is invalid YAML: {e}', file=sys.stderr)
+              sys.exit(1)
+
+          build_tag  = d.get('build_tag', 'v1')
+          dockerfile = d.get('dockerfile', './Dockerfile')
+          enable_sdr = 'true' if d.get('registries', {}).get('dockerhub', False) else 'false'
+
+          if build_tag != 'v1':
+              print(f"::error::Unsupported build_tag '{build_tag}'. Only 'v1' is supported by this template version.", file=sys.stderr)
+              sys.exit(1)
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'build_tag={build_tag}\n')
+              out.write(f'dockerfile={dockerfile}\n')
+              out.write(f'enable_sdr={enable_sdr}\n')
+
+          print(f'Dockerfile path: {dockerfile}')
+          print(f'DockerHub push enabled: {enable_sdr}')
+          PYEOF
+
+      - name: Validate DockerHub secrets
+        if: steps.manifest.outputs.enable_sdr == 'true'
+        env:
+          HAS_USER: ${{ secrets.DOCKER_HUB_USERNAME != '' && 'true' || 'false' }}
+          HAS_PASS: ${{ secrets.DOCKER_HUB_PASSWORD != '' && 'true' || 'false' }}
+        run: |
+          if [ "$HAS_USER" != "true" ] || [ "$HAS_PASS" != "true" ]; then
+            echo "::error::atlan.yaml enables DockerHub push but DOCKER_HUB_USERNAME / DOCKER_HUB_PASSWORD secrets are not set in this repo."
+            exit 1
+          fi
+
+      - name: Compute image tags
+        id: tags
+        env:
+          REPO: ${{ github.event.repository.name }}
+          SHA: ${{ github.sha }}
+          # REF is passed via env (not interpolated into run script body) — safe from shell injection
+          REF: ${{ inputs.ref || github.ref }}
+        run: |
+          # Validate ref format before use
+          if ! [[ "$REF" =~ ^(refs/heads/|refs/tags/)?[a-zA-Z0-9/_.-]+$ ]]; then
+            echo "::error::Invalid ref format: ${REF}"
+            exit 1
+          fi
+
+          # Extract branch name from ref (refs/heads/main → main, feat/foo → feat-foo)
+          BRANCH=$(echo "$REF" | sed 's|refs/heads/||' | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')
+
+          # Immutable tag: first 7 chars of SHA + "abcd" (e.g. abc1234abcd) — used by deploy systems
+          IMAGE_TAG="${SHA:0:7}abcd"
+
+          # Single GHCR image repo per app; branch is part of the tag (not the image name)
+          GHCR_BASE="ghcr.io/atlanhq/${REPO}"
+          GHCR_IMAGE="${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}"
+          GHCR_BRANCH_TAG="${GHCR_BASE}:${BRANCH}"  # mutable, always points to latest on branch
+
+          DOCKERHUB_BASE="atlanhq/${REPO}"
+
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "ghcr_base=${GHCR_BASE}" >> "$GITHUB_OUTPUT"
+          echo "ghcr_image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "ghcr_branch_tag=${GHCR_BRANCH_TAG}" >> "$GITHUB_OUTPUT"
+          echo "dockerhub_base=${DOCKERHUB_BASE}" >> "$GITHUB_OUTPUT"
+
+          echo "Branch: ${BRANCH}"
+          echo "Immutable image: ${GHCR_IMAGE}"
+          echo "Mutable branch tag: ${GHCR_BRANCH_TAG}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: steps.manifest.outputs.enable_sdr == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+      - name: Build and push to GHCR (multi-arch)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ steps.manifest.outputs.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.ghcr_image }}
+            ${{ steps.tags.outputs.ghcr_branch_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Snyk container scan
+        continue-on-error: true
+        # Pinned to commit SHA — avoids silent breakage if snyk/actions@master changes
+        uses: snyk/actions/docker@9adf32b1121593767fc3c057af55b55db032dc04
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: ${{ steps.tags.outputs.ghcr_image }}
+          args: --severity-threshold=high --file=${{ steps.manifest.outputs.dockerfile }}
+
+      - name: Upload Snyk SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk.sarif
+
+      - name: Push to Docker Hub (re-tag, no rebuild)
+        if: steps.manifest.outputs.enable_sdr == 'true'
+        env:
+          GHCR_IMAGE: ${{ steps.tags.outputs.ghcr_image }}
+          DOCKERHUB_BASE: ${{ steps.tags.outputs.dockerhub_base }}
+          IMAGE_TAG: ${{ steps.tags.outputs.image_tag }}
+        run: |
+          # Re-tag GHCR image to DockerHub — no second build needed
+          docker buildx imagetools create \
+            --tag "${DOCKERHUB_BASE}:${IMAGE_TAG}" \
+            "${GHCR_IMAGE}"
+          echo "Pushed to DockerHub: ${DOCKERHUB_BASE}:${IMAGE_TAG}"
+
+      - name: Summary
+        run: |
+          echo "### Build complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Immutable image | \`${{ steps.tags.outputs.ghcr_image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch tag (mutable) | \`${{ steps.tags.outputs.ghcr_branch_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | \`${{ steps.tags.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ steps.tags.outputs.branch }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dockerfile | \`${{ steps.manifest.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| DockerHub | \`${{ steps.manifest.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
