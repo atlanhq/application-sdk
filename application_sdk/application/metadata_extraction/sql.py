@@ -6,7 +6,11 @@ from typing_extensions import deprecated
 from application_sdk.application import BaseApplication
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    DEPLOYMENT_NAME,
+    MAX_CONCURRENT_ACTIVITIES,
+)
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.observability.decorators.observability_decorator import (
     observability,
@@ -68,6 +72,70 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         self.workflow_client = get_workflow_client(
             application_name=self.application_name
         )
+
+    @staticmethod
+    def _task_queue(app_name: str) -> str:
+        return f"atlan-{app_name}-{DEPLOYMENT_NAME}" if DEPLOYMENT_NAME else app_name
+
+    def get_manifest(self) -> Optional[Dict[str, Any]]:
+        """Return the default extract + publish manifest for SQL extraction apps.
+
+        Override this in subclasses to customize args or the entire manifest.
+        """
+        workflow_class = getattr(self, "_primary_workflow_class", None)
+        if workflow_class is None:
+            return None
+
+        extract_node_id = "extract"
+        return {
+            "execution_mode": "automation-engine",
+            "dag": {
+                extract_node_id: {
+                    "activity_name": "execute_workflow",
+                    "activity_display_name": f"Extract {APPLICATION_NAME.title()} Metadata",
+                    "app_name": "automation-engine",
+                    "inputs": {
+                        "workflow_type": workflow_class.__name__,
+                        "task_queue": self._task_queue(APPLICATION_NAME),
+                        "args": {
+                            "credential_guid": "{{credential-guid}}",
+                            "credential": "{{credential}}",
+                            "connection": "{{connection}}",
+                            "metadata": {
+                                "extraction-method": "{{extraction-method}}",
+                                "include-filter": "{{include-filter}}",
+                                "exclude-filter": "{{exclude-filter}}",
+                                "temp-table-regex": "{{temp-table-regex}}",
+                                "advanced-config": "{{advanced-config}}",
+                                "control-config-strategy": "{{control-config-strategy}}",
+                                "control-config": "{{control-config}}",
+                                "use-source-schema-filtering": "{{use-source-schema-filtering}}",
+                                "use-jdbc-internal-methods": "{{use-jdbc-internal-methods}}",
+                            },
+                        },
+                    },
+                },
+                "publish": {
+                    "activity_name": "execute_workflow",
+                    "activity_display_name": "Publish to Atlas",
+                    "app_name": "automation-engine",
+                    "inputs": {
+                        "workflow_type": "PublishWorkflow",
+                        "task_queue": self._task_queue("publish"),
+                        "args": {
+                            "connection_qualified_name": f"$.{extract_node_id}.outputs.connection_qualified_name",
+                            "transformed_data_prefix": f"$.{extract_node_id}.outputs.transformed_data_prefix",
+                            "publish_state_prefix": f"$.{extract_node_id}.outputs.publish_state_prefix",
+                            "current_state_prefix": f"$.{extract_node_id}.outputs.current_state_prefix",
+                            "connection_creation_enabled": True,
+                            "executor_enabled": True,
+                            "connection_entity": "{{connection}}",
+                        },
+                    },
+                    "depends_on": {"node_id": extract_node_id},
+                },
+            },
+        }
 
     @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_workflow(
@@ -219,12 +287,16 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         if self.workflow_client is None:
             await self.workflow_client.load()
 
+        # Store for use by get_manifest()
+        self._primary_workflow_class = workflow_class
+
         # setup application server. serves the UI, and handles the various triggers
         self.server = APIServer(
             handler=self.handler_class(sql_client=self.client_class()),
             workflow_client=self.workflow_client,
             ui_enabled=ui_enabled,
             has_configmap=has_configmap,
+            manifest=self.get_manifest(),
         )
 
         # register the workflow on the application server
