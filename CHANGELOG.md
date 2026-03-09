@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.6.0 (March 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.5.0...v2.6.0
+
+### Features
+
+- reusable build-app.yml workflow for all first-party app repos (#1087) (by @nishantmunjal7 in [0801eeb](https://github.com/atlanhq/application-sdk/commit/0801eeb))
+- replace registries.dockerhub with push_for_sdr in build template (DISTR-213) (#1089) (by @nishantmunjal7 in [25499a2](https://github.com/atlanhq/application-sdk/commit/25499a2))
+- Temporal activities observability via interceptors using logs attributes (#1086) (by @euclidstellar in [9bea6f3](https://github.com/atlanhq/application-sdk/tree/9bea6f3))  
+- Temporal failure exception in CH as log attribute of exception (#1063) (by @euclidstellar in [039c27d](https://github.com/atlanhq/application-sdk/tree/039c27d))
+
+
 ## v2.5.0 (March 03, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.4.1...v2.5.0
