@@ -32,10 +32,10 @@ on:
         description: "Snyk API token for container scanning (optional — scan is non-blocking)"
       DOCKER_HUB_USERNAME:
         required: false
-        description: "DockerHub username — only needed when atlan.yaml push_for_sdr=true"
+        description: "DockerHub username — only needed when atlan.yaml self_deployed_runtime=true"
       DOCKER_HUB_PASSWORD:
         required: false
-        description: "DockerHub password — only needed when atlan.yaml push_for_sdr=true"
+        description: "DockerHub password — only needed when atlan.yaml self_deployed_runtime=true"
 
 permissions:
   contents: read
@@ -75,10 +75,11 @@ jobs:
 
           build_tag  = d.get('build_tag', 'v1')
           dockerfile = d.get('dockerfile', './Dockerfile')
-          # push_for_sdr: true → push to SDR registry (currently DockerHub, may change)
-          # registries.dockerhub kept as fallback for backwards compatibility
+          # self_deployed_runtime: true → push image to shared external registry
+          # so customers can pull it into their own environment.
+          # registries.dockerhub kept as fallback for backwards compatibility.
           enable_sdr = 'true' if (
-              d.get('push_for_sdr', False) or
+              d.get('self_deployed_runtime', False) or
               d.get('registries', {}).get('dockerhub', False)
           ) else 'false'
 
@@ -102,7 +103,7 @@ jobs:
           HAS_PASS: ${{ secrets.DOCKER_HUB_PASSWORD != '' && 'true' || 'false' }}
         run: |
           if [ "$HAS_USER" != "true" ] || [ "$HAS_PASS" != "true" ]; then
-            echo "::error::atlan.yaml sets push_for_sdr=true but DOCKER_HUB_USERNAME / DOCKER_HUB_PASSWORD secrets are not set in this repo."
+            echo "::error::atlan.yaml sets self_deployed_runtime=true but DOCKER_HUB_USERNAME / DOCKER_HUB_PASSWORD secrets are not set in this repo."
             exit 1
           fi
 
