@@ -32,10 +32,10 @@ on:
         description: "Snyk API token for container scanning (optional — scan is non-blocking)"
       DOCKER_HUB_USERNAME:
         required: false
-        description: "DockerHub username — only needed when atlan.yaml registries.dockerhub=true"
+        description: "DockerHub username — only needed when atlan.yaml push_for_sdr=true"
       DOCKER_HUB_PASSWORD:
         required: false
-        description: "DockerHub password — only needed when atlan.yaml registries.dockerhub=true"
+        description: "DockerHub password — only needed when atlan.yaml push_for_sdr=true"
 
 permissions:
   contents: read
@@ -75,7 +75,12 @@ jobs:
 
           build_tag  = d.get('build_tag', 'v1')
           dockerfile = d.get('dockerfile', './Dockerfile')
-          enable_sdr = 'true' if d.get('registries', {}).get('dockerhub', False) else 'false'
+          # push_for_sdr: true → push to SDR registry (currently DockerHub, may change)
+          # registries.dockerhub kept as fallback for backwards compatibility
+          enable_sdr = 'true' if (
+              d.get('push_for_sdr', False) or
+              d.get('registries', {}).get('dockerhub', False)
+          ) else 'false'
 
           if build_tag != 'v1':
               print(f"::error::Unsupported build_tag '{build_tag}'. Only 'v1' is supported by this template version.", file=sys.stderr)
@@ -87,17 +92,17 @@ jobs:
               out.write(f'enable_sdr={enable_sdr}\n')
 
           print(f'Dockerfile path: {dockerfile}')
-          print(f'DockerHub push enabled: {enable_sdr}')
+          print(f'SDR push enabled: {enable_sdr}')
           PYEOF
 
-      - name: Validate DockerHub secrets
+      - name: Validate SDR secrets
         if: steps.manifest.outputs.enable_sdr == 'true'
         env:
           HAS_USER: ${{ secrets.DOCKER_HUB_USERNAME != '' && 'true' || 'false' }}
           HAS_PASS: ${{ secrets.DOCKER_HUB_PASSWORD != '' && 'true' || 'false' }}
         run: |
           if [ "$HAS_USER" != "true" ] || [ "$HAS_PASS" != "true" ]; then
-            echo "::error::atlan.yaml enables DockerHub push but DOCKER_HUB_USERNAME / DOCKER_HUB_PASSWORD secrets are not set in this repo."
+            echo "::error::atlan.yaml sets push_for_sdr=true but DOCKER_HUB_USERNAME / DOCKER_HUB_PASSWORD secrets are not set in this repo."
             exit 1
           fi
 
@@ -213,4 +218,4 @@ jobs:
           echo "| Tag | \`${{ steps.tags.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch | \`${{ steps.tags.outputs.branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Dockerfile | \`${{ steps.manifest.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| DockerHub | \`${{ steps.manifest.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| SDR push | \`${{ steps.manifest.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
