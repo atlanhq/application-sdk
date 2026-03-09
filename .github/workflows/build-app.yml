@@ -77,11 +77,7 @@ jobs:
           dockerfile = d.get('dockerfile', './Dockerfile')
           # self_deployed_runtime: true → push image to shared external registry
           # so customers can pull it into their own environment.
-          # registries.dockerhub kept as fallback for backwards compatibility.
-          enable_sdr = 'true' if (
-              d.get('self_deployed_runtime', False) or
-              d.get('registries', {}).get('dockerhub', False)
-          ) else 'false'
+          enable_sdr = 'true' if d.get('self_deployed_runtime', False) else 'false'
 
           if build_tag != 'v1':
               print(f"::error::Unsupported build_tag '{build_tag}'. Only 'v1' is supported by this template version.", file=sys.stderr)
