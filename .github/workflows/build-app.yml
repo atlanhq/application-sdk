@@ -47,6 +47,18 @@ jobs:
             echo "::error::atlan.yaml not found in repo root"
             exit 1
           fi
+          BUILD_TAG=$(python3 -c "
+          import yaml, sys
+          try:
+              d = yaml.safe_load(open('atlan.yaml'))
+              print(d.get('build_tag', 'v1'))
+          except Exception:
+              print('v1')
+          ")
+          if [ "$BUILD_TAG" != "v1" ]; then
+            echo "::error::Unsupported build_tag: ${BUILD_TAG}. Only 'v1' is supported by this template version."
+            exit 1
+          fi
           DOCKERFILE=$(python3 -c "
           import yaml, sys
           try:
@@ -64,6 +76,7 @@ jobs:
           except Exception:
               print('false')
           ")
+          echo "build_tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
           echo "dockerfile=${DOCKERFILE}" >> "$GITHUB_OUTPUT"
           echo "enable_sdr=${ENABLE_SDR}" >> "$GITHUB_OUTPUT"
           echo "Dockerfile path: ${DOCKERFILE}"
