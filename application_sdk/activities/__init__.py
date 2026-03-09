@@ -212,28 +212,30 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             from application_sdk.services.statestore import StateStore, StateType
 
             workflow_args = await StateStore.get_state(workflow_id, StateType.WORKFLOWS)
-            workflow_args["output_prefix"] = workflow_args.get(
-                "output_prefix", TEMPORARY_PATH
-            )
-            workflow_args["output_path"] = os.path.join(
-                workflow_args["output_prefix"], build_output_path()
-            )
-            workflow_args["workflow_id"] = workflow_id
-            workflow_args["workflow_run_id"] = get_workflow_run_id()
-
-            # Preserve atlan- prefixed keys from workflow_config for logging context
-            for key, value in workflow_config.items():
-                if key.startswith("atlan-") and value:
-                    workflow_args[key] = str(value)
-
-            return workflow_args
-
         except Exception as e:
-            logger.error(
-                f"Failed to retrieve workflow configuration for {workflow_id}: {str(e)}",
-                exc_info=e,
-            )
-            raise
+            logger.warning(f"StateStore lookup failed for {workflow_id}: {e}")
+            workflow_args = None
+
+        if not workflow_args:
+            # AE invocation path: args are passed directly in workflow_config
+            # (no state store round-trip needed)
+            workflow_args = dict(workflow_config)
+
+        workflow_args["output_prefix"] = workflow_args.get(
+            "output_prefix", TEMPORARY_PATH
+        )
+        workflow_args["output_path"] = os.path.join(
+            workflow_args["output_prefix"], build_output_path()
+        )
+        workflow_args["workflow_id"] = workflow_id
+        workflow_args["workflow_run_id"] = get_workflow_run_id()
+
+        # Preserve atlan- prefixed keys from workflow_config for logging context
+        for key, value in workflow_config.items():
+            if key.startswith("atlan-") and value:
+                workflow_args[key] = str(value)
+
+        return workflow_args
 
     @activity.defn
     @auto_heartbeater
