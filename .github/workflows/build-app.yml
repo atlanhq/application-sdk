@@ -33,12 +33,9 @@ on:
       SNYK_TOKEN:
         required: false
         description: "Snyk API token for container scanning (optional — scan is non-blocking)"
-      DOCKER_HUB_USERNAME:
+      DOCKER_HUB_PAT_RW:
         required: false
-        description: "DockerHub username — only needed when atlan.yaml self_deployed_runtime=true"
-      DOCKER_HUB_PASSWORD:
-        required: false
-        description: "DockerHub password — only needed when atlan.yaml self_deployed_runtime=true"
+        description: "DockerHub PAT (read/write) — only needed when atlan.yaml self_deployed_runtime=true"
 
 permissions:
   contents: read
@@ -98,11 +95,10 @@ jobs:
       - name: Validate SDR secrets
         if: steps.manifest.outputs.enable_sdr == 'true'
         env:
-          HAS_USER: ${{ secrets.DOCKER_HUB_USERNAME != '' && 'true' || 'false' }}
-          HAS_PASS: ${{ secrets.DOCKER_HUB_PASSWORD != '' && 'true' || 'false' }}
+          HAS_PAT: ${{ secrets.DOCKER_HUB_PAT_RW != '' && 'true' || 'false' }}
         run: |
-          if [ "$HAS_USER" != "true" ] || [ "$HAS_PASS" != "true" ]; then
-            echo "::error::atlan.yaml sets self_deployed_runtime=true but DOCKER_HUB_USERNAME / DOCKER_HUB_PASSWORD secrets are not set in this repo."
+          if [ "$HAS_PAT" != "true" ]; then
+            echo "::error::atlan.yaml sets self_deployed_runtime=true but DOCKER_HUB_PAT_RW secret is not set in this repo."
             exit 1
           fi
 
@@ -159,8 +155,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: docker.io
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+          username: atlanhq
+          password: ${{ secrets.DOCKER_HUB_PAT_RW }}
 
       - name: Build and push to GHCR (multi-arch)
         uses: docker/build-push-action@v5
