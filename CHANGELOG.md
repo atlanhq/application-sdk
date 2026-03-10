@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.6.1 (March 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.0...v2.6.1
+
+### Bug Fixes
+
+- make release workflow idempotent for safe re-runs (#1090) (by @louisnow in [f4c4eaf](https://github.com/atlanhq/application-sdk/commit/f4c4eaf))
+- catch BaseException to log timeout-driven activity cancellations (#1094) (by @TechyMT in [046c5c4](https://github.com/atlanhq/application-sdk/commit/046c5c4))
+
+
 ## v2.6.0 (March 09, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.5.0...v2.6.0
