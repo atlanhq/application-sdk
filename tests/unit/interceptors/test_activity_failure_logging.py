@@ -3,6 +3,7 @@
 Tests the emission of structured logs with Temporal context when activities fail.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Mapping, Sequence
@@ -220,6 +221,33 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
                 assert "temporal.activity.heartbeat_timeout" not in kwargs
                 # But other Temporal context should still be present
                 assert kwargs["temporal.activity.type"] == "fetch_metadata"
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_is_logged(
+        self, interceptor, mock_next_activity, mock_activity_info
+    ):
+        """Test that asyncio.CancelledError (raised on activity timeout/cancellation) is logged.
+
+        CancelledError is a BaseException, not an Exception. Previously the
+        `except Exception` guard silently swallowed all timeout-driven cancellations
+        (start-to-close, heartbeat, schedule-to-close, workflow execution timeout).
+        """
+        input_data = MockExecuteActivityInput()
+        mock_next_activity.execute_activity.side_effect = asyncio.CancelledError()
+
+        correlation_context.set({"atlan-tenant-id": "tenant-abc"})
+
+        with mock.patch("temporalio.activity.info", return_value=mock_activity_info):
+            with mock.patch(
+                "application_sdk.interceptors.activity_failure_logging.logger"
+            ) as mock_logger:
+                with pytest.raises(asyncio.CancelledError):
+                    await interceptor.execute_activity(input_data)
+
+                mock_logger.error.assert_called_once()
+                kwargs = mock_logger.error.call_args[1]
+                assert kwargs["temporal.activity.type"] == "fetch_metadata"
+                assert kwargs["tenant.id"] == "tenant-abc"
 
     @pytest.mark.asyncio
     async def test_logging_failure_does_not_swallow_activity_exception(

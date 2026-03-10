@@ -33,11 +33,11 @@ class ActivityFailureLoggingActivityInboundInterceptor(ActivityInboundIntercepto
         """
         try:
             return await super().execute_activity(input)
-        except Exception as e:
+        except BaseException as e:
             self._log_activity_failure(e)
             raise
 
-    def _log_activity_failure(self, exception: Exception) -> None:
+    def _log_activity_failure(self, exception: BaseException) -> None:
         """Log activity failure with structured Temporal context.
 
         Extracts context from activity.info() and correlation_context, then emits
