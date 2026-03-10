@@ -193,8 +193,8 @@ def auto_heartbeater(fn: F) -> F:
             try:
                 return await fn(*args, **kwargs)
             except Exception as e:
-                logger.error(f"Error in activity: {e}", exc_info=e)
-                raise e
+                logger.error("Error in activity: %s", e, exc_info=e)
+                raise
             finally:
                 heartbeat_task.cancel()
                 await asyncio.wait([heartbeat_task])
@@ -222,8 +222,8 @@ def auto_heartbeater(fn: F) -> F:
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                logger.error(f"Error in activity: {e}", exc_info=e)
-                raise e
+                logger.error("Error in activity: %s", e, exc_info=e)
+                raise
             finally:
                 stop_event.set()
                 heartbeat_thread.join(timeout=5)
@@ -283,4 +283,8 @@ def send_periodic_heartbeat_sync(
         sync activity functions and should not need to be called directly.
     """
     while not stop_event.wait(timeout=delay):
-        activity.heartbeat(*details)
+        try:
+            activity.heartbeat(*details)
+        except Exception as e:
+            logger.error("Error sending heartbeat: %s", e, exc_info=e)
+            return

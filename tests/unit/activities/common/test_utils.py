@@ -427,6 +427,7 @@ class TestSendPeriodicHeartbeatSync:
             time.sleep(0.01)
         stop_event.set()
         thread.join(timeout=2)
+        assert not thread.is_alive(), "Heartbeat thread failed to terminate"
         assert mock_activity.heartbeat.call_count >= 2
 
     @patch("application_sdk.activities.common.utils.activity")
