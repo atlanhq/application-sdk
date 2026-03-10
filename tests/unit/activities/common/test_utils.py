@@ -1,6 +1,8 @@
 """Simplified unit tests for activities common utilities."""
 
 import asyncio
+import threading
+import time
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -11,6 +13,7 @@ from application_sdk.activities.common.utils import (
     get_object_store_prefix,
     get_workflow_id,
     send_periodic_heartbeat,
+    send_periodic_heartbeat_sync,
 )
 
 
@@ -274,7 +277,8 @@ class TestAutoHeartbeater:
         mock_send_heartbeat.assert_called_once()
 
     @patch("application_sdk.activities.common.utils.activity")
-    def test_auto_heartbeater_sync_function_warning(self, mock_activity):
+    def test_auto_heartbeater_sync_function_returns_value(self, mock_activity):
+        """Test that sync functions return plain values (not coroutines)."""
         mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=60)
 
         @auto_heartbeater
@@ -282,8 +286,50 @@ class TestAutoHeartbeater:
             return "sync_success"
 
         result = sync_activity()
-        # The decorator returns a coroutine even for sync functions
-        assert asyncio.iscoroutine(result)
+        assert result == "sync_success"
+        assert not asyncio.iscoroutine(result)
+
+    def test_auto_heartbeater_preserves_sync_nature(self):
+        """Test that sync wrapper is not a coroutine function."""
+
+        @auto_heartbeater
+        def sync_activity():
+            return "test"
+
+        assert not asyncio.iscoroutinefunction(sync_activity)
+
+    def test_auto_heartbeater_preserves_async_nature(self):
+        """Test that async wrapper is still a coroutine function."""
+
+        @auto_heartbeater
+        async def async_activity():
+            return "test"
+
+        assert asyncio.iscoroutinefunction(async_activity)
+
+    @patch("application_sdk.activities.common.utils.activity")
+    def test_auto_heartbeater_sync_function_error(self, mock_activity):
+        """Test that sync function errors propagate correctly."""
+        mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=60)
+
+        @auto_heartbeater
+        def sync_activity():
+            raise ValueError("Sync error")
+
+        with pytest.raises(ValueError, match="Sync error"):
+            sync_activity()
+
+    @patch("application_sdk.activities.common.utils.activity")
+    def test_auto_heartbeater_sync_with_arguments(self, mock_activity):
+        """Test auto_heartbeater with sync function arguments."""
+        mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=60)
+
+        @auto_heartbeater
+        def sync_activity(arg1, arg2, kwarg1=None):
+            return f"{arg1}_{arg2}_{kwarg1}"
+
+        result = sync_activity("a", "b", kwarg1="c")
+        assert result == "a_b_c"
 
     @patch("application_sdk.activities.common.utils.activity")
     @patch("application_sdk.activities.common.utils.send_periodic_heartbeat")
@@ -359,4 +405,31 @@ class TestSendPeriodicHeartbeat:
             await task
 
         # Heartbeat should not be called if sleep fails
+        mock_activity.heartbeat.assert_not_called()
+
+
+class TestSendPeriodicHeartbeatSync:
+    """Test cases for send_periodic_heartbeat_sync function."""
+
+    @patch("application_sdk.activities.common.utils.activity")
+    def test_heartbeat_called_and_stops(self, mock_activity):
+        """Test that heartbeats are sent and the thread stops on event."""
+        stop_event = threading.Event()
+        thread = threading.Thread(
+            target=send_periodic_heartbeat_sync,
+            args=(0.05, stop_event),
+            daemon=True,
+        )
+        thread.start()
+        time.sleep(0.15)  # Allow ~3 heartbeats
+        stop_event.set()
+        thread.join(timeout=2)
+        assert mock_activity.heartbeat.call_count >= 2
+
+    @patch("application_sdk.activities.common.utils.activity")
+    def test_stops_immediately_on_pre_set_event(self, mock_activity):
+        """Test that a pre-set event prevents any heartbeats."""
+        stop_event = threading.Event()
+        stop_event.set()
+        send_periodic_heartbeat_sync(1.0, stop_event)
         mock_activity.heartbeat.assert_not_called()
