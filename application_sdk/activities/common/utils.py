@@ -193,7 +193,7 @@ def auto_heartbeater(fn: F) -> F:
             try:
                 return await fn(*args, **kwargs)
             except Exception as e:
-                print(f"Error in activity: {e}")
+                logger.error(f"Error in activity: {e}", exc_info=e)
                 raise e
             finally:
                 heartbeat_task.cancel()
@@ -222,7 +222,7 @@ def auto_heartbeater(fn: F) -> F:
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                print(f"Error in activity: {e}")
+                logger.error(f"Error in activity: {e}", exc_info=e)
                 raise e
             finally:
                 stop_event.set()

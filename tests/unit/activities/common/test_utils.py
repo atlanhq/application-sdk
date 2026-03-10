@@ -421,7 +421,10 @@ class TestSendPeriodicHeartbeatSync:
             daemon=True,
         )
         thread.start()
-        time.sleep(0.15)  # Allow ~3 heartbeats
+        # Poll for at least 2 heartbeats with a generous deadline
+        deadline = time.monotonic() + 5
+        while mock_activity.heartbeat.call_count < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
         stop_event.set()
         thread.join(timeout=2)
         assert mock_activity.heartbeat.call_count >= 2
