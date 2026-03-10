@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.6.2 (March 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.1...v2.6.2
+
+### Bug Fixes
+
+- enhanced auto_heartbeater to support sync activity functions (#1095) (by @louisnow in [1eb5a1c](https://github.com/atlanhq/application-sdk/commit/1eb5a1c))
+
+
 ## v2.6.1 (March 10, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.0...v2.6.1
