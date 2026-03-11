@@ -478,9 +478,7 @@ class AtlanObservability(Generic[T], ABC):
                         ),  # seconds -> microseconds
                         "level": record.get("level", "INFO"),
                         "message": record.get("message", ""),
-                        "correlation_id": extra.get(
-                            "correlation_id", extra.get("atlan-request-id", "")
-                        ),
+                        "correlation_id": extra.get("trace_id", ""),
                         "app_name": APPLICATION_NAME,
                         "logger_name": record.get("logger_name", ""),
                         "trace_id": extra.get("trace_id", ""),
