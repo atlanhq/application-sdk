@@ -10,8 +10,6 @@ from pathlib import Path
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
-import duckdb
-import pandas as pd
 from dapr.clients import DaprClient
 from pydantic import BaseModel
 
@@ -384,6 +382,8 @@ class AtlanObservability(Generic[T], ABC):
         if not ENABLE_OBSERVABILITY_DAPR_SINK:
             return
         try:
+            import pandas as pd
+
             # Group records by partition
             partition_records = {}
             for record in records:
@@ -614,6 +614,8 @@ class DuckDBUI:
     def start_ui(self):
         """Start DuckDB UI and create views for Hive partitioned parquet files."""
         if not self._is_duckdb_ui_running():
+            import duckdb
+
             os.makedirs(self.observability_dir, exist_ok=True)
             con = duckdb.connect(self.db_path)
 

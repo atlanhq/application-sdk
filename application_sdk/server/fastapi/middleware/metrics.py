@@ -6,8 +6,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.server.fastapi.utils import EXCLUDED_LOG_PATHS
 
-metrics = get_metrics()
-
 
 class MetricsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
