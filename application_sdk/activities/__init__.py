@@ -13,6 +13,7 @@ Example:
     ...         await state.handler.do_something()
 """
 
+import json
 import os
 from abc import ABC
 from datetime import datetime, timedelta
@@ -220,6 +221,32 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             # AE invocation path: args are passed directly in workflow_config
             # (no state store round-trip needed)
             workflow_args = dict(workflow_config)
+
+        # Normalize connection to canonical shape regardless of caller (AE, Argo, state-store)
+        # Handles three shapes:
+        #   AE path:   {attributes: {qualifiedName, name}, typeName: "Connection"}
+        #   Flat:      {qualifiedName, name}
+        #   SDK/state: {connection_qualified_name, connection_name} (already normalized)
+        connection = workflow_args.get("connection", {})
+        if isinstance(connection, str):
+            try:
+                connection = json.loads(connection)
+            except (json.JSONDecodeError, TypeError):
+                connection = {}
+        if isinstance(connection, dict) and connection:
+            attrs = connection.get("attributes", {}) or {}
+            workflow_args["connection"] = {
+                "connection_qualified_name": (
+                    attrs.get("qualifiedName")
+                    or connection.get("qualifiedName")
+                    or connection.get("connection_qualified_name")
+                ),
+                "connection_name": (
+                    attrs.get("name")
+                    or connection.get("name")
+                    or connection.get("connection_name")
+                ),
+            }
 
         workflow_args["output_prefix"] = workflow_args.get(
             "output_prefix", TEMPORARY_PATH
