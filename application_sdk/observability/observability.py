@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from application_sdk.constants import (
     APPLICATION_NAME,
+    DEPLOYMENT_NAME,
     DEPLOYMENT_OBJECT_STORE_NAME,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_SDR_LOG_EXPORT,
@@ -399,48 +400,50 @@ class AtlanObservability(Generic[T], ABC):
                     partition_records[partition_path] = []
                 partition_records[partition_path].append(record)
 
-                # Write records to each partition using ParquetFileWriter
-            for partition_path, partition_data in partition_records.items():
-                # Create new dataframe from current records
-                new_df = pd.DataFrame(partition_data)
-
-                # Extract partition values from path and add to dataframe
-                partition_parts = os.path.basename(
-                    os.path.dirname(partition_path)
-                ).split(os.sep)
-                for part in partition_parts:
-                    if part.startswith("year="):
-                        new_df["year"] = int(part.split("=")[1])
-                    elif part.startswith("month="):
-                        new_df["month"] = int(part.split("=")[1])
-                    elif part.startswith("day="):
-                        new_df["day"] = int(part.split("=")[1])
-
-                # Use new data directly - let ParquetFileWriter handle consolidation and merging
-                df = new_df
-
-                # Use ParquetFileWriter for efficient writing and uploading
-                # Set the output path for this partition
-                try:
-                    # Lazy import and instantiation of ParquetFileWriter
-                    from application_sdk.io.parquet import ParquetFileWriter
-
-                    parquet_writer = ParquetFileWriter(
-                        path=partition_path,
-                        chunk_start=0,
-                        chunk_part=int(time()),
-                    )
-
-                    await parquet_writer._write_dataframe(dataframe=df)
-
-                except Exception as partition_error:
-                    logging.error(
-                        f"Error processing partition {partition_path}: {str(partition_error)}"
-                    )
-
-            # SDR export: write to centralized prefix for MDLH S3 pipe ingestion
+            # SDR log export: redirect logs to centralized prefix for MDLH S3 pipe
+            # When enabled, replaces the per-app dynamic path for logs only.
+            # Metrics and traces still use the per-app path.
             if ENABLE_SDR_LOG_EXPORT and self.file_name == LOG_FILE_NAME:
                 await self._flush_sdr_records(records)
+            else:
+                # Write records to each partition using ParquetFileWriter
+                for partition_path, partition_data in partition_records.items():
+                    # Create new dataframe from current records
+                    new_df = pd.DataFrame(partition_data)
+
+                    # Extract partition values from path and add to dataframe
+                    partition_parts = os.path.basename(
+                        os.path.dirname(partition_path)
+                    ).split(os.sep)
+                    for part in partition_parts:
+                        if part.startswith("year="):
+                            new_df["year"] = int(part.split("=")[1])
+                        elif part.startswith("month="):
+                            new_df["month"] = int(part.split("=")[1])
+                        elif part.startswith("day="):
+                            new_df["day"] = int(part.split("=")[1])
+
+                    # Use new data directly - let ParquetFileWriter handle consolidation and merging
+                    df = new_df
+
+                    # Use ParquetFileWriter for efficient writing and uploading
+                    # Set the output path for this partition
+                    try:
+                        # Lazy import and instantiation of ParquetFileWriter
+                        from application_sdk.io.parquet import ParquetFileWriter
+
+                        parquet_writer = ParquetFileWriter(
+                            path=partition_path,
+                            chunk_start=0,
+                            chunk_part=int(time()),
+                        )
+
+                        await parquet_writer._write_dataframe(dataframe=df)
+
+                    except Exception as partition_error:
+                        logging.error(
+                            f"Error processing partition {partition_path}: {str(partition_error)}"
+                        )
 
             # Clean up old records if enabled
             if self._cleanup_enabled:
@@ -460,7 +463,9 @@ class AtlanObservability(Generic[T], ABC):
         observability.workflow_logs Iceberg table.
         """
         try:
-            from application_sdk.io.parquet import ParquetFileWriter
+            from time import time_ns
+
+            from application_sdk.services.objectstore import ObjectStore
 
             # Map SDK log records to Iceberg table schema
             iceberg_records = []
@@ -489,23 +494,41 @@ class AtlanObservability(Generic[T], ABC):
             df = pd.DataFrame(iceberg_records)
 
             # Build SDR partition path: sdr-logs/year=YYYY/month=MM/day=DD/hour=HH/
-            now = datetime.now(tz=timezone.utc)
+            partition_dt = datetime.now(tz=timezone.utc)
             sdr_partition = os.path.join(
                 TEMPORARY_PATH,
                 SDR_LOG_S3_PREFIX,
-                f"year={now.year}",
-                f"month={now.month:02d}",
-                f"day={now.day:02d}",
-                f"hour={now.hour:02d}",
+                f"year={partition_dt.year}",
+                f"month={partition_dt.month:02d}",
+                f"day={partition_dt.day:02d}",
+                f"hour={partition_dt.hour:02d}",
             )
             os.makedirs(sdr_partition, exist_ok=True)
 
-            parquet_writer = ParquetFileWriter(
-                path=sdr_partition,
-                chunk_start=0,
-                chunk_part=int(time()),
+            # Lexi-sortable filename: {epoch_ns}_{deployment}_{app}.parquet
+            # - epoch_ns (19 digits): guarantees alphabetical = chronological order
+            # - deployment_name: prevents collision across multiple SDR instances
+            # - app_name: identifies which connector produced this file
+            filename = f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.parquet"
+            local_path = os.path.join(sdr_partition, filename)
+
+            # Write parquet locally
+            df.to_parquet(local_path, index=False)
+
+            # Upload to object store via Dapr
+            remote_key = os.path.join(
+                SDR_LOG_S3_PREFIX,
+                f"year={partition_dt.year}",
+                f"month={partition_dt.month:02d}",
+                f"day={partition_dt.day:02d}",
+                f"hour={partition_dt.hour:02d}",
+                filename,
             )
-            await parquet_writer._write_dataframe(dataframe=df)
+            await ObjectStore.upload_file(
+                local_path, remote_key, store_name=DEPLOYMENT_OBJECT_STORE_NAME
+            )
+
+            logging.info(f"SDR export: {len(records)} records → {remote_key}")
 
         except Exception as e:
             logging.error(f"Error flushing SDR records: {e}")
