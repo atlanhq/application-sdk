@@ -346,7 +346,7 @@ class TemporalWorkflowClient(WorkflowClient):
             correlation_fields = {
                 k: v
                 for k, v in workflow_args.items()
-                if k.startswith("atlan-") or k == "trace_id"
+                if k in ("correlation_id", "trace_id") or k.startswith("atlan-")
             }
             handle = await self.client.start_workflow(
                 workflow_class,  # type: ignore

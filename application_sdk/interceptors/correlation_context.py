@@ -1,7 +1,8 @@
 """Correlation context interceptor for Temporal workflows.
 
-Propagates atlan-* correlation context fields from workflow arguments to activities
-via Temporal headers, ensuring all activity logs include correlation identifiers
+Propagates atlan-* correlation context fields, trace_id, and correlation_id from
+workflow arguments to activities via Temporal headers, ensuring all activity logs
+include correlation identifiers for end-to-end observability.
 """
 
 from dataclasses import replace
@@ -30,7 +31,7 @@ ATLAN_HEADER_PREFIX = "atlan-"
 
 
 class CorrelationContextOutboundInterceptor(WorkflowOutboundInterceptor):
-    """Outbound interceptor that injects atlan-* context into activity headers."""
+    """Outbound interceptor that injects correlation context into activity headers."""
 
     def __init__(
         self,
@@ -49,9 +50,10 @@ class CorrelationContextOutboundInterceptor(WorkflowOutboundInterceptor):
                 payload_converter = default_converter().payload_converter
 
                 for key, value in self.inbound.correlation_data.items():
-                    # Include atlan-* prefixed headers and trace_id
+                    # Include atlan-* prefixed headers, trace_id, and correlation_id
                     if (
-                        key.startswith(ATLAN_HEADER_PREFIX) or key == "trace_id"
+                        key.startswith(ATLAN_HEADER_PREFIX)
+                        or key in ("trace_id", "correlation_id")
                     ) and value:
                         payload = payload_converter.to_payload(value)
                         new_headers[key] = payload
@@ -64,7 +66,7 @@ class CorrelationContextOutboundInterceptor(WorkflowOutboundInterceptor):
 
 
 class CorrelationContextWorkflowInboundInterceptor(WorkflowInboundInterceptor):
-    """Inbound workflow interceptor that extracts atlan-* context from workflow args."""
+    """Inbound workflow interceptor that extracts correlation context from workflow args."""
 
     def __init__(self, next: WorkflowInboundInterceptor):
         """Initialize the inbound interceptor."""
@@ -88,10 +90,11 @@ class CorrelationContextWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                         for k, v in workflow_config.items()
                         if k.startswith(ATLAN_HEADER_PREFIX) and v
                     }
-                    # Extract trace_id separately (not atlan- prefixed)
-                    trace_id = workflow_config.get("trace_id", "")
-                    if trace_id:
-                        self.correlation_data["trace_id"] = str(trace_id)
+                    # Extract trace_id and correlation_id separately (not atlan- prefixed)
+                    for field_name in ("trace_id", "correlation_id"):
+                        field_value = workflow_config.get(field_name, "")
+                        if field_value:
+                            self.correlation_data[field_name] = str(field_value)
                     if self.correlation_data:
                         correlation_context.set(self.correlation_data)
         except Exception as e:
@@ -101,7 +104,7 @@ class CorrelationContextWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
 
 class CorrelationContextActivityInboundInterceptor(ActivityInboundInterceptor):
-    """Activity interceptor that reads atlan-* headers and trace_id, sets correlation_context."""
+    """Activity interceptor that reads correlation headers and sets correlation_context."""
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
         """Execute activity after extracting atlan-* headers and trace_id."""
@@ -110,8 +113,11 @@ class CorrelationContextActivityInboundInterceptor(ActivityInboundInterceptor):
             payload_converter = default_converter().payload_converter
 
             for key, payload in input.headers.items():
-                # Extract atlan-* prefixed headers and trace_id
-                if key.startswith(ATLAN_HEADER_PREFIX) or key == "trace_id":
+                # Extract atlan-* prefixed headers, trace_id, and correlation_id
+                if key.startswith(ATLAN_HEADER_PREFIX) or key in (
+                    "trace_id",
+                    "correlation_id",
+                ):
                     value = payload_converter.from_payload(payload, type_hint=str)
                     atlan_fields[key] = value
 

@@ -329,7 +329,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         colorize = LOG_LEVEL == "DEBUG"
 
         def get_log_format(record: Any) -> str:
-            """Generate log format string with trace_id for correlation.
+            """Generate log format string with trace_id and correlation_id for correlation.
 
             Args:
                 record: Loguru record dictionary containing log information.
@@ -337,11 +337,15 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             Returns:
                 Format string for the log message.
             """
-            # Build trace_id display string (only trace_id is printed, atlan-* go to OTEL)
+            # Build correlation display string (trace_id + correlation_id printed, atlan-* go to OTEL)
+            parts = []
             trace_id = record["extra"].get("trace_id", "")
-            record["extra"]["_trace_id_str"] = (
-                f" trace_id={trace_id}" if trace_id else ""
-            )
+            if trace_id:
+                parts.append(f"trace_id={trace_id}")
+            correlation_id = record["extra"].get("correlation_id", "")
+            if correlation_id:
+                parts.append(f"correlation_id={correlation_id}")
+            record["extra"]["_trace_id_str"] = f" {' '.join(parts)}" if parts else ""
 
             if colorize:
                 return (
@@ -671,13 +675,15 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         except Exception:
             pass
 
-        # Add correlation context (atlan-, temporal., tenant. prefixed keys and trace_id) to kwargs
+        # Add correlation context (atlan-, temporal., tenant. prefixed keys, trace_id, correlation_id) to kwargs
         corr_ctx = correlation_context.get()
         if corr_ctx:
             # Add trace_id if present (for log format display)
             if "trace_id" in corr_ctx and corr_ctx["trace_id"]:
                 kwargs["trace_id"] = str(corr_ctx["trace_id"])
-                kwargs["correlation_id"] = str(corr_ctx["trace_id"])
+            # Add correlation_id if present (AppWorkflowRun GUID for e2e correlation)
+            if "correlation_id" in corr_ctx and corr_ctx["correlation_id"]:
+                kwargs["correlation_id"] = str(corr_ctx["correlation_id"])
             # Add atlan-* headers for OTEL
             for key, value in corr_ctx.items():
                 if (
