@@ -462,22 +462,9 @@ class TestCorrelationContext:
 
 
 class TestLogFormatFunction:
-    """Tests for the conditional log format function with trace_id and correlation_id."""
+    """Tests for the conditional log format function with trace_id."""
 
     TRACE_ID = "my-workflow-trace-123"
-    CORRELATION_ID = "app-workflow-run-guid-456"
-
-    @staticmethod
-    def _build_display_str(record: dict) -> str:
-        """Mimic the logger_adaptor get_log_format display string logic."""
-        parts = []
-        trace_id = record["extra"].get("trace_id", "")
-        if trace_id:
-            parts.append(f"trace_id={trace_id}")
-        correlation_id = record["extra"].get("correlation_id", "")
-        if correlation_id:
-            parts.append(f"correlation_id={correlation_id}")
-        return f" {' '.join(parts)}" if parts else ""
 
     def test_format_includes_trace_id_when_present(self):
         """Format should include trace_id when present."""
@@ -488,77 +475,53 @@ class TestLogFormatFunction:
             }
         }
 
-        display_str = self._build_display_str(record)
+        # Build trace_id display string (mimics logger_adaptor logic)
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
 
-        assert "trace_id=" in display_str
-        assert self.TRACE_ID in display_str
-
-    def test_format_includes_correlation_id_when_present(self):
-        """Format should include correlation_id when present."""
-        record = {
-            "extra": {
-                "logger_name": "test_logger",
-                "correlation_id": self.CORRELATION_ID,
-            }
-        }
-
-        display_str = self._build_display_str(record)
-
-        assert "correlation_id=" in display_str
-        assert self.CORRELATION_ID in display_str
-
-    def test_format_includes_both_trace_and_correlation_id(self):
-        """Format should include both trace_id and correlation_id when present."""
-        record = {
-            "extra": {
-                "logger_name": "test_logger",
-                "trace_id": self.TRACE_ID,
-                "correlation_id": self.CORRELATION_ID,
-            }
-        }
-
-        display_str = self._build_display_str(record)
-
-        assert "trace_id=" in display_str
-        assert "correlation_id=" in display_str
-        assert self.TRACE_ID in display_str
-        assert self.CORRELATION_ID in display_str
+        assert "trace_id=" in trace_id_str
+        assert self.TRACE_ID in trace_id_str
 
     def test_format_excludes_trace_id_when_missing(self):
         """Format should exclude trace_id when not present."""
         record = {"extra": {"logger_name": "test_logger"}}
 
-        display_str = self._build_display_str(record)
+        # Build trace_id display string
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
 
-        assert display_str == ""
+        assert trace_id_str == ""
 
     def test_format_excludes_trace_id_when_empty(self):
         """Format should exclude trace_id when empty string."""
         record = {"extra": {"logger_name": "test_logger", "trace_id": ""}}
 
-        display_str = self._build_display_str(record)
+        # Build trace_id display string
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
 
-        assert display_str == ""
+        assert trace_id_str == ""
 
     def test_format_trace_id_does_not_include_atlan_headers(self):
-        """Format should only include trace_id/correlation_id, not atlan-* headers in display."""
+        """Format should only include trace_id, not atlan-* headers in display."""
         record = {
             "extra": {
                 "logger_name": "test_logger",
                 "trace_id": self.TRACE_ID,
-                "correlation_id": self.CORRELATION_ID,
                 "atlan-tenant": "test-tenant",
                 "atlan-user": "test-user",
             }
         }
 
-        display_str = self._build_display_str(record)
+        # Build trace_id display string (only trace_id, not atlan-*)
+        trace_id = record["extra"].get("trace_id", "")
+        trace_id_str = f" trace_id={trace_id}" if trace_id else ""
 
-        assert "trace_id=" in display_str
-        assert "correlation_id=" in display_str
+        assert "trace_id=" in trace_id_str
+        assert self.TRACE_ID in trace_id_str
         # atlan-* headers should NOT be in the display string
-        assert "atlan-tenant" not in display_str
-        assert "atlan-user" not in display_str
+        assert "atlan-tenant" not in trace_id_str
+        assert "atlan-user" not in trace_id_str
 
 
 class TestCorrelationContextIntegration:

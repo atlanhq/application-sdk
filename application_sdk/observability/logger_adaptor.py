@@ -337,15 +337,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             Returns:
                 Format string for the log message.
             """
-            # Build correlation display string (trace_id + correlation_id printed, atlan-* go to OTEL)
-            parts = []
+            # Build trace_id display string (only trace_id is printed, atlan-* go to OTEL)
             trace_id = record["extra"].get("trace_id", "")
-            if trace_id:
-                parts.append(f"trace_id={trace_id}")
-            correlation_id = record["extra"].get("correlation_id", "")
-            if correlation_id:
-                parts.append(f"correlation_id={correlation_id}")
-            record["extra"]["_trace_id_str"] = f" {' '.join(parts)}" if parts else ""
+            record["extra"]["_trace_id_str"] = (
+                f" trace_id={trace_id}" if trace_id else ""
+            )
 
             if colorize:
                 return (
