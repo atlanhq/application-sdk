@@ -455,15 +455,19 @@ class AtlanObservability(Generic[T], ABC):
     async def _flush_sdr_records(self, records: List[Dict[str, Any]]):
         """Flush log records to the SDR centralized S3 prefix for MDLH ingestion.
 
-        Writes Parquet files with a schema matching the Iceberg workflow_logs table.
-        Files are written to artifacts/apps/observability/sdr-logs/ with Hive
-        partitioning (year/month/day/hour) and lexi-sortable filenames.
+        Writes JSON Lines (NDJSON) files with gzip compression, containing a schema
+        matching the Iceberg workflow_logs table. Files are written to
+        artifacts/apps/observability/sdr-logs/ with Hive partitioning
+        (year/month/day/hour) and lexi-sortable filenames.
 
         The MDLH S3 pipe picks up these files and ingests them into the shared
         observability.workflow_logs Iceberg table.
         """
         try:
+            import gzip
             from time import time_ns
+
+            import orjson
 
             from application_sdk.services.objectstore import ObjectStore
 
@@ -489,8 +493,6 @@ class AtlanObservability(Generic[T], ABC):
                     }
                 )
 
-            df = pd.DataFrame(iceberg_records)
-
             # Build SDR partition path: sdr-logs/year=YYYY/month=MM/day=DD/hour=HH/
             partition_dt = datetime.now(tz=timezone.utc)
             sdr_partition = os.path.join(
@@ -503,15 +505,17 @@ class AtlanObservability(Generic[T], ABC):
             )
             os.makedirs(sdr_partition, exist_ok=True)
 
-            # Lexi-sortable filename: {epoch_ns}_{deployment}_{app}.parquet
+            # Lexi-sortable filename: {epoch_ns}_{deployment}_{app}.json.gz
             # - epoch_ns (19 digits): guarantees alphabetical = chronological order
             # - deployment_name: prevents collision across multiple SDR instances
             # - app_name: identifies which connector produced this file
-            filename = f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.parquet"
+            filename = f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
             local_path = os.path.join(sdr_partition, filename)
 
-            # Write parquet locally
-            df.to_parquet(local_path, index=False)
+            # Write JSON Lines format with gzip compression
+            with gzip.open(local_path, "wt", encoding="utf-8") as f:
+                for iceberg_record in iceberg_records:
+                    f.write(orjson.dumps(iceberg_record).decode("utf-8") + "\n")
 
             # Upload to object store via Dapr
             remote_key = os.path.join(
