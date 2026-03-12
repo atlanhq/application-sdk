@@ -85,6 +85,7 @@ class TestCorrelationContextWorkflowInboundInterceptor:
             "atlan-ignore": "redshift-test-1.41",
             "atlan-argo-workflow-id": "redshift-test-1.09",
             "atlan-argo-workflow-node": "redshift-test.1(0).(2).(3)",
+            "correlation_id": "",
         }
 
     @pytest.mark.asyncio
@@ -150,6 +151,43 @@ class TestCorrelationContextWorkflowInboundInterceptor:
         assert interceptor.correlation_data["atlan-ignore"] == "redshift-test-1.41"
 
     @pytest.mark.asyncio
+    async def test_correlation_id_falls_back_to_trace_id(
+        self, interceptor, mock_next_inbound
+    ):
+        """Test that correlation_id falls back to trace_id when not explicitly set."""
+        workflow_config = {
+            "workflow_id": "test-workflow-123",
+            "trace_id": "my-trace-id-abc",
+            "atlan-ignore": "redshift-test-1.41",
+        }
+        input_data = MockExecuteWorkflowInput(args=[workflow_config])
+
+        await interceptor.execute_workflow(input_data)
+
+        assert interceptor.correlation_data["correlation_id"] == "my-trace-id-abc"
+        assert interceptor.correlation_data["trace_id"] == "my-trace-id-abc"
+
+    @pytest.mark.asyncio
+    async def test_explicit_correlation_id_preserved(
+        self, interceptor, mock_next_inbound
+    ):
+        """Test that an explicit correlation_id is not overwritten by trace_id."""
+        workflow_config = {
+            "workflow_id": "test-workflow-123",
+            "trace_id": "my-trace-id-abc",
+            "correlation_id": "explicit-correlation-id",
+            "atlan-ignore": "redshift-test-1.41",
+        }
+        input_data = MockExecuteWorkflowInput(args=[workflow_config])
+
+        await interceptor.execute_workflow(input_data)
+
+        assert (
+            interceptor.correlation_data["correlation_id"] == "explicit-correlation-id"
+        )
+        assert interceptor.correlation_data["trace_id"] == "my-trace-id-abc"
+
+    @pytest.mark.asyncio
     async def test_handles_workflow_config_without_trace_id(
         self, interceptor, mock_next_inbound
     ):
@@ -197,7 +235,8 @@ class TestCorrelationContextWorkflowInboundInterceptor:
 
         await interceptor.execute_workflow(input_data)
 
-        assert interceptor.correlation_data == {}
+        # correlation_id fallback sets empty string when neither trace_id nor correlation_id present
+        assert interceptor.correlation_data == {"correlation_id": ""}
 
     @pytest.mark.asyncio
     async def test_filters_out_none_values(self, interceptor, mock_next_inbound):
@@ -213,6 +252,7 @@ class TestCorrelationContextWorkflowInboundInterceptor:
 
         assert interceptor.correlation_data == {
             "atlan-ignore": "valid-value",
+            "correlation_id": "",
         }
 
     @pytest.mark.asyncio
@@ -230,7 +270,7 @@ class TestCorrelationContextWorkflowInboundInterceptor:
 
         # Verify correlation context was set
         ctx = correlation_context.get()
-        assert ctx == {"atlan-ignore": "test-value"}
+        assert ctx == {"atlan-ignore": "test-value", "correlation_id": ""}
 
 
 class TestCorrelationContextOutboundInterceptor:

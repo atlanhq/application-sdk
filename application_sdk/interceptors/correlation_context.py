@@ -107,6 +107,10 @@ class CorrelationContextWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                         field_value = workflow_config.get(field_name, "")
                         if field_value:
                             self.correlation_data[field_name] = str(field_value)
+                    # correlation_id is the canonical key; fall back to trace_id if not set
+                    self.correlation_data["correlation_id"] = self.correlation_data.get(
+                        "correlation_id"
+                    ) or self.correlation_data.get("trace_id", "")
                     if self.correlation_data:
                         correlation_context.set(self.correlation_data)
         except Exception as e:
