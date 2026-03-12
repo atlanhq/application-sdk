@@ -45,16 +45,28 @@ class CorrelationContextOutboundInterceptor(WorkflowOutboundInterceptor):
     def start_activity(self, input: StartActivityInput) -> workflow.ActivityHandle[Any]:
         """Inject atlan-* headers and trace_id into activity calls."""
         try:
+            # Merge interceptor-captured data with correlation_context ContextVar.
+            # The ContextVar is updated by the workflow after deriving correlation_id
+            # (e.g. for scheduled runs where it's only known after WorkflowRun creation).
+            merged: Dict[str, str] = {}
+            ctx_data = correlation_context.get()
+            if ctx_data:
+                for k, v in ctx_data.items():
+                    if (
+                        k.startswith(ATLAN_HEADER_PREFIX)
+                        or k in ("trace_id", "correlation_id")
+                    ) and v:
+                        merged[k] = str(v)
+            # Interceptor-captured data takes precedence
             if self.inbound.correlation_data:
+                merged.update(self.inbound.correlation_data)
+
+            if merged:
                 new_headers: Dict[str, Payload] = dict(input.headers)
                 payload_converter = default_converter().payload_converter
 
-                for key, value in self.inbound.correlation_data.items():
-                    # Include atlan-* prefixed headers, trace_id, and correlation_id
-                    if (
-                        key.startswith(ATLAN_HEADER_PREFIX)
-                        or key in ("trace_id", "correlation_id")
-                    ) and value:
+                for key, value in merged.items():
+                    if value:
                         payload = payload_converter.to_payload(value)
                         new_headers[key] = payload
 
