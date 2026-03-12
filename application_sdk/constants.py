@@ -90,6 +90,12 @@ TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
     "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
 )
 
+#: Enable structured failure logging for Temporal activities with context
+#: (tenant, retries, timeouts). Opt-in per application.
+ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING: bool = (
+    os.getenv("ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING", "false").lower() == "true"
+)
+
 # Workflow Client Constants
 #: Host address for the Temporal server
 WORKFLOW_HOST = os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
