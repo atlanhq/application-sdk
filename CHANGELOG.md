@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.7.0 (March 13, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.2...v2.7.0
+
+### Features
+
+- dual OTLP export and correlation_id propagation for workflow logs (#1102) (by @saig214 in [fd7ae09](https://github.com/atlanhq/application-sdk/commit/fd7ae09))
+
+### Bug Fixes
+
+- align DockerHub image tag format with GHCR ({branch}-{sha7}abcd) (#1101) (by @nishantmunjal7 in [bbc3317](https://github.com/atlanhq/application-sdk/commit/bbc3317))
+
+
 ## v2.6.2 (March 10, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.1...v2.6.2
