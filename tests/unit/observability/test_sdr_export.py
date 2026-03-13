@@ -453,3 +453,48 @@ class TestFlushSdrRecords:
             call_args = str(mock_log_error.call_args)
             assert "Error flushing SDR records" in call_args
 
+    @pytest.mark.asyncio
+    async def test_raw_records_preserve_extra_fields(
+        self, observability_instance, sample_log_records, tmp_path
+    ):
+        """Verify that raw records preserve extra fields like trace_id and span_id.
+
+        The SDK writes raw OTel-format records with all original fields intact.
+        MDLH Jolt spec extracts fields from 'extra' for Iceberg schema.
+        """
+        with (
+            patch(
+                "application_sdk.observability.observability.TEMPORARY_PATH",
+                str(tmp_path),
+            ),
+            patch(
+                "application_sdk.observability.observability.SDR_LOG_S3_PREFIX",
+                "sdr-logs",
+            ),
+            patch(
+                "application_sdk.observability.observability.DEPLOYMENT_NAME",
+                "test-deployment",
+            ),
+            patch(
+                "application_sdk.observability.observability.APPLICATION_NAME",
+                "test-app",
+            ),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore.upload_file",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await observability_instance._flush_sdr_records(sample_log_records)
+
+            # Find and read the file
+            sdr_logs_dir = tmp_path / "sdr-logs"
+            json_gz_files = list(sdr_logs_dir.rglob("*.json.gz"))
+
+            with gzip.open(json_gz_files[0], "rt", encoding="utf-8") as f:
+                first_line = f.readline()
+
+            parsed = orjson.loads(first_line)
+            # Verify extra field contains trace context
+            assert "extra" in parsed, "Raw record should have 'extra' field"
+            assert parsed["extra"]["trace_id"] == "trace-123"
+            assert parsed["extra"]["span_id"] == "span-456"

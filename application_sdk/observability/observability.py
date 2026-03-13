@@ -469,13 +469,18 @@ class AtlanObservability(Generic[T], ABC):
     async def _flush_sdr_records(self, records: List[Dict[str, Any]]):
         """Flush log records to the SDR centralized S3 prefix for MDLH ingestion.
 
-        Writes JSON Lines (NDJSON) files with gzip compression in OTel format.
-        Files are written to artifacts/apps/observability/sdr-logs/ with Hive
-        partitioning (year/month/day/hour) and lexi-sortable filenames.
+        Writes JSON Lines (NDJSON) files with gzip compression containing raw
+        OTel-format records (SDK's native LogRecordModel output). Files are written
+        to artifacts/apps/observability/sdr-logs/ with Hive partitioning
+        (year/month/day/hour) and lexi-sortable filenames.
 
-        The MDLH S3 pipe picks up these files and ingests them into the shared
-        observability.workflow_logs Iceberg table. Schema transformation is
-        handled by the MDLH Jolt transform, so records are written as-is.
+        The MDLH S3 pipe picks up these files, applies a Jolt transformation to
+        map OTel fields to Iceberg columns, and ingests them into the shared
+        observability.workflow_logs Iceberg table.
+
+        Note: The SDK writes raw records; MDLH handles the schema transformation.
+        This allows future consumers to use the same data in different formats
+        and schema changes only require updating the MDLH Jolt spec, not the SDK.
         """
         try:
             import gzip
@@ -504,7 +509,8 @@ class AtlanObservability(Generic[T], ABC):
             filename = f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
             local_path = os.path.join(sdr_partition, filename)
 
-            # Write JSON Lines format with gzip compression (OTel format as-is)
+            # Write raw OTel-format records as JSON Lines with gzip compression
+            # MDLH Jolt spec handles transformation to Iceberg schema
             with gzip.open(local_path, "wt", encoding="utf-8") as f:
                 for record in records:
                     f.write(orjson.dumps(record).decode("utf-8") + "\n")
