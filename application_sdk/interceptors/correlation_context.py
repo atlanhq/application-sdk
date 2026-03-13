@@ -57,9 +57,10 @@ class CorrelationContextOutboundInterceptor(WorkflowOutboundInterceptor):
                         or k in ("trace_id", "correlation_id")
                     ) and v:
                         merged[k] = str(v)
-            # Interceptor-captured data takes precedence
             if self.inbound.correlation_data:
-                merged.update(self.inbound.correlation_data)
+                for k, v in self.inbound.correlation_data.items():
+                    if v:
+                        merged[k] = str(v)
 
             if merged:
                 new_headers: Dict[str, Payload] = dict(input.headers)
@@ -108,9 +109,11 @@ class CorrelationContextWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                         if field_value:
                             self.correlation_data[field_name] = str(field_value)
                     # correlation_id is the canonical key; fall back to trace_id if not set
-                    self.correlation_data["correlation_id"] = self.correlation_data.get(
+                    cid = self.correlation_data.get(
                         "correlation_id"
-                    ) or self.correlation_data.get("trace_id", "")
+                    ) or self.correlation_data.get("trace_id")
+                    if cid:
+                        self.correlation_data["correlation_id"] = cid
                     if self.correlation_data:
                         correlation_context.set(self.correlation_data)
         except Exception as e:

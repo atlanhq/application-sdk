@@ -85,7 +85,6 @@ class TestCorrelationContextWorkflowInboundInterceptor:
             "atlan-ignore": "redshift-test-1.41",
             "atlan-argo-workflow-id": "redshift-test-1.09",
             "atlan-argo-workflow-node": "redshift-test.1(0).(2).(3)",
-            "correlation_id": "",
         }
 
     @pytest.mark.asyncio
@@ -235,8 +234,8 @@ class TestCorrelationContextWorkflowInboundInterceptor:
 
         await interceptor.execute_workflow(input_data)
 
-        # correlation_id fallback sets empty string when neither trace_id nor correlation_id present
-        assert interceptor.correlation_data == {"correlation_id": ""}
+        # No correlation_id set when neither trace_id nor correlation_id present
+        assert interceptor.correlation_data == {}
 
     @pytest.mark.asyncio
     async def test_filters_out_none_values(self, interceptor, mock_next_inbound):
@@ -252,7 +251,6 @@ class TestCorrelationContextWorkflowInboundInterceptor:
 
         assert interceptor.correlation_data == {
             "atlan-ignore": "valid-value",
-            "correlation_id": "",
         }
 
     @pytest.mark.asyncio
@@ -270,7 +268,7 @@ class TestCorrelationContextWorkflowInboundInterceptor:
 
         # Verify correlation context was set
         ctx = correlation_context.get()
-        assert ctx == {"atlan-ignore": "test-value", "correlation_id": ""}
+        assert ctx == {"atlan-ignore": "test-value"}
 
 
 class TestCorrelationContextOutboundInterceptor:
