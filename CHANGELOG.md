@@ -1,5 +1,58 @@
 # Changelog
 
+## v2.6.2 (March 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.1...v2.6.2
+
+### Bug Fixes
+
+- enhanced auto_heartbeater to support sync activity functions (#1095) (by @louisnow in [1eb5a1c](https://github.com/atlanhq/application-sdk/commit/1eb5a1c))
+
+
+## v2.6.1 (March 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.0...v2.6.1
+
+### Bug Fixes
+
+- make release workflow idempotent for safe re-runs (#1090) (by @louisnow in [f4c4eaf](https://github.com/atlanhq/application-sdk/commit/f4c4eaf))
+- catch BaseException to log timeout-driven activity cancellations (#1094) (by @TechyMT in [046c5c4](https://github.com/atlanhq/application-sdk/commit/046c5c4))
+
+
+## v2.6.0 (March 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.5.0...v2.6.0
+
+### Features
+
+- reusable build-app.yml workflow for all first-party app repos (#1087) (by @nishantmunjal7 in [0801eeb](https://github.com/atlanhq/application-sdk/commit/0801eeb))
+- replace registries.dockerhub with push_for_sdr in build template (DISTR-213) (#1089) (by @nishantmunjal7 in [25499a2](https://github.com/atlanhq/application-sdk/commit/25499a2))
+- Temporal activities observability via interceptors using logs attributes (#1086) (by @euclidstellar in [9bea6f3](https://github.com/atlanhq/application-sdk/tree/9bea6f3))
+- Temporal failure exception in CH as log attribute of exception (#1063) (by @euclidstellar in [039c27d](https://github.com/atlanhq/application-sdk/tree/039c27d))
+
+
+## v2.5.0 (March 03, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.4.1...v2.5.0
+
+### Features
+
+- add temporal prometheus metrics (#1078) (by @anbarasantr in [6dbf1dd](https://github.com/atlanhq/application-sdk/commit/6dbf1dd))
+
+### Bug Fixes
+
+- make ObjectStore upload/download primitives file-type agnostic (#1056) (by @fyzanshaik-atlan in [ba28569](https://github.com/atlanhq/application-sdk/commit/ba28569d09fa14a01f5ab19dcd7802552b058982))
+
+
+## v2.4.1 (February 24, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.4.0...v2.4.1
+
+### Features
+
+- file upload/download support via FastAPI bindings | PART-255 (#1046) (by @prateek11rai in [326962d](https://github.com/atlanhq/application-sdk/commit/326962d))
+
+
 ## v2.4.0 (February 17, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.3...v2.4.0
