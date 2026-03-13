@@ -203,24 +203,10 @@ class TestFlushSdrRecords:
                 assert isinstance(parsed, dict), "Each line should be a JSON object"
 
     @pytest.mark.asyncio
-    async def test_schema_matches_iceberg_table(
+    async def test_records_written_in_otel_format(
         self, observability_instance, sample_log_records, tmp_path
     ):
-        """Verify that JSON schema matches Iceberg workflow_logs table schema."""
-        expected_fields = {
-            "timestamp",
-            "level",
-            "message",
-            "correlation_id",
-            "app_name",
-            "logger_name",
-            "trace_id",
-            "span_id",
-            "exception_type",
-            "exception_message",
-            "exception_stacktrace",
-        }
-
+        """Verify that records are written as-is in OTel format without transformation."""
         with (
             patch(
                 "application_sdk.observability.observability.TEMPORARY_PATH",
@@ -250,54 +236,20 @@ class TestFlushSdrRecords:
             json_gz_files = list(sdr_logs_dir.rglob("*.json.gz"))
 
             with gzip.open(json_gz_files[0], "rt", encoding="utf-8") as f:
-                first_line = f.readline()
+                lines = f.readlines()
 
-            parsed = orjson.loads(first_line)
-            assert (
-                set(parsed.keys()) == expected_fields
-            ), "Fields should match Iceberg schema"
+            # Verify each record matches the original OTel format
+            assert len(lines) == len(sample_log_records)
+            for i, line in enumerate(lines):
+                parsed = orjson.loads(line.strip())
+                original = sample_log_records[i]
 
-    @pytest.mark.asyncio
-    async def test_timestamp_converted_to_microseconds(
-        self, observability_instance, sample_log_records, tmp_path
-    ):
-        """Verify that timestamp is converted from seconds to microseconds."""
-        with (
-            patch(
-                "application_sdk.observability.observability.TEMPORARY_PATH",
-                str(tmp_path),
-            ),
-            patch(
-                "application_sdk.observability.observability.SDR_LOG_S3_PREFIX",
-                "sdr-logs",
-            ),
-            patch(
-                "application_sdk.observability.observability.DEPLOYMENT_NAME",
-                "test-deployment",
-            ),
-            patch(
-                "application_sdk.observability.observability.APPLICATION_NAME",
-                "test-app",
-            ),
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file",
-                new_callable=AsyncMock,
-            ),
-        ):
-            await observability_instance._flush_sdr_records(sample_log_records)
-
-            # Find and read the file
-            sdr_logs_dir = tmp_path / "sdr-logs"
-            json_gz_files = list(sdr_logs_dir.rglob("*.json.gz"))
-
-            with gzip.open(json_gz_files[0], "rt", encoding="utf-8") as f:
-                first_line = f.readline()
-
-            parsed = orjson.loads(first_line)
-            # Original timestamp: 1709836800.123456 seconds
-            # Expected: 1709836800123456 microseconds
-            expected_timestamp = int(sample_log_records[0]["timestamp"] * 1_000_000)
-            assert parsed["timestamp"] == expected_timestamp
+                # Records should be identical (no transformation)
+                assert parsed["timestamp"] == original["timestamp"]
+                assert parsed["level"] == original["level"]
+                assert parsed["message"] == original["message"]
+                assert parsed["logger_name"] == original["logger_name"]
+                assert parsed["extra"] == original["extra"]
 
     @pytest.mark.asyncio
     async def test_hive_partition_path_format(
@@ -501,41 +453,3 @@ class TestFlushSdrRecords:
             call_args = str(mock_log_error.call_args)
             assert "Error flushing SDR records" in call_args
 
-    @pytest.mark.asyncio
-    async def test_app_name_in_records(
-        self, observability_instance, sample_log_records, tmp_path
-    ):
-        """Verify that APPLICATION_NAME is included in each record."""
-        test_app_name = "my-custom-app"
-        with (
-            patch(
-                "application_sdk.observability.observability.TEMPORARY_PATH",
-                str(tmp_path),
-            ),
-            patch(
-                "application_sdk.observability.observability.SDR_LOG_S3_PREFIX",
-                "sdr-logs",
-            ),
-            patch(
-                "application_sdk.observability.observability.DEPLOYMENT_NAME",
-                "test-deployment",
-            ),
-            patch(
-                "application_sdk.observability.observability.APPLICATION_NAME",
-                test_app_name,
-            ),
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file",
-                new_callable=AsyncMock,
-            ),
-        ):
-            await observability_instance._flush_sdr_records(sample_log_records)
-
-            # Find and read the file
-            sdr_logs_dir = tmp_path / "sdr-logs"
-            json_gz_files = list(sdr_logs_dir.rglob("*.json.gz"))
-
-            with gzip.open(json_gz_files[0], "rt", encoding="utf-8") as f:
-                for line in f:
-                    parsed = orjson.loads(line)
-                    assert parsed["app_name"] == test_app_name
