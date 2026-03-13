@@ -389,6 +389,24 @@ class TestCorrelationContext:
                 assert kwargs["trace_id"] == self.TRACE_ID
                 assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
 
+    def test_process_extracts_correlation_id_from_correlation_context(self):
+        """Test process() extracts correlation_id from correlation context."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                mock_corr_context.get.return_value = {
+                    "trace_id": self.TRACE_ID,
+                    "correlation_id": "app-workflow-run-guid-abc",
+                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                }
+
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                assert kwargs["trace_id"] == self.TRACE_ID
+                assert kwargs["correlation_id"] == "app-workflow-run-guid-abc"
+                assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
+
     def test_process_without_trace_id(self):
         """Test process() when trace_id is not in correlation context."""
         with create_logger_adapter() as logger_adapter:
@@ -402,6 +420,7 @@ class TestCorrelationContext:
                 msg, kwargs = logger_adapter.process("Test message", {})
 
                 assert "trace_id" not in kwargs
+                assert "correlation_id" not in kwargs
                 assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
 
     def test_process_handles_none_correlation_context(self):

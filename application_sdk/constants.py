@@ -206,8 +206,14 @@ OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
+#: Secondary endpoint for workflow logs (optional, for dual export to tenant-level collector)
+OTEL_WORKFLOW_LOGS_ENDPOINT: str = os.getenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "")
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether to enable workflow logs export to secondary endpoint (for S3 archival + live streaming)
+ENABLE_OTLP_WORKFLOW_LOGS: bool = (
+    os.getenv("ENABLE_OTLP_WORKFLOW_LOGS", "false").lower() == "true"
+)
 
 # OTEL Constants
 #: Node name for workflow telemetry
@@ -220,7 +226,6 @@ OTEL_BATCH_DELAY_MS = int(os.getenv("OTEL_BATCH_DELAY_MS", "5000"))
 OTEL_BATCH_SIZE = int(os.getenv("OTEL_BATCH_SIZE", "512"))
 #: Maximum size of the export queue
 OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
-
 
 # AWS Constants
 #: AWS Session Name
