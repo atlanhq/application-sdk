@@ -1,20 +1,19 @@
 # Reusable build workflow for Atlan first-party app repos.
 #
 # Zero-input — reads atlan.yaml from the repo, derives everything from GitHub context.
-# Image tag:  {branch}-{sha7}abcd  (e.g. main-abc1234abcd) — immutable, used by deploy systems
-# Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{image_tag}  (branch in tag, not in repo name)
-# DockerHub:  atlanhq/{repo}:{branch}-{image_tag}          (same tag format as GHCR)
-# Mutable:    ghcr.io/atlanhq/{repo}:{branch}              (always points to latest on branch)
+# Image tag:  {branch}-{sha7}  (e.g. main-abc1234) — immutable, used by deploy systems
+# Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{sha7}  (same format on GHCR and DockerHub)
+# Mutable:    ghcr.io/atlanhq/{repo}:{branch}         (always points to latest on branch)
 #
-# Usage in each app repo (.github/workflows/build-image.yaml):
+# Usage in each app repo (.github/workflows/build-apps-image.yaml):
 #
 #   jobs:
 #     build:
-#       uses: atlanhq/application-sdk/.github/workflows/build-app.yml@main
+#       uses: atlanhq/application-sdk/.github/workflows/build-apps-image.yaml@main
 #       with:
 #         ref: ${{ inputs.ref || github.ref }}
-#       secrets: inherit   # template only reads: SNYK_TOKEN, DOCKER_HUB_USERNAME, DOCKER_HUB_PASSWORD
-#                          # GITHUB_TOKEN is provided automatically and does not need to be passed
+#       secrets: inherit   # template only reads: ORG_PAT_GITHUB, SNYK_TOKEN, DOCKER_HUB_PAT_RW
+#                          # permissions are declared in this workflow — callers don't need to repeat them
 #
 name: Build Atlan App Image
 
@@ -120,8 +119,8 @@ jobs:
           # Extract branch name from ref (refs/heads/main → main, feat/foo → feat-foo)
           BRANCH=$(echo "$REF" | sed 's|refs/heads/||' | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')
 
-          # Immutable tag: first 7 chars of SHA + "abcd" (e.g. abc1234abcd) — used by deploy systems
-          IMAGE_TAG="${SHA:0:7}abcd"
+          # Immutable tag: first 7 chars of SHA (e.g. abc1234)
+          IMAGE_TAG="${SHA:0:7}"
 
           # Single GHCR image repo per app; branch is part of the tag (not the image name)
           GHCR_BASE="ghcr.io/atlanhq/${REPO}"
