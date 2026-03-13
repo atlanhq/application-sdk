@@ -411,7 +411,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                         OTLPLogExporter(
                             endpoint=OTEL_WORKFLOW_LOGS_ENDPOINT,
                             timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                            insecure=True,
                         ),
                         schedule_delay_millis=OTEL_BATCH_DELAY_MS,
                         max_export_batch_size=OTEL_BATCH_SIZE,
