@@ -5,23 +5,29 @@ import signal
 import sys
 import threading
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
 import duckdb
-import pandas as pd
 from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    APPLICATION_NAME,
+    DEPLOYMENT_NAME,
     DEPLOYMENT_OBJECT_STORE_NAME,
+    ENABLE_ATLAN_UPLOAD,
     ENABLE_OBSERVABILITY_DAPR_SINK,
+    ENABLE_SDR_LOG_EXPORT,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
+    SDR_LOG_S3_PREFIX,
     STATE_STORE_NAME,
+    TEMPORARY_PATH,
     TRACES_FILE_NAME,
+    UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
 
@@ -363,22 +369,20 @@ class AtlanObservability(Generic[T], ABC):
             logging.error(f"Error buffering log: {e}")
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
-        """Flush records to parquet file and object store using ParquetFileWriter.
+        """Flush records to storage in json.gz format.
 
         Args:
             records: List of records to flush
 
         This method:
         - Groups records by partition (year/month/day)
-        - Uses ParquetFileWriter for efficient writing
-        - Automatically handles chunking, compression, and dual upload
+        - Uses json.gz format for all types (logs, metrics, traces)
         - Provides robust error handling per partition
         - Cleans up old records if enabled
 
         Features:
-        - Automatic chunking for large datasets
-        - Dual upload support (primary + upstream if enabled)
-        - Advanced consolidation for optimal performance
+        - Lightweight format (no pandas/numpy imports needed)
+        - Dual upload support (primary + upstream if ENABLE_ATLAN_UPLOAD)
         - Fault-tolerant processing (continues on partition errors)
         """
         if not ENABLE_OBSERVABILITY_DAPR_SINK:
@@ -395,44 +399,13 @@ class AtlanObservability(Generic[T], ABC):
                     partition_records[partition_path] = []
                 partition_records[partition_path].append(record)
 
-                # Write records to each partition using ParquetFileWriter
-            for partition_path, partition_data in partition_records.items():
-                # Create new dataframe from current records
-                new_df = pd.DataFrame(partition_data)
+            # Write all record types (logs, metrics, traces) in json.gz format
+            await self._flush_records_as_json_gz(partition_records)
 
-                # Extract partition values from path and add to dataframe
-                partition_parts = os.path.basename(
-                    os.path.dirname(partition_path)
-                ).split(os.sep)
-                for part in partition_parts:
-                    if part.startswith("year="):
-                        new_df["year"] = int(part.split("=")[1])
-                    elif part.startswith("month="):
-                        new_df["month"] = int(part.split("=")[1])
-                    elif part.startswith("day="):
-                        new_df["day"] = int(part.split("=")[1])
-
-                # Use new data directly - let ParquetFileWriter handle consolidation and merging
-                df = new_df
-
-                # Use ParquetFileWriter for efficient writing and uploading
-                # Set the output path for this partition
-                try:
-                    # Lazy import and instantiation of ParquetFileWriter
-                    from application_sdk.io.parquet import ParquetFileWriter
-
-                    parquet_writer = ParquetFileWriter(
-                        path=partition_path,
-                        chunk_start=0,
-                        chunk_part=int(time()),
-                    )
-
-                    await parquet_writer._write_dataframe(dataframe=df)
-
-                except Exception as partition_error:
-                    logging.error(
-                        f"Error processing partition {partition_path}: {str(partition_error)}"
-                    )
+            # Additionally, write logs to centralized SDR path for MDLH ingestion
+            # This is additive - customers still get their per-app logs above
+            if ENABLE_SDR_LOG_EXPORT and self.file_name == LOG_FILE_NAME:
+                await self._flush_sdr_records(records)
 
             # Clean up old records if enabled
             if self._cleanup_enabled:
@@ -440,6 +413,125 @@ class AtlanObservability(Generic[T], ABC):
 
         except Exception as e:
             logging.error(f"Error flushing records batch: {e}")
+
+    async def _flush_records_as_json_gz(
+        self, partition_records: Dict[str, List[Dict[str, Any]]]
+    ):
+        """Flush records to customer per-app path in json.gz format.
+
+        Writes JSON Lines (NDJSON) files with gzip compression to the customer's
+        per-app path (artifacts/apps/{app}/{deployment}/observability/{type}/...).
+        Supports dual upload to both DEPLOYMENT_OBJECT_STORE and UPSTREAM_OBJECT_STORE
+        when ENABLE_ATLAN_UPLOAD is true.
+
+        Args:
+            partition_records: Dict mapping partition paths to lists of records
+        """
+        try:
+            import gzip
+            from time import time_ns
+
+            import orjson
+
+            from application_sdk.services.objectstore import ObjectStore
+
+            for partition_path, partition_data in partition_records.items():
+                os.makedirs(partition_path, exist_ok=True)
+
+                # Lexi-sortable filename: {epoch_ns}_{deployment}_{app}.json.gz
+                filename = f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
+                local_path = os.path.join(partition_path, filename)
+
+                # Write JSON Lines format with gzip compression
+                with gzip.open(local_path, "wt", encoding="utf-8") as f:
+                    for record in partition_data:
+                        f.write(orjson.dumps(record).decode("utf-8") + "\n")
+
+                # Build remote key relative to data_dir
+                remote_key = os.path.relpath(local_path, TEMPORARY_PATH)
+
+                # Upload to primary object store (customer's local S3)
+                await ObjectStore.upload_file(
+                    local_path, remote_key, store_name=DEPLOYMENT_OBJECT_STORE_NAME
+                )
+
+                # Dual upload to upstream object store (Atlan-managed S3) if enabled
+                if ENABLE_ATLAN_UPLOAD:
+                    await ObjectStore.upload_file(
+                        local_path, remote_key, store_name=UPSTREAM_OBJECT_STORE_NAME
+                    )
+
+                logging.debug(f"Exported {len(partition_data)} records → {remote_key}")
+
+        except Exception as e:
+            logging.error(f"Error flushing records as json.gz: {e}")
+
+    async def _flush_sdr_records(self, records: List[Dict[str, Any]]):
+        """Flush log records to the SDR centralized S3 prefix for MDLH ingestion.
+
+        Writes JSON Lines (NDJSON) files with gzip compression containing raw
+        OTel-format records (SDK's native LogRecordModel output). Files are written
+        to artifacts/apps/observability/sdr-logs/ with Hive partitioning
+        (year/month/day/hour) and lexi-sortable filenames.
+
+        The MDLH S3 pipe picks up these files, applies a Jolt transformation to
+        map OTel fields to Iceberg columns, and ingests them into the shared
+        observability.workflow_logs Iceberg table.
+
+        Note: The SDK writes raw records; MDLH handles the schema transformation.
+        This allows future consumers to use the same data in different formats
+        and schema changes only require updating the MDLH Jolt spec, not the SDK.
+        """
+        try:
+            import gzip
+            from time import time_ns
+
+            import orjson
+
+            from application_sdk.services.objectstore import ObjectStore
+
+            # Build SDR partition path: sdr-logs/year=YYYY/month=MM/day=DD/hour=HH/
+            partition_dt = datetime.now(tz=timezone.utc)
+            sdr_partition = os.path.join(
+                TEMPORARY_PATH,
+                SDR_LOG_S3_PREFIX,
+                f"year={partition_dt.year}",
+                f"month={partition_dt.month:02d}",
+                f"day={partition_dt.day:02d}",
+                f"hour={partition_dt.hour:02d}",
+            )
+            os.makedirs(sdr_partition, exist_ok=True)
+
+            # Lexi-sortable filename: {epoch_ns}_{deployment}_{app}.json.gz
+            # - epoch_ns (19 digits): guarantees alphabetical = chronological order
+            # - deployment_name: prevents collision across multiple SDR instances
+            # - app_name: identifies which connector produced this file
+            filename = f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
+            local_path = os.path.join(sdr_partition, filename)
+
+            # Write raw OTel-format records as JSON Lines with gzip compression
+            # MDLH Jolt spec handles transformation to Iceberg schema
+            with gzip.open(local_path, "wt", encoding="utf-8") as f:
+                for record in records:
+                    f.write(orjson.dumps(record).decode("utf-8") + "\n")
+
+            # Upload to object store via Dapr
+            remote_key = os.path.join(
+                SDR_LOG_S3_PREFIX,
+                f"year={partition_dt.year}",
+                f"month={partition_dt.month:02d}",
+                f"day={partition_dt.day:02d}",
+                f"hour={partition_dt.hour:02d}",
+                filename,
+            )
+            await ObjectStore.upload_file(
+                local_path, remote_key, store_name=DEPLOYMENT_OBJECT_STORE_NAME
+            )
+
+            logging.info(f"SDR export: {len(records)} records → {remote_key}")
+
+        except Exception as e:
+            logging.error(f"Error flushing SDR records: {e}")
 
     async def _check_and_cleanup(self):
         """Check if cleanup is needed and perform it if necessary.
