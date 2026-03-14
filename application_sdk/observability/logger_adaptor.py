@@ -16,8 +16,10 @@ from opentelemetry.trace.span import TraceFlags
 from pydantic import BaseModel, Field
 
 from application_sdk.constants import (
+    APPLICATION_NAME,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,
+    ENABLE_OTLP_WORKFLOW_LOGS,
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
     LOG_FILE_NAME,
@@ -31,6 +33,7 @@ from application_sdk.constants import (
     OTEL_QUEUE_SIZE,
     OTEL_RESOURCE_ATTRIBUTES,
     OTEL_WF_NODE_NAME,
+    OTEL_WORKFLOW_LOGS_ENDPOINT,
     SERVICE_NAME,
     SERVICE_VERSION,
 )
@@ -75,8 +78,10 @@ class LogExtraModel(BaseModel):
     heartbeat_timeout: Optional[str] = None
     # Other fields
     log_type: Optional[str] = None
+    app_name: Optional[str] = None
     # Trace context
     trace_id: Optional[str] = None
+    correlation_id: Optional[str] = None
 
 
 class LogRecordModel(BaseModel):
@@ -106,11 +111,17 @@ class LogRecordModel(BaseModel):
         for k, v in message.record["extra"].items():
             if k != "logger_name" and hasattr(extra, k):
                 setattr(extra, k, v)
-            # Include atlan- prefixed fields as extra attributes (correlation context)
+            # Include atlan-, exception., temporal., tenant. prefixed fields as extra attributes
             elif (
-                k.startswith("atlan-") or k.startswith("exception.")
+                k.startswith("atlan-")
+                or k.startswith("exception.")
+                or k.startswith("temporal.")
+                or k.startswith("tenant.")
             ) and v is not None:
-                setattr(extra, k, str(v))
+                if isinstance(v, (bool, int, float, str, bytes)):
+                    setattr(extra, k, v)
+                else:
+                    setattr(extra, k, str(v))
         for key, value in _extract_exception_attributes(
             message.record.get("exception")
         ).items():
@@ -255,6 +266,16 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
     _flush_task_started = False
     _flush_task = None
+    _initialized = False
+
+    @classmethod
+    def _reset_for_testing(cls) -> None:
+        """Reset initialization state for test isolation.
+
+        This method should only be used in tests to allow fresh sink setup
+        for each test case.
+        """
+        cls._initialized = False
 
     def __init__(self, logger_name: str) -> None:
         """Initialize the AtlanLoggerAdapter with enhanced configuration.
@@ -280,6 +301,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         self.logger_name = logger_name
         # Bind the logger name when creating the logger instance
         self.logger = logger
+
+        if AtlanLoggerAdapter._initialized:
+            return
+
         logger.remove()
 
         # Register custom log level for activity
@@ -304,7 +329,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         colorize = LOG_LEVEL == "DEBUG"
 
         def get_log_format(record: Any) -> str:
-            """Generate log format string with trace_id for correlation.
+            """Generate log format string with trace_id and correlation_id for correlation.
 
             Args:
                 record: Loguru record dictionary containing log information.
@@ -358,55 +383,72 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 except Exception as e:
                     logging.error(f"Failed to start flush task: {e}")
 
-        # OTLP handler setup
-        if ENABLE_OTLP_LOGS:
-            try:
-                # Get workflow node name for Argo environment
-                workflow_node_name = OTEL_WF_NODE_NAME
+        # OTLP export: build list of processors, wire up only if any are enabled.
+        #   ENABLE_OTLP_LOGS: primary exporter (host DaemonSet, central ClickHouse)
+        #   ENABLE_OTLP_WORKFLOW_LOGS: secondary exporter (tenant collector, S3/Kafka)
+        try:
+            otlp_processors = []
 
-                # First try to get attributes from OTEL_RESOURCE_ATTRIBUTES
+            if ENABLE_OTLP_LOGS:
+                otlp_processors.append(
+                    BatchLogRecordProcessor(
+                        OTLPLogExporter(
+                            endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
+                            timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
+                        ),
+                        schedule_delay_millis=OTEL_BATCH_DELAY_MS,
+                        max_export_batch_size=OTEL_BATCH_SIZE,
+                        max_queue_size=OTEL_QUEUE_SIZE,
+                    )
+                )
+                logging.info(
+                    f"OTLP primary exporter enabled: {OTEL_EXPORTER_OTLP_ENDPOINT}"
+                )
+
+            if ENABLE_OTLP_WORKFLOW_LOGS and OTEL_WORKFLOW_LOGS_ENDPOINT:
+                otlp_processors.append(
+                    BatchLogRecordProcessor(
+                        OTLPLogExporter(
+                            endpoint=OTEL_WORKFLOW_LOGS_ENDPOINT,
+                            timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
+                        ),
+                        schedule_delay_millis=OTEL_BATCH_DELAY_MS,
+                        max_export_batch_size=OTEL_BATCH_SIZE,
+                        max_queue_size=OTEL_QUEUE_SIZE,
+                    )
+                )
+                logging.info(
+                    f"OTLP workflow logs exporter enabled: {OTEL_WORKFLOW_LOGS_ENDPOINT}"
+                )
+
+            if otlp_processors:
                 resource_attributes = {}
                 if OTEL_RESOURCE_ATTRIBUTES:
                     resource_attributes = self._parse_otel_resource_attributes(
                         OTEL_RESOURCE_ATTRIBUTES
                     )
-
-                # Only add default service attributes if they're not already present
                 if "service.name" not in resource_attributes:
                     resource_attributes["service.name"] = SERVICE_NAME
                 if "service.version" not in resource_attributes:
                     resource_attributes["service.version"] = SERVICE_VERSION
-
-                # Auto-inject SDK version
                 resource_attributes["sdk.version"] = _SDK_VERSION
-
-                # Add workflow node name if running in Argo
+                workflow_node_name = OTEL_WF_NODE_NAME
                 if workflow_node_name:
                     resource_attributes["k8s.workflow.node.name"] = workflow_node_name
 
                 self.logger_provider = LoggerProvider(
                     resource=Resource.create(resource_attributes)
                 )
+                for processor in otlp_processors:
+                    self.logger_provider.add_log_record_processor(processor)
 
-                exporter = OTLPLogExporter(
-                    endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                    timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-                )
-
-                batch_processor = BatchLogRecordProcessor(
-                    exporter,
-                    schedule_delay_millis=OTEL_BATCH_DELAY_MS,
-                    max_export_batch_size=OTEL_BATCH_SIZE,
-                    max_queue_size=OTEL_QUEUE_SIZE,
-                )
-
-                self.logger_provider.add_log_record_processor(batch_processor)
-
-                # Add OTLP sink
                 self.logger.add(self.otlp_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
 
-            except Exception as e:
-                logging.error(f"Failed to setup OTLP logging: {str(e)}")
+        except Exception as e:
+            logging.error(f"Failed to setup OTLP logging: {str(e)}")
+
+        # Mark initialization complete only after all sinks are successfully added
+        AtlanLoggerAdapter._initialized = True
 
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
         """Parse OpenTelemetry resource attributes from environment variable.
@@ -458,9 +500,15 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 if k != "logger_name" and hasattr(extra, k):
                     setattr(extra, k, v)
                 elif (
-                    k.startswith("atlan-") or k.startswith("exception.")
+                    k.startswith("atlan-")
+                    or k.startswith("exception.")
+                    or k.startswith("temporal.")
+                    or k.startswith("tenant.")
                 ) and v is not None:
-                    setattr(extra, k, str(v))
+                    if isinstance(v, (bool, int, float, str, bytes)):
+                        setattr(extra, k, v)
+                    else:
+                        setattr(extra, k, str(v))
             for key, value in _extract_exception_attributes(
                 record.record.get("exception")
             ).items():
@@ -484,9 +532,16 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 if hasattr(extra, k):
                     setattr(extra, k, v)
                 elif (
-                    k.startswith("atlan-") or k.startswith("exception.")
+                    k.startswith("atlan-")
+                    or k.startswith("exception.")
+                    or k.startswith("temporal.")
+                    or k.startswith("tenant.")
                 ) and v is not None:
                     setattr(extra, k, str(v))
+            for key, value in _extract_exception_attributes(
+                record.get("exception")
+            ).items():
+                setattr(extra, key, value)
             record["extra"] = extra
             return LogRecordModel(**record).model_dump()
 
@@ -588,6 +643,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         - Adds correlation context if available
         """
         kwargs["logger_name"] = self.logger_name
+        kwargs["app_name"] = APPLICATION_NAME
 
         # Get request context
         ctx = request_context.get()
@@ -614,16 +670,26 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         except Exception:
             pass
 
-        # Add correlation context (atlan- prefixed keys and trace_id) to kwargs
+        # Add correlation context (atlan-, temporal., tenant. prefixed keys, trace_id, correlation_id) to kwargs
         corr_ctx = correlation_context.get()
         if corr_ctx:
             # Add trace_id if present (for log format display)
             if "trace_id" in corr_ctx and corr_ctx["trace_id"]:
                 kwargs["trace_id"] = str(corr_ctx["trace_id"])
+            # Add correlation_id if present (AppWorkflowRun GUID for e2e correlation)
+            if "correlation_id" in corr_ctx and corr_ctx["correlation_id"]:
+                kwargs["correlation_id"] = str(corr_ctx["correlation_id"])
             # Add atlan-* headers for OTEL
             for key, value in corr_ctx.items():
-                if key.startswith("atlan-") and value:
-                    kwargs[key] = str(value)
+                if (
+                    key.startswith("atlan-")
+                    or key.startswith("temporal.")
+                    or key.startswith("tenant.")
+                ) and value:
+                    if isinstance(value, (bool, int, float, str, bytes)):
+                        kwargs[key] = value
+                    else:
+                        kwargs[key] = str(value)
 
         return msg, kwargs
 
@@ -812,27 +878,23 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             logging.error(f"Error sending log to OpenTelemetry: {e}")
 
     def _sync_flush(self):
-        """Synchronously flush the log buffer.
+        """Flush the log buffer, dispatching appropriately for the current context.
 
-        This method:
-        - Attempts to use existing event loop if available
-        - Creates new event loop if none exists
-        - Ensures logs are flushed immediately
+        Called on error/critical logs to force-flush. Works in three contexts:
+
+        - Async context (running event loop in this thread): schedules a task.
+        - Sync context (no running loop): creates a temporary loop to flush.
+        - Thread context (loop running in another thread, e.g. Temporal
+          activity in ThreadPoolExecutor): skips, periodic flush handles it.
         """
         try:
-            # Try to get the current event loop
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If we're in an async context, create a task
-                    asyncio.create_task(self._flush_buffer(force=True))
-                else:
-                    # If we have a loop but it's not running, run the flush
-                    loop.run_until_complete(self._flush_buffer(force=True))
+                loop = asyncio.get_running_loop()
+                # We're in an async context — schedule non-blocking flush
+                loop.create_task(self._flush_buffer(force=True))
             except RuntimeError:
-                # If no event loop exists, create a new one
+                # No running loop in this thread. Safe to create one.
                 loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
                     loop.run_until_complete(self._flush_buffer(force=True))
                 finally:

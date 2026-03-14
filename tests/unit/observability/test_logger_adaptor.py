@@ -48,6 +48,8 @@ def create_logger_adapter() -> Generator[AtlanLoggerAdapter, None, None]:
     Yields:
         AtlanLoggerAdapter: A configured logger adapter instance.
     """
+    # Reset initialization flag to allow fresh sink setup for each test
+    AtlanLoggerAdapter._reset_for_testing()
     with mock.patch.dict(
         "os.environ",
         {
@@ -387,6 +389,24 @@ class TestCorrelationContext:
                 assert kwargs["trace_id"] == self.TRACE_ID
                 assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
 
+    def test_process_extracts_correlation_id_from_correlation_context(self):
+        """Test process() extracts correlation_id from correlation context."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                mock_corr_context.get.return_value = {
+                    "trace_id": self.TRACE_ID,
+                    "correlation_id": "app-workflow-run-guid-abc",
+                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                }
+
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                assert kwargs["trace_id"] == self.TRACE_ID
+                assert kwargs["correlation_id"] == "app-workflow-run-guid-abc"
+                assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
+
     def test_process_without_trace_id(self):
         """Test process() when trace_id is not in correlation context."""
         with create_logger_adapter() as logger_adapter:
@@ -400,6 +420,7 @@ class TestCorrelationContext:
                 msg, kwargs = logger_adapter.process("Test message", {})
 
                 assert "trace_id" not in kwargs
+                assert "correlation_id" not in kwargs
                 assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
 
     def test_process_handles_none_correlation_context(self):
@@ -776,3 +797,155 @@ def test_create_log_record_does_not_parse_exception_from_message(
     assert "exception.type" not in otel_record.attributes
     assert "exception.message" not in otel_record.attributes
     assert "exception.stacktrace" not in otel_record.attributes
+
+
+class TestTemporalAttributePassthrough:
+    """Tests for temporal.* and tenant.* attribute passthrough to OTEL."""
+
+    def test_temporal_attributes_pass_through_to_otel(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        """temporal.* prefixed attributes should pass through to OTEL log record."""
+        record = {
+            "timestamp": 1739971200.0,
+            "level": "ERROR",
+            "message": "Temporal activity failed",
+            "file": "interceptor.py",
+            "line": 50,
+            "function": "execute_activity",
+            "extra": {
+                "temporal.activity.type": "fetch_metadata",
+                "temporal.activity.attempt": 3,
+                "temporal.workflow.id": "sync-abc-123",
+                "temporal.workflow.run_id": "run-def-456",
+                "temporal.workflow.type": "SyncWorkflow",
+                "temporal.activity.task_queue": "test-queue",
+                "temporal.activity.schedule_to_close_timeout": "0:05:00",
+                "temporal.activity.start_to_close_timeout": "0:05:00",
+                "temporal.activity.heartbeat_timeout": "0:00:30",
+            },
+        }
+
+        otel_record = logger_adapter._create_log_record(record)
+
+        assert otel_record.attributes["temporal.activity.type"] == "fetch_metadata"
+        assert otel_record.attributes["temporal.activity.attempt"] == 3
+        assert otel_record.attributes["temporal.workflow.id"] == "sync-abc-123"
+        assert otel_record.attributes["temporal.workflow.run_id"] == "run-def-456"
+        assert otel_record.attributes["temporal.workflow.type"] == "SyncWorkflow"
+        assert otel_record.attributes["temporal.activity.task_queue"] == "test-queue"
+        assert (
+            otel_record.attributes["temporal.activity.schedule_to_close_timeout"]
+            == "0:05:00"
+        )
+        assert (
+            otel_record.attributes["temporal.activity.start_to_close_timeout"]
+            == "0:05:00"
+        )
+        assert (
+            otel_record.attributes["temporal.activity.heartbeat_timeout"] == "0:00:30"
+        )
+
+    def test_tenant_attributes_pass_through_to_otel(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        """tenant.* prefixed attributes should pass through to OTEL log record."""
+        record = {
+            "timestamp": 1739971200.0,
+            "level": "ERROR",
+            "message": "Temporal activity failed",
+            "file": "interceptor.py",
+            "line": 50,
+            "function": "execute_activity",
+            "extra": {
+                "tenant.id": "acme-corp",
+            },
+        }
+
+        otel_record = logger_adapter._create_log_record(record)
+
+        assert otel_record.attributes["tenant.id"] == "acme-corp"
+
+    def test_temporal_and_tenant_combined_with_exception(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        """temporal.*, tenant.*, and exception.* attributes should all pass through."""
+        record = {
+            "timestamp": 1739971200.0,
+            "level": "ERROR",
+            "message": "Temporal activity failed",
+            "file": "interceptor.py",
+            "line": 50,
+            "function": "execute_activity",
+            "extra": {
+                "temporal.activity.type": "fetch_metadata",
+                "temporal.activity.attempt": 2,
+                "tenant.id": "acme-corp",
+                "exception.type": "ConnectionRefusedError",
+                "exception.message": "Connection refused",
+                "exception.stacktrace": "Traceback (most recent call last):\n...",
+            },
+        }
+
+        otel_record = logger_adapter._create_log_record(record)
+
+        # Temporal attributes
+        assert otel_record.attributes["temporal.activity.type"] == "fetch_metadata"
+        assert otel_record.attributes["temporal.activity.attempt"] == 2
+        # Tenant attributes
+        assert otel_record.attributes["tenant.id"] == "acme-corp"
+        # Exception attributes
+        assert otel_record.attributes["exception.type"] == "ConnectionRefusedError"
+        assert otel_record.attributes["exception.message"] == "Connection refused"
+        assert "Traceback" in otel_record.attributes["exception.stacktrace"]
+
+    def test_log_record_model_extracts_temporal_attributes_from_loguru(self):
+        """LogRecordModel should extract temporal.* attributes from loguru records."""
+        test_message = mock.MagicMock()
+        level_mock = mock.MagicMock()
+        level_mock.name = "ERROR"
+        test_message.record = {
+            "time": datetime.now(),
+            "level": level_mock,
+            "extra": {
+                "logger_name": "test_logger",
+                "temporal.activity.type": "fetch_databases",
+                "temporal.activity.attempt": 1,
+                "tenant.id": "test-tenant",
+            },
+            "message": "Temporal activity failed",
+            "file": mock.MagicMock(path="interceptor.py"),
+            "line": 50,
+            "function": "execute_activity",
+            "exception": None,
+        }
+
+        model = LogRecordModel.from_loguru_message(test_message).model_dump()
+
+        assert model["extra"]["temporal.activity.type"] == "fetch_databases"
+        assert model["extra"]["temporal.activity.attempt"] == 1  # Preserved as int
+        assert model["extra"]["tenant.id"] == "test-tenant"
+
+    def test_no_temporal_or_tenant_keys_baseline(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        """Logs without temporal/tenant keys should not have those attributes."""
+        record = {
+            "timestamp": 1739971200.0,
+            "level": "INFO",
+            "message": "Normal log message",
+            "file": "app.py",
+            "line": 10,
+            "function": "run",
+            "extra": {
+                "some_other_key": "value",
+            },
+        }
+
+        otel_record = logger_adapter._create_log_record(record)
+
+        # temporal.* and tenant.* should not be present
+        temporal_keys = [k for k in otel_record.attributes if k.startswith("temporal.")]
+        tenant_keys = [k for k in otel_record.attributes if k.startswith("tenant.")]
+        assert len(temporal_keys) == 0
+        assert len(tenant_keys) == 0

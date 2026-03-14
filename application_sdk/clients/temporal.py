@@ -20,6 +20,7 @@ from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
+    ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING,
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
@@ -342,9 +343,14 @@ class TemporalWorkflowClient(WorkflowClient):
             if not self.client:
                 raise ValueError("Client is not loaded")
 
+            correlation_fields = {
+                k: v
+                for k, v in workflow_args.items()
+                if k in ("correlation_id", "trace_id") or k.startswith("atlan-")
+            }
             handle = await self.client.start_workflow(
                 workflow_class,  # type: ignore
-                args=[{"workflow_id": workflow_id}],
+                args=[{"workflow_id": workflow_id, **correlation_fields}],
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
@@ -455,6 +461,29 @@ class TemporalWorkflowClient(WorkflowClient):
         # Create activities lookup dict for interceptors
         activities_dict = {getattr(a, "__name__", str(a)): a for a in final_activities}
 
+        # Build interceptors list
+        interceptors = [
+            CorrelationContextInterceptor(),
+            EventInterceptor(),
+            CleanupInterceptor(),
+            RedisLockInterceptor(activities_dict),
+        ]
+
+        # Conditionally add activity failure logging interceptor (must be last
+        # so correlation_context is already populated by CorrelationContextInterceptor)
+        if ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING:
+            try:
+                from application_sdk.interceptors.activity_failure_logging import (
+                    ActivityFailureLoggingInterceptor,
+                )
+
+                interceptors.append(ActivityFailureLoggingInterceptor())
+                logger.info("Activity failure logging interceptor enabled")
+            except ImportError as e:
+                logger.warning(
+                    f"Failed to load activity failure logging interceptor: {e}"
+                )
+
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
@@ -470,12 +499,7 @@ class TemporalWorkflowClient(WorkflowClient):
             graceful_shutdown_timeout=timedelta(
                 seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
             ),
-            interceptors=[
-                CorrelationContextInterceptor(),
-                EventInterceptor(),
-                CleanupInterceptor(),
-                RedisLockInterceptor(activities_dict),
-            ],
+            interceptors=interceptors,
         )
 
     async def get_workflow_run_status(
