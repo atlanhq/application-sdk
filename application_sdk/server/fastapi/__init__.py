@@ -121,6 +121,7 @@ class APIServer(ServerInterface):
         ui_enabled: bool = True,
         has_configmap: bool = False,
         subscriptions: List[Subscription] = [],
+        manifest: Optional[dict[str, Any]] = None,
     ):
         """Initialize the FastAPI application.
 
@@ -136,6 +137,7 @@ class APIServer(ServerInterface):
         self.duckdb_ui = DuckDBUI()
         self.ui_enabled = ui_enabled
         self.has_configmap = has_configmap
+        self.manifest = manifest
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -440,6 +442,14 @@ class APIServer(ServerInterface):
             methods=["POST"],
             response_model=EventWorkflowResponse,
         )
+
+        if self.manifest is not None:
+            manifest_data = self.manifest
+            self.app.add_api_route(
+                "/manifest",
+                lambda: manifest_data,
+                methods=["GET"],
+            )
 
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""

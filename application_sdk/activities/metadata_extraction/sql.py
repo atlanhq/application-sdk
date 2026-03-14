@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime
 from typing import (
@@ -21,7 +22,13 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.common.utils import prepare_query, read_sql_files
-from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
+from application_sdk.constants import (
+    APP_TENANT_ID,
+    APPLICATION_NAME,
+    DEPLOYMENT_NAME,
+    LOCAL_ENVIRONMENT,
+    SQL_QUERIES_PATH,
+)
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.io import DataframeType
 from application_sdk.io.json import JsonFileWriter
@@ -175,10 +182,49 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         # Load credentials BEFORE creating handler to avoid race condition
         if "credential_guid" in workflow_args:
-            credentials = await SecretStore.get_credentials(
-                workflow_args["credential_guid"]
-            )
-            await sql_client.load(credentials)
+            if "credential" in workflow_args:
+                # AE / native path: inline credential config merged with Vault secrets
+                credential_config = workflow_args.get("credential", {})
+                if isinstance(credential_config, str):
+                    try:
+                        credential_config = json.loads(credential_config)
+                    except (json.JSONDecodeError, TypeError):
+                        credential_config = {}
+
+                if DEPLOYMENT_NAME != LOCAL_ENVIRONMENT:
+                    # Production: strip sensitive fields — Vault provides them
+                    credential_config.pop("password", None)
+                    credential_config.pop("username", None)
+                    extra = credential_config.get("extra")
+                    if isinstance(extra, dict):
+                        sensitive = [
+                            k
+                            for k in list(extra.keys())
+                            if any(
+                                s in k.lower()
+                                for s in (
+                                    "secret",
+                                    "private_key",
+                                    "passphrase",
+                                    "password",
+                                )
+                            )
+                        ]
+                        for k in sensitive:
+                            extra.pop(k)
+
+                # Lightweight fetch — only secrets (returns {} in local dev)
+                secret_data = SecretStore.get_secret(
+                    secret_key=workflow_args["credential_guid"]
+                )
+                credential_config.update(secret_data)
+                await sql_client.load(credential_config)
+            else:
+                # Argo / state-store path: full credential fetch from Vault
+                credentials = await SecretStore.get_credentials(
+                    workflow_args["credential_guid"]
+                )
+                await sql_client.load(credentials)
 
         # Only after new client is successfully created and configured,
         # close old client and assign new one to state

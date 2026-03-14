@@ -1,3 +1,4 @@
+import json
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
@@ -39,8 +40,31 @@ class HandlerInterface(ABC):
         raise NotImplementedError("fetch_metadata method not implemented")
 
     @staticmethod
-    async def get_configmap(config_map_id: str) -> Dict[str, Any]:
+    def _wrap_configmap(config_map_id: str, raw: Dict[str, Any]) -> Dict[str, Any]:
+        """Wrap raw config JSON in the K8s ConfigMap shape expected by the frontend.
+
+        Args:
+            config_map_id: The name for the ConfigMap metadata.
+            raw: The raw config dict loaded from a template file. If it has a
+                 top-level "config" key, that value is used; otherwise the whole
+                 dict is serialized.
+
+        Returns:
+            Dict in K8s ConfigMap format: {kind, apiVersion, metadata, data.config}
         """
-        Static method to get the configmap
+        return {
+            "kind": "ConfigMap",
+            "apiVersion": "v1",
+            "metadata": {"name": config_map_id},
+            "data": {"config": json.dumps(raw.get("config", raw))},
+        }
+
+    @staticmethod
+    async def get_configmap(config_map_id: str) -> Dict[str, Any]:
+        """Return the K8s ConfigMap for the given config_map_id.
+
+        Override in subclass to load app-specific template JSON, then call
+        HandlerInterface._wrap_configmap(config_map_id, raw) to produce the
+        correct shape.
         """
         return {}
