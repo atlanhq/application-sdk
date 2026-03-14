@@ -78,9 +78,19 @@ class BaseApplication:
     def get_manifest(self) -> Optional[Dict[str, Any]]:
         """Return the manifest dict for the GET /manifest endpoint.
 
-        Override this in subclasses to serve an app-specific manifest.
-        Return None (default) to disable the /manifest endpoint.
+        Priority:
+        1. contract/generated/manifest.json (if exists)
+        2. Subclass override (e.g., BaseSQLMetadataExtractionApplication)
+        3. None (disables the /manifest endpoint)
         """
+        import json
+        from pathlib import Path
+
+        manifest_path = Path.cwd() / "contract" / "generated" / "manifest.json"
+        if manifest_path.exists():
+            logger.info(f"Serving manifest from contract: {manifest_path}")
+            with open(manifest_path) as f:
+                return json.load(f)
         return None
 
     def bootstrap_event_registration(self):

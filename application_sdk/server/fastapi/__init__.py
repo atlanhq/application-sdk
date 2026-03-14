@@ -423,6 +423,12 @@ class APIServer(ServerInterface):
         )
 
         self.workflow_router.add_api_route(
+            "/configmaps",
+            self.list_configmaps,
+            methods=["GET"],
+        )
+
+        self.workflow_router.add_api_route(
             "/file",
             self.upload_file,
             methods=["POST"],
@@ -737,6 +743,21 @@ class APIServer(ServerInterface):
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"File upload failed: {str(e)}",
             )
+
+    async def list_configmaps(self):
+        """List available configmap IDs from contract/generated/.
+
+        Returns a JSON array of configmap IDs (filenames without .json)
+        that are available for fetching via GET /configmap/{id}.
+        """
+        from application_sdk.handlers import CONTRACT_GENERATED_DIR
+
+        ids = []
+        if CONTRACT_GENERATED_DIR.exists():
+            for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
+                if json_file.stem != "manifest":
+                    ids.append(json_file.stem)
+        return {"success": True, "data": ids}
 
     async def get_configmap(self, config_map_id: str) -> ConfigMapResponse:
         """Get a configuration map by its ID.
