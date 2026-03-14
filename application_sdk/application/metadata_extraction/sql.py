@@ -78,10 +78,18 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         return f"atlan-{app_name}-{DEPLOYMENT_NAME}" if DEPLOYMENT_NAME else app_name
 
     def get_manifest(self) -> Optional[Dict[str, Any]]:
-        """Return the default extract + publish manifest for SQL extraction apps.
+        """Return the manifest for SQL extraction apps.
 
-        Override this in subclasses to customize args or the entire manifest.
+        Priority:
+        1. contract/generated/manifest.json (if exists)
+        2. Default hardcoded extract + publish DAG
+        3. None (if no workflow class set)
         """
+        # Check contract-generated manifest first
+        contract_manifest = super().get_manifest()
+        if contract_manifest is not None:
+            return contract_manifest
+
         workflow_class = getattr(self, "_primary_workflow_class", None)
         if workflow_class is None:
             return None
