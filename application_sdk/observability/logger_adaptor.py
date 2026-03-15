@@ -68,7 +68,7 @@ class LogExtraModel(BaseModel):
     workflow_type: Optional[str] = None
     namespace: Optional[str] = None
     task_queue: Optional[str] = None
-    attempt: Optional[int] = None
+    attempt: Optional[str] = None
     # Activity context
     activity_id: Optional[str] = None
     activity_type: Optional[str] = None
@@ -110,7 +110,7 @@ class LogRecordModel(BaseModel):
         extra = LogExtraModel()
         for k, v in message.record["extra"].items():
             if k != "logger_name" and hasattr(extra, k):
-                setattr(extra, k, v)
+                setattr(extra, k, _normalize_log_extra_value(k, v))
             # Include atlan-, exception., temporal., tenant. prefixed fields as extra attributes
             elif (
                 k.startswith("atlan-")
@@ -181,6 +181,13 @@ def _extract_exception_attributes(exception: Any) -> Dict[str, str]:
         attrs["exception.stacktrace"] = stacktrace
 
     return attrs
+
+
+def _normalize_log_extra_value(key: str, value: Any) -> Any:
+    """Normalize known structured log fields to their canonical types."""
+    if key == "attempt" and value is not None:
+        return str(value)
+    return value
 
 
 # Re-exported from context.py for backward compatibility:
@@ -498,7 +505,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             extra = LogExtraModel()
             for k, v in record.record["extra"].items():
                 if k != "logger_name" and hasattr(extra, k):
-                    setattr(extra, k, v)
+                    setattr(extra, k, _normalize_log_extra_value(k, v))
                 elif (
                     k.startswith("atlan-")
                     or k.startswith("exception.")
@@ -530,7 +537,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             extra = LogExtraModel()
             for k, v in record.get("extra", {}).items():
                 if hasattr(extra, k):
-                    setattr(extra, k, v)
+                    setattr(extra, k, _normalize_log_extra_value(k, v))
                 elif (
                     k.startswith("atlan-")
                     or k.startswith("exception.")
