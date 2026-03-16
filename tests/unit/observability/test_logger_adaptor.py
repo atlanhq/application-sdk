@@ -338,14 +338,25 @@ class TestFlushRecordsJsonGz:
     """Tests for _flush_records writing to json.gz format."""
 
     @pytest.mark.asyncio
-    async def test_flush_records_uses_sdr_path(self, tmp_path):
+    async def test_flush_records_uses_sdr_path(self, tmp_path, monkeypatch):
         """Test that _flush_records uses centralized SDR path (SDR mode only)."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock
+
+        import application_sdk.observability.observability as obs_module
+
+        # Patch constants before creating logger adapter
+        monkeypatch.setattr(obs_module, "ENABLE_OBSERVABILITY_DAPR_SINK", True)
+        monkeypatch.setattr(obs_module, "ENABLE_ATLAN_UPLOAD", True)
+
+        mock_upload = AsyncMock()
+        monkeypatch.setattr(
+            "application_sdk.services.objectstore.ObjectStore.upload_file",
+            mock_upload,
+        )
 
         with create_logger_adapter() as logger_adapter:
             logger_adapter.data_dir = str(tmp_path)
 
-            # Use current time to avoid timezone issues
             current_ts = datetime.now().timestamp()
             records = [
                 {
@@ -356,37 +367,36 @@ class TestFlushRecordsJsonGz:
                 }
             ]
 
-            with patch(
-                "application_sdk.observability.observability.ENABLE_OBSERVABILITY_DAPR_SINK",
-                True,
-            ):
-                with patch(
-                    "application_sdk.observability.observability.ENABLE_ATLAN_UPLOAD",
-                    True,
-                ):
-                    with patch(
-                        "application_sdk.services.objectstore.ObjectStore.upload_file",
-                        new_callable=AsyncMock,
-                    ) as mock_upload:
-                        await logger_adapter._flush_records(records)
+            await logger_adapter._flush_records(records)
 
-                        # Verify upload was called
-                        assert mock_upload.called
-                        call_args = mock_upload.call_args
-                        remote_key = call_args[0][1]
+            # Verify upload was called
+            assert mock_upload.called
+            call_args = mock_upload.call_args
+            remote_key = call_args[0][1]
 
-                        # Verify path contains sdr-logs and Hive partitioning
-                        assert "sdr-logs" in remote_key
-                        assert "year=" in remote_key
-                        assert "month=" in remote_key
-                        assert "day=" in remote_key
-                        assert "hour=" in remote_key
-                        assert remote_key.endswith(".json.gz")
+            # Verify path contains sdr-logs and Hive partitioning
+            assert "sdr-logs" in remote_key
+            assert "year=" in remote_key
+            assert "month=" in remote_key
+            assert "day=" in remote_key
+            assert "hour=" in remote_key
+            assert remote_key.endswith(".json.gz")
 
     @pytest.mark.asyncio
-    async def test_flush_records_dual_upload(self, tmp_path):
+    async def test_flush_records_dual_upload(self, tmp_path, monkeypatch):
         """Test dual upload when ENABLE_ATLAN_UPLOAD is true."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock
+
+        import application_sdk.observability.observability as obs_module
+
+        monkeypatch.setattr(obs_module, "ENABLE_OBSERVABILITY_DAPR_SINK", True)
+        monkeypatch.setattr(obs_module, "ENABLE_ATLAN_UPLOAD", True)
+
+        mock_upload = AsyncMock()
+        monkeypatch.setattr(
+            "application_sdk.services.objectstore.ObjectStore.upload_file",
+            mock_upload,
+        )
 
         with create_logger_adapter() as logger_adapter:
             logger_adapter.data_dir = str(tmp_path)
@@ -400,27 +410,26 @@ class TestFlushRecordsJsonGz:
                 }
             ]
 
-            with patch(
-                "application_sdk.observability.observability.ENABLE_OBSERVABILITY_DAPR_SINK",
-                True,
-            ):
-                with patch(
-                    "application_sdk.observability.observability.ENABLE_ATLAN_UPLOAD",
-                    True,
-                ):
-                    with patch(
-                        "application_sdk.services.objectstore.ObjectStore.upload_file",
-                        new_callable=AsyncMock,
-                    ) as mock_upload:
-                        await logger_adapter._flush_records(records)
+            await logger_adapter._flush_records(records)
 
-                        # Should be called twice (customer bucket + Atlan bucket)
-                        assert mock_upload.call_count == 2
+            # Should be called twice (customer bucket + Atlan bucket)
+            assert mock_upload.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_flush_records_skips_non_sdr(self, tmp_path):
+    async def test_flush_records_skips_non_sdr(self, tmp_path, monkeypatch):
         """Test that non-SDR (ENABLE_ATLAN_UPLOAD=false) skips flush entirely."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock
+
+        import application_sdk.observability.observability as obs_module
+
+        monkeypatch.setattr(obs_module, "ENABLE_OBSERVABILITY_DAPR_SINK", True)
+        monkeypatch.setattr(obs_module, "ENABLE_ATLAN_UPLOAD", False)  # Non-SDR
+
+        mock_upload = AsyncMock()
+        monkeypatch.setattr(
+            "application_sdk.services.objectstore.ObjectStore.upload_file",
+            mock_upload,
+        )
 
         with create_logger_adapter() as logger_adapter:
             logger_adapter.data_dir = str(tmp_path)
@@ -434,22 +443,10 @@ class TestFlushRecordsJsonGz:
                 }
             ]
 
-            with patch(
-                "application_sdk.observability.observability.ENABLE_OBSERVABILITY_DAPR_SINK",
-                True,
-            ):
-                with patch(
-                    "application_sdk.observability.observability.ENABLE_ATLAN_UPLOAD",
-                    False,  # Non-SDR
-                ):
-                    with patch(
-                        "application_sdk.services.objectstore.ObjectStore.upload_file",
-                        new_callable=AsyncMock,
-                    ) as mock_upload:
-                        await logger_adapter._flush_records(records)
+            await logger_adapter._flush_records(records)
 
-                        # Should NOT be called (non-SDR skips flush)
-                        assert not mock_upload.called
+            # Should NOT be called (non-SDR skips flush)
+            assert not mock_upload.called
 
 
 class TestCorrelationContext:
