@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - fix/cve-fixes
     paths:
       - 'Dockerfile'
       - 'pyproject.toml'
