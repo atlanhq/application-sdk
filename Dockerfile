@@ -1,5 +1,6 @@
 FROM cgr.dev/atlan.com/app-framework-golden:3.13
 
+
 # Dapr version arguments
 ARG DAPR_CLI_VERSION=1.17.0
 ARG DAPR_RUNTIME_PACKAGE=dapr-daprd-1.16
