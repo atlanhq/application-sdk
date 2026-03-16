@@ -334,6 +334,86 @@ async def test_parquet_sink_error_handling(mock_parquet_file):
         assert len(logger_adapter._buffer) == 0
 
 
+class TestFlushRecordsJsonGz:
+    """Tests for _flush_records writing to json.gz format."""
+
+    @pytest.mark.asyncio
+    async def test_flush_records_uses_sdr_path(self, tmp_path):
+        """Test that _flush_records uses centralized SDR path."""
+        from unittest.mock import AsyncMock, patch
+
+        with create_logger_adapter() as logger_adapter:
+            logger_adapter.data_dir = str(tmp_path)
+
+            # Use current time to avoid timezone issues
+            current_ts = datetime.now().timestamp()
+            records = [
+                {
+                    "timestamp": current_ts,
+                    "level": "INFO",
+                    "message": "test",
+                    "logger_name": "test",
+                }
+            ]
+
+            with patch(
+                "application_sdk.observability.observability.ENABLE_OBSERVABILITY_DAPR_SINK",
+                True,
+            ):
+                with patch(
+                    "application_sdk.services.objectstore.ObjectStore.upload_file",
+                    new_callable=AsyncMock,
+                ) as mock_upload:
+                    await logger_adapter._flush_records(records)
+
+                    # Verify upload was called
+                    assert mock_upload.called
+                    call_args = mock_upload.call_args
+                    remote_key = call_args[0][1]
+
+                    # Verify path contains sdr-logs and Hive partitioning
+                    assert "sdr-logs" in remote_key
+                    assert "year=" in remote_key
+                    assert "month=" in remote_key
+                    assert "day=" in remote_key
+                    assert "hour=" in remote_key
+                    assert remote_key.endswith(".json.gz")
+
+    @pytest.mark.asyncio
+    async def test_flush_records_dual_upload(self, tmp_path):
+        """Test dual upload when ENABLE_ATLAN_UPLOAD is true."""
+        from unittest.mock import AsyncMock, patch
+
+        with create_logger_adapter() as logger_adapter:
+            logger_adapter.data_dir = str(tmp_path)
+
+            records = [
+                {
+                    "timestamp": 1709854200.0,
+                    "level": "INFO",
+                    "message": "test",
+                    "logger_name": "test",
+                }
+            ]
+
+            with patch(
+                "application_sdk.observability.observability.ENABLE_OBSERVABILITY_DAPR_SINK",
+                True,
+            ):
+                with patch(
+                    "application_sdk.observability.observability.ENABLE_ATLAN_UPLOAD",
+                    True,
+                ):
+                    with patch(
+                        "application_sdk.services.objectstore.ObjectStore.upload_file",
+                        new_callable=AsyncMock,
+                    ) as mock_upload:
+                        await logger_adapter._flush_records(records)
+
+                        # Should be called twice (customer bucket + Atlan bucket)
+                        assert mock_upload.call_count == 2
+
+
 class TestCorrelationContext:
     """Tests for correlation context in logging."""
 

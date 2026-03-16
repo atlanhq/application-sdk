@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import logging
 import os
 import signal
@@ -11,19 +12,24 @@ from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
 import duckdb
-import pandas as pd
+import orjson
 from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    APPLICATION_NAME,
+    DEPLOYMENT_NAME,
     DEPLOYMENT_OBJECT_STORE_NAME,
+    ENABLE_ATLAN_UPLOAD,
     ENABLE_OBSERVABILITY_DAPR_SINK,
-    LOG_FILE_NAME,
-    METRICS_FILE_NAME,
     STATE_STORE_NAME,
-    TRACES_FILE_NAME,
+    TEMPORARY_PATH,
+    UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
+
+# Centralized observability path prefix for MDLH ingestion
+OBSERVABILITY_S3_PREFIX = "artifacts/apps/observability/sdr-logs"
 
 
 class LogRecord(BaseModel):
@@ -217,32 +223,23 @@ class AtlanObservability(Generic[T], ABC):
     def _get_partition_path(self, timestamp: datetime) -> str:
         """Generate Hive partition path based on timestamp.
 
+        Uses centralized SDR path: artifacts/apps/observability/sdr-logs/
+        with hour-level partitioning for MDLH ingestion.
+
         Args:
             timestamp: The timestamp to generate partition path for
 
         Returns:
             str: The partition path
         """
-        # Determine the base directory based on file type
-        if self.file_name == LOG_FILE_NAME:
-            base_dir = "logs"
-        elif self.file_name == METRICS_FILE_NAME:
-            base_dir = "metrics"
-        elif self.file_name == TRACES_FILE_NAME:
-            base_dir = "traces"
-        else:
-            base_dir = "other"
-
-        # Create partition path components
-        partition_path = os.path.join(
+        return os.path.join(
             self.data_dir,
-            base_dir,
+            OBSERVABILITY_S3_PREFIX,
             f"year={timestamp.year}",
             f"month={timestamp.month:02d}",
             f"day={timestamp.day:02d}",
+            f"hour={timestamp.hour:02d}",
         )
-
-        return partition_path
 
     def _update_parquet_path(self):
         """Update the parquet file path based on current timestamp."""
@@ -363,31 +360,28 @@ class AtlanObservability(Generic[T], ABC):
             logging.error(f"Error buffering log: {e}")
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
-        """Flush records to parquet file and object store using ParquetFileWriter.
+        """Flush records to json.gz files and upload to object stores.
 
         Args:
             records: List of records to flush
 
         This method:
-        - Groups records by partition (year/month/day)
-        - Uses ParquetFileWriter for efficient writing
-        - Automatically handles chunking, compression, and dual upload
-        - Provides robust error handling per partition
-        - Cleans up old records if enabled
-
-        Features:
-        - Automatic chunking for large datasets
-        - Dual upload support (primary + upstream if enabled)
-        - Advanced consolidation for optimal performance
-        - Fault-tolerant processing (continues on partition errors)
+        - Groups records by partition (year/month/day/hour)
+        - Writes json.gz format (lightweight, no pandas dependency)
+        - Uploads to customer bucket (DEPLOYMENT_OBJECT_STORE)
+        - Uploads to Atlan bucket (UPSTREAM_OBJECT_STORE) when ENABLE_ATLAN_UPLOAD=true
+        - MDLH S3 pipe reads from Atlan bucket for Iceberg ingestion
         """
-        if not ENABLE_OBSERVABILITY_DAPR_SINK:
+        if not ENABLE_OBSERVABILITY_DAPR_SINK or not records:
             return
         try:
-            # Group records by partition
-            partition_records = {}
+            from time import time_ns
+
+            from application_sdk.services.objectstore import ObjectStore
+
+            # Group records by partition using record's own timestamp
+            partition_records: Dict[str, List[Dict[str, Any]]] = {}
             for record in records:
-                # Convert timestamp to datetime
                 record_time = datetime.fromtimestamp(record["timestamp"])
                 partition_path = self._get_partition_path(record_time)
 
@@ -395,39 +389,45 @@ class AtlanObservability(Generic[T], ABC):
                     partition_records[partition_path] = []
                 partition_records[partition_path].append(record)
 
-                # Write records to each partition using ParquetFileWriter
+            # Write each partition as json.gz and upload
             for partition_path, partition_data in partition_records.items():
-                # Create new dataframe from current records
-                new_df = pd.DataFrame(partition_data)
-
-                # Extract partition values from path and add to dataframe
-                partition_parts = os.path.basename(
-                    os.path.dirname(partition_path)
-                ).split(os.sep)
-                for part in partition_parts:
-                    if part.startswith("year="):
-                        new_df["year"] = int(part.split("=")[1])
-                    elif part.startswith("month="):
-                        new_df["month"] = int(part.split("=")[1])
-                    elif part.startswith("day="):
-                        new_df["day"] = int(part.split("=")[1])
-
-                # Use new data directly - let ParquetFileWriter handle consolidation and merging
-                df = new_df
-
-                # Use ParquetFileWriter for efficient writing and uploading
-                # Set the output path for this partition
                 try:
-                    # Lazy import and instantiation of ParquetFileWriter
-                    from application_sdk.io.parquet import ParquetFileWriter
+                    os.makedirs(partition_path, exist_ok=True)
 
-                    parquet_writer = ParquetFileWriter(
-                        path=partition_path,
-                        chunk_start=0,
-                        chunk_part=int(time()),
+                    # Lexi-sortable filename
+                    filename = (
+                        f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
+                    )
+                    local_path = os.path.join(partition_path, filename)
+
+                    # Write NDJSON with gzip compression
+                    with gzip.open(local_path, "wb") as f:
+                        for record in partition_data:
+                            f.write(orjson.dumps(record) + b"\n")
+
+                    # Remote key relative to temp root
+                    remote_key = os.path.relpath(local_path, TEMPORARY_PATH)
+
+                    # Upload to customer bucket
+                    await ObjectStore.upload_file(
+                        local_path, remote_key, store_name=DEPLOYMENT_OBJECT_STORE_NAME
                     )
 
-                    await parquet_writer._write_dataframe(dataframe=df)
+                    # Dual upload to Atlan bucket when enabled
+                    # MDLH S3 pipe reads from this bucket
+                    if ENABLE_ATLAN_UPLOAD:
+                        await ObjectStore.upload_file(
+                            local_path,
+                            remote_key,
+                            store_name=UPSTREAM_OBJECT_STORE_NAME,
+                        )
+
+                    # Clean up local file
+                    os.unlink(local_path)
+
+                    logging.debug(
+                        f"Exported {len(partition_data)} records → {remote_key}"
+                    )
 
                 except Exception as partition_error:
                     logging.error(
@@ -475,24 +475,15 @@ class AtlanObservability(Generic[T], ABC):
         """Clean up records older than retention_days.
 
         This method:
-        - Determines the base directory
+        - Uses the centralized SDR path
         - Walks through the partition directories
         - Removes records older than retention period
         - Updates or deletes files as needed
         - Syncs changes with object store
         """
         try:
-            # Determine the base directory
-            if self.file_name == LOG_FILE_NAME:
-                base_dir = "logs"
-            elif self.file_name == METRICS_FILE_NAME:
-                base_dir = "metrics"
-            elif self.file_name == TRACES_FILE_NAME:
-                base_dir = "traces"
-            else:
-                base_dir = "other"
-
-            data_dir = os.path.join(self.data_dir, base_dir)
+            # Use centralized SDR path
+            data_dir = os.path.join(self.data_dir, OBSERVABILITY_S3_PREFIX)
             if not os.path.exists(data_dir):
                 return
 
