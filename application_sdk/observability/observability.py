@@ -18,16 +18,13 @@ from application_sdk.constants import (
     DEPLOYMENT_OBJECT_STORE_NAME,
     ENABLE_ATLAN_UPLOAD,
     ENABLE_OBSERVABILITY_DAPR_SINK,
-    ENABLE_SDR_LOG_EXPORT,
     STATE_STORE_NAME,
-    TEMPORARY_PATH,
     UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.sinks import (
     ObservabilityRecordType,
     ObservabilitySink,
     PartitionedJsonGzSink,
-    SdrLogSink,
     file_name_to_type,
 )
 from application_sdk.observability.utils import get_observability_dir
@@ -111,8 +108,13 @@ class AtlanObservability(Generic[T], ABC):
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
 
-        # Build the flush pipeline.  Adding a new storage destination means
+        # Build the flush pipeline. Adding a new storage destination means
         # appending a sink here — _flush_records never needs to change.
+        #
+        # With ENABLE_ATLAN_UPLOAD=true, data is written to both:
+        # - DEPLOYMENT_OBJECT_STORE (customer's bucket)
+        # - UPSTREAM_OBJECT_STORE (Atlan's bucket)
+        # MDLH S3 pipe reads from Atlan's bucket for Iceberg ingestion.
         store_names = [DEPLOYMENT_OBJECT_STORE_NAME]
         if ENABLE_ATLAN_UPLOAD:
             store_names.append(UPSTREAM_OBJECT_STORE_NAME)
@@ -124,13 +126,6 @@ class AtlanObservability(Generic[T], ABC):
                 store_names=store_names,
             )
         ]
-        if ENABLE_SDR_LOG_EXPORT and self._record_type == ObservabilityRecordType.LOGS:
-            self._sinks.append(
-                SdrLogSink(
-                    staging_root=TEMPORARY_PATH,
-                    store_name=DEPLOYMENT_OBJECT_STORE_NAME,
-                )
-            )
 
         # Register this instance
         AtlanObservability._instances.append(self)

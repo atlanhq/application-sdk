@@ -25,10 +25,12 @@ from application_sdk.constants import (
     DEPLOYMENT_NAME,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
-    SDR_LOG_S3_PREFIX,
     TEMPORARY_PATH,
     TRACES_FILE_NAME,
 )
+
+# Centralized observability path prefix for MDLH ingestion
+OBSERVABILITY_S3_PREFIX = "artifacts/apps/observability/sdr-logs"
 
 # ---------------------------------------------------------------------------
 # Record-type enum — replaces brittle filename-string comparisons
@@ -117,17 +119,21 @@ class ObservabilitySink(ABC):
 
 
 class PartitionedJsonGzSink(ObservabilitySink):
-    """Writes day-partitioned json.gz files to one or more object stores.
+    """Writes hour-partitioned json.gz files to the centralized SDR path.
 
     Output path::
 
-        {staging_root}/{record_type}/year=YYYY/month=MM/day=DD/
-            {epoch_ns}_{deployment}_{app}.json.gz
+        {staging_root}/artifacts/apps/observability/sdr-logs/
+            year=YYYY/month=MM/day=DD/hour=HH/{epoch_ns}_{deployment}_{app}.json.gz
+
+    This centralized path is used for both customer bucket and Atlan bucket
+    (when ENABLE_ATLAN_UPLOAD=true). MDLH S3 pipe reads from Atlan bucket
+    and ingests into the shared Iceberg table.
 
     Supports dual upload (primary + upstream Atlan-managed S3) when more than
-    one ``store_name`` is supplied.  Partitions are derived from each record's
+    one ``store_name`` is supplied. Partitions are derived from each record's
     own ``timestamp`` field — never from wall-clock time — so late-flushed
-    records still land in the correct day bucket.
+    records still land in the correct hour bucket.
     """
 
     def __init__(
@@ -143,10 +149,11 @@ class PartitionedJsonGzSink(ObservabilitySink):
     def _partition_dir(self, dt: datetime) -> str:
         return os.path.join(
             self._staging_root,
-            self._record_type.value,
+            OBSERVABILITY_S3_PREFIX,
             f"year={dt.year}",
             f"month={dt.month:02d}",
             f"day={dt.day:02d}",
+            f"hour={dt.hour:02d}",
         )
 
     async def flush(self, records: List[Dict[str, Any]]) -> None:
@@ -180,68 +187,4 @@ class PartitionedJsonGzSink(ObservabilitySink):
                     "Failed to flush %s partition %s; skipping",
                     self._record_type.value,
                     partition_dir,
-                )
-
-
-# ---------------------------------------------------------------------------
-# Sink 2: centralized SDR path for MDLH ingestion (hour-partitioned)
-# ---------------------------------------------------------------------------
-
-
-class SdrLogSink(ObservabilitySink):
-    """Writes hour-partitioned json.gz log files to the shared SDR S3 prefix.
-
-    Output path::
-
-        {SDR_LOG_S3_PREFIX}/year=YYYY/month=MM/day=DD/hour=HH/
-            {epoch_ns}_{deployment}_{app}.json.gz
-
-    The MDLH S3 pipe picks up these files and ingests them into the shared
-    ``observability.workflow_logs`` Iceberg table.  Records are written in
-    raw OTel format; MDLH applies the Jolt transformation, so schema changes
-    only require updating the MDLH spec — not the SDK.
-
-    This sink should only be instantiated when ``ATLAN_ENABLE_SDR_LOG_EXPORT=true``
-    **and** the record type is :attr:`ObservabilityRecordType.LOGS`; that
-    decision lives in :class:`~application_sdk.observability.AtlanObservability`'s
-    constructor.
-    """
-
-    def __init__(self, staging_root: str, store_name: str) -> None:
-        self._staging_root = staging_root
-        self._store_name = store_name
-
-    def _partition_dir(self, dt: datetime) -> str:
-        return os.path.join(
-            self._staging_root,
-            SDR_LOG_S3_PREFIX,
-            f"year={dt.year}",
-            f"month={dt.month:02d}",
-            f"day={dt.day:02d}",
-            f"hour={dt.hour:02d}",
-        )
-
-    async def flush(self, records: List[Dict[str, Any]]) -> None:
-        if not records:
-            return
-
-        # Partition by hour using each record's own timestamp — never wall clock.
-        # Records buffered across an hour boundary land in the correct bucket.
-        partitioned: Dict[str, List[Dict[str, Any]]] = {}
-        for record in records:
-            dt = datetime.fromtimestamp(record["timestamp"], tz=timezone.utc)
-            partitioned.setdefault(self._partition_dir(dt), []).append(record)
-
-        for partition_dir, batch in partitioned.items():
-            filename = f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
-            local_path = os.path.join(partition_dir, filename)
-            remote_key = os.path.relpath(local_path, self._staging_root)
-            try:
-                await _write_and_upload_json_gz(
-                    batch, local_path, remote_key, [self._store_name]
-                )
-                logging.info("SDR export: %d records → %s", len(batch), remote_key)
-            except Exception:
-                logging.exception(
-                    "Failed to flush SDR partition %s; skipping", partition_dir
                 )

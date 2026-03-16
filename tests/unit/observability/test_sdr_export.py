@@ -1,5 +1,5 @@
-"""Tests for observability sinks: SdrLogSink, PartitionedJsonGzSink, and the
-shared _write_and_upload_json_gz primitive.
+"""Tests for observability sinks: PartitionedJsonGzSink and the shared
+_write_and_upload_json_gz primitive.
 
 Design principle: each sink is tested directly (not via AtlanObservability),
 which keeps tests fast, focused, and free of observability-instance boilerplate.
@@ -16,9 +16,9 @@ import orjson
 import pytest
 
 from application_sdk.observability.sinks import (
+    OBSERVABILITY_S3_PREFIX,
     ObservabilityRecordType,
     PartitionedJsonGzSink,
-    SdrLogSink,
     _write_and_upload_json_gz,
     file_name_to_type,
 )
@@ -140,14 +140,18 @@ class TestWriteAndUploadJsonGz:
 
 
 # ---------------------------------------------------------------------------
-# SdrLogSink
+# PartitionedJsonGzSink
 # ---------------------------------------------------------------------------
 
 
-class TestSdrLogSink:
+class TestPartitionedJsonGzSink:
     @pytest.fixture
     def sink(self, tmp_path):
-        return SdrLogSink(staging_root=str(tmp_path), store_name="sdr-store")
+        return PartitionedJsonGzSink(
+            record_type=ObservabilityRecordType.LOGS,
+            staging_root=str(tmp_path),
+            store_names=["primary-store"],
+        )
 
     @pytest.mark.asyncio
     async def test_empty_records_skips_upload(self, sink):
@@ -156,13 +160,17 @@ class TestSdrLogSink:
         m.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_single_batch_calls_write_once(self, sink, log_record):
+    async def test_partition_path_uses_sdr_logs_prefix(self, sink, log_record):
+        """Verify path uses artifacts/apps/observability/sdr-logs/..."""
         with patch(f"{_MODULE}._write_and_upload_json_gz", new_callable=AsyncMock) as m:
             await sink.flush([log_record])
-        m.assert_called_once()
+
+        local_path = m.call_args[0][1]
+        assert OBSERVABILITY_S3_PREFIX in local_path
+        assert "sdr-logs" in local_path
 
     @pytest.mark.asyncio
-    async def test_partition_path_derived_from_record_timestamp(self, sink, log_record):
+    async def test_partition_uses_record_timestamp_with_hour(self, sink, log_record):
         """2024-03-07 23:30 UTC → year=2024/month=03/day=07/hour=23."""
         with patch(f"{_MODULE}._write_and_upload_json_gz", new_callable=AsyncMock) as m:
             await sink.flush([log_record])
@@ -198,88 +206,8 @@ class TestSdrLogSink:
         assert filename.endswith(".json.gz")
 
     @pytest.mark.asyncio
-    async def test_uses_configured_store_name(self, sink, log_record):
-        with patch(f"{_MODULE}._write_and_upload_json_gz", new_callable=AsyncMock) as m:
-            await sink.flush([log_record])
-
-        store_names = m.call_args[0][3]
-        assert store_names == ["sdr-store"]
-
-    @pytest.mark.asyncio
-    async def test_upload_error_is_isolated_not_raised(self, sink, log_record):
-        """A failing upload must not propagate; the sink swallows per-partition errors."""
-        with patch(
-            f"{_MODULE}._write_and_upload_json_gz",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("S3 down"),
-        ):
-            await sink.flush([log_record])  # must not raise
-
-    @pytest.mark.asyncio
-    async def test_records_passed_through_unmodified(self, sink, log_record):
-        """Records are written in raw OTel format; no field transformation."""
-        with patch(f"{_MODULE}._write_and_upload_json_gz", new_callable=AsyncMock) as m:
-            await sink.flush([log_record])
-
-        written_records = m.call_args[0][0]
-        assert written_records == [log_record]
-
-
-# ---------------------------------------------------------------------------
-# PartitionedJsonGzSink
-# ---------------------------------------------------------------------------
-
-
-class TestPartitionedJsonGzSink:
-    @pytest.fixture
-    def sink(self, tmp_path):
-        return PartitionedJsonGzSink(
-            record_type=ObservabilityRecordType.LOGS,
-            staging_root=str(tmp_path),
-            store_names=["primary-store"],
-        )
-
-    @pytest.mark.asyncio
-    async def test_empty_records_skips_upload(self, sink):
-        with patch(f"{_MODULE}._write_and_upload_json_gz", new_callable=AsyncMock) as m:
-            await sink.flush([])
-        m.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_partition_path_uses_record_type_subfolder(self, sink, log_record):
-        with patch(f"{_MODULE}._write_and_upload_json_gz", new_callable=AsyncMock) as m:
-            await sink.flush([log_record])
-
-        local_path = m.call_args[0][1]
-        assert "/logs/" in local_path
-
-    @pytest.mark.asyncio
-    async def test_partition_uses_record_timestamp(self, sink, log_record):
-        with patch(f"{_MODULE}._write_and_upload_json_gz", new_callable=AsyncMock) as m:
-            await sink.flush([log_record])
-
-        local_path = m.call_args[0][1]
-        assert "year=2024" in local_path
-        assert "month=03" in local_path
-        assert "day=07" in local_path
-
-    @pytest.mark.asyncio
-    async def test_records_spanning_days_produce_separate_files(
-        self, tmp_path, log_record
-    ):
-        sink = PartitionedJsonGzSink(
-            record_type=ObservabilityRecordType.LOGS,
-            staging_root=str(tmp_path),
-            store_names=["store"],
-        )
-        next_day_record = dict(log_record, timestamp=_TS_NEXT_HOUR + 86400)
-        with patch(f"{_MODULE}._write_and_upload_json_gz", new_callable=AsyncMock) as m:
-            await sink.flush([log_record, next_day_record])
-
-        assert m.call_count == 2
-
-    @pytest.mark.asyncio
     async def test_uploads_to_all_store_names(self, tmp_path, log_record):
+        """Dual upload: primary customer bucket + Atlan bucket."""
         sink = PartitionedJsonGzSink(
             record_type=ObservabilityRecordType.LOGS,
             staging_root=str(tmp_path),
@@ -299,6 +227,15 @@ class TestPartitionedJsonGzSink:
             side_effect=RuntimeError("disk full"),
         ):
             await sink.flush([log_record])  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_records_passed_through_unmodified(self, sink, log_record):
+        """Records are written in raw OTel format; no field transformation."""
+        with patch(f"{_MODULE}._write_and_upload_json_gz", new_callable=AsyncMock) as m:
+            await sink.flush([log_record])
+
+        written_records = m.call_args[0][0]
+        assert written_records == [log_record]
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +314,8 @@ class TestFlushRecordsSinkDispatch:
         mock_sink.flush.assert_called_once_with(records)
 
     @pytest.mark.asyncio
-    async def test_both_sinks_flushed_when_sdr_enabled(self, tmp_path):
+    async def test_multiple_sinks_all_flushed(self, tmp_path):
+        """When multiple sinks are configured, all receive records."""
         instance = self._make_instance(tmp_path)
         sink_a, sink_b = AsyncMock(), AsyncMock()
         instance._sinks = [sink_a, sink_b]
