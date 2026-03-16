@@ -300,6 +300,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
+      - name: Pull image for Snyk
+        run: docker pull ${{ needs.prepare.outputs.ghcr_image }}
+
       - name: Snyk container scan
         # Pinned to commit SHA — avoids silent breakage if snyk/actions@master changes
         uses: snyk/actions/docker@9adf32b1121593767fc3c057af55b55db032dc04
