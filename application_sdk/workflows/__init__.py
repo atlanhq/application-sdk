@@ -6,7 +6,7 @@ all workflow implementations in the application SDK.
 
 from abc import ABC
 from datetime import timedelta
-from typing import Any, Callable, Dict, Generic, Sequence, Type, TypeVar
+from typing import Any, Callable, Dict, Generic, Optional, Sequence, Type, TypeVar
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -60,7 +60,7 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
         raise NotImplementedError("Workflow get_activities method not implemented")
 
     @workflow.run
-    async def run(self, workflow_config: Dict[str, Any]) -> None:
+    async def run(self, workflow_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Run the workflow with the given configuration.
 
         This method provides the base implementation for workflow execution. It:
