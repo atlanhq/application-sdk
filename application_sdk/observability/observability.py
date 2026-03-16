@@ -371,8 +371,13 @@ class AtlanObservability(Generic[T], ABC):
         - Uploads to customer bucket (DEPLOYMENT_OBJECT_STORE)
         - Uploads to Atlan bucket (UPSTREAM_OBJECT_STORE) when ENABLE_ATLAN_UPLOAD=true
         - MDLH S3 pipe reads from Atlan bucket for Iceberg ingestion
+
+        Note: This only runs for SDR (where ENABLE_ATLAN_UPLOAD=true).
+        Non-SDR apps use OTLP for logs and skip this path entirely.
         """
         if not ENABLE_OBSERVABILITY_DAPR_SINK or not records:
+            return
+        if not ENABLE_ATLAN_UPLOAD:
             return
         try:
             from time import time_ns
@@ -391,6 +396,7 @@ class AtlanObservability(Generic[T], ABC):
 
             # Write each partition as json.gz and upload
             for partition_path, partition_data in partition_records.items():
+                local_path = None
                 try:
                     os.makedirs(partition_path, exist_ok=True)
 
@@ -422,9 +428,6 @@ class AtlanObservability(Generic[T], ABC):
                             store_name=UPSTREAM_OBJECT_STORE_NAME,
                         )
 
-                    # Clean up local file
-                    os.unlink(local_path)
-
                     logging.debug(
                         f"Exported {len(partition_data)} records → {remote_key}"
                     )
@@ -433,6 +436,10 @@ class AtlanObservability(Generic[T], ABC):
                     logging.error(
                         f"Error processing partition {partition_path}: {str(partition_error)}"
                     )
+                finally:
+                    # Always clean up local file to prevent disk leaks
+                    if local_path and os.path.exists(local_path):
+                        os.unlink(local_path)
 
             # Clean up old records if enabled
             if self._cleanup_enabled:

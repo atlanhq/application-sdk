@@ -339,7 +339,7 @@ class TestFlushRecordsJsonGz:
 
     @pytest.mark.asyncio
     async def test_flush_records_uses_sdr_path(self, tmp_path):
-        """Test that _flush_records uses centralized SDR path."""
+        """Test that _flush_records uses centralized SDR path (SDR mode only)."""
         from unittest.mock import AsyncMock, patch
 
         with create_logger_adapter() as logger_adapter:
@@ -361,23 +361,27 @@ class TestFlushRecordsJsonGz:
                 True,
             ):
                 with patch(
-                    "application_sdk.services.objectstore.ObjectStore.upload_file",
-                    new_callable=AsyncMock,
-                ) as mock_upload:
-                    await logger_adapter._flush_records(records)
+                    "application_sdk.observability.observability.ENABLE_ATLAN_UPLOAD",
+                    True,
+                ):
+                    with patch(
+                        "application_sdk.services.objectstore.ObjectStore.upload_file",
+                        new_callable=AsyncMock,
+                    ) as mock_upload:
+                        await logger_adapter._flush_records(records)
 
-                    # Verify upload was called
-                    assert mock_upload.called
-                    call_args = mock_upload.call_args
-                    remote_key = call_args[0][1]
+                        # Verify upload was called
+                        assert mock_upload.called
+                        call_args = mock_upload.call_args
+                        remote_key = call_args[0][1]
 
-                    # Verify path contains sdr-logs and Hive partitioning
-                    assert "sdr-logs" in remote_key
-                    assert "year=" in remote_key
-                    assert "month=" in remote_key
-                    assert "day=" in remote_key
-                    assert "hour=" in remote_key
-                    assert remote_key.endswith(".json.gz")
+                        # Verify path contains sdr-logs and Hive partitioning
+                        assert "sdr-logs" in remote_key
+                        assert "year=" in remote_key
+                        assert "month=" in remote_key
+                        assert "day=" in remote_key
+                        assert "hour=" in remote_key
+                        assert remote_key.endswith(".json.gz")
 
     @pytest.mark.asyncio
     async def test_flush_records_dual_upload(self, tmp_path):
@@ -389,7 +393,7 @@ class TestFlushRecordsJsonGz:
 
             records = [
                 {
-                    "timestamp": 1709854200.0,
+                    "timestamp": datetime.now().timestamp(),
                     "level": "INFO",
                     "message": "test",
                     "logger_name": "test",
@@ -412,6 +416,40 @@ class TestFlushRecordsJsonGz:
 
                         # Should be called twice (customer bucket + Atlan bucket)
                         assert mock_upload.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_flush_records_skips_non_sdr(self, tmp_path):
+        """Test that non-SDR (ENABLE_ATLAN_UPLOAD=false) skips flush entirely."""
+        from unittest.mock import AsyncMock, patch
+
+        with create_logger_adapter() as logger_adapter:
+            logger_adapter.data_dir = str(tmp_path)
+
+            records = [
+                {
+                    "timestamp": datetime.now().timestamp(),
+                    "level": "INFO",
+                    "message": "test",
+                    "logger_name": "test",
+                }
+            ]
+
+            with patch(
+                "application_sdk.observability.observability.ENABLE_OBSERVABILITY_DAPR_SINK",
+                True,
+            ):
+                with patch(
+                    "application_sdk.observability.observability.ENABLE_ATLAN_UPLOAD",
+                    False,  # Non-SDR
+                ):
+                    with patch(
+                        "application_sdk.services.objectstore.ObjectStore.upload_file",
+                        new_callable=AsyncMock,
+                    ) as mock_upload:
+                        await logger_adapter._flush_records(records)
+
+                        # Should NOT be called (non-SDR skips flush)
+                        assert not mock_upload.called
 
 
 class TestCorrelationContext:
