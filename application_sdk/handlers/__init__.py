@@ -1,6 +1,13 @@
 import json
+import logging
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Dict
+
+logger = logging.getLogger(__name__)
+
+# Convention: generated contract files live here
+CONTRACT_GENERATED_DIR = Path.cwd() / "contract" / "generated"
 
 
 class HandlerInterface(ABC):
@@ -63,8 +70,15 @@ class HandlerInterface(ABC):
     async def get_configmap(config_map_id: str) -> Dict[str, Any]:
         """Return the K8s ConfigMap for the given config_map_id.
 
-        Override in subclass to load app-specific template JSON, then call
-        HandlerInterface._wrap_configmap(config_map_id, raw) to produce the
-        correct shape.
+        Priority:
+        1. contract/generated/{config_map_id}.json (if exists)
+        2. Subclass override (call _wrap_configmap to produce correct shape)
+        3. Empty dict
         """
+        if CONTRACT_GENERATED_DIR.exists():
+            for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
+                if json_file.stem == config_map_id:
+                    logger.debug(f"Serving configmap from contract: {json_file}")
+                    with open(json_file) as f:
+                        return json.load(f)
         return {}
