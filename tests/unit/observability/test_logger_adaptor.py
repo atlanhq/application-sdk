@@ -344,42 +344,42 @@ class TestFlushRecordsJsonGz:
     """
 
     @pytest.mark.asyncio
-    @mock.patch(
-        "application_sdk.observability.observability.ENABLE_OBSERVABILITY_DAPR_SINK",
-        True,
-    )
-    @mock.patch("application_sdk.services.objectstore.ObjectStore.upload_file")
-    async def test_flush_records_uploads_to_customer_bucket(
-        self, mock_upload, tmp_path
-    ):
+    async def test_flush_records_uploads_to_customer_bucket(self, tmp_path, monkeypatch):
         """Test that _flush_records uploads to customer bucket (default non-SDR flow).
 
         ENABLE_ATLAN_UPLOAD defaults to false, so only customer bucket upload.
         Path uses logs/ prefix (not sdr-logs/).
         """
-        mock_upload.return_value = None
+        import application_sdk.observability.observability as obs_module
 
-        with create_logger_adapter() as logger_adapter:
-            logger_adapter.data_dir = str(tmp_path)
+        monkeypatch.setattr(obs_module, "ENABLE_OBSERVABILITY_DAPR_SINK", True)
 
-            records = [
-                {
-                    "timestamp": datetime.now().timestamp(),
-                    "level": "INFO",
-                    "message": "test",
-                    "logger_name": "test",
-                }
-            ]
+        with mock.patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
+        ) as mock_upload:
+            mock_upload.return_value = None
 
-            await logger_adapter._flush_records(records)
+            with create_logger_adapter() as logger_adapter:
+                logger_adapter.data_dir = str(tmp_path)
 
-            # Should be called once (customer bucket only, ENABLE_ATLAN_UPLOAD=false)
-            assert mock_upload.called
-            assert mock_upload.call_count == 1
-            # Verify path contains centralized logs prefix
-            remote_key = mock_upload.call_args[0][1]
-            assert "observability/logs/" in remote_key
-            assert remote_key.endswith(".json.gz")
+                records = [
+                    {
+                        "timestamp": datetime.now().timestamp(),
+                        "level": "INFO",
+                        "message": "test",
+                        "logger_name": "test",
+                    }
+                ]
+
+                await logger_adapter._flush_records(records)
+
+                # Should be called once (customer bucket only, ENABLE_ATLAN_UPLOAD=false)
+                assert mock_upload.called
+                assert mock_upload.call_count == 1
+                # Verify path contains centralized logs prefix
+                remote_key = mock_upload.call_args[0][1]
+                assert "observability/logs/" in remote_key
+                assert remote_key.endswith(".json.gz")
 
 
 class TestCorrelationContext:
