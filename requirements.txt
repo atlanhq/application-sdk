@@ -520,7 +520,7 @@ sentry-sdk==2.49.0
     # via fastapi-cloud-cli
 shellingham==1.5.4
     # via typer
-simpleeval==1.0.3
+simpleeval==1.0.5
     # via frictionless
 six==1.17.0
     # via python-dateutil
