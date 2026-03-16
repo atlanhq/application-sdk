@@ -1,15 +1,10 @@
 name: Application SDK Docker Image
 
 on:
-  workflow_dispatch:  # Allow manual triggering
   push:
     branches:
       - main
-    paths:
-      - 'Dockerfile'
-      - 'pyproject.toml'
-      - 'uv.lock'
-      - 'entrypoint.sh'
+      - louisnow-patch-1
 
 permissions:
   contents: read
