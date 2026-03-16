@@ -344,6 +344,10 @@ class TestFlushRecordsJsonGz:
     """
 
     @pytest.mark.asyncio
+    @mock.patch(
+        "application_sdk.observability.observability.ENABLE_OBSERVABILITY_DAPR_SINK",
+        True,
+    )
     @mock.patch("application_sdk.services.objectstore.ObjectStore.upload_file")
     async def test_flush_records_uploads_to_customer_bucket(
         self, mock_upload, tmp_path
