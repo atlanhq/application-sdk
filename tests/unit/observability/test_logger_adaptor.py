@@ -335,22 +335,22 @@ async def test_parquet_sink_error_handling(mock_parquet_file):
 
 
 class TestFlushRecordsJsonGz:
-    """Tests for _flush_records SDR gate behavior.
+    """Tests for _flush_records json.gz behavior.
 
-    Note: We only test the gate condition (ENABLE_ATLAN_UPLOAD=false skips flush).
-    Testing the happy path with ENABLE_ATLAN_UPLOAD=true is unreliable due to
-    module-level constant import caching across different Python versions.
+    Both SDR and non-SDR flows now use _flush_records with centralized paths.
+    Non-SDR: artifacts/apps/observability/logs/ (single upload)
+    SDR: artifacts/apps/observability/sdr-logs/ (dual upload)
     """
 
     @pytest.mark.asyncio
     @mock.patch("application_sdk.services.objectstore.ObjectStore.upload_file")
-    async def test_flush_records_skips_when_atlan_upload_disabled(
+    async def test_flush_records_uploads_to_customer_bucket(
         self, mock_upload, tmp_path
     ):
-        """Test that _flush_records skips when ENABLE_ATLAN_UPLOAD=false (non-SDR).
+        """Test that _flush_records uploads to customer bucket (default non-SDR flow).
 
-        This is the default behavior - non-SDR apps don't use this flush path.
-        They use OTLP for logs instead.
+        ENABLE_ATLAN_UPLOAD defaults to false, so only customer bucket upload.
+        Path uses logs/ prefix (not sdr-logs/).
         """
         mock_upload.return_value = None
 
@@ -368,9 +368,13 @@ class TestFlushRecordsJsonGz:
 
             await logger_adapter._flush_records(records)
 
-            # Should NOT be called - ENABLE_ATLAN_UPLOAD defaults to false
-            # This verifies the SDR gate works correctly
-            assert not mock_upload.called
+            # Should be called once (customer bucket only, ENABLE_ATLAN_UPLOAD=false)
+            assert mock_upload.called
+            assert mock_upload.call_count == 1
+            # Verify path contains centralized logs prefix
+            remote_key = mock_upload.call_args[0][1]
+            assert "observability/logs/" in remote_key
+            assert remote_key.endswith(".json.gz")
 
 
 class TestCorrelationContext:

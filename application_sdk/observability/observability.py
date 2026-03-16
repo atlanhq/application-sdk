@@ -28,8 +28,14 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.utils import get_observability_dir
 
-# Centralized observability path prefix for MDLH ingestion
-OBSERVABILITY_S3_PREFIX = "artifacts/apps/observability/sdr-logs"
+# Centralized observability path prefix
+# SDR: sdr-logs/ (MDLH S3 pipe reads from Atlan bucket)
+# Non-SDR: logs/ (will be deprecated when OTLP → LH replaces it)
+OBSERVABILITY_S3_PREFIX = (
+    "artifacts/apps/observability/sdr-logs"
+    if ENABLE_ATLAN_UPLOAD
+    else "artifacts/apps/observability/logs"
+)
 
 
 class LogRecord(BaseModel):
@@ -368,16 +374,13 @@ class AtlanObservability(Generic[T], ABC):
         This method:
         - Groups records by partition (year/month/day/hour)
         - Writes json.gz format (lightweight, no pandas dependency)
-        - Uploads to customer bucket (DEPLOYMENT_OBJECT_STORE)
+        - Uses centralized path based on ENABLE_ATLAN_UPLOAD:
+          - SDR: artifacts/apps/observability/sdr-logs/ (MDLH reads from Atlan bucket)
+          - Non-SDR: artifacts/apps/observability/logs/ (to be deprecated)
+        - Uploads to customer bucket (DEPLOYMENT_OBJECT_STORE) always
         - Uploads to Atlan bucket (UPSTREAM_OBJECT_STORE) when ENABLE_ATLAN_UPLOAD=true
-        - MDLH S3 pipe reads from Atlan bucket for Iceberg ingestion
-
-        Note: This only runs for SDR (where ENABLE_ATLAN_UPLOAD=true).
-        Non-SDR apps use OTLP for logs and skip this path entirely.
         """
         if not ENABLE_OBSERVABILITY_DAPR_SINK or not records:
-            return
-        if not ENABLE_ATLAN_UPLOAD:
             return
         try:
             from time import time_ns
