@@ -80,5 +80,6 @@ class HandlerInterface(ABC):
                 if json_file.stem == config_map_id:
                     logger.debug(f"Serving configmap from contract: {json_file}")
                     with open(json_file) as f:
-                        return json.load(f)
+                        raw = json.load(f)
+                    return HandlerInterface._wrap_configmap(config_map_id, raw)
         return {}
