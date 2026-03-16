@@ -1,4 +1,5 @@
 import sys
+import warnings
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Dict, Generator
@@ -718,6 +719,31 @@ def test_log_record_model_extracts_exception_attrs_from_loguru_record():
     assert (
         "Traceback (most recent call last):" in model["extra"]["exception.stacktrace"]
     )
+
+
+@pytest.mark.parametrize("attempt_value", ["1", 1])
+def test_log_record_model_serializes_attempt_without_warning(attempt_value):
+    """Attempt values should normalize to the canonical string form."""
+    test_message = mock.MagicMock()
+    level_mock = mock.MagicMock()
+    level_mock.name = "INFO"
+    test_message.record = {
+        "time": datetime.now(),
+        "level": level_mock,
+        "extra": {"logger_name": "test_logger", "attempt": attempt_value},
+        "message": "heartbeat",
+        "file": mock.MagicMock(path="worker.py"),
+        "line": 10,
+        "function": "run",
+        "exception": None,
+    }
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        model = LogRecordModel.from_loguru_message(test_message).model_dump()
+
+    assert model["extra"]["attempt"] == "1"
+    assert caught == []
 
 
 def test_log_record_model_extracts_nested_exception_type():
