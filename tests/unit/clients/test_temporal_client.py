@@ -264,6 +264,7 @@ async def test_create_worker_without_client(
         temporal_client.create_worker(activities, workflow_classes, passthrough_modules)
 
 
+@patch("application_sdk.clients.temporal.TEMPORAL_DEPLOYMENT_NAME", "")
 @patch("application_sdk.clients.temporal.TEMPORAL_BUILD_ID", "")
 @patch("application_sdk.clients.temporal.Worker")
 @patch(
@@ -304,23 +305,25 @@ async def test_create_worker(
         activity_executor=ANY,
         max_concurrent_activities=ANY,
         graceful_shutdown_timeout=ANY,
+        deployment_config=None,
     )
 
     assert worker == mock_worker_class.return_value
 
 
+@patch("application_sdk.clients.temporal.TEMPORAL_DEPLOYMENT_NAME", "test-ns/test-twd")
 @patch("application_sdk.clients.temporal.TEMPORAL_BUILD_ID", "v1.2.3-abc123")
 @patch("application_sdk.clients.temporal.Worker")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
-async def test_create_worker_with_build_id(
+async def test_create_worker_with_deployment_config(
     mock_connect: AsyncMock,
     mock_worker_class: MagicMock,
     temporal_client: TemporalWorkflowClient,
 ):
-    """Test creating a versioned worker when TEMPORAL_BUILD_ID is set."""
+    """Test creating a versioned worker with Worker Deployment config."""
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
     await temporal_client.load()
@@ -342,9 +345,42 @@ async def test_create_worker_with_build_id(
         activity_executor=ANY,
         max_concurrent_activities=ANY,
         graceful_shutdown_timeout=ANY,
-        build_id="v1.2.3-abc123",
-        use_worker_versioning=True,
+        deployment_config=ANY,
     )
+    # Verify the deployment_config has the right values
+    call_kwargs = mock_worker_class.call_args[1]
+    dc = call_kwargs["deployment_config"]
+    assert dc.version.deployment_name == "test-ns/test-twd"
+    assert dc.version.build_id == "v1.2.3-abc123"
+
+
+@patch("application_sdk.clients.temporal.TEMPORAL_DEPLOYMENT_NAME", "")
+@patch("application_sdk.clients.temporal.TEMPORAL_BUILD_ID", "v1.2.3-abc123")
+@patch("application_sdk.clients.temporal.Worker")
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_create_worker_with_build_id_only(
+    mock_connect: AsyncMock,
+    mock_worker_class: MagicMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test creating a versioned worker with only build_id (no deployment name)."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+    await temporal_client.load()
+
+    workflow_classes = [MagicMock()]
+    activities = [MagicMock()]
+    passthrough_modules = ["application_sdk"]
+
+    temporal_client.create_worker(activities, workflow_classes, passthrough_modules)
+
+    call_kwargs = mock_worker_class.call_args[1]
+    dc = call_kwargs["deployment_config"]
+    assert dc.version.deployment_name == "v1.2.3-abc123"
+    assert dc.version.build_id == "v1.2.3-abc123"
 
 
 def test_get_worker_task_queue(temporal_client: TemporalWorkflowClient):

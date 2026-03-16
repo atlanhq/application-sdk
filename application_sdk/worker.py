@@ -20,6 +20,7 @@ from application_sdk.constants import (
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     MAX_CONCURRENT_ACTIVITIES,
     TEMPORAL_BUILD_ID,
+    TEMPORAL_DEPLOYMENT_NAME,
 )
 from application_sdk.interceptors.models import (
     ApplicationEventNames,
@@ -279,7 +280,12 @@ class Worker:
             )
             self.workflow_worker = worker
 
-            if TEMPORAL_BUILD_ID:
+            if TEMPORAL_BUILD_ID and TEMPORAL_DEPLOYMENT_NAME:
+                logger.info(
+                    f"Starting versioned worker with task queue: {self.workflow_client.worker_task_queue}, "
+                    f"deployment: {TEMPORAL_DEPLOYMENT_NAME}, build_id: {TEMPORAL_BUILD_ID}"
+                )
+            elif TEMPORAL_BUILD_ID:
                 logger.info(
                     f"Starting versioned worker with task queue: {self.workflow_client.worker_task_queue}, "
                     f"build_id: {TEMPORAL_BUILD_ID}"
