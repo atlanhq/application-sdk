@@ -1,5 +1,6 @@
 import os
 import time
+from pathlib import Path
 from typing import Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
@@ -453,10 +454,22 @@ class APIServer(ServerInterface):
 
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
+        if not self.ui_enabled:
+            return
+
         self.app.get("/")(self.frontend_home)
 
-        # Mount static files
-        self.app.mount("/", StaticFiles(directory="frontend/static"), name="static")
+        static_dir = Path(self.frontend_assets_path)
+        if not static_dir.is_dir():
+            logger.warning(
+                f"Static UI assets not found at '{static_dir}'. "
+                f"Skipping static mount. Run "
+                f"'npx @atlanhq/app-playground install-to "
+                f"{self.frontend_assets_path}' to enable the packaged UI."
+            )
+            return
+
+        self.app.mount("/", StaticFiles(directory=str(static_dir)), name="static")
 
     async def get_dapr_subscriptions(
         self,

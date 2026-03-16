@@ -817,6 +817,59 @@ class TestMessagingRouterRegistration:
             assert response.status_code == 404
 
 
+class TestUIRouteRegistration:
+    """Test suite for UI route registration behavior."""
+
+    @pytest.fixture(autouse=True)
+    def setup_method(self):
+        """Setup method that runs before each test method."""
+        self.mock_handler = Mock(spec=HandlerInterface)
+        self.mock_handler.preflight_check = AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_start_skips_static_mount_when_assets_missing(self, tmp_path):
+        """Server startup should not fail when frontend static assets are absent."""
+        app = APIServer(handler=self.mock_handler)
+        app.frontend_assets_path = str(tmp_path / "missing-static")
+
+        mock_server = Mock()
+        mock_server.serve = AsyncMock()
+
+        with patch("application_sdk.server.fastapi.Server", return_value=mock_server):
+            with patch("application_sdk.server.fastapi.logger.warning") as mock_warning:
+                await app.start(host="127.0.0.1", port=8001)
+
+        assert not any(
+            getattr(route, "name", None) == "static" for route in app.app.routes
+        )
+        mock_warning.assert_called_once()
+        warning_message = mock_warning.call_args[0][0]
+        assert str(tmp_path / "missing-static") in warning_message
+        assert "@atlanhq/app-playground install-to" in warning_message
+        mock_server.serve.assert_awaited_once()
+
+    def test_register_ui_routes_mounts_configured_static_directory(self, tmp_path):
+        """UI routes should mount the configured static directory when it exists."""
+        app = APIServer(handler=self.mock_handler)
+        static_dir = tmp_path / "frontend-static"
+        static_dir.mkdir()
+        (static_dir / "index.html").write_text("ok", encoding="utf-8")
+        app.frontend_assets_path = str(static_dir)
+
+        app.register_ui_routes()
+
+        static_route = next(
+            (
+                route
+                for route in app.app.routes
+                if getattr(route, "name", None) == "static"
+            ),
+            None,
+        )
+        assert static_route is not None
+        assert static_route.app.directory == str(static_dir)
+
+
 class TestDaprSubscriptionEndpointGeneration:
     """Test suite for Dapr subscription endpoint generation."""
 
