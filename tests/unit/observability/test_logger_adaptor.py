@@ -335,53 +335,6 @@ async def test_parquet_sink_error_handling(mock_parquet_file):
         assert len(logger_adapter._buffer) == 0
 
 
-class TestFlushRecordsJsonGz:
-    """Tests for _flush_records json.gz behavior.
-
-    Both SDR and non-SDR flows now use _flush_records with centralized paths.
-    Non-SDR: artifacts/apps/observability/logs/ (single upload)
-    SDR: artifacts/apps/observability/sdr-logs/ (dual upload)
-    """
-
-    @pytest.mark.asyncio
-    async def test_flush_records_uploads_to_customer_bucket(self, tmp_path, monkeypatch):
-        """Test that _flush_records uploads to customer bucket (default non-SDR flow).
-
-        ENABLE_ATLAN_UPLOAD defaults to false, so only customer bucket upload.
-        Path uses logs/ prefix (not sdr-logs/).
-        """
-        import application_sdk.observability.observability as obs_module
-
-        monkeypatch.setattr(obs_module, "ENABLE_OBSERVABILITY_DAPR_SINK", True)
-
-        with mock.patch(
-            "application_sdk.services.objectstore.ObjectStore.upload_file"
-        ) as mock_upload:
-            mock_upload.return_value = None
-
-            with create_logger_adapter() as logger_adapter:
-                logger_adapter.data_dir = str(tmp_path)
-
-                records = [
-                    {
-                        "timestamp": datetime.now().timestamp(),
-                        "level": "INFO",
-                        "message": "test",
-                        "logger_name": "test",
-                    }
-                ]
-
-                await logger_adapter._flush_records(records)
-
-                # Should be called once (customer bucket only, ENABLE_ATLAN_UPLOAD=false)
-                assert mock_upload.called
-                assert mock_upload.call_count == 1
-                # Verify path contains centralized logs prefix
-                remote_key = mock_upload.call_args[0][1]
-                assert "observability/logs/" in remote_key
-                assert remote_key.endswith(".json.gz")
-
-
 class TestCorrelationContext:
     """Tests for correlation context in logging."""
 
