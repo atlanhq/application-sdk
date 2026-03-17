@@ -22,23 +22,33 @@ from application_sdk.constants import (
     DEPLOYMENT_OBJECT_STORE_NAME,
     ENABLE_ATLAN_UPLOAD,
     ENABLE_OBSERVABILITY_DAPR_SINK,
+    ENABLE_SDR_TO_MDLH,
+    LOG_FILE_NAME,
+    METRICS_FILE_NAME,
     STATE_STORE_NAME,
+    TRACES_FILE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
 
-# Local subdirectory for observability data (used in data_dir)
-# SDR: sdr-logs/ | Non-SDR: logs/
-LOCAL_OBS_SUBDIR = "sdr-logs" if ENABLE_ATLAN_UPLOAD else "logs"
+# --- Path configuration ---
+# SDR:     sdr-logs/, sdr-metrics/, sdr-traces/
+# Non-SDR: non-sdr-logs/, non-sdr-metrics/, non-sdr-traces/
+_OBS_PATH_PREFIX = "sdr" if ENABLE_SDR_TO_MDLH else "non-sdr"
 
-# S3 remote key prefix for observability data
-# SDR: sdr-logs/ (MDLH S3 pipe reads from Atlan bucket)
-# Non-SDR: logs/ (will be deprecated when OTLP → LH replaces it)
-OBSERVABILITY_S3_PREFIX = (
-    "artifacts/apps/observability/sdr-logs"
-    if ENABLE_ATLAN_UPLOAD
-    else "artifacts/apps/observability/logs"
-)
+# Map of record type → local subdirectory
+LOCAL_OBS_SUBDIR_MAP = {
+    "logs": f"{_OBS_PATH_PREFIX}-logs",
+    "metrics": f"{_OBS_PATH_PREFIX}-metrics",
+    "traces": f"{_OBS_PATH_PREFIX}-traces",
+}
+
+# Map of record type → S3 remote key prefix
+OBSERVABILITY_S3_PREFIX_MAP = {
+    "logs": f"artifacts/apps/observability/{_OBS_PATH_PREFIX}-logs",
+    "metrics": f"artifacts/apps/observability/{_OBS_PATH_PREFIX}-metrics",
+    "traces": f"artifacts/apps/observability/{_OBS_PATH_PREFIX}-traces",
+}
 
 
 class LogRecord(BaseModel):
@@ -229,11 +239,25 @@ class AtlanObservability(Generic[T], ABC):
             except Exception as e:
                 logging.error(f"Error flushing instance: {e}")
 
+    def _get_signal_type(self) -> str:
+        """Map file_name to signal type (logs, metrics, traces).
+
+        Returns:
+            str: The signal type based on self.file_name
+        """
+        if self.file_name == LOG_FILE_NAME:
+            return "logs"
+        elif self.file_name == METRICS_FILE_NAME:
+            return "metrics"
+        elif self.file_name == TRACES_FILE_NAME:
+            return "traces"
+        return "other"
+
     def _get_partition_path(self, timestamp: datetime) -> str:
         """Generate local partition path based on timestamp.
 
-        Uses a simple local subdirectory (sdr-logs/ or logs/) with
-        hour-level partitioning. The full S3 prefix is applied separately
+        Uses signal-type-specific subdirectory (e.g., sdr-logs/, non-sdr-metrics/)
+        with hour-level partitioning. The full S3 prefix is applied separately
         when computing the remote key for upload.
 
         Args:
@@ -242,9 +266,14 @@ class AtlanObservability(Generic[T], ABC):
         Returns:
             str: The local partition path
         """
+        signal_type = self._get_signal_type()
+        local_subdir = LOCAL_OBS_SUBDIR_MAP.get(
+            signal_type, f"{_OBS_PATH_PREFIX}-other"
+        )
+
         return os.path.join(
             self.data_dir,
-            LOCAL_OBS_SUBDIR,
+            local_subdir,
             f"year={timestamp.year}",
             f"month={timestamp.month:02d}",
             f"day={timestamp.day:02d}",
@@ -423,9 +452,14 @@ class AtlanObservability(Generic[T], ABC):
                         for record in partition_data:
                             f.write(orjson.dumps(record) + b"\n")
 
-                    # Compute remote key using S3 prefix (not local path)
+                    # Compute remote key using signal-type-specific S3 prefix
+                    signal_type = self._get_signal_type()
+                    s3_prefix = OBSERVABILITY_S3_PREFIX_MAP.get(
+                        signal_type,
+                        f"artifacts/apps/observability/{_OBS_PATH_PREFIX}-other",
+                    )
                     remote_key = os.path.join(
-                        OBSERVABILITY_S3_PREFIX,
+                        s3_prefix,
                         f"year={first_record_time.year}",
                         f"month={first_record_time.month:02d}",
                         f"day={first_record_time.day:02d}",
@@ -509,7 +543,11 @@ class AtlanObservability(Generic[T], ABC):
         """
         try:
             # Use local subdir (same as _get_partition_path)
-            data_dir = os.path.join(self.data_dir, LOCAL_OBS_SUBDIR)
+            signal_type = self._get_signal_type()
+            local_subdir = LOCAL_OBS_SUBDIR_MAP.get(
+                signal_type, f"{_OBS_PATH_PREFIX}-other"
+            )
+            data_dir = os.path.join(self.data_dir, local_subdir)
             if not os.path.exists(data_dir):
                 return
 

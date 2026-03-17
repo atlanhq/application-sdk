@@ -180,6 +180,9 @@ WORKER_START_EVENT_VERSION = "v1"
 
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
+
+#: Whether to enable SDR to MDLH log export (uses sdr-* paths instead of non-sdr-*)
+ENABLE_SDR_TO_MDLH = os.getenv("ATLAN_ENABLE_SDR_TO_MDLH", "false").lower() == "true"
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:
