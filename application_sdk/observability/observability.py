@@ -23,12 +23,15 @@ from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     STATE_STORE_NAME,
-    TEMPORARY_PATH,
     UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
 
-# Centralized observability path prefix
+# Local subdirectory for observability data (used in data_dir)
+# SDR: sdr-logs/ | Non-SDR: logs/
+LOCAL_OBS_SUBDIR = "sdr-logs" if ENABLE_ATLAN_UPLOAD else "logs"
+
+# S3 remote key prefix for observability data
 # SDR: sdr-logs/ (MDLH S3 pipe reads from Atlan bucket)
 # Non-SDR: logs/ (will be deprecated when OTLP → LH replaces it)
 OBSERVABILITY_S3_PREFIX = (
@@ -227,20 +230,21 @@ class AtlanObservability(Generic[T], ABC):
                 logging.error(f"Error flushing instance: {e}")
 
     def _get_partition_path(self, timestamp: datetime) -> str:
-        """Generate Hive partition path based on timestamp.
+        """Generate local partition path based on timestamp.
 
-        Uses centralized SDR path: artifacts/apps/observability/sdr-logs/
-        with hour-level partitioning for MDLH ingestion.
+        Uses a simple local subdirectory (sdr-logs/ or logs/) with
+        hour-level partitioning. The full S3 prefix is applied separately
+        when computing the remote key for upload.
 
         Args:
             timestamp: The timestamp to generate partition path for
 
         Returns:
-            str: The partition path
+            str: The local partition path
         """
         return os.path.join(
             self.data_dir,
-            OBSERVABILITY_S3_PREFIX,
+            LOCAL_OBS_SUBDIR,
             f"year={timestamp.year}",
             f"month={timestamp.month:02d}",
             f"day={timestamp.day:02d}",
@@ -403,6 +407,11 @@ class AtlanObservability(Generic[T], ABC):
                 try:
                     os.makedirs(partition_path, exist_ok=True)
 
+                    # Get timestamp from first record for remote key partitioning
+                    first_record_time = datetime.fromtimestamp(
+                        partition_data[0]["timestamp"]
+                    )
+
                     # Lexi-sortable filename
                     filename = (
                         f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
@@ -414,8 +423,15 @@ class AtlanObservability(Generic[T], ABC):
                         for record in partition_data:
                             f.write(orjson.dumps(record) + b"\n")
 
-                    # Remote key relative to temp root
-                    remote_key = os.path.relpath(local_path, TEMPORARY_PATH)
+                    # Compute remote key using S3 prefix (not local path)
+                    remote_key = os.path.join(
+                        OBSERVABILITY_S3_PREFIX,
+                        f"year={first_record_time.year}",
+                        f"month={first_record_time.month:02d}",
+                        f"day={first_record_time.day:02d}",
+                        f"hour={first_record_time.hour:02d}",
+                        filename,
+                    )
 
                     # Upload to customer bucket
                     await ObjectStore.upload_file(
