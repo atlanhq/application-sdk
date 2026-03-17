@@ -150,6 +150,9 @@ jobs:
           elif channel:
               body['target_channel'] = channel
 
+          # Always create as draft — requires admin approval before going active
+          body['draft'] = True
+
           # Read SDK version from pyproject.toml (optional, non-fatal)
           try:
               with open('pyproject.toml') as f:
