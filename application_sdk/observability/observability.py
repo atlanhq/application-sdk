@@ -22,7 +22,6 @@ from application_sdk.constants import (
     DEPLOYMENT_OBJECT_STORE_NAME,
     ENABLE_ATLAN_UPLOAD,
     ENABLE_OBSERVABILITY_DAPR_SINK,
-    ENABLE_SDR_TO_MDLH,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
     STATE_STORE_NAME,
@@ -32,9 +31,9 @@ from application_sdk.constants import (
 from application_sdk.observability.utils import get_observability_dir
 
 # --- Path configuration ---
-# SDR:     sdr-logs/, sdr-metrics/, sdr-traces/
-# Non-SDR: non-sdr-logs/, non-sdr-metrics/, non-sdr-traces/
-_OBS_PATH_PREFIX = "sdr" if ENABLE_SDR_TO_MDLH else "non-sdr"
+# SDR (ENABLE_ATLAN_UPLOAD=true):     sdr-logs/, sdr-metrics/, sdr-traces/
+# Non-SDR (ENABLE_ATLAN_UPLOAD=false): non-sdr-logs/, non-sdr-metrics/, non-sdr-traces/
+_OBS_PATH_PREFIX = "sdr" if ENABLE_ATLAN_UPLOAD else "non-sdr"
 
 # Map of record type → local subdirectory
 LOCAL_OBS_SUBDIR_MAP = {
