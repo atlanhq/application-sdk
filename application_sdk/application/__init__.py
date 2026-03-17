@@ -82,15 +82,22 @@ class BaseApplication:
         1. contract/generated/manifest.json (if exists)
         2. Subclass override (e.g., BaseSQLMetadataExtractionApplication)
         3. None (disables the /manifest endpoint)
+
+        Post-processes the manifest to substitute {deployment_name}
+        with the actual DEPLOYMENT_NAME at serve time.
         """
         import json
         from pathlib import Path
+
+        from application_sdk.constants import DEPLOYMENT_NAME
 
         manifest_path = Path.cwd() / "contract" / "generated" / "manifest.json"
         if manifest_path.exists():
             logger.info(f"Serving manifest from contract: {manifest_path}")
             with open(manifest_path) as f:
-                return json.load(f)
+                raw = f.read()
+            raw = raw.replace("{deployment_name}", DEPLOYMENT_NAME or "default")
+            return json.loads(raw)
         return None
 
     def bootstrap_event_registration(self):
