@@ -1,0 +1,210 @@
+# Reusable publish workflow for Atlan first-party app repos.
+#
+# Builds the image (delegates to build-apps-image.yaml) and then registers
+# the version in the Global Marketplace as a **draft** release that requires
+# admin approval before going active.
+#
+# Image tag format is identical to build-apps-image: {branch}-{sha7}
+# Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{sha7}
+#
+# Usage in each app repo (.github/workflows/publish.yaml):
+#
+#   jobs:
+#     publish:
+#       uses: atlanhq/application-sdk/.github/workflows/publish-app.yaml@main
+#       with:
+#         ref: ${{ inputs.ref || github.ref }}
+#         channel: ${{ inputs.channel }}
+#         tenants: ${{ inputs.tenants || '' }}
+#       secrets: inherit
+#
+name: Publish Atlan App
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Branch or SHA to checkout, build, and publish (default: caller's ref)"
+        required: false
+        type: string
+      channel:
+        description: "Target channel (e.g. 'all' for draft release requiring approval). Ignored when tenants is set."
+        required: false
+        type: string
+        default: ""
+      tenants:
+        description: "Comma-separated tenant IDs for targeted publish. Takes precedence over channel."
+        required: false
+        type: string
+        default: ""
+      base_url:
+        description: "Marketplace API base URL"
+        required: false
+        type: string
+        default: "https://home.atlan.com"
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
+        description: "Org-level PAT for GHCR login — passed through to build-apps-image"
+      APP_PUBLISH_TOKEN:
+        required: true
+        description: "API token from home.atlan.com for marketplace publish"
+      SNYK_TOKEN:
+        required: false
+        description: "Snyk API token — passed through to build-apps-image"
+      DOCKER_HUB_PAT_RW:
+        required: false
+        description: "DockerHub PAT — passed through to build-apps-image (SDR only)"
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  # ── Job 1: Build image (delegates to the shared build template) ─────────────
+  build:
+    uses: atlanhq/application-sdk/.github/workflows/build-apps-image.yaml@main
+    with:
+      ref: ${{ inputs.ref }}
+    secrets: inherit
+
+  # ── Job 2: Register version in the Global Marketplace as draft ──────────────
+  publish:
+    name: Publish to Marketplace
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Publish to marketplace
+        env:
+          APP_PUBLISH_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN }}
+          BASE_URL: ${{ inputs.base_url }}
+          CHANNEL: ${{ inputs.channel }}
+          TENANTS: ${{ inputs.tenants }}
+          REF: ${{ inputs.ref || github.ref }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.event.repository.name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PYEOF'
+          import yaml, json, os, re, sys, urllib.request, urllib.error
+
+          # ── Validate inputs ────────────────────────────────────────────────
+          channel = os.environ.get('CHANNEL', '').strip()
+          tenants_raw = os.environ.get('TENANTS', '').strip()
+          tenants = [t.strip() for t in tenants_raw.split(',') if t.strip()] if tenants_raw else []
+
+          if not channel and not tenants:
+              print('::error::Either "channel" or "tenants" input must be provided')
+              sys.exit(1)
+
+          # ── Parse atlan.yaml ───────────────────────────────────────────────
+          if not os.path.isfile('atlan.yaml'):
+              print('::error::atlan.yaml not found in repo root')
+              sys.exit(1)
+
+          with open('atlan.yaml') as f:
+              manifest = yaml.safe_load(f) or {}
+
+          app_name = manifest.get('name', '')
+          if not app_name:
+              print('::error::atlan.yaml missing required "name" field')
+              sys.exit(1)
+
+          app_id = manifest.get('app_id', '') or app_name
+          deploy = manifest.get('deploy')
+          config = yaml.dump(deploy) if deploy else ''
+
+          # ── Compute image URI (mirrors build-apps-image logic) ─────────────
+          ref = os.environ['REF']
+          sha = os.environ['SHA']
+          repo = os.environ['REPO']
+
+          branch = ref.replace('refs/heads/', '').lower().replace('/', '-').replace('_', '-')
+          image_tag = sha[:7]
+          image = f'ghcr.io/atlanhq/{repo}:{branch}-{image_tag}'
+
+          # ── Build request body ─────────────────────────────────────────────
+          body = {
+              'app_id':  app_id,
+              'image':   image,
+              'version': image_tag,
+              'branch':  ref,
+              'repo':    os.environ['REPO_URL'],
+              'config':  config,
+          }
+
+          # Tenants takes precedence over channel
+          if tenants:
+              body['target_channel']  = 'specific'
+              body['allowed_tenants'] = tenants
+          elif channel:
+              body['target_channel'] = channel
+
+          # Read SDK version from pyproject.toml (optional, non-fatal)
+          try:
+              with open('pyproject.toml') as f:
+                  for line in f:
+                      m = re.search(r'atlan-application-sdk[^=]*==([0-9][^\s",]*)', line)
+                      if m:
+                          body['sdk_version'] = m.group(1)
+                          break
+          except FileNotFoundError:
+              pass
+
+          # ── Call marketplace API ────────────────────────────────────────────
+          base_url = os.environ['BASE_URL'].rstrip('/')
+          url = f'{base_url}/api/service/marketplace/builds'
+          token = os.environ['APP_PUBLISH_TOKEN']
+
+          data = json.dumps(body).encode()
+          req = urllib.request.Request(url, data=data, method='POST')
+          req.add_header('Authorization', f'Bearer {token}')
+          req.add_header('Content-Type', 'application/json')
+
+          print(f'Publishing {app_name} ({image}) ...')
+
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  result = json.loads(resp.read())
+          except urllib.error.HTTPError as e:
+              error_body = e.read().decode()
+              print(f'::error::Marketplace API returned {e.code}: {error_body}')
+              sys.exit(1)
+
+          d = result.get('data', {})
+          version_id = d.get('version_id', 'N/A')
+          release_id = d.get('release_id', 'N/A')
+          resolved_app_id = d.get('app_id', 'N/A')
+
+          print(f'Published successfully!')
+          print(f'  Version ID: {version_id}')
+          print(f'  Release ID: {release_id}')
+          print(f'  App ID:     {resolved_app_id}')
+          print(f'  Image:      {image}')
+          print(f'  Status:     Draft (requires admin approval)')
+
+          # ── Step summary ────────────────────────────────────────────────────
+          effective_channel = 'specific' if tenants else channel
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('### Publish complete\n\n')
+              summary.write('| Field | Value |\n')
+              summary.write('|-------|-------|\n')
+              summary.write(f'| Version ID | `{version_id}` |\n')
+              summary.write(f'| Release ID | `{release_id}` |\n')
+              summary.write(f'| App ID | `{resolved_app_id}` |\n')
+              summary.write(f'| Image | `{image}` |\n')
+              summary.write(f'| Channel | `{effective_channel}` |\n')
+              if tenants:
+                  summary.write(f'| Tenants | `{", ".join(tenants)}` |\n')
+              summary.write(f'| Status | Draft |\n')
+          PYEOF
