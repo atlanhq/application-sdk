@@ -318,7 +318,7 @@ class BaseSQLClient(ClientInterface):
             if param == "password":
                 param_values[param] = auth_token
             else:
-                value = self.credentials.get(param) or extra.get(param)
+                value = extra.get(param) or self.credentials.get(param)
                 if value is None:
                     raise ValueError(f"{param} is required")
                 param_values[param] = value
