@@ -508,8 +508,8 @@ class AtlanObservability(Generic[T], ABC):
         - Syncs changes with object store
         """
         try:
-            # Use centralized SDR path
-            data_dir = os.path.join(self.data_dir, OBSERVABILITY_S3_PREFIX)
+            # Use local subdir (same as _get_partition_path)
+            data_dir = os.path.join(self.data_dir, LOCAL_OBS_SUBDIR)
             if not os.path.exists(data_dir):
                 return
 
