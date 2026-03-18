@@ -1,10 +1,12 @@
 """SQL metadata extraction workflow implementation.
 
-This module provides the workflow implementation for extracting metadata from SQL databases,
-including databases, schemas, tables, and columns.
+.. deprecated::
+    Use ``application_sdk.templates.SqlMetadataExtractor`` instead.
+    This v2 module will be removed in v3.1.0.
 """
 
 import asyncio
+import warnings
 from time import time
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
@@ -20,6 +22,14 @@ from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
+
+warnings.warn(
+    "application_sdk.workflows.metadata_extraction.sql is deprecated. "
+    "Use application_sdk.templates.SqlMetadataExtractor instead. "
+    "This module will be removed in v3.1.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = get_logger(__name__)
 workflow.logger = logger

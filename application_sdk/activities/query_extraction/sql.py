@@ -1,5 +1,6 @@
 import json
 import os
+import warnings
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Type
 
@@ -19,6 +20,14 @@ from application_sdk.services.objectstore import ObjectStore
 from application_sdk.services.secretstore import SecretStore
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
+
+warnings.warn(
+    "application_sdk.activities.query_extraction.sql is deprecated. "
+    "Use application_sdk.templates.SqlQueryExtractor instead. "
+    "This module will be removed in v3.1.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = get_logger(__name__)
 

@@ -1,8 +1,15 @@
 """Global test configuration and fixtures."""
 
+import os
 from unittest.mock import Mock, patch
 
 import pytest
+
+# Disable the Dapr observability sink globally for all unit tests.
+# Without this, metrics flushing tries to connect to the Dapr sidecar
+# (http://127.0.0.1:3500), which isn't running in unit test environments
+# and causes 60-second timeouts per test.
+os.environ.setdefault("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false")
 
 
 @pytest.fixture(autouse=True)
@@ -23,17 +30,25 @@ def mock_secret_store():
 @pytest.fixture(autouse=True)
 def mock_dapr_client():
     """Automatically mock DaprClient for all tests to prevent Dapr health check timeouts."""
-    with patch(
-        "application_sdk.services.eventstore.clients.DaprClient",
-        autospec=True,
-    ) as mock_dapr:
-        # Create a mock instance that can be used as a context manager
-        mock_instance = Mock()
-        mock_dapr.return_value.__enter__.return_value = mock_instance
-        mock_dapr.return_value.__exit__.return_value = None
 
-        # Mock the publish_event method to avoid actual Dapr calls
+    def _make_mock_dapr():
+        mock_instance = Mock()
         mock_instance.publish_event = Mock()
         mock_instance.invoke_binding = Mock()
+        mock_instance.get_state = Mock(return_value=Mock(data=None))
+        mock_instance.save_state = Mock()
+        mock_instance.get_secret = Mock(return_value=Mock(secret={}))
+        return mock_instance
 
-        yield mock_dapr
+    def _patch(target):
+        mock_dapr = Mock()
+        mock_instance = _make_mock_dapr()
+        mock_dapr.return_value.__enter__ = Mock(return_value=mock_instance)
+        mock_dapr.return_value.__exit__ = Mock(return_value=None)
+        return patch(target, mock_dapr)
+
+    with (
+        _patch("application_sdk.observability.observability.DaprClient"),
+        _patch("application_sdk.infrastructure._dapr.client.DaprClient"),
+    ):
+        yield

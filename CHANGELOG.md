@@ -1,5 +1,41 @@
 # Changelog
 
+## v3.0.0 (March 17, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.2...v3.0.0
+
+### Breaking Changes
+
+This is a major version bump. All v2 imports remain functional in v3.0.x with `DeprecationWarning` and will be removed in v3.1.0. See the [v3 Migration Guide](docs/migration-guide-v3.md) for upgrade instructions.
+
+### Features
+
+- **Schema-driven contracts** (`application_sdk.contracts`): `Input`/`Output` dataclass bases with payload-safety validation at class-definition time. Forbidden: `Any`, `bytes`, unbounded `list`/`dict`. Safe alternatives: `Annotated[list[T], MaxItems(N)]`, `FileReference`.
+
+- **Infrastructure abstraction** (`application_sdk.infrastructure`): Protocol-based interfaces for `StateStore`, `SecretStore`, `PubSub`, `Binding`, `CapacityPool`. Dapr implementations in `_dapr/`, Redis in `_redis/`, in-memory implementations for testing without Dapr.
+
+- **App + @task abstractions** (`application_sdk.app`): `App` ABC auto-registers as a Temporal workflow. `@task` decorator auto-registers as a Temporal activity with heartbeating, typed contracts, and configurable timeouts. `AppRegistry` and `TaskRegistry` singletons enable auto-discovery.
+
+- **Temporal execution layer** (`application_sdk.execution`): `create_worker()` factory auto-discovers all registered `App` subclasses and their `@task` methods. Includes correlation ID propagation, lifecycle event interceptors, and temp-directory cleanup interceptors.
+
+- **Handler framework** (`application_sdk.handler`): Typed `Handler` ABC with `test_auth`, `preflight_check`, `fetch_metadata`. `create_app_handler_service()` FastAPI factory replaces the untyped `HandlerInterface` + `APIServer` pattern.
+
+- **CLI entry point** (`application_sdk.main`): `application-sdk --mode worker|handler|combined --app module:Class`. `run_dev_combined()` for local development. Auto-discovery of all `App` subclasses in a module.
+
+- **Built-in SQL connector templates** (`application_sdk.templates`): `SqlMetadataExtractor` and `SqlQueryExtractor` replace `BaseSQLMetadataExtractionWorkflow`/`Activities` and `SQLQueryExtractionWorkflow`/`Activities` with typed contracts and single-class patterns.
+
+### Deprecations
+
+The following v2 modules now emit `DeprecationWarning` on import:
+
+- `application_sdk.workflows.metadata_extraction.sql` → use `application_sdk.templates.SqlMetadataExtractor`
+- `application_sdk.activities.metadata_extraction.sql` → use `application_sdk.templates.SqlMetadataExtractor`
+- `application_sdk.workflows.query_extraction.sql` → use `application_sdk.templates.SqlQueryExtractor`
+- `application_sdk.activities.query_extraction.sql` → use `application_sdk.templates.SqlQueryExtractor`
+- `application_sdk.application.BaseApplication` → use `application_sdk.main.run_dev_combined`
+- `application_sdk.application.metadata_extraction.sql.BaseSQLMetadataExtractionApplication` → use `application_sdk.templates.SqlMetadataExtractor`
+
+
 ## v2.6.2 (March 10, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.1...v2.6.2

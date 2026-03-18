@@ -1,20 +1,14 @@
-"""Unified secret store service for the application.
+"""Unified secret store service for the application (deprecated).
 
-Logic summary:
-
-    1. Fetch credential config from state store.
-
-    2. Determine mode: Multi-key if (credentialSource == 'direct' OR secret-path is defined), Single-key otherwise.
-
-    3. Fetch secrets accordingly: Multi-key uses secret_path if credentialSource == "agent" else credential_guid, Single-key fetches each field individually.
-
-    4. Merge & resolve secrets.
+.. deprecated::
+    Use :mod:`application_sdk.infrastructure.secrets` instead.
 """
 
 import collections.abc
 import copy
 import json
 import uuid
+import warnings
 from enum import Enum
 from typing import Any, Dict
 
@@ -31,6 +25,14 @@ from application_sdk.constants import (
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services._utils import is_component_registered
 from application_sdk.services.statestore import StateStore, StateType
+
+warnings.warn(
+    "application_sdk.services.secretstore is deprecated. "
+    "Use application_sdk.infrastructure.secrets.SecretStore instead. "
+    "This module will be removed in v4.0.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = get_logger(__name__)
 

@@ -22,7 +22,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-class ActivityFailureLoggingActivityInboundInterceptor(ActivityInboundInterceptor):
+class _TaskFailureLoggingActivityInboundInterceptor(ActivityInboundInterceptor):
     """Activity interceptor that logs failures with full Temporal context."""
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
@@ -98,17 +98,18 @@ class ActivityFailureLoggingActivityInboundInterceptor(ActivityInboundIntercepto
         return attrs
 
 
-class ActivityFailureLoggingInterceptor(Interceptor):
-    """Main interceptor for logging Temporal activity failures with context.
+class TaskFailureLoggingInterceptor(Interceptor):
+    """Temporal interceptor that logs task (activity) failures with full context.
 
     Activity-only interceptor that catches failures and emits structured logs
     with Temporal context (activity type, attempt, workflow ID, timeouts, tenant).
+    Named "Task" because in v3 these are registered via @task decorators.
     """
 
     def workflow_interceptor_class(
         self, input: WorkflowInterceptorClassInput
     ) -> Optional[Type[WorkflowInboundInterceptor]]:
-        """Return None - activity-only interceptor.
+        """Return None - task-only interceptor.
 
         activity.info() is only available in activity context, and Temporal's
         workflow sandbox blocks certain imports.
@@ -118,5 +119,10 @@ class ActivityFailureLoggingInterceptor(Interceptor):
     def intercept_activity(
         self, next: ActivityInboundInterceptor
     ) -> ActivityInboundInterceptor:
-        """Wrap activity execution with failure logging interceptor."""
-        return ActivityFailureLoggingActivityInboundInterceptor(next)
+        """Wrap task execution with failure logging interceptor."""
+        return _TaskFailureLoggingActivityInboundInterceptor(next)
+
+
+# Backwards-compatible alias — v2 code that imports ActivityFailureLoggingInterceptor
+# by name (e.g. clients/temporal.py) continues to work unchanged.
+ActivityFailureLoggingInterceptor = TaskFailureLoggingInterceptor

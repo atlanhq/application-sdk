@@ -2,6 +2,7 @@
 
 import json
 import os
+import warnings
 from enum import Enum
 from typing import Any, Dict
 
@@ -16,6 +17,14 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
+
+warnings.warn(
+    "application_sdk.services.statestore is deprecated. "
+    "Use application_sdk.infrastructure.state.StateStore instead. "
+    "This module will be removed in v4.0.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = get_logger(__name__)
 activity.logger = logger

@@ -101,7 +101,7 @@ class CleanupWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         """
         output = None
         try:
-            output = await super().execute_workflow(input)
+            output = await self.next.execute_workflow(input)
         except Exception:
             raise
 

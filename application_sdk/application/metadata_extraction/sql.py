@@ -1,3 +1,4 @@
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Type
 
@@ -20,6 +21,14 @@ from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
     BaseSQLMetadataExtractionWorkflow,
+)
+
+warnings.warn(
+    "application_sdk.application.metadata_extraction.sql.BaseSQLMetadataExtractionApplication "
+    "is deprecated. Use application_sdk.templates.SqlMetadataExtractor instead. "
+    "This module will be removed in v3.1.0.",
+    DeprecationWarning,
+    stacklevel=2,
 )
 
 logger = get_logger(__name__)

@@ -1,0 +1,211 @@
+"""Secrets management abstraction."""
+
+from typing import ClassVar, Protocol
+
+from loguru import logger
+
+from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
+
+
+class SecretStoreError(Exception):
+    """Raised when secret store operations fail."""
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_STORE_ERROR
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        secret_name: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.secret_name = secret_name
+        self.cause = cause
+        self._error_code = error_code
+
+    @property
+    def error_code(self) -> ErrorCode:
+        return (
+            self._error_code
+            if self._error_code is not None
+            else self.DEFAULT_ERROR_CODE
+        )
+
+    def __str__(self) -> str:
+        parts = [f"[{self.error_code.code}] {self.message}"]
+        if self.secret_name:
+            parts.append(f"secret={self.secret_name}")
+        if self.cause:
+            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+        return " | ".join(parts)
+
+
+class SecretNotFoundError(SecretStoreError):
+    """Raised when a secret is not found."""
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_NOT_FOUND
+
+    def __init__(self, secret_name: str) -> None:
+        super().__init__(
+            f"Secret '{secret_name}' not found",
+            secret_name=secret_name,
+        )
+
+
+class SecretStore(Protocol):
+    """Protocol for secrets management.
+
+    Secret stores provide secure access to credentials and sensitive data.
+    The underlying implementation (DAPR, Vault, etc.) is hidden.
+    """
+
+    async def get(self, name: str) -> str:
+        """Get a secret by name.
+
+        Args:
+            name: Secret name.
+
+        Returns:
+            The secret value.
+
+        Raises:
+            SecretNotFoundError: If secret not found.
+            SecretStoreError: If retrieval fails.
+        """
+        ...
+
+    async def get_optional(self, name: str) -> str | None:
+        """Get a secret by name, returning None if not found.
+
+        Args:
+            name: Secret name.
+
+        Returns:
+            The secret value, or None if not found.
+
+        Raises:
+            SecretStoreError: If retrieval fails (other than not found).
+        """
+        ...
+
+    async def get_bulk(self, names: list[str]) -> dict[str, str]:
+        """Get multiple secrets.
+
+        Args:
+            names: List of secret names.
+
+        Returns:
+            Dictionary of name -> value for found secrets.
+
+        Raises:
+            SecretStoreError: If retrieval fails.
+        """
+        ...
+
+    async def list_names(self) -> list[str]:
+        """List available secret names.
+
+        Returns:
+            List of secret names.
+        """
+        ...
+
+
+class InMemorySecretStore:
+    """In-memory secret store for testing.
+
+    WARNING: Do not use in production. Secrets are stored in plain text.
+    """
+
+    def __init__(self, secrets: dict[str, str] | None = None) -> None:
+        self._secrets: dict[str, str] = secrets or {}
+
+    async def get(self, name: str) -> str:
+        """Get a secret by name."""
+        if name not in self._secrets:
+            raise SecretNotFoundError(name)
+        return self._secrets[name]
+
+    async def get_optional(self, name: str) -> str | None:
+        """Get a secret by name, returning None if not found."""
+        return self._secrets.get(name)
+
+    async def get_bulk(self, names: list[str]) -> dict[str, str]:
+        """Get multiple secrets."""
+        return {name: self._secrets[name] for name in names if name in self._secrets}
+
+    async def list_names(self) -> list[str]:
+        """List available secret names."""
+        return list(self._secrets.keys())
+
+    def set(self, name: str, value: str) -> None:
+        """Set a secret (for test setup)."""
+        self._secrets[name] = value
+
+    def clear(self) -> None:
+        """Clear all secrets (for testing)."""
+        self._secrets.clear()
+
+
+class EnvironmentSecretStore:
+    """Secret store backed by environment variables.
+
+    Useful for local development and simple deployments.
+    """
+
+    def __init__(self, prefix: str = "") -> None:
+        """Initialize with optional prefix.
+
+        Args:
+            prefix: Prefix for environment variable names.
+                   e.g., prefix="MYAPP_" means secret "DB_PASSWORD"
+                   maps to env var "MYAPP_DB_PASSWORD".
+        """
+        self._prefix = prefix
+
+    async def get(self, name: str) -> str:
+        """Get a secret from environment."""
+        import os
+
+        env_name = f"{self._prefix}{name}"
+        value = os.environ.get(env_name)
+        if value is None:
+            logger.debug(
+                f"Secret '{name}' not found in environment (env var: {env_name})"
+            )
+            raise SecretNotFoundError(name)
+        return value
+
+    async def get_optional(self, name: str) -> str | None:
+        """Get a secret from environment, returning None if not set."""
+        import os
+
+        env_name = f"{self._prefix}{name}"
+        return os.environ.get(env_name)
+
+    async def get_bulk(self, names: list[str]) -> dict[str, str]:
+        """Get multiple secrets from environment."""
+        import os
+
+        result = {}
+        for name in names:
+            env_name = f"{self._prefix}{name}"
+            value = os.environ.get(env_name)
+            if value is not None:
+                result[name] = value
+        return result
+
+    async def list_names(self) -> list[str]:
+        """List environment variables with the configured prefix."""
+        import os
+
+        if not self._prefix:
+            return list(os.environ.keys())
+        return [
+            k[len(self._prefix) :]
+            for k in os.environ.keys()
+            if k.startswith(self._prefix)
+        ]

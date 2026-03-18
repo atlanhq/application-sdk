@@ -1,3 +1,4 @@
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Type
 
@@ -20,6 +21,14 @@ from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.server.fastapi.models import EventWorkflowTrigger
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
+
+warnings.warn(
+    "application_sdk.application.BaseApplication is deprecated. "
+    "Use application_sdk.main.run_dev_combined or application_sdk.app.App instead. "
+    "This module will be removed in v3.1.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = get_logger(__name__)
 metrics = get_metrics()

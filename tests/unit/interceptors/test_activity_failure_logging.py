@@ -12,10 +12,16 @@ import pytest
 from temporalio.api.common.v1 import Payload
 
 from application_sdk.interceptors.activity_failure_logging import (
-    ActivityFailureLoggingActivityInboundInterceptor,
-    ActivityFailureLoggingInterceptor,
+    TaskFailureLoggingInterceptor,
+    _TaskFailureLoggingActivityInboundInterceptor,
 )
 from application_sdk.observability.context import correlation_context
+
+# backwards-compat aliases used in assertions below
+ActivityFailureLoggingInterceptor = TaskFailureLoggingInterceptor
+ActivityFailureLoggingActivityInboundInterceptor = (
+    _TaskFailureLoggingActivityInboundInterceptor
+)
 
 
 @dataclass

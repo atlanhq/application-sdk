@@ -1,0 +1,247 @@
+"""Temporal activity definitions for App tasks.
+
+Each @task method on an App becomes a named Temporal activity via
+create_activity_from_task(). The activity:
+- Receives a strongly-typed Input (the task's input_type)
+- Returns a strongly-typed Output (the task's output_type)
+- Supports heartbeating for long-running operations
+- Converts NonRetryableError to Temporal's ApplicationError
+"""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+from collections.abc import Callable
+from datetime import timedelta
+from typing import Any, cast
+from uuid import uuid4
+
+from loguru import logger
+from temporalio import activity
+
+from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.task import TaskMetadata
+from application_sdk.contracts.base import Input, Output
+
+
+@dataclasses.dataclass
+class TaskContext:
+    """Context passed to task execution.
+
+    Contains metadata needed to set up the app instance.
+    """
+
+    app_name: str
+    """Name of the parent app."""
+
+    task_name: str
+    """Name of the task being executed."""
+
+    run_id: str
+    """Workflow run ID."""
+
+    heartbeat_timeout_seconds: int | None = 60
+    """Heartbeat timeout in seconds. Set to None to disable heartbeating."""
+
+    auto_heartbeat_seconds: int | None = 20
+    """Auto-heartbeat interval in seconds. Set to None for manual heartbeats only."""
+
+
+def create_activity_from_task(
+    task_metadata: TaskMetadata,
+) -> Callable[..., Any]:
+    """Create a Temporal activity function from a task.
+
+    Args:
+        task_metadata: Metadata about the task (input/output types, timeouts, etc.).
+
+    Returns:
+        A decorated Temporal activity function.
+    """
+    activity_name = task_metadata.name
+    input_type = task_metadata.input_type
+    output_type = task_metadata.output_type
+
+    async def activity_fn(context: TaskContext, input_data: Input) -> Output:
+        """Execute the task as a Temporal activity."""
+        from application_sdk.app.context import AppContext, TaskExecutionContext
+        from application_sdk.execution.heartbeat import (
+            NoopHeartbeatController,
+            TemporalHeartbeatController,
+            auto_heartbeat_loop,
+        )
+
+        app_registry = AppRegistry.get_instance()
+        app_metadata = app_registry.get(context.app_name)
+        app_instance = app_metadata.app_cls()
+
+        run_id = context.run_id or str(uuid4())
+
+        # Read correlation_id from ContextVar (set by CorrelationContextInterceptor)
+        from application_sdk.observability.correlation import get_correlation_context
+
+        corr_ctx = get_correlation_context()
+        correlation_id = corr_ctx.correlation_id if corr_ctx else ""
+
+        app_context = AppContext(
+            app_name=context.app_name,
+            app_version=app_metadata.version,
+            run_id=run_id,
+            correlation_id=correlation_id,
+        )
+
+        from application_sdk.infrastructure.context import get_infrastructure
+
+        infra = get_infrastructure()
+        if infra is not None:
+            app_context._state_store = infra.state_store
+            app_context._secret_store = infra.secret_store
+            app_context._storage_binding = infra.storage_binding
+
+        app_instance._context = app_context
+
+        # Create heartbeat controller based on configuration
+        if context.heartbeat_timeout_seconds is not None:
+            heartbeat_controller: (
+                TemporalHeartbeatController | NoopHeartbeatController
+            ) = TemporalHeartbeatController()
+        else:
+            heartbeat_controller = NoopHeartbeatController()
+
+        task_exec_context = TaskExecutionContext(
+            app_context=app_context,
+            task_name=context.task_name,
+            heartbeat_controller=heartbeat_controller,
+        )
+        app_instance._task_context = task_exec_context
+
+        stop_event = asyncio.Event()
+        heartbeat_task = None
+
+        if (
+            context.heartbeat_timeout_seconds is not None
+            and context.auto_heartbeat_seconds is not None
+        ):
+            heartbeat_task = asyncio.create_task(
+                auto_heartbeat_loop(
+                    interval_seconds=context.auto_heartbeat_seconds,
+                    heartbeat_fn=heartbeat_controller.heartbeat_keepalive,
+                    stop_event=stop_event,
+                    task_name=context.task_name,
+                )
+            )
+
+        try:
+            method_name = getattr(task_metadata.func, "__name__", task_metadata.name)
+            task_method = getattr(app_instance, method_name)
+            result = await task_method(input_data)
+            return cast("Output", result)
+
+        except Exception as e:
+            from application_sdk.app.base import NonRetryableError
+
+            if isinstance(e, NonRetryableError):
+                from temporalio.exceptions import ApplicationError
+
+                raise ApplicationError(
+                    str(e),
+                    type=type(e).__name__,
+                    non_retryable=True,
+                ) from e
+            raise
+
+        finally:
+            if heartbeat_task is not None:
+                stop_event.set()
+                try:
+                    await asyncio.wait_for(heartbeat_task, timeout=1.0)
+                except (TimeoutError, Exception, BaseException):
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except (Exception, BaseException):
+                        logger.debug(
+                            "Heartbeat task did not cancel cleanly", exc_info=True
+                        )
+
+            app_instance._task_context = None
+            app_instance._context = None
+
+    # Set type annotations with the actual input/output types from task metadata.
+    # This is critical for Temporal to properly deserialize the input dataclass.
+    activity_fn.__annotations__ = {
+        "context": TaskContext,
+        "input_data": input_type,
+        "return": output_type,
+    }
+
+    decorated = activity.defn(name=activity_name)(activity_fn)
+    decorated._task_metadata = task_metadata  # type: ignore[attr-defined]
+    decorated._activity_name = activity_name  # type: ignore[attr-defined]
+
+    return decorated
+
+
+def get_all_task_activities(
+    app_names: list[str] | None = None,
+) -> list[Callable[..., Any]]:
+    """Get registered tasks as Temporal activity functions.
+
+    Args:
+        app_names: Optional list of app names to filter by. If None, includes all.
+
+    Returns:
+        List of Temporal activity functions.
+    """
+    activities: list[Callable[..., Any]] = []
+    task_registry = TaskRegistry.get_instance()
+
+    for reg_app_name, task_list in task_registry.get_all_tasks().items():
+        if app_names is not None and reg_app_name not in app_names:
+            continue
+        for task_meta in task_list:
+            activity_fn = create_activity_from_task(task_meta)
+            activities.append(activity_fn)
+
+    return activities
+
+
+def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
+    """Get Temporal activity options from task metadata.
+
+    Args:
+        task_metadata: The task metadata.
+
+    Returns:
+        Dict of activity options for workflow.execute_activity().
+    """
+    from temporalio.common import RetryPolicy as TemporalRetryPolicy
+
+    if task_metadata.retry_policy is not None:
+        rp = task_metadata.retry_policy
+        retry_policy = TemporalRetryPolicy(
+            maximum_attempts=rp.max_attempts,
+            initial_interval=rp.initial_interval,
+            maximum_interval=rp.max_interval,
+            backoff_coefficient=rp.backoff_coefficient,
+            non_retryable_error_types=list(rp.non_retryable_errors),
+        )
+    else:
+        retry_policy = TemporalRetryPolicy(
+            maximum_attempts=task_metadata.retry_max_attempts,
+            maximum_interval=timedelta(
+                seconds=task_metadata.retry_max_interval_seconds
+            ),
+        )
+
+    return {
+        "start_to_close_timeout": timedelta(seconds=task_metadata.timeout_seconds),
+        "retry_policy": retry_policy,
+    }
+
+
+# Re-export for backward compatibility with Phase 2 stub callers
+def create_activities_from_registry() -> list[Any]:
+    """Create activity functions from all registered tasks."""
+    return get_all_task_activities()

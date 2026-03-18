@@ -26,8 +26,8 @@ from application_sdk.interceptors.models import (
     EventTypes,
     WorkerStartEventData,
 )
+from application_sdk.interceptors.events import _publish_event_via_binding
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.eventstore import EventStore
 
 logger = get_logger(__name__)
 
@@ -264,7 +264,7 @@ class Worker:
                 data=self._worker_creation_event_data.model_dump(),
             )
 
-            await EventStore.publish_event(worker_creation_event)
+            await _publish_event_via_binding(worker_creation_event)
 
         try:
             worker = self.workflow_client.create_worker(

@@ -2,6 +2,7 @@
 
 import json
 import os
+import warnings
 from typing import List, Union
 
 import orjson
@@ -16,6 +17,14 @@ from application_sdk.constants import (
     UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+
+warnings.warn(
+    "application_sdk.services.objectstore is deprecated. "
+    "Use application_sdk.infrastructure.bindings.StorageBinding instead. "
+    "This module will be removed in v4.0.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = get_logger(__name__)
 activity.logger = logger

@@ -1,10 +1,12 @@
 """SQL query extraction workflow implementation.
 
-This module provides the workflow implementation for extracting SQL queries from
-databases. It handles batch processing of queries and manages the workflow state.
+.. deprecated::
+    Use ``application_sdk.templates.SqlQueryExtractor`` instead.
+    This v2 module will be removed in v3.1.0.
 """
 
 import asyncio
+import warnings
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
@@ -16,6 +18,14 @@ from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.workflows.query_extraction import QueryExtractionWorkflow
+
+warnings.warn(
+    "application_sdk.workflows.query_extraction.sql is deprecated. "
+    "Use application_sdk.templates.SqlQueryExtractor instead. "
+    "This module will be removed in v3.1.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = get_logger(__name__)
 workflow.logger = logger

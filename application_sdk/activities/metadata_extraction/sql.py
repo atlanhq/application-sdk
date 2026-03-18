@@ -1,4 +1,5 @@
 import os
+import warnings
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -32,6 +33,14 @@ from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.services.secretstore import SecretStore
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.query import QueryBasedTransformer
+
+warnings.warn(
+    "application_sdk.activities.metadata_extraction.sql is deprecated. "
+    "Use application_sdk.templates.SqlMetadataExtractor instead. "
+    "This module will be removed in v3.1.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = get_logger(__name__)
 activity.logger = logger

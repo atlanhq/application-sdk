@@ -6,6 +6,7 @@ to a pub/sub system with automatic fallback to HTTP binding.
 
 import json
 import time
+import warnings
 from datetime import datetime
 
 from dapr import clients
@@ -31,6 +32,14 @@ from application_sdk.observability.metrics_adaptor import (
     get_metrics,
 )
 from application_sdk.services._utils import is_component_registered
+
+warnings.warn(
+    "application_sdk.services.eventstore is deprecated. "
+    "Use application_sdk.infrastructure.context.get_infrastructure().event_binding instead. "
+    "This module will be removed in v4.0.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = get_logger(__name__)
 activity.logger = logger

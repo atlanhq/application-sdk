@@ -1,0 +1,825 @@
+"""Unified entry point for Application SDK containers.
+
+Supports three execution modes:
+- ``worker``: Temporal workflow execution only
+- ``handler``: HTTP FastAPI handler service only
+- ``combined``: Worker + handler in a single process (SDR / docker-compose)
+
+CLI usage::
+
+    python -m application_sdk.main --mode worker --app my_package.apps:MyApp
+    python -m application_sdk.main --mode handler --app my_package.apps:MyApp
+    python -m application_sdk.main --mode combined --app my_package.apps:MyApp
+
+Environment variable equivalents::
+
+    ATLAN_APP_MODE=combined
+    ATLAN_APP_MODULE=my_package.apps:MyApp
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import faulthandler
+import os
+import signal
+import sys
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, NoReturn
+
+# Enable faulthandler so C-level crashes dump a traceback to stderr.
+faulthandler.enable()
+
+# Module-level reference to the running event loop (set in worker/combined mode).
+# Used by the SIGUSR1 debug handler to snapshot asyncio tasks.
+_worker_event_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _debug_dump_handler(signum: int, frame: object) -> None:  # noqa: ARG001
+    """Dump thread stacks and asyncio tasks to /tmp/debug-dump-<pid>.txt on SIGUSR1."""
+    dump_path = os.path.join("/tmp", f"debug-dump-{os.getpid()}.txt")  # noqa: PTH118
+    fd = os.open(dump_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.write(fd, b"\n===== DEBUG DUMP (SIGUSR1) =====\n")
+        os.write(fd, f"PID: {os.getpid()}\n\n".encode())
+        os.write(fd, b"--- Thread Stacks ---\n")
+        faulthandler.dump_traceback(file=fd, all_threads=True)
+        os.write(fd, b"\n--- Asyncio Tasks ---\n")
+        loop = _worker_event_loop
+        if loop is not None and loop.is_running():
+            for task in asyncio.all_tasks(loop):
+                os.write(fd, f"\nTask: {task.get_name()}\n".encode())
+                for fr in task.get_stack():
+                    os.write(
+                        fd,
+                        f'  File "{fr.f_code.co_filename}", line {fr.f_lineno}, in {fr.f_code.co_name}\n'.encode(),
+                    )
+        else:
+            os.write(fd, b"  (event loop not running)\n")
+        os.write(fd, b"\n===== END DEBUG DUMP =====\n")
+    finally:
+        os.close(fd)
+    print(f"Debug dump written to {dump_path}", file=sys.stderr, flush=True)
+
+
+signal.signal(signal.SIGUSR1, _debug_dump_handler)
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from application_sdk.app.base import App
+    from application_sdk.infrastructure.context import InfrastructureContext
+    from application_sdk.infrastructure.secrets import SecretStore
+
+from loguru import logger  # noqa: E402
+
+from application_sdk.discovery import (  # noqa: E402
+    DiscoveryError,
+    load_app_class,
+    load_handler_class,
+    validate_app_class,
+)
+
+
+@dataclass
+class AppConfig:
+    """Configuration for app execution.
+
+    Loaded from CLI arguments with environment variable fallbacks.
+    """
+
+    mode: str
+    """Execution mode: "worker", "handler", or "combined"."""
+
+    app_module: str
+    """App class module path, e.g. "my_package.apps:MyApp"."""
+
+    handler_module: str | None = None
+    """Optional explicit handler module path."""
+
+    # Worker
+    temporal_host: str = "localhost:7233"
+    temporal_namespace: str = "default"
+    task_queue: str = "app-framework"
+
+    # Handler
+    handler_host: str = "0.0.0.0"
+    handler_port: int = 8080
+
+    # Common
+    log_level: str = "INFO"
+    service_name: str = ""
+
+    # TLS
+    tls_enabled: bool = False
+    tls_server_root_ca_cert_path: str = ""
+    tls_client_cert_path: str = ""
+    tls_client_private_key_path: str = ""
+    tls_domain: str = ""
+
+    # Auth
+    auth_enabled: bool = False
+    auth_client_id: str = ""
+    auth_client_secret: str = ""
+    auth_token_url: str = ""
+    auth_base_url: str = ""
+    auth_scopes: str = ""
+
+    @classmethod
+    def from_args_and_env(cls, args: argparse.Namespace) -> AppConfig:
+        """Create config from CLI args with env var fallbacks.
+
+        CLI arguments take precedence over environment variables.
+        """
+
+        def _env(key: str, default: str = "") -> str:
+            return os.environ.get(key, default)
+
+        def _env_int(key: str, default: int) -> int:
+            val = os.environ.get(key)
+            return int(val) if val else default
+
+        def _env_bool(key: str, default: bool = False) -> bool:
+            val = os.environ.get(key, "").lower()
+            return val in ("true", "1", "yes") if val else default
+
+        mode = args.mode or _env("ATLAN_APP_MODE")
+        if not mode:
+            raise ValueError("Mode is required. Use --mode or set ATLAN_APP_MODE.")
+
+        app_module = args.app or _env("ATLAN_APP_MODULE")
+        if not app_module:
+            raise ValueError(
+                "App module is required. Use --app or set ATLAN_APP_MODULE."
+            )
+
+        service_name = (
+            getattr(args, "service_name", None)
+            or _env("ATLAN_SERVICE_NAME")
+            or _env("OTEL_SERVICE_NAME")
+            or _derive_service_name(app_module)
+        )
+
+        return cls(
+            mode=mode,
+            app_module=app_module,
+            handler_module=getattr(args, "handler", None)
+            or _env("ATLAN_HANDLER_MODULE")
+            or None,
+            temporal_host=getattr(args, "temporal_host", None)
+            or _env("ATLAN_TEMPORAL_HOST", "localhost:7233"),
+            temporal_namespace=getattr(args, "temporal_namespace", None)
+            or _env("ATLAN_TEMPORAL_NAMESPACE", "default"),
+            task_queue=getattr(args, "task_queue", None)
+            or _env("ATLAN_TASK_QUEUE", "app-framework"),
+            handler_host=getattr(args, "handler_host", None)
+            or _env("ATLAN_HANDLER_HOST", "0.0.0.0"),
+            handler_port=getattr(args, "handler_port", None)
+            or _env_int("ATLAN_HANDLER_PORT", 8080),
+            log_level=getattr(args, "log_level", None)
+            or _env("ATLAN_LOG_LEVEL", "INFO"),
+            service_name=service_name,
+            # TLS
+            tls_enabled=_env_bool("ATLAN_TEMPORAL_TLS_ENABLED"),
+            tls_server_root_ca_cert_path=_env("ATLAN_TEMPORAL_TLS_CA_CERT_PATH"),
+            tls_client_cert_path=_env("ATLAN_TEMPORAL_TLS_CLIENT_CERT_PATH"),
+            tls_client_private_key_path=_env("ATLAN_TEMPORAL_TLS_CLIENT_KEY_PATH"),
+            tls_domain=_env("ATLAN_TEMPORAL_TLS_DOMAIN"),
+            # Auth
+            auth_enabled=_env_bool("ATLAN_AUTH_ENABLED"),
+            auth_client_id=_env("ATLAN_AUTH_CLIENT_ID"),
+            auth_client_secret=_env("ATLAN_AUTH_CLIENT_SECRET"),
+            auth_token_url=_env("ATLAN_AUTH_TOKEN_URL"),
+            auth_base_url=_env("ATLAN_AUTH_BASE_URL"),
+            auth_scopes=_env("ATLAN_AUTH_SCOPES"),
+        )
+
+
+def _create_infrastructure(
+    credential_stores: "Mapping[str, SecretStore] | None" = None,
+) -> "InfrastructureContext":
+    """Create infrastructure services based on environment.
+
+    If ``DAPR_HTTP_PORT`` is set (Dapr sidecar present), creates Dapr-backed
+    implementations. Otherwise creates InMemory implementations suitable for
+    local development and testing.
+
+    Args:
+        credential_stores: Optional mapping of store name → SecretStore. When
+            provided (e.g., from ``run_dev_combined``), the first value is used
+            as the secret store instead of a blank ``InMemorySecretStore``.
+
+    Returns:
+        Configured InfrastructureContext.
+    """
+    from application_sdk.infrastructure.bindings import InMemoryBinding, StorageBinding
+    from application_sdk.infrastructure.context import InfrastructureContext
+    from application_sdk.infrastructure.secrets import InMemorySecretStore
+    from application_sdk.infrastructure.state import InMemoryStateStore
+
+    if os.environ.get("DAPR_HTTP_PORT"):
+        from application_sdk.constants import (
+            DEPLOYMENT_OBJECT_STORE_NAME,
+            EVENT_STORE_NAME,
+            SECRET_STORE_NAME,
+            STATE_STORE_NAME,
+        )
+        from application_sdk.infrastructure._dapr.client import (
+            DaprBinding,
+            DaprSecretStore,
+            DaprStateStore,
+            create_dapr_client,
+        )
+
+        dapr_client = create_dapr_client()
+        logger.info("Dapr sidecar detected — using Dapr infrastructure")
+        return InfrastructureContext(
+            state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
+            secret_store=DaprSecretStore(dapr_client, store_name=SECRET_STORE_NAME),
+            storage_binding=StorageBinding(
+                DaprBinding(dapr_client, DEPLOYMENT_OBJECT_STORE_NAME)
+            ),
+            event_binding=DaprBinding(dapr_client, EVENT_STORE_NAME),
+        )
+    else:
+        # No Dapr — use InMemory implementations
+        secret_store: SecretStore
+        if credential_stores:
+            secret_store = next(iter(credential_stores.values()))
+        else:
+            secret_store = InMemorySecretStore()
+
+        logger.info("No Dapr sidecar — using InMemory infrastructure")
+        return InfrastructureContext(
+            state_store=InMemoryStateStore(),
+            secret_store=secret_store,
+            storage_binding=StorageBinding(InMemoryBinding()),
+            event_binding=None,
+        )
+
+
+def _derive_service_name(app_module: str) -> str:
+    """Convert "my_package.apps:MyApp" to "my-app" (kebab-case)."""
+    if ":" in app_module:
+        class_name = app_module.split(":")[1]
+        result = ""
+        for i, char in enumerate(class_name):
+            if char.isupper() and i > 0:
+                result += "-"
+            result += char.lower()
+        return result
+    return "application-sdk"
+
+
+async def run_worker_mode(config: AppConfig) -> None:
+    """Run in worker mode (Temporal workflow execution).
+
+    Loads the app class, connects to Temporal, creates a worker, and
+    runs until a shutdown signal is received.
+    """
+    global _worker_event_loop
+    _worker_event_loop = asyncio.get_running_loop()
+
+    from application_sdk.app.registry import AppRegistry, TaskRegistry
+    from application_sdk.execution._temporal.backend import create_temporal_client
+    from application_sdk.execution._temporal.converter import (
+        create_data_converter_for_app,
+    )
+    from application_sdk.execution._temporal.worker import create_worker
+    from application_sdk.infrastructure.context import set_infrastructure
+
+    logger.info(
+        "Starting worker mode",
+        app_module=config.app_module,
+        temporal_host=config.temporal_host,
+        task_queue=config.task_queue,
+    )
+
+    infra = _create_infrastructure()
+    set_infrastructure(infra)
+
+    app_class = load_app_class(config.app_module)
+    validate_app_class(app_class)
+    app_name = app_class._app_name  # type: ignore[attr-defined]
+
+    logger.info(
+        "Loaded app",
+        app_name=app_name,
+        app_version=app_class._app_version,  # type: ignore[attr-defined]
+    )
+
+    data_converter = create_data_converter_for_app(app_class)
+
+    # Acquire auth token if enabled
+    auth_manager: Any = None
+    api_key: str | None = None
+    if config.auth_enabled:
+        from application_sdk.execution._temporal.auth import (
+            TemporalAuthConfig,
+            TemporalAuthManager,
+        )
+
+        auth_config = TemporalAuthConfig(
+            client_id=config.auth_client_id,
+            client_secret=config.auth_client_secret,
+            token_url=config.auth_token_url,
+            base_url=config.auth_base_url,
+            scopes=config.auth_scopes,
+        )
+        auth_manager = TemporalAuthManager(auth_config)
+        api_key = await auth_manager.acquire_initial_token()
+        logger.info("Acquired initial auth token")
+
+    logger.info("Connecting to Temporal", host=config.temporal_host)
+    client = await create_temporal_client(
+        config.temporal_host,
+        config.temporal_namespace,
+        data_converter=data_converter,
+        api_key=api_key,
+        tls_enabled=config.tls_enabled,
+        tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
+        tls_client_cert_path=config.tls_client_cert_path,
+        tls_client_private_key_path=config.tls_client_private_key_path,
+        tls_domain=config.tls_domain,
+    )
+
+    if auth_manager is not None:
+        auth_manager.start_background_refresh(client)
+        logger.info("Background token refresh started")
+
+    worker = create_worker(client, task_queue=config.task_queue, app_names=[app_name])
+
+    # Log registrations
+    for registered_app in AppRegistry.get_instance().list_apps():
+        app_meta = AppRegistry.get_instance().get(registered_app)
+        logger.info(
+            "Registered app", app_name=registered_app, app_version=app_meta.version
+        )
+
+    for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
+        for task_meta in tasks:
+            logger.debug(
+                "Registered task", app_name=registered_app, task_name=task_meta.name
+            )
+
+    # Graceful shutdown
+    shutdown_event = asyncio.Event()
+
+    def _signal_handler() -> None:
+        logger.info("Shutdown signal received")
+        shutdown_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
+
+    logger.info("Worker started", app_name=app_name, task_queue=config.task_queue)
+    async with worker:
+        await shutdown_event.wait()
+
+    if auth_manager is not None:
+        await auth_manager.shutdown()
+        logger.info("Auth manager stopped")
+
+    logger.info("Worker stopped")
+
+
+def run_handler_mode(config: AppConfig) -> None:
+    """Run in handler mode (HTTP FastAPI server).
+
+    Loads the handler class (or DefaultHandler) and runs the FastAPI
+    server via uvicorn. This is synchronous — uvicorn manages its own loop.
+    """
+    from application_sdk.execution._temporal.converter import (
+        create_data_converter_for_app,
+    )
+    from application_sdk.handler import DefaultHandler, run_app_handler_service
+    from application_sdk.infrastructure.context import set_infrastructure
+
+    infra = _create_infrastructure()
+    set_infrastructure(infra)
+
+    logger.info(
+        "Starting handler mode",
+        app_module=config.app_module,
+        host=config.handler_host,
+        port=config.handler_port,
+    )
+
+    app_class = load_app_class(config.app_module)
+    app_name = app_class._app_name  # type: ignore[attr-defined]
+
+    handler_class = load_handler_class(
+        config.app_module,
+        handler_module_path=config.handler_module,
+    )
+    if handler_class is None:
+        handler_class = DefaultHandler
+        logger.info("Using DefaultHandler", app_name=app_name)
+    else:
+        logger.info(
+            "Loaded custom handler",
+            handler_class=handler_class.__name__,
+            app_name=app_name,
+        )
+
+    handler = handler_class()
+    data_converter = create_data_converter_for_app(app_class)
+
+    run_app_handler_service(
+        handler,
+        host=config.handler_host,
+        port=config.handler_port,
+        log_level=config.log_level.lower(),
+        app_name=app_name,
+        app_class=app_class,
+        temporal_host=config.temporal_host,
+        temporal_namespace=config.temporal_namespace,
+        task_queue=config.task_queue,
+        data_converter=data_converter,
+        tls_enabled=config.tls_enabled,
+        tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
+        tls_client_cert_path=config.tls_client_cert_path,
+        tls_client_private_key_path=config.tls_client_private_key_path,
+        tls_domain=config.tls_domain,
+        auth_enabled=config.auth_enabled,
+        auth_client_id=config.auth_client_id,
+        auth_client_secret=config.auth_client_secret,
+        auth_token_url=config.auth_token_url,
+        auth_base_url=config.auth_base_url,
+        auth_scopes=config.auth_scopes,
+        state_store=infra.state_store,
+        storage_binding=infra.storage_binding,
+    )
+
+
+async def run_combined_mode(config: AppConfig) -> None:
+    """Run worker + handler in a single process (SDR / docker-compose mode).
+
+    Combines Temporal worker execution with the HTTP handler service,
+    enabling single-container deployment. Both components share the same
+    event loop and shut down together on SIGINT/SIGTERM.
+    """
+    global _worker_event_loop
+    _worker_event_loop = asyncio.get_running_loop()
+
+    import uvicorn
+
+    from application_sdk.app.registry import AppRegistry, TaskRegistry
+    from application_sdk.execution._temporal.backend import create_temporal_client
+    from application_sdk.execution._temporal.converter import (
+        create_data_converter_for_app,
+    )
+    from application_sdk.execution._temporal.worker import create_worker
+    from application_sdk.handler import DefaultHandler, create_app_handler_service
+    from application_sdk.infrastructure.context import (
+        get_infrastructure,
+        set_infrastructure,
+    )
+
+    # Only create infrastructure if not already set (e.g., by run_dev_combined)
+    _existing_infra = get_infrastructure()
+    if _existing_infra is None:
+        infra = _create_infrastructure()
+        set_infrastructure(infra)
+    else:
+        infra = _existing_infra
+
+    logger.info(
+        "Starting combined mode",
+        app_module=config.app_module,
+        temporal_host=config.temporal_host,
+        task_queue=config.task_queue,
+        handler_port=config.handler_port,
+    )
+
+    app_class = load_app_class(config.app_module)
+    validate_app_class(app_class)
+    app_name = app_class._app_name  # type: ignore[attr-defined]
+
+    logger.info(
+        "Loaded app",
+        app_name=app_name,
+        app_version=app_class._app_version,  # type: ignore[attr-defined]
+    )
+
+    data_converter = create_data_converter_for_app(app_class)
+
+    auth_manager: Any = None
+    api_key: str | None = None
+    if config.auth_enabled:
+        from application_sdk.execution._temporal.auth import (
+            TemporalAuthConfig,
+            TemporalAuthManager,
+        )
+
+        auth_config = TemporalAuthConfig(
+            client_id=config.auth_client_id,
+            client_secret=config.auth_client_secret,
+            token_url=config.auth_token_url,
+            base_url=config.auth_base_url,
+            scopes=config.auth_scopes,
+        )
+        auth_manager = TemporalAuthManager(auth_config)
+        api_key = await auth_manager.acquire_initial_token()
+        logger.info("Acquired initial auth token")
+
+    logger.info("Connecting to Temporal", host=config.temporal_host)
+    client = await create_temporal_client(
+        config.temporal_host,
+        config.temporal_namespace,
+        data_converter=data_converter,
+        api_key=api_key,
+        tls_enabled=config.tls_enabled,
+        tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
+        tls_client_cert_path=config.tls_client_cert_path,
+        tls_client_private_key_path=config.tls_client_private_key_path,
+        tls_domain=config.tls_domain,
+    )
+
+    if auth_manager is not None:
+        auth_manager.start_background_refresh(client)
+        logger.info("Background token refresh started")
+
+    worker = create_worker(client, task_queue=config.task_queue, app_names=[app_name])
+
+    for registered_app in AppRegistry.get_instance().list_apps():
+        app_meta = AppRegistry.get_instance().get(registered_app)
+        logger.info(
+            "Registered app", app_name=registered_app, app_version=app_meta.version
+        )
+
+    for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
+        for task_meta in tasks:
+            logger.debug(
+                "Registered task", app_name=registered_app, task_name=task_meta.name
+            )
+
+    handler_class = load_handler_class(
+        config.app_module,
+        handler_module_path=config.handler_module,
+    )
+    if handler_class is None:
+        handler_class = DefaultHandler
+        logger.info("Using DefaultHandler", app_name=app_name)
+    else:
+        logger.info(
+            "Loaded custom handler",
+            handler_class=handler_class.__name__,
+            app_name=app_name,
+        )
+
+    handler = handler_class()
+    fastapi_app = create_app_handler_service(
+        handler,
+        app_name=app_name,
+        app_class=app_class,
+        temporal_host=config.temporal_host,
+        temporal_namespace=config.temporal_namespace,
+        task_queue=config.task_queue,
+        data_converter=data_converter,
+        tls_enabled=config.tls_enabled,
+        tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
+        tls_client_cert_path=config.tls_client_cert_path,
+        tls_client_private_key_path=config.tls_client_private_key_path,
+        tls_domain=config.tls_domain,
+        auth_enabled=config.auth_enabled,
+        auth_client_id=config.auth_client_id,
+        auth_client_secret=config.auth_client_secret,
+        auth_token_url=config.auth_token_url,
+        auth_base_url=config.auth_base_url,
+        auth_scopes=config.auth_scopes,
+        state_store=infra.state_store,
+        storage_binding=infra.storage_binding,
+    )
+
+    uvicorn_server = uvicorn.Server(
+        uvicorn.Config(
+            fastapi_app,
+            host=config.handler_host,
+            port=config.handler_port,
+            log_level=config.log_level.lower(),
+        )
+    )
+
+    shutdown_event = asyncio.Event()
+
+    def _signal_handler() -> None:
+        logger.info("Shutdown signal received")
+        shutdown_event.set()
+        uvicorn_server.should_exit = True
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
+
+    logger.info(
+        "Combined mode started",
+        app_name=app_name,
+        task_queue=config.task_queue,
+        handler_port=config.handler_port,
+    )
+    async with worker:
+        await asyncio.gather(
+            uvicorn_server.serve(),
+            shutdown_event.wait(),
+        )
+
+    if auth_manager is not None:
+        await auth_manager.shutdown()
+        logger.info("Auth manager stopped")
+
+    logger.info("Combined mode stopped")
+
+
+async def run_dev_combined(
+    app_class: type[App],
+    *,
+    credential_stores: Mapping[str, SecretStore] | None = None,
+    example_input: dict[str, Any] | None = None,
+    host: str = "127.0.0.1",
+    port: int = 8080,
+    temporal_host: str = "localhost:7233",
+    temporal_namespace: str = "default",
+    task_queue: str = "",
+) -> None:
+    """Run worker + handler in a single process for local development.
+
+    Dev-friendly wrapper around ``run_combined_mode()`` that accepts a
+    Python class and keyword arguments directly. Use it in ``run_dev.py``
+    scripts; production containers use ``run_combined_mode()`` via CLI flags.
+
+    Args:
+        app_class: The App class to serve (must already be imported).
+        credential_stores: Optional mapping of store name → SecretStore.
+        example_input: Optional dict shown as curl example in startup banner.
+        host: Bind host (default: "127.0.0.1").
+        port: Handler HTTP port.
+        temporal_host: Temporal server address.
+        temporal_namespace: Temporal namespace.
+        task_queue: Task queue name (default: "{app_name}-queue").
+
+    Example::
+
+        import asyncio
+        from my_app import MyApp
+        asyncio.run(run_dev_combined(MyApp, example_input={"key": "value"}))
+    """
+    import json as _json
+
+    app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
+    effective_task_queue = task_queue or f"{app_name}-queue"
+    app_module = f"{app_class.__module__}:{app_class.__name__}"
+
+    config = AppConfig(
+        mode="combined",
+        app_module=app_module,
+        temporal_host=temporal_host,
+        temporal_namespace=temporal_namespace,
+        task_queue=effective_task_queue,
+        handler_host=host,
+        handler_port=port,
+        log_level="DEBUG",
+        service_name=_derive_service_name(app_module),
+    )
+
+    # Create infrastructure early so run_combined_mode uses it directly
+    from application_sdk.infrastructure.context import set_infrastructure
+
+    infra = _create_infrastructure(credential_stores=credential_stores)
+    set_infrastructure(infra)
+
+    print(f"\nDev server running at http://{host}:{port}")
+    print("  POST /workflows/v1/start                         - Start workflow")
+    print("  POST /workflows/v1/stop/{workflow_id}/{run_id}   - Stop workflow")
+    print("  GET  /workflows/v1/result/{workflow_id}          - Get result")
+    print("  GET  /workflows/v1/status/{workflow_id}/{run_id} - Get status")
+    print("  GET  /health                                      - Health check")
+    print("\nExample:")
+    if example_input is not None:
+        example_json = _json.dumps(example_input, indent=2)
+        print(f"  curl -X POST http://{host}:{port}/workflows/v1/start \\")
+        print('    -H "Content-Type: application/json" \\')
+        print(f"    -d '{example_json}'")
+    else:
+        print(
+            f"  curl -X POST http://{host}:{port}/workflows/v1/start"
+            f' -H "Content-Type: application/json" -d \'{{"name": "World"}}\''
+        )
+    print(f"\n  curl http://{host}:{port}/workflows/v1/result/{{workflow_id}}\n")
+
+    await run_combined_mode(config)
+
+
+def run_main(config: AppConfig) -> None:
+    """Route to worker, handler, or combined mode based on config."""
+    if config.mode == "worker":
+        asyncio.run(run_worker_mode(config))
+    elif config.mode == "handler":
+        run_handler_mode(config)
+    elif config.mode == "combined":
+        asyncio.run(run_combined_mode(config))
+    else:
+        raise ValueError(
+            f"Unknown mode: {config.mode!r}. Must be 'worker', 'handler', or 'combined'."
+        )
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Application SDK — run apps in worker, handler, or combined mode",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Environment Variables:
+  ATLAN_APP_MODE           Execution mode (worker, handler, or combined)
+  ATLAN_APP_MODULE         App class path (e.g., my_package.apps:MyApp)
+  ATLAN_HANDLER_MODULE     Optional custom handler module path
+  ATLAN_TEMPORAL_HOST      Temporal server address (default: localhost:7233)
+  ATLAN_TEMPORAL_NAMESPACE Temporal namespace (default: default)
+  ATLAN_TASK_QUEUE         Task queue name (default: app-framework)
+  ATLAN_HANDLER_HOST       Handler bind host (default: 0.0.0.0)
+  ATLAN_HANDLER_PORT       Handler bind port (default: 8080)
+  ATLAN_LOG_LEVEL          Log level (default: INFO)
+
+Examples:
+  python -m application_sdk.main --mode worker --app my_package.apps:MyApp
+  python -m application_sdk.main --mode handler --app my_package.apps:MyApp --port 9000
+  python -m application_sdk.main --mode combined --app my_package.apps:MyApp
+        """,
+    )
+
+    parser.add_argument(
+        "--mode",
+        "-m",
+        choices=["worker", "handler", "combined"],
+        help="Execution mode",
+    )
+    parser.add_argument(
+        "--app",
+        "-a",
+        help="App module path (e.g., my_package.apps:MyApp)",
+    )
+    parser.add_argument(
+        "--handler",
+        help="Optional custom handler module path",
+    )
+
+    worker_group = parser.add_argument_group("Worker options")
+    worker_group.add_argument("--temporal-host", help="Temporal server address")
+    worker_group.add_argument("--temporal-namespace", help="Temporal namespace")
+    worker_group.add_argument("--task-queue", help="Task queue name")
+
+    handler_group = parser.add_argument_group("Handler options")
+    handler_group.add_argument(
+        "--handler-host", "--host", help="Handler bind host (default: 0.0.0.0)"
+    )
+    handler_group.add_argument(
+        "--handler-port", "--port", type=int, help="Handler bind port (default: 8080)"
+    )
+
+    common_group = parser.add_argument_group("Common options")
+    common_group.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level",
+    )
+    common_group.add_argument("--service-name", help="Service name for observability")
+
+    return parser.parse_args()
+
+
+def main() -> NoReturn:
+    """CLI entry point."""
+    args = parse_args()
+
+    try:
+        config = AppConfig.from_args_and_env(args)
+    except ValueError as e:
+        print(f"Configuration error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    logger.info(
+        "Application SDK starting",
+        mode=config.mode,
+        app_module=config.app_module,
+        service_name=config.service_name,
+    )
+
+    try:
+        run_main(config)
+    except DiscoveryError as e:
+        logger.error("Discovery error", error=str(e))
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+    except Exception as e:
+        logger.exception("Fatal error", error=str(e))
+        sys.exit(1)
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
