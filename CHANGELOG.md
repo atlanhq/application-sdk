@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.7.2 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.1...v2.7.2
+
+### Bug Fixes
+
+- pre-pull GHCR image before Snyk scan to fix 404 auth failure (#1123) (by @nishantmunjal7 in [f8fa380](https://github.com/atlanhq/application-sdk/commit/f8fa380))
+- replace Snyk with Trivy for container scanning (#1126) (by @nishantmunjal7 in [80f4a3b](https://github.com/atlanhq/application-sdk/commit/80f4a3b))
+
+
 ## v2.7.1 (March 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.0...v2.7.1
