@@ -122,6 +122,7 @@ class APIServer(ServerInterface):
         ui_enabled: bool = True,
         has_configmap: bool = False,
         subscriptions: List[Subscription] = [],
+        manifest: Optional[dict[str, Any]] = None,
     ):
         """Initialize the FastAPI application.
 
@@ -137,6 +138,7 @@ class APIServer(ServerInterface):
         self.duckdb_ui = DuckDBUI()
         self.ui_enabled = ui_enabled
         self.has_configmap = has_configmap
+        self.manifest = manifest
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -422,6 +424,12 @@ class APIServer(ServerInterface):
         )
 
         self.workflow_router.add_api_route(
+            "/configmaps",
+            self.list_configmaps,
+            methods=["GET"],
+        )
+
+        self.workflow_router.add_api_route(
             "/file",
             self.upload_file,
             methods=["POST"],
@@ -441,6 +449,14 @@ class APIServer(ServerInterface):
             methods=["POST"],
             response_model=EventWorkflowResponse,
         )
+
+        if self.manifest is not None:
+            manifest_data = self.manifest
+            self.app.add_api_route(
+                "/manifest",
+                lambda: manifest_data,
+                methods=["GET"],
+            )
 
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
@@ -740,6 +756,21 @@ class APIServer(ServerInterface):
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"File upload failed: {str(e)}",
             )
+
+    async def list_configmaps(self):
+        """List available configmap IDs from contract/generated/.
+
+        Returns a JSON array of configmap IDs (filenames without .json)
+        that are available for fetching via GET /configmap/{id}.
+        """
+        from application_sdk.handlers import CONTRACT_GENERATED_DIR
+
+        ids = []
+        if CONTRACT_GENERATED_DIR.exists():
+            for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
+                if json_file.stem != "manifest":
+                    ids.append(json_file.stem)
+        return {"success": True, "data": ids}
 
     async def get_configmap(self, config_map_id: str) -> ConfigMapResponse:
         """Get a configuration map by its ID.

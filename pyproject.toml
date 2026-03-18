@@ -115,6 +115,9 @@ docs = [
 ]
 
 [tool.poe.tasks]
+# Contract generation
+generate.shell = "cd contract && pkl eval -m generated app.pkl && mkdir -p ../app/contracts && mv generated/input.py ../app/contracts/_input.py"
+
 download-components.shell = "ls -l components/*.yaml"
 # Dapr and Temporal service tasks
 start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"

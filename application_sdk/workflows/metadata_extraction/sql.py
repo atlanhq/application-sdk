@@ -183,7 +183,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         return batches, chunk_start_numbers
 
     @workflow.run
-    async def run(self, workflow_config: Dict[str, Any]) -> None:
+    async def run(self, workflow_config: Dict[str, Any]) -> Dict[str, Any]:
         """Run the SQL metadata extraction workflow.
 
         This method orchestrates the entire metadata extraction process, including:
@@ -235,6 +235,26 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             await asyncio.gather(*fetch_and_transforms)
             logger.info(f"Extraction workflow completed for {workflow_id}")
             workflow_success = True
+
+            # Build output paths for AE downstream nodes (e.g. publish app)
+            # AE parent workflow references these via JSONPath: $.extract.outputs.*
+            output_path = workflow_args.get("output_path", "")
+            output_prefix = workflow_args.get("output_prefix", "")
+            # Strip local filesystem prefix to get object store path
+            if output_prefix and output_path.startswith(output_prefix):
+                transformed_prefix = (
+                    output_path[len(output_prefix) :].strip("/") + "/transformed"
+                )
+            else:
+                transformed_prefix = output_path + "/transformed"
+            connection = workflow_args.get("connection", {})
+            connection_qn = connection.get("connection_qualified_name", "")
+            return {
+                "transformed_data_prefix": transformed_prefix,
+                "connection_qualified_name": connection_qn,
+                "publish_state_prefix": f"persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}/publish-state",
+                "current_state_prefix": f"argo-artifacts/{connection_qn}/current-state",
+            }
         except Exception as e:
             logger.error(f"Workflow failed for {workflow_id}: {str(e)}")
             workflow_success = False
