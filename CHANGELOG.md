@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.7.4 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.3...v2.7.4
+
+### Features
+
+- add worker deployment versioning support (#1074) (by @anuj-atlan in [8a10fd2](https://github.com/atlanhq/application-sdk/commit/8a10fd2))
+
+
 ## v2.7.3 (March 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.2...v2.7.3
