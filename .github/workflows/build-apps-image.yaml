@@ -292,7 +292,8 @@ jobs:
     timeout-minutes: 15
     continue-on-error: true  # never block a release on a security scan
     permissions:
-      security-events: write
+      security-events: write  # upload SARIF
+      actions: read           # codeql-action telemetry (GET /actions/workflow-runs)
 
     steps:
       - name: Log in to GHCR
@@ -331,6 +332,7 @@ jobs:
 
       - name: Upload Trivy SARIF to GitHub Security
         if: always() && hashFiles('trivy-results.sarif') != ''
+        continue-on-error: true  # codeql telemetry endpoint is not accessible in reusable workflow context
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
