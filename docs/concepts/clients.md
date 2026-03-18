@@ -193,6 +193,31 @@ Provides clients for interacting with the Temporal workflow orchestration servic
     *   **Configuration:** Initialized with `host`, `port`, `application_name`, `namespace`. Defaults read from environment variables.
     *   **Key Methods:** `load()`, `close()`, `start_workflow()`, `stop_workflow()`, `get_workflow_run_status()`, `create_worker()`.
 
+### Prometheus Metrics
+
+`TemporalWorkflowClient` automatically exposes ~40 built-in Temporal SDK metrics via a Prometheus endpoint on every worker. No code changes are required — metrics become available as soon as `load()` is called.
+
+**Endpoint:** `0.0.0.0:9464` by default (OpenTelemetry Prometheus convention).
+
+**Override:** Set `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS=<host>:<port>` to change the bind address.
+
+**Sample metrics exposed:**
+
+| Metric | Description |
+|--------|-------------|
+| `temporal_activity_execution_latency` | Activity execution duration |
+| `temporal_activity_schedule_to_start_latency` | Time from schedule to start for activities |
+| `temporal_workflow_completed` | Total completed workflows |
+| `temporal_workflow_endtoend_latency` | End-to-end workflow duration |
+| `temporal_request_latency` | gRPC request latency to Temporal server |
+| `temporal_request_failure` | gRPC request failures |
+| `temporal_worker_task_slots_available` | Available worker task slots |
+| `temporal_worker_task_slots_used` | In-use worker task slots |
+| `temporal_sticky_cache_hit` | Sticky cache hit count |
+| `temporal_sticky_cache_size` | Current sticky cache size |
+
+The Temporal `Runtime` that binds the metrics port is a process-level singleton (`TemporalWorkflowClient._prometheus_runtime`). Creating multiple client instances or calling `load()` more than once within the same process reuses the same `Runtime` and does not attempt to rebind the port.
+
 ### Configuration and Usage
 
 The common pattern is to use the `get_workflow_client` utility function.

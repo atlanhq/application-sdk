@@ -334,6 +334,64 @@ This setup:
 *   Supports bulk message processing with `Subscription.BulkConfig`
 *   Supports dead letter topics for failed messages
 
+### 5. File Upload & Download
+
+The SDK provides a built-in file upload endpoint and a companion download utility so that workflows and activities can accept files from external clients and process them locally.
+
+#### Uploading a File
+
+The `POST /workflows/v1/file` endpoint is registered automatically on every `APIServer`. Clients send a file via multipart form data:
+
+```bash
+curl -X POST "http://localhost:8000/workflows/v1/file" \
+  -F "file=@/path/to/data.csv" \
+  -F "filename=data.csv" \
+  -F "prefix=workflow_file_upload" \
+  -F "contentType=text/csv"
+```
+
+The response is a `FileUploadResponse` object whose `key` field identifies the file in the object store.
+
+#### Downloading the File in a Workflow or Activity
+
+Use `download_file_from_upload_response()` from `application_sdk.common.utils` to
+download the uploaded file to a local temporary path for processing. The function
+accepts the upload response in multiple formats (dict, JSON string, or
+`FileUploadResponse` model).
+
+```python
+from application_sdk.common.utils import download_file_from_upload_response
+
+# Inside an activity or workflow step:
+
+# Option 1 — pass the response dict directly
+upload_response = {
+    "key": "workflow_file_upload/977f156b-9c78-4bfc-bd74-f603f18c078a.csv",
+    # ... other fields from the upload endpoint
+}
+local_path = await download_file_from_upload_response(upload_response)
+
+# Option 2 — pass the FileUploadResponse model returned by the upload endpoint
+from application_sdk.server.fastapi.models import FileUploadResponse
+
+response_obj = FileUploadResponse(**upload_response)
+local_path = await download_file_from_upload_response(response_obj)
+
+# Option 3 — pass a JSON string (e.g. from workflow args stored in state)
+import json
+
+json_str = json.dumps(upload_response)
+local_path = await download_file_from_upload_response(json_str)
+
+# Now process the file at local_path
+with open(local_path) as f:
+    data = f.read()
+```
+
+The file is downloaded to `TEMPORARY_PATH/<key>`, preserving the prefix directory
+structure. This path is local to the activity worker and should be treated as
+ephemeral.
+
 ## Summary
 
-The `application_sdk.server` module, especially the `fastapi` sub-package, provides a robust foundation for building web servers that interact with Atlan handlers and Temporal workflows. You can use the default `APIServer` for simple cases, extend it with custom routers for specific API needs, override handler methods to tailor the behavior of standard API endpoints, and use `Subscription` for event-driven message processing.
+The `application_sdk.server` module, especially the `fastapi` sub-package, provides a robust foundation for building web servers that interact with Atlan handlers and Temporal workflows. You can use the default `APIServer` for simple cases, extend it with custom routers for specific API needs, override handler methods to tailor the behavior of standard API endpoints, use `Subscription` for event-driven message processing, and use the built-in file upload endpoint with `download_file_from_upload_response()` for file-based workflows.

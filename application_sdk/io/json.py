@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Unio
 import orjson
 from temporalio import activity
 
+from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.io.utils import (
@@ -322,7 +323,7 @@ class JsonFileWriter(Writer):
 
         if typename:
             self.path = os.path.join(self.path, typename)
-        os.makedirs(self.path, exist_ok=True)
+        SafeFileOps.makedirs(self.path, exist_ok=True)
 
         if self.chunk_start:
             self.chunk_count = self.chunk_start + self.chunk_count
@@ -395,7 +396,7 @@ class JsonFileWriter(Writer):
                     and self.total_record_count % self.chunk_size == 0
                 ):
                     output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
-                    if os.path.exists(output_file_name):
+                    if SafeFileOps.exists(output_file_name):
                         await self._upload_file(output_file_name)
                         self.chunk_part += 1
 
@@ -442,7 +443,7 @@ class JsonFileWriter(Writer):
         and uploads the file to the object store.
         """
         output_file_name = f"{self.path}/{path_gen(self.chunk_count, chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
-        with open(output_file_name, "ab+") as f:
+        with SafeFileOps.open(output_file_name, "ab+") as f:
             f.writelines(buffer)
         buffer.clear()  # Clear the buffer
 
@@ -462,8 +463,8 @@ class JsonFileWriter(Writer):
 
         This method writes a chunk to a JSON file and uploads the file to the object store.
         """
-        mode = "w" if not os.path.exists(file_name) else "a"
-        with open(file_name, mode=mode) as f:
+        mode = "w" if not SafeFileOps.exists(file_name) else "a"
+        with SafeFileOps.open(file_name, mode=mode) as f:
             chunk.to_json(f, orient="records", lines=True)
 
     async def _finalize(self) -> None:
@@ -474,7 +475,7 @@ class JsonFileWriter(Writer):
         # Upload the final file if there's remaining buffered data
         if self.current_buffer_size_bytes > 0:
             output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
-            if os.path.exists(output_file_name):
+            if SafeFileOps.exists(output_file_name):
                 await self._upload_file(output_file_name)
                 self.chunk_part += 1
 

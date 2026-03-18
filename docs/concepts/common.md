@@ -485,6 +485,14 @@ include_pattern, exclude_pattern = prepare_filters(
 # use patterns in SQL: WHERE table_schema SIMILAR TO '{include_pattern}' AND table_schema NOT SIMILAR TO '{exclude_pattern}'
 ```
 
+## Temporal Configuration Constants (`constants.py`)
+
+The following constants control Temporal-related behaviour and are defined in `application_sdk/constants.py`.
+
+| Constant | Env Var | Default | Description |
+|----------|---------|---------|-------------|
+| `TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `0.0.0.0:9464` | Bind address for the Temporal SDK Prometheus metrics endpoint. Follows the OpenTelemetry convention of port `9464`. Override to avoid port conflicts or to restrict the listener interface. |
+
 ## Summary
 
 The `common` utilities provide essential services for logging, AWS integration, configuration management, and various helper tasks, forming a core part of the SDK's functionality and promoting consistent practices across different modules.

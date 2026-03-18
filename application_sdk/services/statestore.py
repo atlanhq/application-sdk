@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 from temporalio import activity
 
-from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
     APPLICATION_NAME,
     STATE_STORE_PATH_TEMPLATE,
@@ -19,6 +19,12 @@ from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 activity.logger = logger
+
+
+class PathTraversalError(ValueError):
+    """Raised when a path traversal attempt is detected."""
+
+    pass
 
 
 class StateType(Enum):
@@ -54,6 +60,10 @@ def build_state_store_path(id: str, state_type: StateType) -> str:
     Returns:
         str: The constructed state file path.
 
+    Raises:
+        PathTraversalError: If the id contains path traversal sequences that would
+            escape the base directory.
+
     Examples:
         >>> from application_sdk.services.statestore import build_state_store_path, StateType
 
@@ -66,13 +76,31 @@ def build_state_store_path(id: str, state_type: StateType) -> str:
         >>> cred_path = build_state_store_path("db-cred-456", StateType.CREDENTIALS)
         >>> print(cred_path)
         './local/tmp/persistent-artifacts/apps/appName/credentials/db-cred-456/config.json'
+
+        >>> # Path traversal attempt raises error
+        >>> build_state_store_path("../../../etc/passwd", StateType.WORKFLOWS)
+        Traceback (most recent call last):
+            ...
+        PathTraversalError: Invalid state id: path traversal detected
     """
-    return os.path.join(
+    constructed_path = os.path.join(
         TEMPORARY_PATH,
         STATE_STORE_PATH_TEMPLATE.format(
             application_name=APPLICATION_NAME, state_type=state_type.value, id=id
         ),
     )
+
+    base_path = os.path.abspath(TEMPORARY_PATH)
+    resolved_path = os.path.abspath(constructed_path)
+
+    if not resolved_path.startswith(base_path + os.sep) and resolved_path != base_path:
+        logger.warning(
+            f"Path traversal attempt detected in state id: {id!r}",
+            extra={"security_event": "path_traversal_blocked"},
+        )
+        raise PathTraversalError("Invalid state id: path traversal detected")
+
+    return constructed_path
 
 
 class StateStore:
@@ -107,7 +135,7 @@ class StateStore:
         state_file_path = build_state_store_path(id, type)
         try:
             object_store_content = await ObjectStore.get_content(
-                get_object_store_prefix(state_file_path),
+                state_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
                 suppress_error=True,
             )
@@ -167,16 +195,16 @@ class StateStore:
             # update the state with the new value
             current_state[key] = value
 
-            os.makedirs(os.path.dirname(state_file_path), exist_ok=True)
+            SafeFileOps.makedirs(os.path.dirname(state_file_path), exist_ok=True)
 
             # save the state to a local file
-            with open(state_file_path, "w") as file:
+            with SafeFileOps.open(state_file_path, "w") as file:
                 json.dump(current_state, file)
 
             # save the state to the object store
             await ObjectStore.upload_file(
                 source=state_file_path,
-                destination=get_object_store_prefix(state_file_path),
+                destination=state_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
@@ -243,16 +271,16 @@ class StateStore:
             # update the state with the new value
             current_state.update(value)
 
-            os.makedirs(os.path.dirname(state_file_path), exist_ok=True)
+            SafeFileOps.makedirs(os.path.dirname(state_file_path), exist_ok=True)
 
             # save the state to a local file
-            with open(state_file_path, "w") as file:
+            with SafeFileOps.open(state_file_path, "w") as file:
                 json.dump(current_state, file)
 
             # save the state to the object store
             await ObjectStore.upload_file(
                 source=state_file_path,
-                destination=get_object_store_prefix(state_file_path),
+                destination=state_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
             logger.info(

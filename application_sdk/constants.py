@@ -42,6 +42,8 @@ APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0"))
 APP_PORT = int(os.getenv("ATLAN_APP_HTTP_PORT", "8000"))
 #: Tenant ID for multi-tenant applications
 APP_TENANT_ID = os.getenv("ATLAN_TENANT_ID", "default")
+# Domain Name of the tenant
+DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
 #: Host address for the application's dashboard
 APP_DASHBOARD_HOST = str(os.getenv("ATLAN_APP_DASHBOARD_HOST", "localhost"))
 #: Port number for the application's dashboard
@@ -81,6 +83,18 @@ STATE_STORE_PATH_TEMPLATE = (
 # Observability Constants
 #: Directory for storing observability data
 OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observability"
+
+# Temporal Prometheus Metrics
+#: Bind address for the Temporal Prometheus metrics endpoint
+TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
+    "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
+)
+
+#: Enable structured failure logging for Temporal activities with context
+#: (tenant, retries, timeouts). Opt-in per application.
+ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING: bool = (
+    os.getenv("ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING", "false").lower() == "true"
+)
 
 # Workflow Client Constants
 #: Host address for the Temporal server
@@ -192,8 +206,14 @@ OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
+#: Secondary endpoint for workflow logs (optional, for dual export to tenant-level collector)
+OTEL_WORKFLOW_LOGS_ENDPOINT: str = os.getenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "")
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether to enable workflow logs export to secondary endpoint (for S3 archival + live streaming)
+ENABLE_OTLP_WORKFLOW_LOGS: bool = (
+    os.getenv("ENABLE_OTLP_WORKFLOW_LOGS", "false").lower() == "true"
+)
 
 # OTEL Constants
 #: Node name for workflow telemetry
@@ -206,7 +226,6 @@ OTEL_BATCH_DELAY_MS = int(os.getenv("OTEL_BATCH_DELAY_MS", "5000"))
 OTEL_BATCH_SIZE = int(os.getenv("OTEL_BATCH_SIZE", "512"))
 #: Maximum size of the export queue
 OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
-
 
 # AWS Constants
 #: AWS Session Name
@@ -238,6 +257,20 @@ METRICS_CLEANUP_ENABLED = (
     os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
 )
 METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
+
+# Segment Configuration
+#: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
+SEGMENT_API_URL = os.getenv("ATLAN_SEGMENT_API_URL", "https://api.segment.io/v1/batch")
+#: Segment write key for authentication. If set, Segment metrics are automatically enabled.
+SEGMENT_WRITE_KEY = os.getenv("ATLAN_SEGMENT_WRITE_KEY", "")
+#: Default user ID for Segment events
+SEGMENT_DEFAULT_USER_ID = "atlan.automation"
+#: Maximum batch size for Segment events
+SEGMENT_BATCH_SIZE = int(os.getenv("ATLAN_SEGMENT_BATCH_SIZE", "100"))
+#: Maximum time to wait before sending a batch (in seconds)
+SEGMENT_BATCH_TIMEOUT_SECONDS = float(
+    os.getenv("ATLAN_SEGMENT_BATCH_TIMEOUT_SECONDS", "10.0")
+)
 
 # Traces Configuration
 ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
@@ -287,6 +320,9 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
+#: Windows extended-length path prefix
+WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
+
 
 class ApplicationMode(str, Enum):
     """Application execution mode.
@@ -303,6 +339,39 @@ class ApplicationMode(str, Enum):
 
 
 APPLICATION_MODE = ApplicationMode(os.getenv("APPLICATION_MODE", "LOCAL").upper())
+
+# =============================================================================
+# Incremental Extraction Constants
+# =============================================================================
+
+#: Prefix for storing marker timestamp and current state of a connection in ObjectStore
+#: Example: persistent-artifacts/apps/oracle/connection/1764230875
+PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE = (
+    "persistent-artifacts/apps/{application_name}/connection/{connection_id}"
+)
+
+#: Maximum number of column extraction batch activities to execute in parallel
+#: Controls concurrency during incremental column extraction
+MAX_CONCURRENT_COLUMN_BATCHES = 3
+
+#: Subpath template for per-run incremental diff (under connection prefix)
+#: Full path: {PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE}/{INCREMENTAL_DIFF_SUBPATH_TEMPLATE}
+#: Example: persistent-artifacts/apps/oracle/connection/123456/runs/abc-def-ghi/incremental-diff
+INCREMENTAL_DIFF_SUBPATH_TEMPLATE = "runs/{run_id}/incremental-diff"
+
+#: Format for marker timestamp in incremental extraction
+#: Example: 2025-12-08T10:00:00Z
+MARKER_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+#: Default incremental state for first run (when incremental_state field doesn't exist)
+#: Required by coalesce function in DuckDB
+INCREMENTAL_DEFAULT_STATE = "NO CHANGE"
+
+#: Base folder for DuckDB temp files (each connection gets a unique UUID subfolder)
+DUCKDB_COMMON_TEMP_FOLDER = "/tmp/incremental_duckdb"
+
+#: Default memory limit for DuckDB (fixed for K8s pods)
+DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
 
 # Disable Analytics Configuration for DAFT
 # NOTE: These must NOT be set at module level via os.environ (which calls os.putenv).

@@ -281,8 +281,35 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                 {"metadata": workflow_args["metadata"]}
             )
 
-            if not result or "error" in result:
-                raise ValueError("Preflight check failed")
+            # Guard against None or empty results
+            if not result:
+                raise ValueError("Preflight check failed: No results returned")
+
+            # Find all check entries (dicts with 'success' field)
+            check_entries = {
+                key: value
+                for key, value in result.items()
+                if isinstance(value, dict) and "success" in value
+            }
+
+            # Fail if no recognized check entries exist (pessimistic approach)
+            if not check_entries:
+                raise ValueError(
+                    "Preflight check failed: No recognized check results found"
+                )
+
+            # Check if any individual check failed
+            failed_checks = [
+                key for key, value in check_entries.items() if not value.get("success")
+            ]
+            if failed_checks:
+                failure_messages = [
+                    check_entries[key].get("failureMessage", "Unknown failure")
+                    for key in failed_checks
+                ]
+                raise ValueError(
+                    f"Preflight check failed: {'; '.join(failure_messages)}"
+                )
 
             logger.info("Preflight check completed successfully")
             return result

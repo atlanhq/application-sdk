@@ -2,11 +2,27 @@ from typing import Any, Dict, Generator
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from temporalio.runtime import Runtime
 
 from application_sdk.clients.temporal import TemporalWorkflowClient
 from application_sdk.interceptors.cleanup import cleanup
 from application_sdk.interceptors.events import publish_event
 from application_sdk.workflows import WorkflowInterface
+
+
+@pytest.fixture(autouse=True)
+def mock_runtime():
+    """Mock Runtime and reset the class-level singleton for each test.
+
+    Patches the Runtime class to avoid real port binding, and resets
+    TemporalWorkflowClient._prometheus_runtime so each test starts with
+    a fresh singleton state, preventing cross-test interference.
+    """
+    TemporalWorkflowClient._prometheus_runtime = None
+    with patch("application_sdk.clients.temporal.Runtime") as mock_cls:
+        mock_cls.return_value = MagicMock(spec=Runtime)
+        yield mock_cls
+    TemporalWorkflowClient._prometheus_runtime = None
 
 
 # Mock workflow class for testing
@@ -73,11 +89,12 @@ async def test_load(
     await temporal_client.load()
 
     # Verify that Client.connect was called with the correct parameters
-    mock_connect.assert_called_once_with(
-        target_host=temporal_client.get_connection_string(),
-        namespace=temporal_client.get_namespace(),
-        tls=False,
-    )
+    mock_connect.assert_called_once()
+    call_kwargs = mock_connect.call_args[1]
+    assert call_kwargs["target_host"] == temporal_client.get_connection_string()
+    assert call_kwargs["namespace"] == temporal_client.get_namespace()
+    assert call_kwargs["tls"] is False
+    assert isinstance(call_kwargs["runtime"], Runtime)
 
     # Check that client is set
     assert temporal_client.client == mock_client
@@ -450,3 +467,26 @@ async def test_publish_token_refresh_event_exception_handling(
     mock_logger.warning.assert_called_once_with(
         "Failed to publish token refresh event: Event store connection failed"
     )
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+@patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
+async def test_load_with_prometheus_metrics(
+    mock_get_config: AsyncMock,
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test that load always passes a Runtime with PrometheusConfig."""
+    mock_get_config.return_value = None
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    mock_connect.assert_called_once()
+    call_kwargs = mock_connect.call_args[1]
+    assert "runtime" in call_kwargs
+    assert isinstance(call_kwargs["runtime"], Runtime)

@@ -107,6 +107,86 @@ class TestCorrelationContextWorkflowInboundInterceptor:
         assert interceptor.correlation_data["atlan-ignore"] == "redshift-test-1.41"
 
     @pytest.mark.asyncio
+    async def test_extracts_correlation_id_from_workflow_args(
+        self, interceptor, mock_next_inbound
+    ):
+        """Test that correlation_id is extracted from workflow config."""
+        workflow_config = {
+            "workflow_id": "test-workflow-123",
+            "correlation_id": "app-workflow-run-guid-abc",
+            "atlan-ignore": "redshift-test-1.41",
+            "other_field": "should_be_ignored",
+        }
+        input_data = MockExecuteWorkflowInput(args=[workflow_config])
+
+        await interceptor.execute_workflow(input_data)
+
+        assert (
+            interceptor.correlation_data["correlation_id"]
+            == "app-workflow-run-guid-abc"
+        )
+        assert interceptor.correlation_data["atlan-ignore"] == "redshift-test-1.41"
+
+    @pytest.mark.asyncio
+    async def test_extracts_both_trace_id_and_correlation_id(
+        self, interceptor, mock_next_inbound
+    ):
+        """Test that both trace_id and correlation_id are extracted together."""
+        workflow_config = {
+            "workflow_id": "test-workflow-123",
+            "trace_id": "my-trace-id-abc",
+            "correlation_id": "app-workflow-run-guid-abc",
+            "atlan-ignore": "redshift-test-1.41",
+        }
+        input_data = MockExecuteWorkflowInput(args=[workflow_config])
+
+        await interceptor.execute_workflow(input_data)
+
+        assert interceptor.correlation_data["trace_id"] == "my-trace-id-abc"
+        assert (
+            interceptor.correlation_data["correlation_id"]
+            == "app-workflow-run-guid-abc"
+        )
+        assert interceptor.correlation_data["atlan-ignore"] == "redshift-test-1.41"
+
+    @pytest.mark.asyncio
+    async def test_correlation_id_falls_back_to_trace_id(
+        self, interceptor, mock_next_inbound
+    ):
+        """Test that correlation_id falls back to trace_id when not explicitly set."""
+        workflow_config = {
+            "workflow_id": "test-workflow-123",
+            "trace_id": "my-trace-id-abc",
+            "atlan-ignore": "redshift-test-1.41",
+        }
+        input_data = MockExecuteWorkflowInput(args=[workflow_config])
+
+        await interceptor.execute_workflow(input_data)
+
+        assert interceptor.correlation_data["correlation_id"] == "my-trace-id-abc"
+        assert interceptor.correlation_data["trace_id"] == "my-trace-id-abc"
+
+    @pytest.mark.asyncio
+    async def test_explicit_correlation_id_preserved(
+        self, interceptor, mock_next_inbound
+    ):
+        """Test that an explicit correlation_id is not overwritten by trace_id."""
+        workflow_config = {
+            "workflow_id": "test-workflow-123",
+            "trace_id": "my-trace-id-abc",
+            "correlation_id": "explicit-correlation-id",
+            "atlan-ignore": "redshift-test-1.41",
+        }
+        input_data = MockExecuteWorkflowInput(args=[workflow_config])
+
+        await interceptor.execute_workflow(input_data)
+
+        assert (
+            interceptor.correlation_data["correlation_id"] == "explicit-correlation-id"
+        )
+        assert interceptor.correlation_data["trace_id"] == "my-trace-id-abc"
+
+    @pytest.mark.asyncio
     async def test_handles_workflow_config_without_trace_id(
         self, interceptor, mock_next_inbound
     ):
@@ -154,6 +234,7 @@ class TestCorrelationContextWorkflowInboundInterceptor:
 
         await interceptor.execute_workflow(input_data)
 
+        # No correlation_id set when neither trace_id nor correlation_id present
         assert interceptor.correlation_data == {}
 
     @pytest.mark.asyncio
@@ -216,6 +297,16 @@ class TestCorrelationContextOutboundInterceptor:
         mock_inbound = mock.MagicMock()
         mock_inbound.correlation_data = {
             "trace_id": "my-trace-id-123",
+            "atlan-ignore": "test-value",
+        }
+        return mock_inbound
+
+    @pytest.fixture
+    def mock_inbound_with_correlation_id(self):
+        """Create a mock inbound interceptor with correlation data including correlation_id."""
+        mock_inbound = mock.MagicMock()
+        mock_inbound.correlation_data = {
+            "correlation_id": "app-workflow-run-guid-123",
             "atlan-ignore": "test-value",
         }
         return mock_inbound
@@ -308,6 +399,28 @@ class TestCorrelationContextOutboundInterceptor:
         )
         assert trace_id_value == "my-trace-id-123"
 
+    def test_injects_correlation_id_into_activity_headers(
+        self, mock_next_outbound, mock_inbound_with_correlation_id
+    ):
+        """Test that correlation_id is injected into activity headers."""
+        interceptor = CorrelationContextOutboundInterceptor(
+            mock_next_outbound, mock_inbound_with_correlation_id
+        )
+        input_data = MockStartActivityInput(headers={})
+
+        interceptor.start_activity(input_data)
+
+        called_input = mock_next_outbound.start_activity.call_args[0][0]
+
+        payload_converter = default_converter().payload_converter
+        assert "correlation_id" in called_input.headers
+        assert "atlan-ignore" in called_input.headers
+
+        correlation_id_value = payload_converter.from_payload(
+            called_input.headers["correlation_id"], type_hint=str
+        )
+        assert correlation_id_value == "app-workflow-run-guid-123"
+
 
 class TestCorrelationContextActivityInboundInterceptor:
     """Tests for CorrelationContextActivityInboundInterceptor."""
@@ -371,6 +484,27 @@ class TestCorrelationContextActivityInboundInterceptor:
         # Verify trace_id was extracted and set in correlation context
         ctx = correlation_context.get()
         assert ctx["trace_id"] == "my-trace-id-456"
+        assert ctx["atlan-ignore"] == "test-value"
+
+    @pytest.mark.asyncio
+    async def test_extracts_correlation_id_from_headers(
+        self, interceptor, mock_next_activity
+    ):
+        """Test that correlation_id is extracted from headers and set in correlation context."""
+        payload_converter = default_converter().payload_converter
+
+        headers = {
+            "correlation_id": payload_converter.to_payload("app-workflow-run-guid-789"),
+            "atlan-ignore": payload_converter.to_payload("test-value"),
+        }
+        input_data = MockExecuteActivityInput(headers=headers)
+
+        correlation_context.set({})
+
+        await interceptor.execute_activity(input_data)
+
+        ctx = correlation_context.get()
+        assert ctx["correlation_id"] == "app-workflow-run-guid-789"
         assert ctx["atlan-ignore"] == "test-value"
 
     @pytest.mark.asyncio

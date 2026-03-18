@@ -3,7 +3,7 @@ name: PR Checks
 on:
   pull_request:
     types: [opened, synchronize, labeled, reopened]
-    branches: [main, develop]
+    branches: [main, develop, native]
 
 permissions:
   id-token: write
@@ -14,23 +14,48 @@ permissions:
   actions: write
 
 jobs:
+  # Detect which files changed
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      container: ${{ steps.filter.outputs.container }}
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            container:
+              - 'Dockerfile'
+              - 'entrypoint.sh'
+            code:
+              - 'application_sdk/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'examples/**'
+
   # Conventional Commits
   commits:
     name: Conventional Commits
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
-      - uses: webiny/action-conventional-commits@v1.3.0
+      - uses: webiny/action-conventional-commits@v1.3.1
         with:
           GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
 
   docstr:
     name: Docstring Coverage
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: "./.github/actions/docstring-coverage"
         with:
           module-name: application_sdk
@@ -39,16 +64,34 @@ jobs:
   # Security Checks
   trivy:
     name: Trivy Code Scan
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: "./.github/actions/trivy"
         with:
           add-report-comment-to-pr: "true"
 
+  trivy-container:
+    name: Trivy Container Scan
+    needs: changes
+    if: needs.changes.outputs.container == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: "./.github/actions/trivy-container"
+        with:
+          chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
+          chainguard-password: ${{ secrets.CHAINGUARD_PASSWORD }}
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          fail-on-vulns: 'true'
+
   # Testing
   unit:
     name: Unit Tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -57,7 +100,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
@@ -71,7 +114,7 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6.0.2
 
       - name: Get PR Labels
         id: get-labels
@@ -150,7 +193,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: "./.github/actions/e2e-examples"
         with:
           operating-system: ${{ matrix.os }}
@@ -164,13 +207,14 @@ jobs:
   # E2E Tests: This step is run for each app in the matrix
   e2e-apps:
     name: E2E (Apps)
-    needs: matrix-builder
+    needs: [changes, matrix-builder]
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'e2e-test') || contains(github.event.pull_request.labels.*.name, 'e2e-test'))
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: "./.github/actions/e2e-apps"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
@@ -180,9 +224,11 @@ jobs:
   # Documentation
   docs:
     name: Docs
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: "./.github/actions/setup-deps"
       - name: Install graphviz
         run: |
