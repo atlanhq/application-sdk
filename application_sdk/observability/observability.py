@@ -31,22 +31,23 @@ from application_sdk.constants import (
 from application_sdk.observability.utils import get_observability_dir
 
 # --- Path configuration ---
-# SDR (ENABLE_ATLAN_UPLOAD=true):     sdr-logs/, sdr-metrics/, sdr-traces/
-# Non-SDR (ENABLE_ATLAN_UPLOAD=false): non-sdr-logs/, non-sdr-metrics/, non-sdr-traces/
-_OBS_PATH_PREFIX = "sdr" if ENABLE_ATLAN_UPLOAD else "non-sdr"
+# Structure: observability/<mode>/<signal>/year=.../hour=.../file.json.gz
+# SDR (ENABLE_ATLAN_UPLOAD=true):     sdr/logs/, sdr/metrics/, sdr/traces/
+# Non-SDR (ENABLE_ATLAN_UPLOAD=false): non-sdr/logs/, non-sdr/metrics/, non-sdr/traces/
+_OBS_MODE = "sdr" if ENABLE_ATLAN_UPLOAD else "non-sdr"
 
-# Map of record type → local subdirectory
+# Map of signal type → local subdirectory (e.g., sdr/logs)
 LOCAL_OBS_SUBDIR_MAP = {
-    "logs": f"{_OBS_PATH_PREFIX}-logs",
-    "metrics": f"{_OBS_PATH_PREFIX}-metrics",
-    "traces": f"{_OBS_PATH_PREFIX}-traces",
+    "logs": f"{_OBS_MODE}/logs",
+    "metrics": f"{_OBS_MODE}/metrics",
+    "traces": f"{_OBS_MODE}/traces",
 }
 
-# Map of record type → S3 remote key prefix
+# Map of signal type → S3 remote key prefix
 OBSERVABILITY_S3_PREFIX_MAP = {
-    "logs": f"artifacts/apps/observability/{_OBS_PATH_PREFIX}-logs",
-    "metrics": f"artifacts/apps/observability/{_OBS_PATH_PREFIX}-metrics",
-    "traces": f"artifacts/apps/observability/{_OBS_PATH_PREFIX}-traces",
+    "logs": f"artifacts/apps/observability/{_OBS_MODE}/logs",
+    "metrics": f"artifacts/apps/observability/{_OBS_MODE}/metrics",
+    "traces": f"artifacts/apps/observability/{_OBS_MODE}/traces",
 }
 
 
@@ -266,9 +267,7 @@ class AtlanObservability(Generic[T], ABC):
             str: The local partition path
         """
         signal_type = self._get_signal_type()
-        local_subdir = LOCAL_OBS_SUBDIR_MAP.get(
-            signal_type, f"{_OBS_PATH_PREFIX}-other"
-        )
+        local_subdir = LOCAL_OBS_SUBDIR_MAP.get(signal_type, f"{_OBS_MODE}/other")
 
         return os.path.join(
             self.data_dir,
@@ -455,7 +454,7 @@ class AtlanObservability(Generic[T], ABC):
                     signal_type = self._get_signal_type()
                     s3_prefix = OBSERVABILITY_S3_PREFIX_MAP.get(
                         signal_type,
-                        f"artifacts/apps/observability/{_OBS_PATH_PREFIX}-other",
+                        f"artifacts/apps/observability/{_OBS_MODE}/other",
                     )
                     remote_key = os.path.join(
                         s3_prefix,
@@ -543,9 +542,7 @@ class AtlanObservability(Generic[T], ABC):
         try:
             # Use local subdir (same as _get_partition_path)
             signal_type = self._get_signal_type()
-            local_subdir = LOCAL_OBS_SUBDIR_MAP.get(
-                signal_type, f"{_OBS_PATH_PREFIX}-other"
-            )
+            local_subdir = LOCAL_OBS_SUBDIR_MAP.get(signal_type, f"{_OBS_MODE}/other")
             data_dir = os.path.join(self.data_dir, local_subdir)
             if not os.path.exists(data_dir):
                 return
