@@ -6,7 +6,12 @@ from typing_extensions import deprecated
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.base import BaseClient
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.constants import APPLICATION_MODE, ENABLE_MCP, ApplicationMode
+from application_sdk.constants import (
+    APPLICATION_MODE,
+    ENABLE_MCP,
+    ApplicationMode,
+    configure_analytics_env,
+)
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.interceptors.models import EventRegistration
 from application_sdk.observability.decorators.observability_decorator import (
@@ -24,6 +29,9 @@ from application_sdk.workflows import WorkflowInterface
 logger = get_logger(__name__)
 metrics = get_metrics()
 traces = get_traces()
+
+# Set analytics env vars early, before any Temporal workflow sandbox is active
+configure_analytics_env()
 
 
 class BaseApplication:

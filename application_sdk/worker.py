@@ -19,6 +19,7 @@ from application_sdk.constants import (
     DEPLOYMENT_NAME,
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     MAX_CONCURRENT_ACTIVITIES,
+    configure_analytics_env,
 )
 from application_sdk.interceptors.models import (
     ApplicationEventNames,
@@ -30,6 +31,9 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.eventstore import EventStore
 
 logger = get_logger(__name__)
+
+# Set analytics env vars early, before any Temporal workflow sandbox is active
+configure_analytics_env()
 
 
 if sys.platform not in ("win32", "cygwin"):

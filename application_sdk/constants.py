@@ -305,6 +305,23 @@ class ApplicationMode(str, Enum):
 APPLICATION_MODE = ApplicationMode(os.getenv("APPLICATION_MODE", "LOCAL").upper())
 
 # Disable Analytics Configuration for DAFT
-os.environ["DO_NOT_TRACK"] = "true"
-os.environ["SCARF_NO_ANALYTICS"] = "true"
-os.environ["DAFT_ANALYTICS_ENABLED"] = "0"
+# NOTE: These must NOT be set at module level via os.environ (which calls os.putenv).
+# Temporal's Python SDK sandbox flags os.putenv as a non-deterministic operation,
+# causing worker evictions when workflow code imports this module.
+# Instead, these are set via configure_analytics_env() called during app/worker startup.
+_ANALYTICS_ENV_VARS = {
+    "DO_NOT_TRACK": "true",
+    "SCARF_NO_ANALYTICS": "true",
+    "DAFT_ANALYTICS_ENABLED": "0",
+}
+
+
+def configure_analytics_env() -> None:
+    """Set analytics-disabling environment variables.
+
+    Must be called once during application or worker startup,
+    before Temporal workflows are registered. Not safe to call
+    from within a Temporal workflow context.
+    """
+    for key, value in _ANALYTICS_ENV_VARS.items():
+        os.environ[key] = value
