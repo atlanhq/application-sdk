@@ -54,6 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      app_name:         ${{ steps.manifest.outputs.app_name }}
       dockerfile:       ${{ steps.manifest.outputs.dockerfile }}
       enable_sdr:       ${{ steps.manifest.outputs.enable_sdr }}
       branch:           ${{ steps.tags.outputs.branch }}
@@ -88,17 +89,23 @@ jobs:
               print(f'::error::atlan.yaml is invalid YAML: {e}', file=sys.stderr)
               sys.exit(1)
 
+          app_name   = d.get('name', '')
           build_tag  = d.get('build_tag', 'v1')
           dockerfile = d.get('dockerfile', './Dockerfile')
           # self_deployed_runtime: true → push image to shared external registry
           # so customers can pull it into their own environment.
           enable_sdr = 'true' if d.get('self_deployed_runtime', False) else 'false'
 
+          if not app_name:
+              print('::error::atlan.yaml is missing required "name" field', file=sys.stderr)
+              sys.exit(1)
+
           if build_tag != 'v1':
               print(f"::error::Unsupported build_tag '{build_tag}'. Only 'v1' is supported by this template version.", file=sys.stderr)
               sys.exit(1)
 
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'app_name={app_name}\n')
               out.write(f'build_tag={build_tag}\n')
               out.write(f'dockerfile={dockerfile}\n')
               out.write(f'enable_sdr={enable_sdr}\n')
@@ -314,3 +321,25 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: snyk.sarif
+
+  # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
+  app-deployment-dispatcher:
+    name: Dispatch App Deployment
+    needs: [prepare, merge]
+    if: github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repo: ['atlanhq/atlan-apps-deployment']
+    steps:
+      - name: Repository Dispatch
+        uses: peter-evans/repository-dispatch@v3.0.0
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+          repository: ${{ matrix.repo }}
+          event-type: dispatch_app_builder_workflow
+          client-payload: |-
+            {
+                "app_name": "${{ needs.prepare.outputs.app_name }}",
+                "image_name": "${{ needs.prepare.outputs.dockerhub_image }}"
+            }
