@@ -291,6 +291,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     continue-on-error: true  # never block a release on a security scan
+    permissions:
+      security-events: write
 
     steps:
       - name: Log in to GHCR
