@@ -36,6 +36,10 @@ Public API:
 """
 
 from application_sdk.credentials.atlan import AtlanApiToken, AtlanOAuthClient
+from application_sdk.credentials.atlan_client import (
+    AtlanClientMixin,
+    create_async_atlan_client,
+)
 from application_sdk.credentials.errors import (
     CredentialError,
     CredentialNotFoundError,
@@ -100,6 +104,9 @@ __all__ = [
     # Atlan types
     "AtlanApiToken",
     "AtlanOAuthClient",
+    # Atlan client
+    "create_async_atlan_client",
+    "AtlanClientMixin",
     # Resolver
     "CredentialResolver",
     # Registry

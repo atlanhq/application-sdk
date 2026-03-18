@@ -4,6 +4,7 @@ Provides types and utilities for contracts that stay within Temporal's 2MB paylo
 
 Key types:
 - FileReference: Reference to externally-stored data
+- GitReference: Reference to a Git repository
 - MaxItems: Constraint marker for bounded collections
 - BoundedList/BoundedDict: Type aliases with size bounds
 """
@@ -12,7 +13,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, TypeVar
+from typing import TYPE_CHECKING, Annotated, TypeVar
+
+if TYPE_CHECKING:
+    from application_sdk.credentials.ref import CredentialRef
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -86,3 +90,19 @@ class FileReference:
         return FileReference(
             local_path=str(p),
         )
+
+
+@dataclass(frozen=True)
+class GitReference:
+    """Reference to a Git repository for workflow inputs.
+
+    Temporal-safe data carrier for specifying a git repo to clone.
+    Checkout precedence: commit > tag > branch.
+    """
+
+    repo_url: str
+    branch: str = "main"
+    path: str = ""
+    tag: str = ""
+    commit: str = ""
+    credential: "CredentialRef | None" = None

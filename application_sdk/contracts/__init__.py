@@ -35,6 +35,7 @@ from application_sdk.contracts.types import (
     BoundedDict,
     BoundedList,
     FileReference,
+    GitReference,
     MaxItems,
 )
 
@@ -57,6 +58,7 @@ __all__ = [
     "BoundedDict",
     "BoundedList",
     "FileReference",
+    "GitReference",
     "MaxItems",
     "UploadInput",
     "UploadOutput",

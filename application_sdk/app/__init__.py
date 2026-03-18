@@ -25,11 +25,13 @@ from application_sdk.app.context import AppContext
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata, task
 from application_sdk.contracts.base import Input, Output
+from application_sdk.credentials.atlan_client import AtlanClientMixin
 from application_sdk.execution.retry import RetryPolicy
 
 __all__ = [
     "App",
     "AppContext",
+    "AtlanClientMixin",
     "AppError",
     "AppRegistry",
     "Input",
