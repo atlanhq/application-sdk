@@ -11,17 +11,21 @@ from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
 import duckdb
-import pandas as pd
 from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
     DEPLOYMENT_OBJECT_STORE_NAME,
+    ENABLE_ATLAN_UPLOAD,
     ENABLE_OBSERVABILITY_DAPR_SINK,
-    LOG_FILE_NAME,
-    METRICS_FILE_NAME,
     STATE_STORE_NAME,
-    TRACES_FILE_NAME,
+    UPSTREAM_OBJECT_STORE_NAME,
+)
+from application_sdk.observability.sinks import (
+    ObservabilityRecordType,
+    ObservabilitySink,
+    PartitionedJsonGzSink,
+    file_name_to_type,
 )
 from application_sdk.observability.utils import get_observability_dir
 
@@ -98,10 +102,30 @@ class AtlanObservability(Generic[T], ABC):
         self._cleanup_enabled = cleanup_enabled
         self.data_dir = data_dir
         self.file_name = file_name
+        self._record_type: ObservabilityRecordType = file_name_to_type(file_name)
         self._update_parquet_path()
 
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
+
+        # Build the flush pipeline. Adding a new storage destination means
+        # appending a sink here — _flush_records never needs to change.
+        #
+        # With ENABLE_ATLAN_UPLOAD=true, data is written to both:
+        # - DEPLOYMENT_OBJECT_STORE (customer's bucket)
+        # - UPSTREAM_OBJECT_STORE (Atlan's bucket)
+        # MDLH S3 pipe reads from Atlan's bucket for Iceberg ingestion.
+        store_names = [DEPLOYMENT_OBJECT_STORE_NAME]
+        if ENABLE_ATLAN_UPLOAD:
+            store_names.append(UPSTREAM_OBJECT_STORE_NAME)
+
+        self._sinks: List[ObservabilitySink] = [
+            PartitionedJsonGzSink(
+                record_type=self._record_type,
+                staging_root=data_dir,
+                store_names=store_names,
+            )
+        ]
 
         # Register this instance
         AtlanObservability._instances.append(self)
@@ -223,26 +247,13 @@ class AtlanObservability(Generic[T], ABC):
         Returns:
             str: The partition path
         """
-        # Determine the base directory based on file type
-        if self.file_name == LOG_FILE_NAME:
-            base_dir = "logs"
-        elif self.file_name == METRICS_FILE_NAME:
-            base_dir = "metrics"
-        elif self.file_name == TRACES_FILE_NAME:
-            base_dir = "traces"
-        else:
-            base_dir = "other"
-
-        # Create partition path components
-        partition_path = os.path.join(
+        return os.path.join(
             self.data_dir,
-            base_dir,
+            self._record_type.value,
             f"year={timestamp.year}",
             f"month={timestamp.month:02d}",
             f"day={timestamp.day:02d}",
         )
-
-        return partition_path
 
     def _update_parquet_path(self):
         """Update the parquet file path based on current timestamp."""
@@ -362,84 +373,23 @@ class AtlanObservability(Generic[T], ABC):
         except Exception as e:
             logging.error(f"Error buffering log: {e}")
 
-    async def _flush_records(self, records: List[Dict[str, Any]]):
-        """Flush records to parquet file and object store using ParquetFileWriter.
+    async def _flush_records(self, records: List[Dict[str, Any]]) -> None:
+        """Fan out *records* to every configured sink, then run cleanup if enabled.
 
-        Args:
-            records: List of records to flush
-
-        This method:
-        - Groups records by partition (year/month/day)
-        - Uses ParquetFileWriter for efficient writing
-        - Automatically handles chunking, compression, and dual upload
-        - Provides robust error handling per partition
-        - Cleans up old records if enabled
-
-        Features:
-        - Automatic chunking for large datasets
-        - Dual upload support (primary + upstream if enabled)
-        - Advanced consolidation for optimal performance
-        - Fault-tolerant processing (continues on partition errors)
+        Sink composition (which destinations receive records) is decided once at
+        construction time, not here.  To add a new storage destination, append a
+        new :class:`~application_sdk.observability.sinks.ObservabilitySink` in
+        ``__init__`` — this method never needs to change.
         """
-        if not ENABLE_OBSERVABILITY_DAPR_SINK:
+        if not ENABLE_OBSERVABILITY_DAPR_SINK or not records:
             return
         try:
-            # Group records by partition
-            partition_records = {}
-            for record in records:
-                # Convert timestamp to datetime
-                record_time = datetime.fromtimestamp(record["timestamp"])
-                partition_path = self._get_partition_path(record_time)
-
-                if partition_path not in partition_records:
-                    partition_records[partition_path] = []
-                partition_records[partition_path].append(record)
-
-                # Write records to each partition using ParquetFileWriter
-            for partition_path, partition_data in partition_records.items():
-                # Create new dataframe from current records
-                new_df = pd.DataFrame(partition_data)
-
-                # Extract partition values from path and add to dataframe
-                partition_parts = os.path.basename(
-                    os.path.dirname(partition_path)
-                ).split(os.sep)
-                for part in partition_parts:
-                    if part.startswith("year="):
-                        new_df["year"] = int(part.split("=")[1])
-                    elif part.startswith("month="):
-                        new_df["month"] = int(part.split("=")[1])
-                    elif part.startswith("day="):
-                        new_df["day"] = int(part.split("=")[1])
-
-                # Use new data directly - let ParquetFileWriter handle consolidation and merging
-                df = new_df
-
-                # Use ParquetFileWriter for efficient writing and uploading
-                # Set the output path for this partition
-                try:
-                    # Lazy import and instantiation of ParquetFileWriter
-                    from application_sdk.io.parquet import ParquetFileWriter
-
-                    parquet_writer = ParquetFileWriter(
-                        path=partition_path,
-                        chunk_start=0,
-                        chunk_part=int(time()),
-                    )
-
-                    await parquet_writer._write_dataframe(dataframe=df)
-
-                except Exception as partition_error:
-                    logging.error(
-                        f"Error processing partition {partition_path}: {str(partition_error)}"
-                    )
-
-            # Clean up old records if enabled
+            for sink in self._sinks:
+                await sink.flush(records)
             if self._cleanup_enabled:
                 await self._check_and_cleanup()
-
-        except Exception as e:
-            logging.error(f"Error flushing records batch: {e}")
+        except Exception:
+            logging.exception("Error flushing records batch")
 
     async def _check_and_cleanup(self):
         """Check if cleanup is needed and perform it if necessary.
@@ -482,17 +432,7 @@ class AtlanObservability(Generic[T], ABC):
         - Syncs changes with object store
         """
         try:
-            # Determine the base directory
-            if self.file_name == LOG_FILE_NAME:
-                base_dir = "logs"
-            elif self.file_name == METRICS_FILE_NAME:
-                base_dir = "metrics"
-            elif self.file_name == TRACES_FILE_NAME:
-                base_dir = "traces"
-            else:
-                base_dir = "other"
-
-            data_dir = os.path.join(self.data_dir, base_dir)
+            data_dir = os.path.join(self.data_dir, self._record_type.value)
             if not os.path.exists(data_dir):
                 return
 
