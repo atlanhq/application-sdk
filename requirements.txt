@@ -28,7 +28,7 @@ attrs==25.4.0
     #   cyclopts
     #   jsonschema
     #   referencing
-authlib==1.6.6
+authlib==1.6.9
     # via
     #   fastmcp
     #   pyatlan
@@ -51,7 +51,7 @@ beartype==0.22.9
     # via
     #   py-key-value-aio
     #   py-key-value-shared
-black==25.12.0
+black==26.3.1
     # via pandera
 boto3==1.42.25
     # via atlan-application-sdk
@@ -325,7 +325,7 @@ opentelemetry-semantic-conventions==0.60b1
     # via
     #   opentelemetry-instrumentation
     #   opentelemetry-sdk
-orjson==3.11.5
+orjson==3.11.7
     # via atlan-application-sdk
 packaging==25.0
     # via
@@ -416,7 +416,7 @@ pygments==2.19.2
     # via
     #   pytest
     #   rich
-pyjwt==2.10.1
+pyjwt==2.12.1
     # via
     #   mcp
     #   msal
@@ -450,7 +450,7 @@ python-multipart==0.0.22
     #   mcp
 python-slugify==8.0.4
     # via frictionless
-pytokens==0.3.0
+pytokens==0.4.1
     # via black
 pytz==2025.2
     # via
@@ -520,7 +520,7 @@ sentry-sdk==2.49.0
     # via fastapi-cloud-cli
 shellingham==1.5.4
     # via typer
-simpleeval==1.0.3
+simpleeval==1.0.6
     # via frictionless
 six==1.17.0
     # via python-dateutil
