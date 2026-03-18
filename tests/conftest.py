@@ -48,7 +48,6 @@ def mock_dapr_client():
         return patch(target, mock_dapr)
 
     with (
-        _patch("application_sdk.observability.observability.DaprClient"),
         _patch("application_sdk.infrastructure._dapr.client.DaprClient"),
     ):
         yield

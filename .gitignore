@@ -164,6 +164,9 @@ docs/reference/*.rst
 # Interrogate coverage report
 docstring-cov.md
 
+# vscode settings
+.vscode
+
 # local
 local/
 temporal.db

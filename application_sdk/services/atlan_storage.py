@@ -9,10 +9,10 @@ detailed reporting through the MigrationSummary model.
 """
 
 import asyncio
+import tempfile
 import warnings
 from typing import Dict, List
 
-from dapr.clients import DaprClient
 from pydantic import BaseModel
 from temporalio import activity
 
@@ -21,7 +21,8 @@ from application_sdk.constants import (
     UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage import download_file, list_keys, upload_file
+from application_sdk.storage.binding import create_store_from_binding
 
 warnings.warn(
     "application_sdk.services.atlan_storage is deprecated. "
@@ -64,7 +65,22 @@ class MigrationSummary(BaseModel):
 class AtlanStorage:
     """Handles upload operations to Atlan storage and migration from objectstore."""
 
-    OBJECT_CREATE_OPERATION = "create"
+    _deployment_store = None
+    _upstream_store = None
+
+    @classmethod
+    def _get_deployment_store(cls):
+        if cls._deployment_store is None:
+            cls._deployment_store = create_store_from_binding(
+                DEPLOYMENT_OBJECT_STORE_NAME
+            )
+        return cls._deployment_store
+
+    @classmethod
+    def _get_upstream_store(cls):
+        if cls._upstream_store is None:
+            cls._upstream_store = create_store_from_binding(UPSTREAM_OBJECT_STORE_NAME)
+        return cls._upstream_store
 
     @classmethod
     async def _migrate_single_file(cls, file_path: str) -> tuple[str, bool, str]:
@@ -89,24 +105,25 @@ class AtlanStorage:
             and error handling.
         """
         try:
-            # Get file data from objectstore
-            file_data = await ObjectStore.get_content(
-                file_path, store_name=DEPLOYMENT_OBJECT_STORE_NAME
-            )
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                tmp_path = tmp.name
 
-            with DaprClient() as client:
-                metadata = {"key": file_path}
-
-                client.invoke_binding(
-                    binding_name=UPSTREAM_OBJECT_STORE_NAME,
-                    operation=cls.OBJECT_CREATE_OPERATION,
-                    data=file_data,
-                    binding_metadata=metadata,
+            try:
+                await download_file(
+                    file_path,
+                    tmp_path,
+                    store=cls._get_deployment_store(),
                 )
-
-                logger.debug(
-                    f"Successfully uploaded file to Atlan storage: {file_path}"
+                await upload_file(
+                    file_path,
+                    tmp_path,
+                    store=cls._get_upstream_store(),
                 )
+            finally:
+                import os
+
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
 
             logger.debug(f"Successfully migrated: {file_path}")
             return file_path, True, ""
@@ -164,8 +181,8 @@ class AtlanStorage:
             )
 
             # Get list of all files to migrate from objectstore
-            files_to_migrate = await ObjectStore.list_files(
-                prefix, store_name=DEPLOYMENT_OBJECT_STORE_NAME
+            files_to_migrate = await list_keys(
+                prefix, store=cls._get_deployment_store()
             )
 
             total_files = len(files_to_migrate)

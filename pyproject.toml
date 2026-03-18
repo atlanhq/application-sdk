@@ -49,8 +49,8 @@ Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 [project.optional-dependencies]
 workflows = [
     "dapr==1.16.0",
-    "temporalio>=1.7.1,<1.22.0",
-    "orjson>=3.10.18,<3.12.0",
+    "temporalio>=1.7.1,<1.24.0",
+    "orjson>=3.11.6,<3.12.0",
 ]
 pandas = [
     "pandas>=2.2.3,<2.4.0",
@@ -119,6 +119,9 @@ docs = [
 ]
 
 [tool.poe.tasks]
+# Contract generation
+generate.shell = "cd contract && pkl eval -m generated app.pkl && mkdir -p ../app/contracts && mv generated/input.py ../app/contracts/_input.py"
+
 download-components.shell = "ls -l components/*.yaml"
 # Dapr and Temporal service tasks
 start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
@@ -192,6 +195,10 @@ default-groups = ["dev", "test"]
 constraint-dependencies = [
     "python-multipart>=0.0.22",  # CVE-2026-24486
     "protobuf>=6.33.5",          # CVE-2026-0994
+    "authlib>=1.6.7",            # CVE-2026-28802
+    "black>=26.3.1",             # CVE-2026-32274
+    "pyjwt>=2.12.0",             # CVE-2026-32597
+    "simpleeval>=1.0.5",         # CVE-2026-32640
 ]
 
 # Uncomment the following section in case you want to publish to testpypi

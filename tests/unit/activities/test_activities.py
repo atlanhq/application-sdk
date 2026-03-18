@@ -244,15 +244,16 @@ class TestActivitiesInterfaceActivities:
         mock_build_output_path,
         mock_activities,
     ):
-        """Test get_workflow_args when extraction fails."""
+        """Test get_workflow_args when statestore fails — SDK logs warning and returns defaults."""
         workflow_config = {"workflow_id": "test-123"}
         mock_get_state.side_effect = Exception("Extraction failed")
         mock_get_workflow_id.return_value = "test-123"
         mock_get_workflow_run_id.return_value = "run-456"
         mock_build_output_path.return_value = "test/output/path"
 
-        with pytest.raises(Exception, match="Extraction failed"):
-            await mock_activities.get_workflow_args(workflow_config)
+        result = await mock_activities.get_workflow_args(workflow_config)
+        assert isinstance(result, dict)
+        assert result["workflow_id"] == "test-123"
 
     async def test_preflight_check_success(self, mock_activities):
         """Test successful preflight_check activity."""

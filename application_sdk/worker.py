@@ -5,6 +5,7 @@ including their initialization, configuration, and execution with graceful shutd
 """
 
 import asyncio
+import os
 import signal
 import sys
 import threading
@@ -19,6 +20,8 @@ from application_sdk.constants import (
     DEPLOYMENT_NAME,
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     MAX_CONCURRENT_ACTIVITIES,
+    TEMPORAL_BUILD_ID,
+    TEMPORAL_DEPLOYMENT_NAME,
 )
 from application_sdk.interceptors.events import _publish_event_via_binding
 from application_sdk.interceptors.models import (
@@ -219,6 +222,8 @@ class Worker:
                 max_concurrent_activities=max_concurrent_activities,
                 workflow_count=len(workflow_classes),
                 activity_count=len(workflow_activities),
+                build_id=TEMPORAL_BUILD_ID or None,
+                use_worker_versioning=bool(TEMPORAL_BUILD_ID),
             )
 
     async def start(self, daemon: bool = True, *args: Any, **kwargs: Any) -> None:
@@ -248,9 +253,27 @@ class Worker:
             3. Worker exits early if activities finish, or at timeout
         """
         if daemon:
-            worker_thread = threading.Thread(
-                target=lambda: asyncio.run(self.start(daemon=False)), daemon=True
-            )
+
+            def _run_daemon() -> None:
+                try:
+                    asyncio.run(self.start(daemon=False))
+                except (SystemExit, KeyboardInterrupt):
+                    return
+                except Exception as e:
+                    logger.error(f"Worker daemon crashed: {e}", exc_info=True)
+                else:
+                    logger.warning("Worker daemon exited without error")
+
+                # Worker exited while the main thread (server) is still alive —
+                # the pod is now broken. Send SIGTERM so k8s can restart it.
+                if threading.main_thread().is_alive():
+                    logger.error(
+                        "Worker stopped while server is still running. "
+                        "Sending SIGTERM to trigger pod restart."
+                    )
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            worker_thread = threading.Thread(target=_run_daemon, daemon=True)
             worker_thread.start()
             return
 
@@ -276,9 +299,20 @@ class Worker:
             )
             self.workflow_worker = worker
 
-            logger.info(
-                f"Starting worker with task queue: {self.workflow_client.worker_task_queue}"
-            )
+            if TEMPORAL_BUILD_ID and TEMPORAL_DEPLOYMENT_NAME:
+                logger.info(
+                    f"Starting versioned worker with task queue: {self.workflow_client.worker_task_queue}, "
+                    f"deployment: {TEMPORAL_DEPLOYMENT_NAME}, build_id: {TEMPORAL_BUILD_ID}"
+                )
+            elif TEMPORAL_BUILD_ID:
+                logger.info(
+                    f"Starting versioned worker with task queue: {self.workflow_client.worker_task_queue}, "
+                    f"build_id: {TEMPORAL_BUILD_ID}"
+                )
+            else:
+                logger.info(
+                    f"Starting worker with task queue: {self.workflow_client.worker_task_queue}"
+                )
 
             # Set up signal handlers and run worker
             self._setup_signal_handlers()

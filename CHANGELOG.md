@@ -36,6 +36,81 @@ The following v2 modules now emit `DeprecationWarning` on import:
 - `application_sdk.application.metadata_extraction.sql.BaseSQLMetadataExtractionApplication` → use `application_sdk.templates.SqlMetadataExtractor`
 
 
+## v2.8.0 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.4...v2.8.0
+
+### Features
+
+- native orchestration support with contract toolkit integration (#1115) (by @fyzanshaik-atlan in [63bd8c7](https://github.com/atlanhq/application-sdk/commit/63bd8c7))
+
+
+## v2.7.4 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.3...v2.7.4
+
+### Features
+
+- add worker deployment versioning support (#1074) (by @anuj-atlan in [8a10fd2](https://github.com/atlanhq/application-sdk/commit/8a10fd2))
+
+
+## v2.7.3 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.2...v2.7.3
+
+### Features
+
+- centralized SDR path with json.gz format (#1111) (by @EuclidStellar in [41a98db](https://github.com/atlanhq/application-sdk/commit/41a98db))
+
+### Bug Fixes
+
+- pass github_token to trivy-action to avoid rate limit on binary download (#1127) (by @nishantmunjal7 in [3a2b410](https://github.com/atlanhq/application-sdk/commit/3a2b410))
+- replace Snyk with Trivy container scan — bypass broken trivy-action (#1130) (by @nishantmunjal7 in [4ecb9a6](https://github.com/atlanhq/application-sdk/commit/4ecb9a6))
+- disable daft analytics via Dockerfile ENV to avoid Temporal non-determinism (#1131) (by @vishalkatlan in [3bdff48](https://github.com/atlanhq/application-sdk/commit/3bdff48))
+
+
+## v2.7.2 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.1...v2.7.2
+
+### Bug Fixes
+
+- pre-pull GHCR image before Snyk scan to fix 404 auth failure (#1123) (by @nishantmunjal7 in [f8fa380](https://github.com/atlanhq/application-sdk/commit/f8fa380))
+- replace Snyk with Trivy for container scanning (#1126) (by @nishantmunjal7 in [80f4a3b](https://github.com/atlanhq/application-sdk/commit/80f4a3b))
+
+
+## v2.7.1 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.0...v2.7.1
+
+### Features
+
+- add app deployment dispatcher job in build workflow (#1121) (by @Lalit3716-atlan in [e5f524c](https://github.com/atlanhq/application-sdk/commit/e5f524c))
+
+### Bug Fixes
+
+- Crash the server if the worker crashes (#1118) (by @SanilK2108 in [0a7b2ad](https://github.com/atlanhq/application-sdk/commit/0a7b2ad))
+
+
+## v2.7.0 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.2...v2.7.0
+
+### Features
+
+- dual OTLP export and correlation_id propagation for workflow logs (#1102) (by @saig214 in [fd7ae09](https://github.com/atlanhq/application-sdk/commit/fd7ae09))
+
+### Bug Fixes
+
+- normalize attempt logging and guard missing UI assets (BLDX-737 / BLDX-739) (#1108) (by @fyzanshaik-atlan in [81905af](https://github.com/atlanhq/application-sdk/commit/81905af))
+- bump Dapr CLI to 1.17.0 and widen temporalio bound to resolve CVEs (BLDX-744) (#1106) (by @praveenkmr in [3d6343e](https://github.com/atlanhq/application-sdk/commit/3d6343e))
+- align DockerHub image tag format with GHCR ({branch}-{sha7}abcd) (#1101) (by @nishantmunjal7 in [bbc3317](https://github.com/atlanhq/application-sdk/commit/bbc3317))
+
+### Performance
+
+- parallel multi-arch build — cut build time from ~3 min to <1 min (#1103) (by @nishantmunjal7 in [9d30a5a](https://github.com/atlanhq/application-sdk/commit/9d30a5a))
+
+
 ## v2.6.2 (March 10, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.1...v2.6.2
