@@ -35,9 +35,7 @@ on:
       ORG_PAT_GITHUB:
         required: true
         description: "Org-level PAT for GHCR login — needed to pull private base images from other repos in the org"
-      SNYK_TOKEN:
-        required: false
-        description: "Snyk API token for container scanning (optional — scan is non-blocking)"
+      # Note: no SNYK_TOKEN needed — scanning is done with Trivy (no auth required)
       DOCKER_HUB_PAT_RW:
         required: false
         description: "DockerHub PAT (read/write) — only needed when atlan.yaml self_deployed_runtime=true"
@@ -45,7 +43,7 @@ on:
 permissions:
   contents: read
   packages: write
-  security-events: write  # For Snyk SARIF upload
+  security-events: write  # For Trivy SARIF upload
 
 jobs:
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
@@ -286,20 +284,15 @@ jobs:
           echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Job 4: Snyk scan — non-blocking, runs after manifest is available ─────────
-  snyk:
-    name: Snyk Container Scan
+  # ── Job 4: Trivy scan — non-blocking, runs after manifest is available ──────
+  trivy:
+    name: Trivy Container Scan
     needs: [prepare, merge]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     continue-on-error: true  # never block a release on a security scan
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -307,26 +300,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
-      - name: Pull image for Snyk scan
-        # snyk/actions/docker runs Snyk inside a container that doesn't inherit the host's
-        # Docker credentials (~/.docker/config.json). Pre-pulling on the host runner ensures
-        # the image is in the local daemon cache so Snyk can access it without re-authenticating.
-        run: docker pull ${{ needs.prepare.outputs.ghcr_image }}
-
-      - name: Snyk container scan
-        # Pinned to commit SHA — avoids silent breakage if snyk/actions@master changes
-        uses: snyk/actions/docker@9adf32b1121593767fc3c057af55b55db032dc04
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      - name: Run Trivy container scan
+        uses: aquasecurity/trivy-action@0.33.1
         with:
-          image: ${{ needs.prepare.outputs.ghcr_image }}
-          args: --severity-threshold=high --file=${{ needs.prepare.outputs.dockerfile }}
+          image-ref: ${{ needs.prepare.outputs.ghcr_image }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          scanners: vuln
+          ignore-unfixed: true
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
-      - name: Upload Snyk SARIF to GitHub Security
-        if: always() && hashFiles('snyk.sarif') != ''
+      - name: Upload Trivy SARIF to GitHub Security
+        if: always() && hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: snyk.sarif
+          sarif_file: trivy-results.sarif
+          category: trivy-container
 
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
   app-deployment-dispatcher:
