@@ -465,13 +465,19 @@ class AtlanObservability(Generic[T], ABC):
                         filename,
                     )
 
-                    # Upload to customer bucket
-                    await ObjectStore.upload_file(
-                        local_path, remote_key, store_name=DEPLOYMENT_OBJECT_STORE_NAME
-                    )
+                    # Upload to customer bucket (non-fatal if fails)
+                    try:
+                        await ObjectStore.upload_file(
+                            local_path,
+                            remote_key,
+                            store_name=DEPLOYMENT_OBJECT_STORE_NAME,
+                        )
+                    except Exception as e:
+                        logging.warning(
+                            f"Deployment objectstore upload failed (non-fatal): {e}"
+                        )
 
-                    # Dual upload to Atlan bucket when enabled
-                    # MDLH S3 pipe reads from this bucket
+                    # Upload to Atlan bucket (independent, MDLH reads from here)
                     if ENABLE_ATLAN_UPLOAD:
                         await ObjectStore.upload_file(
                             local_path,
