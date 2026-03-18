@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import logging
 import os
 import signal
@@ -11,19 +12,43 @@ from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
 import duckdb
-import pandas as pd
+import orjson
 from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    APPLICATION_NAME,
+    DEPLOYMENT_NAME,
     DEPLOYMENT_OBJECT_STORE_NAME,
+    ENABLE_ATLAN_UPLOAD,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
     STATE_STORE_NAME,
     TRACES_FILE_NAME,
+    UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
+
+# --- Path configuration ---
+# Structure: observability/<mode>/<signal>/year=.../hour=.../file.json.gz
+# SDR (ENABLE_ATLAN_UPLOAD=true):     sdr/logs/, sdr/metrics/, sdr/traces/
+# Non-SDR (ENABLE_ATLAN_UPLOAD=false): non-sdr/logs/, non-sdr/metrics/, non-sdr/traces/
+_OBS_MODE = "sdr" if ENABLE_ATLAN_UPLOAD else "non-sdr"
+
+# Map of signal type → local subdirectory (e.g., sdr/logs)
+LOCAL_OBS_SUBDIR_MAP = {
+    "logs": f"{_OBS_MODE}/logs",
+    "metrics": f"{_OBS_MODE}/metrics",
+    "traces": f"{_OBS_MODE}/traces",
+}
+
+# Map of signal type → S3 remote key prefix
+OBSERVABILITY_S3_PREFIX_MAP = {
+    "logs": f"artifacts/apps/observability/{_OBS_MODE}/logs",
+    "metrics": f"artifacts/apps/observability/{_OBS_MODE}/metrics",
+    "traces": f"artifacts/apps/observability/{_OBS_MODE}/traces",
+}
 
 
 class LogRecord(BaseModel):
@@ -214,35 +239,44 @@ class AtlanObservability(Generic[T], ABC):
             except Exception as e:
                 logging.error(f"Error flushing instance: {e}")
 
+    def _get_signal_type(self) -> str:
+        """Map file_name to signal type (logs, metrics, traces).
+
+        Returns:
+            str: The signal type based on self.file_name
+        """
+        if self.file_name == LOG_FILE_NAME:
+            return "logs"
+        elif self.file_name == METRICS_FILE_NAME:
+            return "metrics"
+        elif self.file_name == TRACES_FILE_NAME:
+            return "traces"
+        return "other"
+
     def _get_partition_path(self, timestamp: datetime) -> str:
-        """Generate Hive partition path based on timestamp.
+        """Generate local partition path based on timestamp.
+
+        Uses signal-type-specific subdirectory (e.g., sdr-logs/, non-sdr-metrics/)
+        with hour-level partitioning. The full S3 prefix is applied separately
+        when computing the remote key for upload.
 
         Args:
             timestamp: The timestamp to generate partition path for
 
         Returns:
-            str: The partition path
+            str: The local partition path
         """
-        # Determine the base directory based on file type
-        if self.file_name == LOG_FILE_NAME:
-            base_dir = "logs"
-        elif self.file_name == METRICS_FILE_NAME:
-            base_dir = "metrics"
-        elif self.file_name == TRACES_FILE_NAME:
-            base_dir = "traces"
-        else:
-            base_dir = "other"
+        signal_type = self._get_signal_type()
+        local_subdir = LOCAL_OBS_SUBDIR_MAP.get(signal_type, f"{_OBS_MODE}/other")
 
-        # Create partition path components
-        partition_path = os.path.join(
+        return os.path.join(
             self.data_dir,
-            base_dir,
+            local_subdir,
             f"year={timestamp.year}",
             f"month={timestamp.month:02d}",
             f"day={timestamp.day:02d}",
+            f"hour={timestamp.hour:02d}",
         )
-
-        return partition_path
 
     def _update_parquet_path(self):
         """Update the parquet file path based on current timestamp."""
@@ -363,31 +397,30 @@ class AtlanObservability(Generic[T], ABC):
             logging.error(f"Error buffering log: {e}")
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
-        """Flush records to parquet file and object store using ParquetFileWriter.
+        """Flush records to json.gz files and upload to object stores.
 
         Args:
             records: List of records to flush
 
         This method:
-        - Groups records by partition (year/month/day)
-        - Uses ParquetFileWriter for efficient writing
-        - Automatically handles chunking, compression, and dual upload
-        - Provides robust error handling per partition
-        - Cleans up old records if enabled
-
-        Features:
-        - Automatic chunking for large datasets
-        - Dual upload support (primary + upstream if enabled)
-        - Advanced consolidation for optimal performance
-        - Fault-tolerant processing (continues on partition errors)
+        - Groups records by partition (year/month/day/hour)
+        - Writes json.gz format (lightweight, no pandas dependency)
+        - Uses centralized path based on ENABLE_ATLAN_UPLOAD:
+          - SDR: artifacts/apps/observability/sdr-logs/ (MDLH reads from Atlan bucket)
+          - Non-SDR: artifacts/apps/observability/logs/ (to be deprecated)
+        - Uploads to customer bucket (DEPLOYMENT_OBJECT_STORE) always
+        - Uploads to Atlan bucket (UPSTREAM_OBJECT_STORE) when ENABLE_ATLAN_UPLOAD=true
         """
-        if not ENABLE_OBSERVABILITY_DAPR_SINK:
+        if not ENABLE_OBSERVABILITY_DAPR_SINK or not records:
             return
         try:
-            # Group records by partition
-            partition_records = {}
+            from time import time_ns
+
+            from application_sdk.services.objectstore import ObjectStore
+
+            # Group records by partition using record's own timestamp
+            partition_records: Dict[str, List[Dict[str, Any]]] = {}
             for record in records:
-                # Convert timestamp to datetime
                 record_time = datetime.fromtimestamp(record["timestamp"])
                 partition_path = self._get_partition_path(record_time)
 
@@ -395,44 +428,75 @@ class AtlanObservability(Generic[T], ABC):
                     partition_records[partition_path] = []
                 partition_records[partition_path].append(record)
 
-                # Write records to each partition using ParquetFileWriter
+            # Write each partition as json.gz and upload
             for partition_path, partition_data in partition_records.items():
-                # Create new dataframe from current records
-                new_df = pd.DataFrame(partition_data)
-
-                # Extract partition values from path and add to dataframe
-                partition_parts = os.path.basename(
-                    os.path.dirname(partition_path)
-                ).split(os.sep)
-                for part in partition_parts:
-                    if part.startswith("year="):
-                        new_df["year"] = int(part.split("=")[1])
-                    elif part.startswith("month="):
-                        new_df["month"] = int(part.split("=")[1])
-                    elif part.startswith("day="):
-                        new_df["day"] = int(part.split("=")[1])
-
-                # Use new data directly - let ParquetFileWriter handle consolidation and merging
-                df = new_df
-
-                # Use ParquetFileWriter for efficient writing and uploading
-                # Set the output path for this partition
+                local_path = None
                 try:
-                    # Lazy import and instantiation of ParquetFileWriter
-                    from application_sdk.io.parquet import ParquetFileWriter
+                    os.makedirs(partition_path, exist_ok=True)
 
-                    parquet_writer = ParquetFileWriter(
-                        path=partition_path,
-                        chunk_start=0,
-                        chunk_part=int(time()),
+                    # Get timestamp from first record for remote key partitioning
+                    first_record_time = datetime.fromtimestamp(
+                        partition_data[0]["timestamp"]
                     )
 
-                    await parquet_writer._write_dataframe(dataframe=df)
+                    # Lexi-sortable filename
+                    filename = (
+                        f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
+                    )
+                    local_path = os.path.join(partition_path, filename)
+
+                    # Write NDJSON with gzip compression
+                    with gzip.open(local_path, "wb") as f:
+                        for record in partition_data:
+                            f.write(orjson.dumps(record) + b"\n")
+
+                    # Compute remote key using signal-type-specific S3 prefix
+                    signal_type = self._get_signal_type()
+                    s3_prefix = OBSERVABILITY_S3_PREFIX_MAP.get(
+                        signal_type,
+                        f"artifacts/apps/observability/{_OBS_MODE}/other",
+                    )
+                    remote_key = os.path.join(
+                        s3_prefix,
+                        f"year={first_record_time.year}",
+                        f"month={first_record_time.month:02d}",
+                        f"day={first_record_time.day:02d}",
+                        f"hour={first_record_time.hour:02d}",
+                        filename,
+                    )
+
+                    # Upload to customer bucket (non-fatal if fails)
+                    try:
+                        await ObjectStore.upload_file(
+                            local_path,
+                            remote_key,
+                            store_name=DEPLOYMENT_OBJECT_STORE_NAME,
+                        )
+                    except Exception as e:
+                        logging.warning(
+                            f"Deployment objectstore upload failed (non-fatal): {e}"
+                        )
+
+                    # Upload to Atlan bucket (independent, MDLH reads from here)
+                    if ENABLE_ATLAN_UPLOAD:
+                        await ObjectStore.upload_file(
+                            local_path,
+                            remote_key,
+                            store_name=UPSTREAM_OBJECT_STORE_NAME,
+                        )
+
+                    logging.debug(
+                        f"Exported {len(partition_data)} records → {remote_key}"
+                    )
 
                 except Exception as partition_error:
                     logging.error(
                         f"Error processing partition {partition_path}: {str(partition_error)}"
                     )
+                finally:
+                    # Always clean up local file to prevent disk leaks
+                    if local_path and os.path.exists(local_path):
+                        os.unlink(local_path)
 
             # Clean up old records if enabled
             if self._cleanup_enabled:
@@ -475,24 +539,17 @@ class AtlanObservability(Generic[T], ABC):
         """Clean up records older than retention_days.
 
         This method:
-        - Determines the base directory
+        - Uses the centralized SDR path
         - Walks through the partition directories
         - Removes records older than retention period
         - Updates or deletes files as needed
         - Syncs changes with object store
         """
         try:
-            # Determine the base directory
-            if self.file_name == LOG_FILE_NAME:
-                base_dir = "logs"
-            elif self.file_name == METRICS_FILE_NAME:
-                base_dir = "metrics"
-            elif self.file_name == TRACES_FILE_NAME:
-                base_dir = "traces"
-            else:
-                base_dir = "other"
-
-            data_dir = os.path.join(self.data_dir, base_dir)
+            # Use local subdir (same as _get_partition_path)
+            signal_type = self._get_signal_type()
+            local_subdir = LOCAL_OBS_SUBDIR_MAP.get(signal_type, f"{_OBS_MODE}/other")
+            data_dir = os.path.join(self.data_dir, local_subdir)
             if not os.path.exists(data_dir):
                 return
 
@@ -612,40 +669,37 @@ class DuckDBUI:
             return result == 0
 
     def start_ui(self):
-        """Start DuckDB UI and create views for Hive partitioned parquet files."""
+        """Start DuckDB UI and create views for Hive partitioned json.gz files."""
         if not self._is_duckdb_ui_running():
             os.makedirs(self.observability_dir, exist_ok=True)
             con = duckdb.connect(self.db_path)
 
-            def process_partitioned_files(directory, prefix=""):
-                """Process Hive partitioned parquet files and create views."""
-                # Skip if directory doesn't exist
+            def process_partitioned_files(directory, view_name):
+                """Process Hive partitioned json.gz files and create views."""
                 if not os.path.exists(directory):
                     return
 
-                # Check if there are any parquet files in the directory
-                if not any(Path(directory).rglob("*.parquet")):
+                # Check if there are any json.gz files in the directory
+                if not any(Path(directory).rglob("*.json.gz")):
                     return
 
-                # Create view name based on data type
-                view_name = prefix if prefix else "data"
-
-                # Create a view that reads all parquet files in the directory
+                # Create a view that reads all json.gz files in the directory
                 # using DuckDB's native Hive partitioning support
                 view_query = f"""
                 CREATE OR REPLACE VIEW {view_name} AS
                 SELECT *
-                FROM read_parquet('{directory}/**/*.parquet',
-                                hive_partitioning = true,
-                                hive_types = {{'year': INTEGER, 'month': INTEGER, 'day': INTEGER}})
+                FROM read_json_auto('{directory}/**/*.json.gz',
+                                   hive_partitioning = true,
+                                   hive_types = {{'year': INTEGER, 'month': INTEGER, 'day': INTEGER, 'hour': INTEGER}})
                 """
                 con.execute(view_query)
 
-            # Process each type of data
-            for data_type in ["logs", "metrics", "traces"]:
-                data_dir = os.path.join(self.observability_dir, data_type)
+            # Process each signal type under the mode directory (sdr/ or non-sdr/)
+            mode_dir = os.path.join(self.observability_dir, _OBS_MODE)
+            for signal_type in ["logs", "metrics", "traces"]:
+                data_dir = os.path.join(mode_dir, signal_type)
                 if os.path.exists(data_dir):
-                    process_partitioned_files(data_dir, data_type)
+                    process_partitioned_files(data_dir, signal_type)
 
             # Start DuckDB UI
             con.execute("CALL start_ui();")
