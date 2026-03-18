@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.8.0 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.4...v2.8.0
+
+### Features
+
+- native orchestration support with contract toolkit integration (#1115) (by @fyzanshaik-atlan in [63bd8c7](https://github.com/atlanhq/application-sdk/commit/63bd8c7))
+
+
 ## v2.7.4 (March 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.3...v2.7.4
