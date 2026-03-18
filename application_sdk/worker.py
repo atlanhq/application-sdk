@@ -20,6 +20,8 @@ from application_sdk.constants import (
     DEPLOYMENT_NAME,
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     MAX_CONCURRENT_ACTIVITIES,
+    TEMPORAL_BUILD_ID,
+    TEMPORAL_DEPLOYMENT_NAME,
 )
 from application_sdk.interceptors.models import (
     ApplicationEventNames,
@@ -220,6 +222,8 @@ class Worker:
                 max_concurrent_activities=max_concurrent_activities,
                 workflow_count=len(workflow_classes),
                 activity_count=len(workflow_activities),
+                build_id=TEMPORAL_BUILD_ID or None,
+                use_worker_versioning=bool(TEMPORAL_BUILD_ID),
             )
 
     async def start(self, daemon: bool = True, *args: Any, **kwargs: Any) -> None:
@@ -295,9 +299,20 @@ class Worker:
             )
             self.workflow_worker = worker
 
-            logger.info(
-                f"Starting worker with task queue: {self.workflow_client.worker_task_queue}"
-            )
+            if TEMPORAL_BUILD_ID and TEMPORAL_DEPLOYMENT_NAME:
+                logger.info(
+                    f"Starting versioned worker with task queue: {self.workflow_client.worker_task_queue}, "
+                    f"deployment: {TEMPORAL_DEPLOYMENT_NAME}, build_id: {TEMPORAL_BUILD_ID}"
+                )
+            elif TEMPORAL_BUILD_ID:
+                logger.info(
+                    f"Starting versioned worker with task queue: {self.workflow_client.worker_task_queue}, "
+                    f"build_id: {TEMPORAL_BUILD_ID}"
+                )
+            else:
+                logger.info(
+                    f"Starting worker with task queue: {self.workflow_client.worker_task_queue}"
+                )
 
             # Set up signal handlers and run worker
             self._setup_signal_handlers()

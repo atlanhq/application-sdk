@@ -177,6 +177,8 @@ class WorkerStartEventData(BaseModel):
     max_concurrent_activities: Optional[int]
     workflow_count: int
     activity_count: int
+    build_id: Optional[str] = None
+    use_worker_versioning: bool = False
 
 
 class WorkerTokenRefreshEventData(BaseModel):
