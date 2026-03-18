@@ -116,11 +116,12 @@ class TestCreateActivityFromTask:
         self._make_app_with_task()
         task_registry = TaskRegistry.get_instance()
         tasks = task_registry.get_tasks_for_app("_greeter-app")
-        task_meta = tasks[0]
-        create_activity_from_task(task_meta)
+        # Find the user-defined greet task (not the framework upload/download tasks)
+        greet_task = next(t for t in tasks if t.name == "greet")
+        create_activity_from_task(greet_task)
         # Check that input type matches
-        assert task_meta.input_type is _ActInput
-        assert task_meta.output_type is _ActOutput
+        assert greet_task.input_type is _ActInput
+        assert greet_task.output_type is _ActOutput
 
     def test_activity_name_matches_task_name(self) -> None:
         self._make_app_with_task()
@@ -161,7 +162,8 @@ class TestGetAllTaskActivities:
                 return _ActOutput()
 
         activities = get_all_task_activities()
-        assert len(activities) == 2
+        # 2 user tasks + 2 framework tasks (upload, download) = 4
+        assert len(activities) == 4
 
     def test_filters_by_app_names(self) -> None:
         class _AppA(App):
@@ -208,7 +210,8 @@ class TestGetAllTaskActivities:
                 return _Out2()
 
         activities = get_all_task_activities(app_names=None)
-        assert len(activities) == 2
+        # 1 user task per app + 2 framework tasks (upload, download) per app = 6
+        assert len(activities) == 6
 
 
 class TestGetActivityOptions:
@@ -233,7 +236,8 @@ class TestGetActivityOptions:
 
         task_registry = TaskRegistry.get_instance()
         tasks = task_registry.get_tasks_for_app("_timeout-app")
-        options = get_activity_options(tasks[0])
+        my_task = next(t for t in tasks if t.name == "my_task")
+        options = get_activity_options(my_task)
 
         assert "start_to_close_timeout" in options
         assert options["start_to_close_timeout"] == timedelta(seconds=300)
@@ -249,7 +253,8 @@ class TestGetActivityOptions:
 
         task_registry = TaskRegistry.get_instance()
         tasks = task_registry.get_tasks_for_app("_retry-app")
-        options = get_activity_options(tasks[0])
+        retryable_task = next(t for t in tasks if t.name == "retryable")
+        options = get_activity_options(retryable_task)
 
         assert "retry_policy" in options
         assert options["retry_policy"].maximum_attempts == 5
@@ -265,5 +270,6 @@ class TestGetActivityOptions:
 
         task_registry = TaskRegistry.get_instance()
         tasks = task_registry.get_tasks_for_app("_default-retry-app")
-        options = get_activity_options(tasks[0])
+        simple_task = next(t for t in tasks if t.name == "simple")
+        options = get_activity_options(simple_task)
         assert options["retry_policy"] is not None

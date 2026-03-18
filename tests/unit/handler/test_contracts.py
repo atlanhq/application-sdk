@@ -8,11 +8,9 @@ from application_sdk.handler.contracts import (
     AuthStatus,
     Credential,
     MetadataField,
-    MetadataInput,
     MetadataObject,
     MetadataOutput,
     PreflightCheck,
-    PreflightInput,
     PreflightOutput,
     PreflightStatus,
 )

@@ -29,7 +29,7 @@ from application_sdk.services.statestore import StateStore, StateType
 warnings.warn(
     "application_sdk.services.secretstore is deprecated. "
     "Use application_sdk.infrastructure.secrets.SecretStore instead. "
-    "This module will be removed in v4.0.0.",
+    "This module will be removed in v3.1.0.",
     DeprecationWarning,
     stacklevel=2,
 )

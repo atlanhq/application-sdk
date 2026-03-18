@@ -6,9 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
-from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 
 

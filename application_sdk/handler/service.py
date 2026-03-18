@@ -49,11 +49,11 @@ from application_sdk.handler.contracts import (
 )
 
 if TYPE_CHECKING:
+    from obstore.store import ObjectStore
     from temporalio.client import Client
     from temporalio.converter import DataConverter
 
     from application_sdk.app.base import App
-    from application_sdk.infrastructure.bindings import StorageBinding
     from application_sdk.infrastructure.state import StateStore
 
 
@@ -132,7 +132,7 @@ _temporal_client: Client | None = None
 _workflow_config: WorkflowClientConfig = WorkflowClientConfig()
 _handler_auth_manager: Any | None = None
 _state_store: StateStore | None = None
-_storage_binding: StorageBinding | None = None
+_storage: ObjectStore | None = None
 
 
 async def _get_temporal_client() -> Client:
@@ -216,7 +216,7 @@ def create_app_handler_service(
     auth_base_url: str = "",
     auth_scopes: str = "",
     state_store: StateStore | None = None,
-    storage_binding: StorageBinding | None = None,
+    storage: ObjectStore | None = None,
     title: str = "Handler Service",
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
@@ -232,7 +232,7 @@ def create_app_handler_service(
         task_queue: Task queue name (default: "{app_name}-queue").
         data_converter: Optional custom Temporal DataConverter.
         state_store: Optional state store for workflow config persistence.
-        storage_binding: Optional storage binding for file uploads.
+        storage: Optional obstore store for file uploads.
         title: OpenAPI title.
         description: OpenAPI description.
         version: API version string.
@@ -240,10 +240,10 @@ def create_app_handler_service(
     Returns:
         Configured FastAPI application.
     """
-    global _workflow_config, _state_store, _storage_binding
+    global _workflow_config, _state_store, _storage
 
     _state_store = state_store
-    _storage_binding = storage_binding
+    _storage = storage
     _workflow_config = WorkflowClientConfig(
         host=temporal_host,
         namespace=temporal_namespace,
@@ -810,12 +810,12 @@ def create_app_handler_service(
         prefix: str | None = Form(None),
         contentType: str | None = Form(None),
     ) -> JSONResponse:
-        if _storage_binding is None:
-            raise HTTPException(
-                status_code=503, detail="Storage binding not configured"
-            )
+        if _storage is None:
+            raise HTTPException(status_code=503, detail="Storage not configured")
 
         from pathlib import PurePosixPath
+
+        from application_sdk.storage.ops import put
 
         content = await file.read()
         file_size = len(content)
@@ -833,7 +833,7 @@ def create_app_handler_service(
         stored_name = f"{file_id}.{extension}" if extension else file_id
         key = f"{effective_prefix}/{stored_name}"
 
-        await _storage_binding.put(key=key, data=content, content_type=resolved_type)  # type: ignore[attr-defined]
+        await put(key, content, _storage)
 
         now_ms = int(datetime.now(UTC).timestamp() * 1000)
         response_obj = FileUploadResponse(

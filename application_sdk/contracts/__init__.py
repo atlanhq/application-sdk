@@ -25,6 +25,12 @@ from application_sdk.contracts.base import (
     validate_is_dataclass,
     validate_payload_safety,
 )
+from application_sdk.contracts.storage import (
+    DownloadInput,
+    DownloadOutput,
+    UploadInput,
+    UploadOutput,
+)
 from application_sdk.contracts.types import (
     BoundedDict,
     BoundedList,
@@ -52,4 +58,8 @@ __all__ = [
     "BoundedList",
     "FileReference",
     "MaxItems",
+    "UploadInput",
+    "UploadOutput",
+    "DownloadInput",
+    "DownloadOutput",
 ]

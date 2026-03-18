@@ -11,8 +11,9 @@ from temporalio import workflow
 from application_sdk.contracts.base import HeartbeatDetails
 
 if TYPE_CHECKING:
+    from obstore.store import ObjectStore
+
     from application_sdk.execution.heartbeat import HeartbeatController
-    from application_sdk.infrastructure.bindings import StorageBinding
     from application_sdk.infrastructure.secrets import SecretStore
     from application_sdk.infrastructure.state import StateStore
 
@@ -161,7 +162,7 @@ class AppContext:
     # These are set by the execution layer, not by users
     _state_store: "StateStore | None" = field(default=None, repr=False)
     _secret_store: "SecretStore | None" = field(default=None, repr=False)
-    _storage_binding: "StorageBinding | None" = field(default=None, repr=False)
+    _storage: "ObjectStore | None" = field(default=None, repr=False)
     _logger: Any = field(default=None, repr=False)
     _cancelled: bool = field(default=False, repr=False)
 
@@ -269,22 +270,24 @@ class AppContext:
     async def upload_bytes(
         self, key: str, data: bytes, *, content_type: str | None = None
     ) -> None:
-        """Upload bytes to the storage binding.
+        """Upload bytes to the storage store.
 
         Args:
             key: Object key/path.
             data: Bytes to upload.
-            content_type: Optional MIME type.
+            content_type: Optional MIME type (unused; kept for API compatibility).
 
         Raises:
-            RuntimeError: If no storage binding is configured.
+            RuntimeError: If no storage store is configured.
         """
-        if self._storage_binding is None:
-            raise RuntimeError("No storage binding configured")
-        await self._storage_binding.put(key, data, content_type=content_type)
+        if self._storage is None:
+            raise RuntimeError("No storage store configured")
+        from application_sdk.storage.ops import put
+
+        await put(key, data, self._storage)
 
     async def download_bytes(self, key: str) -> bytes | None:
-        """Download bytes from the storage binding.
+        """Download bytes from the storage store.
 
         Args:
             key: Object key/path.
@@ -293,11 +296,13 @@ class AppContext:
             The object data, or None if not found.
 
         Raises:
-            RuntimeError: If no storage binding is configured.
+            RuntimeError: If no storage store is configured.
         """
-        if self._storage_binding is None:
-            raise RuntimeError("No storage binding configured")
-        return await self._storage_binding.get(key)
+        if self._storage is None:
+            raise RuntimeError("No storage store configured")
+        from application_sdk.storage.ops import get_bytes
+
+        return await get_bytes(key, self._storage)
 
     def log_debug(self, message: str, **kwargs: Any) -> None:
         """Log a debug message."""

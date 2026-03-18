@@ -25,8 +25,9 @@ from application_sdk.services.objectstore import ObjectStore
 
 warnings.warn(
     "application_sdk.services.atlan_storage is deprecated. "
-    "Use application_sdk.infrastructure.bindings.StorageBinding instead. "
-    "This module will be removed in v4.0.0.",
+    "Use App.upload / App.download for workflow file transfer, or "
+    "application_sdk.storage for low-level operations. "
+    "This module will be removed in v3.1.0.",
     DeprecationWarning,
     stacklevel=2,
 )

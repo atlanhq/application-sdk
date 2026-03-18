@@ -213,12 +213,13 @@ def _create_infrastructure(
     Returns:
         Configured InfrastructureContext.
     """
-    from application_sdk.infrastructure.bindings import InMemoryBinding, StorageBinding
     from application_sdk.infrastructure.context import InfrastructureContext
     from application_sdk.infrastructure.secrets import InMemorySecretStore
     from application_sdk.infrastructure.state import InMemoryStateStore
 
     if os.environ.get("DAPR_HTTP_PORT"):
+        from pathlib import Path
+
         from application_sdk.constants import (
             DEPLOYMENT_OBJECT_STORE_NAME,
             EVENT_STORE_NAME,
@@ -231,14 +232,17 @@ def _create_infrastructure(
             DaprStateStore,
             create_dapr_client,
         )
+        from application_sdk.storage import create_store_from_binding
 
         dapr_client = create_dapr_client()
+        components_dir = Path(os.environ.get("DAPR_COMPONENTS_PATH", "./components"))
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
         return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
             secret_store=DaprSecretStore(dapr_client, store_name=SECRET_STORE_NAME),
-            storage_binding=StorageBinding(
-                DaprBinding(dapr_client, DEPLOYMENT_OBJECT_STORE_NAME)
+            storage=create_store_from_binding(
+                DEPLOYMENT_OBJECT_STORE_NAME,
+                components_dir=components_dir,
             ),
             event_binding=DaprBinding(dapr_client, EVENT_STORE_NAME),
         )
@@ -250,11 +254,17 @@ def _create_infrastructure(
         else:
             secret_store = InMemorySecretStore()
 
-        logger.info("No Dapr sidecar — using InMemory infrastructure")
+        storage_root = os.environ.get("APP_STORAGE_ROOT", "./local/dapr/objectstore")
+        from application_sdk.storage import create_local_store
+
+        logger.info(
+            "No Dapr sidecar — using InMemory + LocalStore infrastructure",
+            storage_root=storage_root,
+        )
         return InfrastructureContext(
             state_store=InMemoryStateStore(),
             secret_store=secret_store,
-            storage_binding=StorageBinding(InMemoryBinding()),
+            storage=create_local_store(storage_root),
             event_binding=None,
         )
 
@@ -450,7 +460,7 @@ def run_handler_mode(config: AppConfig) -> None:
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
         state_store=infra.state_store,
-        storage_binding=infra.storage_binding,
+        storage=infra.storage,
     )
 
 
@@ -591,7 +601,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
         state_store=infra.state_store,
-        storage_binding=infra.storage_binding,
+        storage=infra.storage,
     )
 
     uvicorn_server = uvicorn.Server(

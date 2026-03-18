@@ -20,13 +20,13 @@ from application_sdk.constants import (
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     MAX_CONCURRENT_ACTIVITIES,
 )
+from application_sdk.interceptors.events import _publish_event_via_binding
 from application_sdk.interceptors.models import (
     ApplicationEventNames,
     Event,
     EventTypes,
     WorkerStartEventData,
 )
-from application_sdk.interceptors.events import _publish_event_via_binding
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)

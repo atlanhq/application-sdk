@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, ClassVar, TypeVar
+from typing import Annotated, TypeVar
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -51,37 +51,38 @@ class FileReference:
 
     Temporal has a 2MB payload limit. Large data (files, blobs, large datasets)
     should be stored externally and referenced via FileReference.
+
+    Attributes:
+        local_path: Local filesystem path to the file or directory.
+        storage_path: Object-store key (single file) or prefix (directory).
+        is_durable: ``True`` when the data has been uploaded to the object
+            store and ``storage_path`` is set.
+        file_count: Number of files this reference covers.  Defaults to 1
+            for single-file references; set to the total number of files for
+            directory uploads/downloads.
     """
 
     local_path: str | None = None
-    size_bytes: int | None = None
-    checksum: str | None = None
-    content_type: str = "application/octet-stream"
+    storage_path: str | None = None
     is_durable: bool = False
-    storage_key: str | None = None
-
-    _CONTENT_TYPES: ClassVar[dict[str, str]] = {
-        ".jsonl": "application/x-ndjson",
-        ".ndjson": "application/x-ndjson",
-        ".json": "application/json",
-        ".csv": "text/csv",
-        ".tsv": "text/tab-separated-values",
-        ".parquet": "application/x-parquet",
-    }
+    file_count: int = 1
 
     @staticmethod
     def from_local(
         path: str | Path,
-        content_type: str | None = None,
-    ) -> FileReference:
-        """Create an ephemeral FileReference from a local filesystem path."""
+    ) -> "FileReference":
+        """Create an ephemeral FileReference from a local filesystem path.
+
+        Args:
+            path: Local file or directory path.
+
+        Returns:
+            An ephemeral ``FileReference`` (``is_durable=False``) with
+            ``local_path`` set.  ``file_count`` is always 1; use
+            :func:`~application_sdk.storage.transfer.upload` if you need
+            accurate file counts for directories.
+        """
         p = Path(path) if not isinstance(path, Path) else path
-        if content_type is None:
-            content_type = FileReference._CONTENT_TYPES.get(
-                p.suffix.lower(), "application/octet-stream"
-            )
         return FileReference(
             local_path=str(p),
-            size_bytes=p.stat().st_size if p.exists() else 0,
-            content_type=content_type,
         )

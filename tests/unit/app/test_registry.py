@@ -15,7 +15,6 @@ from application_sdk.app.registry import (
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 
-
 # =============================================================================
 # Test fixtures
 # =============================================================================

@@ -13,7 +13,6 @@ from application_sdk.app.task import (
 )
 from application_sdk.contracts.base import Input, Output
 
-
 # =============================================================================
 # Test fixtures
 # =============================================================================
@@ -215,7 +214,9 @@ class TestTaskContractValidation:
 
             class MyApp:
                 @task
-                async def my_task(self, input1: SimpleInput, input2: SimpleInput) -> SimpleOutput:
+                async def my_task(
+                    self, input1: SimpleInput, input2: SimpleInput
+                ) -> SimpleOutput:
                     return SimpleOutput()
 
     def test_task_contract_error_wrong_input_type(self) -> None:
@@ -229,7 +230,9 @@ class TestTaskContractValidation:
 
     def test_task_contract_error_no_return_annotation(self) -> None:
         """TaskContractError raised when return type is missing."""
-        with pytest.raises(TaskContractError, match="must have a return type annotation"):
+        with pytest.raises(
+            TaskContractError, match="must have a return type annotation"
+        ):
 
             class MyApp:
                 @task

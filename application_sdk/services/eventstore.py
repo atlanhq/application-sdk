@@ -36,7 +36,7 @@ from application_sdk.services._utils import is_component_registered
 warnings.warn(
     "application_sdk.services.eventstore is deprecated. "
     "Use application_sdk.infrastructure.context.get_infrastructure().event_binding instead. "
-    "This module will be removed in v4.0.0.",
+    "This module will be removed in v3.1.0.",
     DeprecationWarning,
     stacklevel=2,
 )

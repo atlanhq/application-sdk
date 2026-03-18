@@ -14,10 +14,8 @@ from application_sdk.infrastructure.bindings import (
     BindingError,
     BindingRequest,
     BindingResponse,
-    InMemoryBinding,
     InputBinding,
     OutputBinding,
-    StorageBinding,
 )
 from application_sdk.infrastructure.capacity import (
     CapacityPool,
@@ -56,10 +54,8 @@ __all__ = [
     "BindingError",
     "BindingRequest",
     "BindingResponse",
-    "InMemoryBinding",
     "InputBinding",
     "OutputBinding",
-    "StorageBinding",
     "CapacityPool",
     "LocalCapacityPool",
     "configure_capacity_pool",

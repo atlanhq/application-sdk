@@ -97,7 +97,7 @@ def create_activity_from_task(
         if infra is not None:
             app_context._state_store = infra.state_store
             app_context._secret_store = infra.secret_store
-            app_context._storage_binding = infra.storage_binding
+            app_context._storage = infra.storage
 
         app_instance._context = app_context
 
@@ -133,9 +133,29 @@ def create_activity_from_task(
             )
 
         try:
+            from application_sdk.storage.file_ref_sync import (
+                has_refs_to_materialize,
+                has_refs_to_persist,
+                materialize_file_refs,
+                persist_file_refs,
+            )
+
             method_name = getattr(task_metadata.func, "__name__", task_metadata.name)
             task_method = getattr(app_instance, method_name)
+
+            # Resolve the store once for both FileReference hooks.
+            store = infra.storage if infra is not None else None
+
+            # Materialise any durable FileReferences in the input before the task runs.
+            if store is not None and has_refs_to_materialize(input_data):
+                input_data = await materialize_file_refs(store, input_data)
+
             result = await task_method(input_data)
+
+            # Persist any ephemeral FileReferences in the output after the task completes.
+            if store is not None and has_refs_to_persist(result):
+                result = await persist_file_refs(store, result)
+
             return cast("Output", result)
 
         except Exception as e:

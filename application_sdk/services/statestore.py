@@ -21,7 +21,7 @@ from application_sdk.services.objectstore import ObjectStore
 warnings.warn(
     "application_sdk.services.statestore is deprecated. "
     "Use application_sdk.infrastructure.state.StateStore instead. "
-    "This module will be removed in v4.0.0.",
+    "This module will be removed in v3.1.0.",
     DeprecationWarning,
     stacklevel=2,
 )

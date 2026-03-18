@@ -16,6 +16,12 @@ from application_sdk.app.context import AppContext, TaskExecutionContext
 from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
+from application_sdk.contracts.storage import (
+    DownloadInput,
+    DownloadOutput,
+    UploadInput,
+    UploadOutput,
+)
 from application_sdk.contracts.types import FileReference
 from application_sdk.errors import (
     APP_CONTEXT_ERROR,
@@ -803,6 +809,123 @@ class App(ABC):
             parent_context=self.context,
             output_type=output_type,
             task_queue=task_queue,
+        )
+
+    # =========================================================================
+    # Framework-provided storage tasks
+    # =========================================================================
+
+    @task(timeout_seconds=600, retry_max_attempts=3)
+    async def upload(
+        self,
+        input: UploadInput,
+    ) -> UploadOutput:
+        """Framework task: upload a local file or directory to the object store.
+
+        Call this from ``run()`` — **not** from inside another ``@task``.
+        Wrapping the upload in its own Temporal activity gives it a dedicated
+        retry policy and timeout, and Temporal records the result so the upload
+        is never re-executed on workflow replay even if the worker is replaced
+        mid-run (e.g. a KEDA scale-down event).
+
+        For direct use inside an existing ``@task``, import and call
+        :func:`application_sdk.storage.transfer.upload` directly.
+
+        Args:
+            input: ``UploadInput`` describing the local file or directory and
+                optional destination override.
+
+        Returns:
+            ``UploadOutput`` with a durable ``FileReference`` (``is_durable=True``)
+            containing both ``local_path`` and ``storage_path``, plus ``file_count``
+            indicating the number of files uploaded.
+
+        Example — upload a single file produced by an extraction task::
+
+            async def run(self, input: PipelineInput) -> PipelineOutput:
+                extract = await self.extract_data(ExtractInput(source=input.source))
+                up = await self.upload(UploadInput(local_path=extract.output_file))
+                # up.ref is durable — safe to pass to a task on a different worker
+                await self.load_data(LoadInput(ref=up.ref))
+
+        Example — upload an entire output directory::
+
+            up = await self.upload(UploadInput(local_path="/tmp/output/"))
+            # up.ref.file_count == number of files in the directory
+        """
+        from application_sdk.storage.transfer import upload as _upload
+
+        store = self.context._storage
+        if store is None:
+            raise RuntimeError(
+                "No object store configured. "
+                "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
+            )
+        app_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
+        return await _upload(
+            input.local_path,
+            input.storage_path,
+            skip_if_exists=input.skip_if_exists,
+            store=store,
+            _app_prefix=app_prefix,
+        )
+
+    @task(timeout_seconds=600, retry_max_attempts=3)
+    async def download(
+        self,
+        input: DownloadInput,
+    ) -> DownloadOutput:
+        """Framework task: download a key or prefix from the object store.
+
+        Call this from ``run()`` — **not** from inside another ``@task``.
+        Handles both single-file and directory/prefix downloads automatically.
+        If ``input.ref`` is provided and ``input.storage_path`` is empty, the
+        ref's ``storage_path`` is used as the source.
+
+        For direct use inside an existing ``@task``, import and call
+        :func:`application_sdk.storage.transfer.download` directly.
+
+        Args:
+            input: ``DownloadInput`` with the store key or prefix to download
+                and optional local destination path.
+
+        Returns:
+            ``DownloadOutput`` with a fully materialised ``FileReference``
+            containing both ``storage_path`` and ``local_path``.
+
+        Example — download a file reference from a previous upload::
+
+            async def run(self, input: InferInput) -> InferOutput:
+                dl = await self.download(
+                    DownloadInput(storage_path=input.model_ref.storage_path)
+                )
+                result = await self.run_inference(
+                    InferenceInput(model_path=dl.ref.local_path, data=input.data)
+                )
+
+        Example — re-materialise an existing FileReference::
+
+            dl = await self.download(DownloadInput(ref=input.model_ref))
+        """
+        from application_sdk.storage.transfer import download as _download
+
+        store = self.context._storage
+        if store is None:
+            raise RuntimeError(
+                "No object store configured. "
+                "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
+            )
+
+        # Resolve storage_path: explicit field takes precedence over ref.storage_path
+        storage_path = input.storage_path
+        if not storage_path and input.ref is not None:
+            storage_path = input.ref.storage_path or ""
+
+        return await _download(
+            storage_path,
+            input.local_path,
+            skip_if_exists=input.skip_if_exists,
+            store=store,
         )
 
 

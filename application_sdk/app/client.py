@@ -173,7 +173,9 @@ class WorkflowAppClient:
                 from dataclasses import fields as dc_fields
 
                 expected_fields = {f.name for f in dc_fields(output_type)}
-                filtered_result = {k: v for k, v in result.items() if k in expected_fields}
+                filtered_result = {
+                    k: v for k, v in result.items() if k in expected_fields
+                }
                 return output_type(**filtered_result)
 
             # Return result as-is (typically the output dataclass)
