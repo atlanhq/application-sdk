@@ -319,7 +319,7 @@ jobs:
   app-deployment-dispatcher:
     name: Dispatch App Deployment
     needs: [prepare, merge]
-    if: needs.prepare.outputs.enable_sdr == 'true'
+    if: github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
