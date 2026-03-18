@@ -307,6 +307,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
+      - name: Pull image for Snyk scan
+        # snyk/actions/docker runs Snyk inside a container that doesn't inherit the host's
+        # Docker credentials (~/.docker/config.json). Pre-pulling on the host runner ensures
+        # the image is in the local daemon cache so Snyk can access it without re-authenticating.
+        run: docker pull ${{ needs.prepare.outputs.ghcr_image }}
+
       - name: Snyk container scan
         # Pinned to commit SHA — avoids silent breakage if snyk/actions@master changes
         uses: snyk/actions/docker@9adf32b1121593767fc3c057af55b55db032dc04
