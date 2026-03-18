@@ -300,19 +300,32 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
-      - name: Run Trivy container scan
-        uses: aquasecurity/trivy-action@0.29.0
-        with:
-          image-ref: ${{ needs.prepare.outputs.ghcr_image }}
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          scanners: vuln
-          ignore-unfixed: true
+      - name: Install Trivy
+        # Download the binary directly from GitHub releases — bypasses setup-trivy
+        # which fetches install.sh from trivy@main (currently broken).
         env:
           GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          TRIVY_VERSION=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            https://api.github.com/repos/aquasecurity/trivy/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+          curl -sL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            -o /tmp/trivy.tar.gz
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo mv /tmp/trivy /usr/local/bin/trivy
+
+      - name: Run Trivy container scan
+        env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        run: |
+          trivy image \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity CRITICAL,HIGH \
+            --scanners vuln \
+            --ignore-unfixed \
+            ${{ needs.prepare.outputs.ghcr_image }}
 
       - name: Upload Trivy SARIF to GitHub Security
         if: always() && hashFiles('trivy-results.sarif') != ''
