@@ -8,12 +8,14 @@ import pytest
 
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import (
+    _get_bytes,
+    _get_content,
+    _put,
     delete,
-    get_bytes,
-    get_content,
+    download_file,
     list_keys,
     normalize_key,
-    put,
+    upload_file,
 )
 
 
@@ -24,37 +26,37 @@ def store():
 
 class TestPutAndGet:
     async def test_put_then_get_returns_data(self, store) -> None:
-        await put("hello.txt", b"world", store)
-        result = await get_bytes("hello.txt", store)
+        await _put("hello.txt", b"world", store)
+        result = await _get_bytes("hello.txt", store)
         assert result == b"world"
 
     async def test_get_missing_key_returns_none(self, store) -> None:
-        result = await get_bytes("nonexistent/key.bin", store)
+        result = await _get_bytes("nonexistent/key.bin", store)
         assert result is None
 
     async def test_put_overwrites(self, store) -> None:
-        await put("key", b"v1", store)
-        await put("key", b"v2", store)
-        assert await get_bytes("key", store) == b"v2"
+        await _put("key", b"v1", store)
+        await _put("key", b"v2", store)
+        assert await _get_bytes("key", store) == b"v2"
 
     async def test_put_empty_bytes(self, store) -> None:
-        await put("empty", b"", store)
-        result = await get_bytes("empty", store)
+        await _put("empty", b"", store)
+        result = await _get_bytes("empty", store)
         assert result == b""
 
     async def test_get_content_alias(self, store) -> None:
-        """get_content is the v2-compatible alias for get_bytes."""
-        await put("alias.txt", b"v2compat", store)
-        result = await get_content("alias.txt", store)
+        """_get_content is the v2-compatible alias for _get_bytes."""
+        await _put("alias.txt", b"v2compat", store)
+        result = await _get_content("alias.txt", store)
         assert result == b"v2compat"
 
 
 class TestDelete:
     async def test_delete_existing_key(self, store) -> None:
-        await put("del-me", b"data", store)
+        await _put("del-me", b"data", store)
         deleted = await delete("del-me", store)
         assert deleted is True
-        assert await get_bytes("del-me", store) is None
+        assert await _get_bytes("del-me", store) is None
 
     async def test_delete_missing_key_does_not_raise(self, store) -> None:
         # MemoryStore silently succeeds on delete of non-existent key
@@ -64,16 +66,16 @@ class TestDelete:
 
 class TestListKeys:
     async def test_list_all_keys(self, store) -> None:
-        await put("a/b.txt", b"1", store)
-        await put("a/c.txt", b"2", store)
+        await _put("a/b.txt", b"1", store)
+        await _put("a/c.txt", b"2", store)
         keys = await list_keys(store=store)
         assert "a/b.txt" in keys
         assert "a/c.txt" in keys
 
     async def test_list_with_prefix(self, store) -> None:
-        await put("docs/x.txt", b"x", store)
-        await put("docs/y.txt", b"y", store)
-        await put("images/z.png", b"z", store)
+        await _put("docs/x.txt", b"x", store)
+        await _put("docs/y.txt", b"y", store)
+        await _put("images/z.png", b"z", store)
         keys = await list_keys("docs/", store)
         assert "docs/x.txt" in keys
         assert "docs/y.txt" in keys
@@ -127,20 +129,81 @@ class TestNormalizeIntegration:
         from application_sdk.constants import TEMPORARY_PATH
 
         staging = os.path.join(TEMPORARY_PATH, "artifacts/apps/app/wf/run/data.bin")
-        await put(staging, b"payload", store)
+        await _put(staging, b"payload", store)
         # Can be retrieved with the normalised key
-        result = await get_bytes("artifacts/apps/app/wf/run/data.bin", store)
+        result = await _get_bytes("artifacts/apps/app/wf/run/data.bin", store)
         assert result == b"payload"
 
     async def test_put_and_get_with_normalize_false_uses_exact_key(self, store) -> None:
-        await put("exact/key.bin", b"data", store, normalize=False)
-        result = await get_bytes("exact/key.bin", store, normalize=False)
+        await _put("exact/key.bin", b"data", store, normalize=False)
+        result = await _get_bytes("exact/key.bin", store, normalize=False)
         assert result == b"data"
 
     async def test_list_keys_adds_trailing_slash_to_prefix(self, store) -> None:
-        await put("docs/a.txt", b"a", store, normalize=False)
-        await put("docs_extra/b.txt", b"b", store, normalize=False)
+        await _put("docs/a.txt", b"a", store, normalize=False)
+        await _put("docs_extra/b.txt", b"b", store, normalize=False)
         # "docs" without trailing slash should NOT match "docs_extra/"
         keys = await list_keys("docs", store, normalize=True)
         assert "docs/a.txt" in keys
         assert "docs_extra/b.txt" not in keys
+
+
+class TestUploadFile:
+    async def test_upload_file_roundtrip(self, store, tmp_path) -> None:
+        f = tmp_path / "data.bin"
+        content = b"hello streaming world"
+        f.write_bytes(content)
+
+        sha256 = await upload_file("test/data.bin", f, store)
+        assert len(sha256) == 64  # hex SHA-256
+
+        # Verify what was stored
+        dest = tmp_path / "out.bin"
+        dl_sha256 = await download_file("test/data.bin", dest, store, compute_hash=True)
+        assert dest.read_bytes() == content
+        assert dl_sha256 == sha256
+
+    async def test_upload_file_returns_correct_sha256(self, store, tmp_path) -> None:
+        import hashlib
+
+        content = b"checksum me"
+        f = tmp_path / "check.bin"
+        f.write_bytes(content)
+        expected = hashlib.sha256(content).hexdigest()
+
+        sha256 = await upload_file("check.bin", f, store)
+        assert sha256 == expected
+
+    async def test_upload_file_normalize_false(self, store, tmp_path) -> None:
+        f = tmp_path / "x.bin"
+        f.write_bytes(b"exact")
+        await upload_file("exact/key.bin", f, store, normalize=False)
+        raw = await _get_bytes("exact/key.bin", store, normalize=False)
+        assert raw == b"exact"
+
+
+class TestDownloadFile:
+    async def test_download_file_missing_key_raises(self, store, tmp_path) -> None:
+        from application_sdk.storage.errors import StorageNotFoundError
+
+        with pytest.raises(StorageNotFoundError):
+            await download_file("no/such/key.bin", tmp_path / "out.bin", store)
+
+    async def test_download_file_no_hash(self, store, tmp_path) -> None:
+        f = tmp_path / "src.bin"
+        f.write_bytes(b"payload")
+        await upload_file("payload.bin", f, store)
+
+        dest = tmp_path / "dest.bin"
+        result = await download_file("payload.bin", dest, store, compute_hash=False)
+        assert result is None
+        assert dest.read_bytes() == b"payload"
+
+    async def test_download_file_creates_parent_dirs(self, store, tmp_path) -> None:
+        f = tmp_path / "src.bin"
+        f.write_bytes(b"nested")
+        await upload_file("n.bin", f, store)
+
+        dest = tmp_path / "a" / "b" / "c" / "out.bin"
+        await download_file("n.bin", dest, store)
+        assert dest.read_bytes() == b"nested"

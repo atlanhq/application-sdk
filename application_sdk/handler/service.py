@@ -813,12 +813,14 @@ def create_app_handler_service(
         if _storage is None:
             raise HTTPException(status_code=503, detail="Storage not configured")
 
+        import asyncio
+        import os
+        import shutil
+        import tempfile
         from pathlib import PurePosixPath
 
-        from application_sdk.storage.ops import put
+        from application_sdk.storage.ops import upload_file as _upload_file
 
-        content = await file.read()
-        file_size = len(content)
         raw_name = filename or file.filename or "upload"
         extension = PurePosixPath(raw_name).suffix.lstrip(".")
         resolved_type = (
@@ -833,7 +835,24 @@ def create_app_handler_service(
         stored_name = f"{file_id}.{extension}" if extension else file_id
         key = f"{effective_prefix}/{stored_name}"
 
-        await put(key, content, _storage)
+        # Stream the upload: drain the spooled temp file to a named temp file,
+        # then stream-upload to the object store (avoids materialising in memory).
+        fd, tmp_path = tempfile.mkstemp(suffix=f".{extension}" if extension else "")
+        try:
+            os.close(fd)
+
+            def _drain_to_tmp() -> int:
+                with open(tmp_path, "wb") as dst:
+                    shutil.copyfileobj(file.file, dst)
+                return os.path.getsize(tmp_path)
+
+            file_size = await asyncio.to_thread(_drain_to_tmp)
+            await _upload_file(key, tmp_path, _storage)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
 
         now_ms = int(datetime.now(UTC).timestamp() * 1000)
         response_obj = FileUploadResponse(

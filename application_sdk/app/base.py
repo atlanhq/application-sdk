@@ -855,7 +855,7 @@ class App(ABC):
         """
         from application_sdk.storage.transfer import upload as _upload
 
-        store = self.context._storage
+        store = self.context.storage
         if store is None:
             raise RuntimeError(
                 "No object store configured. "
@@ -909,7 +909,7 @@ class App(ABC):
         """
         from application_sdk.storage.transfer import download as _download
 
-        store = self.context._storage
+        store = self.context.storage
         if store is None:
             raise RuntimeError(
                 "No object store configured. "

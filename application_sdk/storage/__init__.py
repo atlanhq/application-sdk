@@ -5,8 +5,8 @@ Public API:
     create_memory_store()            → MemoryStore (for unit tests)
     create_store_from_binding(...)   → ObjectStore parsed from Dapr component YAML
     normalize_key(key)               → str  (v2-compatible path normalisation)
-    get_bytes(key, store=None)       → bytes | None   (alias: get_content)
-    put(key, data, store=None)       → None
+    upload_file(key, local_path)     → str  (streaming upload, returns sha256)
+    download_file(key, local_path)   → str | None  (streaming download)
     delete(key, store=None)          → bool           (alias: delete_file)
     exists(key, store=None)          → bool
     delete_prefix(prefix, store=None) → int  (returns count deleted)
@@ -24,8 +24,8 @@ All I/O functions normalise keys by default (see normalize_key).  Pass
 ``normalize=False`` to use a key exactly as supplied.
 
 Migration from v2:
-    objectstore.get_content(key)            →  get_bytes(key)  or  get_content(key)
-    objectstore.upload_bytes(key, data)     →  put(key, data)
+    objectstore.get_content(key)            →  download_file(key, local_path)
+    objectstore.upload_bytes(key, data)     →  upload_file(key, local_path)
     objectstore.delete_file(key)            →  delete(key)  or  delete_file(key)
     objectstore.exists(key)                 →  exists(key)
     objectstore.list_files(prefix)          →  list_keys(prefix)  or  list_files(prefix)
@@ -48,13 +48,12 @@ from application_sdk.storage.ops import (
     delete,
     delete_file,
     delete_prefix,
+    download_file,
     exists,
-    get_bytes,
-    get_content,
     list_files,
     list_keys,
     normalize_key,
-    put,
+    upload_file,
 )
 
 __all__ = [
@@ -63,15 +62,14 @@ __all__ = [
     "create_local_store",
     "create_memory_store",
     # Core ops
-    "get_bytes",
-    "put",
+    "upload_file",
+    "download_file",
     "delete",
     "delete_prefix",
     "exists",
     "list_keys",
     "normalize_key",
     # v2-compatible aliases
-    "get_content",
     "delete_file",
     "list_files",
     # Errors

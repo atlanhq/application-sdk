@@ -15,10 +15,21 @@ Pass ``normalize=False`` to bypass normalisation and use the key exactly as
 supplied (useful for callers that already hold a clean store key and want to
 avoid the constant import overhead, or for tests that need exact key control).
 
+Internal helpers (small payloads)
+----------------------------------
+* ``_put(key, data)``    — write bytes (sidecars, metadata, JSON configs)
+* ``_get_bytes(key)``    — read bytes (sidecars, metadata, JSON configs)
+* ``_get_content(key)``  — v2-compatible alias for ``_get_bytes``
+
+Streaming API (large files)
+----------------------------
+* ``upload_file(key, local_path)``   — streaming upload with adaptive multipart
+* ``download_file(key, local_path)`` — streaming download with optional hash
+
 Migration from v2
 -----------------
-* ``objectstore.get_content(key)``  →  ``get_bytes(key)``  (or ``get_content(key)``)
-* ``objectstore.upload_bytes(key, data)``  →  ``put(key, data)``
+* ``objectstore.get_content(key)``  →  ``upload_file`` / ``download_file``
+* ``objectstore.upload_bytes(key, data)``  →  ``_put(key, data)`` (internal)
 * ``objectstore.delete(key)``  →  ``delete(key)``
 * ``objectstore.exists(key)``  →  ``exists(key)``
 * ``objectstore.list_keys(prefix)``  →  ``list_keys(prefix)``
@@ -31,7 +42,10 @@ to target a specific store instead.
 
 from __future__ import annotations
 
+import hashlib
+import math
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import obstore
@@ -116,13 +130,167 @@ def _is_not_found(exc: Exception) -> bool:
     )
 
 
-async def get_bytes(
+def _compute_part_size(file_size: int, chunk_size: int) -> int:
+    """Compute effective upload part size to stay under S3's 10,000-part limit.
+
+    Args:
+        file_size: Total file size in bytes.
+        chunk_size: Desired chunk size in bytes.
+
+    Returns:
+        Effective part size — at least *chunk_size* but never so small that
+        more than 9,900 parts would be needed (safety margin below 10,000).
+    """
+    return max(chunk_size, math.ceil(file_size / 9900))
+
+
+async def upload_file(
+    key: str,
+    local_path: "str | Path",
+    store: "ObjectStore | None" = None,
+    *,
+    chunk_size: int = 8 * 1024 * 1024,
+    normalize: bool = True,
+) -> str:
+    """Stream-upload a local file to *key* in the store.
+
+    Uses obstore's multipart writer so arbitrarily large files are uploaded
+    without materialising the whole content in memory.  The part size is
+    adapted automatically to stay under S3's 10,000-part limit.
+
+    A single pass over the file simultaneously feeds each chunk to the
+    SHA-256 hasher and the store writer.
+
+    Args:
+        key: Destination object key.  Normalised by default.
+        local_path: Path to the local file to upload.
+        store: Target store, or ``None`` to use the infrastructure store.
+        chunk_size: Desired chunk / part size in bytes (default 8 MiB).
+            Increased automatically if the file is large enough to exceed
+            the 9,900-part safety limit.
+        normalize: When ``True`` (default), normalise *key* before use.
+
+    Returns:
+        Hex-encoded SHA-256 digest of the uploaded file.
+
+    Raises:
+        StorageError: If the upload fails.
+        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    resolved = _resolve_store(store)
+    if normalize:
+        key = normalize_key(key)
+
+    path = Path(local_path)
+    file_size = path.stat().st_size
+    effective_chunk = _compute_part_size(file_size, chunk_size)
+
+    h = hashlib.sha256()
+    try:
+        async with obstore.open_writer_async(
+            resolved, key, buffer_size=effective_chunk
+        ) as writer:
+            with path.open("rb") as fh:
+                while True:
+                    chunk = fh.read(effective_chunk)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+                    await writer.write(chunk)
+    except Exception as exc:
+        from application_sdk.storage.errors import StorageError
+
+        raise StorageError(
+            f"Failed to upload file to key '{key}'", key=key, cause=exc
+        ) from exc
+
+    return h.hexdigest()
+
+
+async def download_file(
+    key: str,
+    local_path: "str | Path",
+    store: "ObjectStore | None" = None,
+    *,
+    compute_hash: bool = False,
+    min_chunk_size: int = 10 * 1024 * 1024,
+    normalize: bool = True,
+) -> "str | None":
+    """Stream-download *key* from the store to a local file.
+
+    Uses obstore's streaming GET so arbitrarily large files are written to
+    disk without materialising the whole content in memory.
+
+    Args:
+        key: Source object key.  Normalised by default.
+        local_path: Destination path (file will be created or overwritten).
+            Parent directories are created automatically.
+        store: Source store, or ``None`` to use the infrastructure store.
+        compute_hash: When ``True``, compute and return the SHA-256 digest
+            while streaming.  When ``False`` (default), returns ``None``.
+        min_chunk_size: Minimum chunk size hint passed to the stream iterator
+            (default 10 MiB).
+        normalize: When ``True`` (default), normalise *key* before use.
+
+    Returns:
+        Hex-encoded SHA-256 digest if *compute_hash* is ``True``, else ``None``.
+
+    Raises:
+        StorageNotFoundError: If *key* does not exist in the store.
+        StorageError: If the download or write fails.
+        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    resolved = _resolve_store(store)
+    if normalize:
+        key = normalize_key(key)
+
+    path = Path(local_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    h = hashlib.sha256() if compute_hash else None
+
+    try:
+        result = await obstore.get_async(resolved, key)
+    except Exception as exc:
+        if _is_not_found(exc):
+            from application_sdk.storage.errors import StorageNotFoundError
+
+            raise StorageNotFoundError(
+                f"Key not found in store: {key}", key=key
+            ) from exc
+        from application_sdk.storage.errors import StorageError
+
+        raise StorageError(
+            f"Failed to download key '{key}'", key=key, cause=exc
+        ) from exc
+
+    try:
+        with path.open("wb") as fh:
+            async for chunk in result.stream(min_chunk_size=min_chunk_size):
+                raw = bytes(chunk)
+                fh.write(raw)
+                if h is not None:
+                    h.update(raw)
+    except Exception as exc:
+        from application_sdk.storage.errors import StorageError
+
+        raise StorageError(
+            f"Failed to write downloaded file to '{local_path}'", key=key, cause=exc
+        ) from exc
+
+    return h.hexdigest() if h is not None else None
+
+
+async def _get_bytes(
     key: str,
     store: "ObjectStore | None" = None,
     *,
     normalize: bool = True,
 ) -> bytes | None:
     """Fetch the bytes stored at *key*, or ``None`` if the key does not exist.
+
+    **Internal use only** — intended for small payloads (sidecars, metadata,
+    JSON configs).  For large files use :func:`download_file` instead.
 
     When *store* is omitted the store is resolved from the current
     infrastructure context (see :func:`_resolve_store`).
@@ -158,11 +326,11 @@ async def get_bytes(
         raise StorageError(f"Failed to get key '{key}'", key=key, cause=exc) from exc
 
 
-#: v2-compatible alias for :func:`get_bytes`.
-get_content = get_bytes
+#: v2-compatible alias for :func:`_get_bytes` — internal use only.
+_get_content = _get_bytes
 
 
-async def put(
+async def _put(
     key: str,
     data: bytes,
     store: "ObjectStore | None" = None,
@@ -170,6 +338,9 @@ async def put(
     normalize: bool = True,
 ) -> None:
     """Write *data* to *key* in the store (creates or overwrites).
+
+    **Internal use only** — intended for small payloads (sidecars, metadata,
+    JSON configs).  For large files use :func:`upload_file` instead.
 
     When *store* is omitted the store is resolved from the current
     infrastructure context (see :func:`_resolve_store`).

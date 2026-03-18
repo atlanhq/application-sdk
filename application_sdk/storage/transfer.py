@@ -28,6 +28,8 @@ from application_sdk.contracts.types import FileReference
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
+    from application_sdk.contracts.storage import DownloadOutput, UploadOutput
+
 
 _SHA256_SUFFIX = ".sha256"
 
@@ -51,17 +53,17 @@ def _sha256_file(path: Path) -> str:
 
 async def _get_remote_sha256(store: "ObjectStore", key: str) -> str | None:
     """Fetch the stored SHA-256 sidecar for *key*, or ``None`` if absent."""
-    from application_sdk.storage.ops import get_bytes
+    from application_sdk.storage.ops import _get_bytes
 
-    data = await get_bytes(_sidecar_key(key), store, normalize=False)
+    data = await _get_bytes(_sidecar_key(key), store, normalize=False)
     return data.decode() if data else None
 
 
 async def _put_remote_sha256(store: "ObjectStore", key: str, digest: str) -> None:
     """Write the SHA-256 sidecar for *key*."""
-    from application_sdk.storage.ops import put
+    from application_sdk.storage.ops import _put
 
-    await put(_sidecar_key(key), digest.encode(), store, normalize=False)
+    await _put(_sidecar_key(key), digest.encode(), store, normalize=False)
 
 
 async def _upload_one(
@@ -72,17 +74,18 @@ async def _upload_one(
     skip_if_exists: bool,
 ) -> tuple[bool, str]:
     """Upload a single file.  Returns ``(transferred, reason)``."""
-    from application_sdk.storage.ops import put
+    from application_sdk.storage.ops import upload_file
 
-    local_digest = _sha256_file(local_file)
     if skip_if_exists:
+        local_digest = _sha256_file(local_file)
         remote_digest = await _get_remote_sha256(store, store_key)
         if remote_digest == local_digest:
             return False, "skipped:hash_match"
+        sha256 = await upload_file(store_key, local_file, store, normalize=False)
+    else:
+        sha256 = await upload_file(store_key, local_file, store, normalize=False)
 
-    data = local_file.read_bytes()
-    await put(store_key, data, store, normalize=False)
-    await _put_remote_sha256(store, store_key, local_digest)
+    await _put_remote_sha256(store, store_key, sha256)
     return True, "uploaded"
 
 
@@ -94,8 +97,7 @@ async def _download_one(
     skip_if_exists: bool,
 ) -> tuple[bool, str]:
     """Download a single file.  Returns ``(transferred, reason)``."""
-    from application_sdk.storage.errors import StorageNotFoundError
-    from application_sdk.storage.ops import get_bytes
+    from application_sdk.storage.ops import download_file
 
     if skip_if_exists and local_file.exists():
         remote_digest = await _get_remote_sha256(store, store_key)
@@ -104,14 +106,8 @@ async def _download_one(
             if local_digest == remote_digest:
                 return False, "skipped:hash_match"
 
-    data = await get_bytes(store_key, store, normalize=False)
-    if data is None:
-        raise StorageNotFoundError(
-            f"Key not found in store: {store_key}", key=store_key
-        )
-
     local_file.parent.mkdir(parents=True, exist_ok=True)
-    local_file.write_bytes(data)
+    await download_file(store_key, local_file, store, normalize=False)
     return True, "downloaded"
 
 
@@ -281,7 +277,7 @@ async def download(
 
         transferred_count = 0
         for key in data_keys:
-            rel = key[len(strip):] if key.startswith(strip) else key
+            rel = key[len(strip) :] if key.startswith(strip) else key
             local_file = dest_dir / rel
             ok, _ = await _download_one(
                 resolved, key, local_file, skip_if_exists=skip_if_exists

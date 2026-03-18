@@ -10,11 +10,31 @@ to handle large-payload cross-task data transfer:
   durable.
 
 This makes ``FileReference`` round-trips transparent to task authors.
+
+SHA-256 sidecar verification
+-----------------------------
+After every persist, a ``{storage_path}.sha256`` sidecar is written to the
+store and a ``{local_path}.sha256`` sidecar is written locally.  Before a
+re-use of an already-materialised file (``local_path`` is set), the local
+sidecar is checked:
+
+* **Missing sidecar** — conservative default: assume the file must be
+  re-verified.  ``materialize_file_reference`` will fetch the stored sidecar
+  and, if the hashes agree, simply stamp the local sidecar without re-downloading.
+* **Sidecar mismatch** — file is corrupt or partially written; re-download.
+
+This ensures that:
+1. A Temporal retry on a different worker (stale ``local_path``) always
+   triggers a fresh download.
+2. A crash mid-download (partial file, no sidecar) is detected and recovered.
+3. Once a sidecar exists and matches, re-downloads are skipped entirely.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from application_sdk.contracts.types import FileReference
@@ -40,6 +60,55 @@ def _find_file_refs(data: Any) -> list[FileReference]:
     return refs
 
 
+def _local_sidecar_ok(local_path: str) -> bool:
+    """Return True if the local sha256 sidecar exists and matches the file.
+
+    Conservative: any I/O error (missing file, missing sidecar, read error)
+    returns False so the caller triggers a fresh materialize.
+
+    Directories always return False — they always go through the full
+    materialize check (list + download).
+    """
+    try:
+        file_path = Path(local_path)
+        if file_path.is_dir():
+            return False
+        sidecar_path = Path(local_path + ".sha256")
+        if not file_path.exists() or not sidecar_path.exists():
+            return False
+        stored = sidecar_path.read_text().strip()
+        h = hashlib.sha256()
+        with file_path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        actual = h.hexdigest()
+        return stored == actual
+    except Exception:
+        return False
+
+
+def _needs_materialize(ref: FileReference) -> bool:
+    """Return True if the durable ref needs to be downloaded (or re-verified).
+
+    A durable ref needs materializing when any of the following is true:
+
+    * ``local_path`` is ``None`` — file has never been downloaded.
+    * ``local_path`` is set but the file no longer exists on disk
+      (e.g. the activity retried on a different worker pod).
+    * The local ``.sha256`` sidecar is missing — conservative default;
+      ``materialize_file_reference`` will validate against the stored sidecar
+      before deciding whether to skip the actual download.
+    * The local sidecar exists but does not match the file's current sha256 —
+      the file is corrupt or was only partially written.
+    """
+    if not ref.is_durable or ref.storage_path is None:
+        return False
+    if ref.local_path is None:
+        return True
+    # File missing or sidecar check fails → needs materialize
+    return not _local_sidecar_ok(ref.local_path)
+
+
 def has_refs_to_persist(data: Any) -> bool:
     """Return True if *data* contains ephemeral FileReferences (local but not durable)."""
     return any(
@@ -49,11 +118,13 @@ def has_refs_to_persist(data: Any) -> bool:
 
 
 def has_refs_to_materialize(data: Any) -> bool:
-    """Return True if *data* contains durable FileReferences that need downloading."""
-    return any(
-        ref.is_durable and ref.storage_path is not None and ref.local_path is None
-        for ref in _find_file_refs(data)
-    )
+    """Return True if *data* contains durable FileReferences that need downloading.
+
+    Checks for: missing local file, stale local_path (different worker),
+    missing local sha256 sidecar (conservative), and sidecar hash mismatch
+    (corrupt/partial file).
+    """
+    return any(_needs_materialize(ref) for ref in _find_file_refs(data))
 
 
 async def _replace_refs(data: Any, store: "ObjectStore", mode: str) -> Any:
@@ -76,7 +147,7 @@ async def _replace_refs(data: Any, store: "ObjectStore", mode: str) -> Any:
     if isinstance(data, FileReference):
         if mode == "persist" and data.local_path is not None and not data.is_durable:
             return await persist_file_reference(store, data)
-        if mode == "materialize" and data.is_durable and data.local_path is None:
+        if mode == "materialize" and _needs_materialize(data):
             return await materialize_file_reference(store, data)
         return data
 
@@ -91,11 +162,7 @@ async def _replace_refs(data: Any, store: "ObjectStore", mode: str) -> Any:
 
     if isinstance(data, list):
         new_list = [await _replace_refs(item, store, mode) for item in data]
-        return (
-            new_list
-            if any(n is not o for n, o in zip(new_list, data))
-            else data
-        )
+        return new_list if any(n is not o for n, o in zip(new_list, data)) else data
 
     if isinstance(data, tuple):
         new_tuple = tuple(await _replace_refs(item, store, mode) for item in data)
@@ -109,7 +176,7 @@ async def persist_file_refs(store: "ObjectStore", data: Any) -> Any:
 
     Returns:
         New object tree with all ephemeral FileReferences replaced by
-        durable ones.
+        durable ones (with sha256 sidecars written).
     """
     return await _replace_refs(data, store, "persist")
 
@@ -117,8 +184,15 @@ async def persist_file_refs(store: "ObjectStore", data: Any) -> Any:
 async def materialize_file_refs(store: "ObjectStore", data: Any) -> Any:
     """Download all durable FileReferences in *data* to local temp files.
 
+    Handles:
+    * Normal case: ``local_path`` is ``None`` → download + write sidecar.
+    * Retry on different worker: ``local_path`` set but file gone → download.
+    * Missing sidecar: file exists but no ``.sha256`` sidecar → validate
+      against stored sidecar; skip download if hashes agree.
+    * Corrupt file: sidecar mismatch → re-download.
+
     Returns:
         New object tree with all durable FileReferences replaced by local
-        ones (``local_path`` set).
+        ones (``local_path`` set, ``.sha256`` sidecar written).
     """
     return await _replace_refs(data, store, "materialize")

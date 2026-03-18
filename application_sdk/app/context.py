@@ -269,42 +269,18 @@ class AppContext:
             return None
         return await self._secret_store.get_optional(name)
 
-    async def upload_bytes(
-        self, key: str, data: bytes, *, content_type: str | None = None
-    ) -> None:
-        """Upload bytes to the storage store.
+    @property
+    def storage(self) -> "ObjectStore | None":
+        """Object store for this context, or ``None`` if not configured.
 
-        Args:
-            key: Object key/path.
-            data: Bytes to upload.
-            content_type: Optional MIME type (unused; kept for API compatibility).
+        Use with the streaming storage API::
 
-        Raises:
-            RuntimeError: If no storage store is configured.
+            from application_sdk.storage import upload_file, download_file
+
+            sha256 = await upload_file("output/result.json", local_path, self.context.storage)
+            await download_file("input/data.parquet", local_path, self.context.storage)
         """
-        if self._storage is None:
-            raise RuntimeError("No storage store configured")
-        from application_sdk.storage.ops import put
-
-        await put(key, data, self._storage)
-
-    async def download_bytes(self, key: str) -> bytes | None:
-        """Download bytes from the storage store.
-
-        Args:
-            key: Object key/path.
-
-        Returns:
-            The object data, or None if not found.
-
-        Raises:
-            RuntimeError: If no storage store is configured.
-        """
-        if self._storage is None:
-            raise RuntimeError("No storage store configured")
-        from application_sdk.storage.ops import get_bytes
-
-        return await get_bytes(key, self._storage)
+        return self._storage
 
     def log_debug(self, message: str, **kwargs: Any) -> None:
         """Log a debug message."""
