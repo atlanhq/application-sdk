@@ -256,7 +256,7 @@ class Worker:
                 except (SystemExit, KeyboardInterrupt):
                     return
                 except Exception as e:
-                    logger.error(f"Worker daemon crashed: {e}")
+                    logger.error(f"Worker daemon crashed: {e}", exc_info=True)
                 else:
                     logger.warning("Worker daemon exited without error")
 
