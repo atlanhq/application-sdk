@@ -29,22 +29,6 @@ on:
         description: "Branch or SHA to checkout and build (default: caller's ref)"
         required: false
         type: string
-    outputs:
-      branch:
-        description: "Normalized branch name (e.g. main, feat-foo)"
-        value: ${{ jobs.prepare.outputs.branch }}
-      image_tag:
-        description: "Immutable image tag — first 7 chars of SHA (e.g. abc1234)"
-        value: ${{ jobs.prepare.outputs.image_tag }}
-      ghcr_image:
-        description: "Full immutable GHCR image URI (e.g. ghcr.io/atlanhq/repo:main-abc1234)"
-        value: ${{ jobs.prepare.outputs.ghcr_image }}
-      dockerhub_image:
-        description: "Full DockerHub image URI (e.g. atlanhq/repo:main-abc1234) — only meaningful when SDR is enabled"
-        value: ${{ jobs.prepare.outputs.dockerhub_image }}
-      enable_sdr:
-        description: "Whether self-deployed runtime (DockerHub push) is enabled"
-        value: ${{ jobs.prepare.outputs.enable_sdr }}
     secrets:
       # Declaring the only secrets this template reads.
       # Callers using `secrets: inherit` are safe — all other inherited secrets are unused.
