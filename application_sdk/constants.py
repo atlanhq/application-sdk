@@ -373,7 +373,8 @@ DUCKDB_COMMON_TEMP_FOLDER = "/tmp/incremental_duckdb"
 #: Default memory limit for DuckDB (fixed for K8s pods)
 DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
 
-# Disable Analytics Configuration for DAFT
-os.environ["DO_NOT_TRACK"] = "true"
-os.environ["SCARF_NO_ANALYTICS"] = "true"
-os.environ["DAFT_ANALYTICS_ENABLED"] = "0"
+# Daft analytics are disabled via ENV vars in the Dockerfile (DO_NOT_TRACK,
+# SCARF_NO_ANALYTICS, DAFT_ANALYTICS_ENABLED). They must NOT be set here at
+# module level — os.environ assignments call os.putenv(), which Temporal's
+# workflow sandbox flags as non-deterministic, causing worker eviction loops.
+# See: https://github.com/atlanhq/application-sdk/pull/1129
