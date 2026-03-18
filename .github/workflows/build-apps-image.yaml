@@ -330,3 +330,32 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: snyk.sarif
+
+  # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
+  app-deployment-dispatcher:
+    name: Dispatch App Deployment
+    needs: [prepare, merge]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repo: ['atlanhq/atlan-apps-deployment']
+    steps:
+      - name: Extract App Name
+        id: extract_app_name
+        run: |
+          repo_name=$(basename $GITHUB_REPOSITORY)
+          app_name=$(echo $repo_name | sed -E 's/^atlan-(.*)-app$/\1/')
+          echo "app_name=${app_name}" >> $GITHUB_OUTPUT
+
+      - name: Repository Dispatch
+        uses: peter-evans/repository-dispatch@v3.0.0
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+          repository: ${{ matrix.repo }}
+          event-type: dispatch_app_builder_workflow
+          client-payload: |-
+            {
+                "app_name": "${{ steps.extract_app_name.outputs.app_name }}",
+                "image_name": "${{ needs.prepare.outputs.dockerhub_image }}"
+            }
