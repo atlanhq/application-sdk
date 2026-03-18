@@ -1,4 +1,5 @@
 import asyncio
+import os
 import signal
 import sys
 from unittest.mock import AsyncMock, Mock, patch
@@ -72,11 +73,11 @@ async def test_worker_start_with_daemon_true(mock_workflow_client: WorkflowClien
         workflow_classes=[AsyncMock()],
     )
 
-    # Start in daemon mode
-    await worker.start(daemon=True)
-
-    # Give the daemon thread a moment to start and call create_worker
-    await asyncio.sleep(0.1)
+    # os.kill must be mocked: the daemon thread will call it after run() returns
+    # (clean exit from a mock is unexpected, triggering the crash-recovery path).
+    with patch("application_sdk.worker.os.kill"):
+        await worker.start(daemon=True)
+        await asyncio.sleep(0.1)
 
     # On some platforms, the daemon thread might not have started yet
     # So we check if it was called at least once (allowing for timing differences)
@@ -351,3 +352,92 @@ class TestWorkerGracefulShutdown:
         )
 
         assert worker._shutdown_initiated is False
+
+
+class TestWorkerDaemonCrashRecovery:
+    """Tests for the _run_daemon crash-detection logic in Worker.start(daemon=True).
+
+    In LOCAL mode both the FastAPI server and the Temporal worker run in the same
+    process. If the worker exits (crash or premature clean return) while the server
+    is still running, k8s readiness probes keep returning 200 and the pod is never
+    restarted.  The fix sends SIGTERM to the process so k8s detects the broken pod.
+    """
+
+    async def _start_and_wait(self, worker: Worker, wait: float = 0.3) -> None:
+        await worker.start(daemon=True)
+        await asyncio.sleep(wait)
+
+    async def test_sigterm_sent_when_worker_raises(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Exception from worker.run() → SIGTERM sent to the process."""
+        mock_workflow_client.create_worker.return_value.run = AsyncMock(
+            side_effect=RuntimeError("fatal worker error")
+        )
+        worker = Worker(workflow_client=mock_workflow_client)
+
+        with patch("application_sdk.worker.os.kill") as mock_kill:
+            await self._start_and_wait(worker)
+
+        mock_kill.assert_called_once_with(os.getpid(), signal.SIGTERM)
+
+    async def test_sigterm_sent_when_worker_run_returns_cleanly(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """worker.run() returning without raising is also unexpected → SIGTERM sent."""
+        # Default fixture already has run() returning None (clean exit).
+        worker = Worker(workflow_client=mock_workflow_client)
+
+        with patch("application_sdk.worker.os.kill") as mock_kill:
+            await self._start_and_wait(worker)
+
+        mock_kill.assert_called_once_with(os.getpid(), signal.SIGTERM)
+
+    async def test_sigterm_not_sent_on_system_exit(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """SystemExit signals intentional shutdown already in progress → no SIGTERM."""
+        mock_workflow_client.create_worker.return_value.run = AsyncMock(
+            side_effect=SystemExit(0)
+        )
+        worker = Worker(workflow_client=mock_workflow_client)
+
+        with patch("application_sdk.worker.os.kill") as mock_kill:
+            await self._start_and_wait(worker)
+
+        mock_kill.assert_not_called()
+
+    async def test_sigterm_not_sent_on_keyboard_interrupt(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """KeyboardInterrupt signals intentional shutdown already in progress → no SIGTERM."""
+        mock_workflow_client.create_worker.return_value.run = AsyncMock(
+            side_effect=KeyboardInterrupt()
+        )
+        worker = Worker(workflow_client=mock_workflow_client)
+
+        with patch("application_sdk.worker.os.kill") as mock_kill:
+            await self._start_and_wait(worker)
+
+        mock_kill.assert_not_called()
+
+    async def test_sigterm_not_sent_when_main_thread_is_dead(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Main thread already dead = process shutting down → no SIGTERM (avoid double-signal)."""
+        mock_workflow_client.create_worker.return_value.run = AsyncMock(
+            side_effect=RuntimeError("fatal worker error")
+        )
+        worker = Worker(workflow_client=mock_workflow_client)
+
+        dead_thread = Mock()
+        dead_thread.is_alive.return_value = False
+
+        with patch("application_sdk.worker.os.kill") as mock_kill:
+            with patch(
+                "application_sdk.worker.threading.main_thread",
+                return_value=dead_thread,
+            ):
+                await self._start_and_wait(worker)
+
+        mock_kill.assert_not_called()
