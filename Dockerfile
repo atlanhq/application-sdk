@@ -48,7 +48,10 @@ ENV UV_NO_CACHE=1 \
     ATLAN_DAPR_METRICS_PORT=3100 \
     DAPR_LOG_LEVEL=info \
     DAPR_APP_ID=app \
-    DAPR_MAX_BODY_SIZE="1024Mi"
+    DAPR_MAX_BODY_SIZE="1024Mi" \
+    DO_NOT_TRACK=true \
+    SCARF_NO_ANALYTICS=true \
+    DAFT_ANALYTICS_ENABLED=0
 
 # Copy entrypoint script for graceful shutdown handling
 COPY --chown=appuser:appuser entrypoint.sh /usr/local/bin/entrypoint.sh
