@@ -301,7 +301,7 @@ jobs:
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Run Trivy container scan
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@0.29.0
         with:
           image-ref: ${{ needs.prepare.outputs.ghcr_image }}
           format: sarif
@@ -309,8 +309,6 @@ jobs:
           severity: CRITICAL,HIGH
           scanners: vuln
           ignore-unfixed: true
-          token-setup-trivy: ${{ secrets.ORG_PAT_GITHUB }}
-          github-pat: ${{ secrets.ORG_PAT_GITHUB }}
         env:
           GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
