@@ -1,4 +1,4 @@
-FROM cgr.dev/atlan.com/app-framework-golden:3.14
+FROM cgr.dev/atlan.com/app-framework-golden:3.13
 
 # Dapr version arguments
 ARG DAPR_CLI_VERSION=1.17.0
