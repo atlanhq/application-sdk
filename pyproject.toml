@@ -116,7 +116,7 @@ docs = [
 
 [tool.poe.tasks]
 # Contract generation
-generate = "pkl eval -m contract/generated contract/app.pkl"
+generate.shell = "cd contract && pkl eval -m generated app.pkl && mkdir -p ../app/contracts && mv generated/input.py ../app/contracts/_input.py"
 
 download-components.shell = "ls -l components/*.yaml"
 # Dapr and Temporal service tasks
