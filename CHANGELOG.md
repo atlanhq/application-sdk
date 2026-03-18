@@ -10,7 +10,13 @@ Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.2...v2.7
 
 ### Bug Fixes
 
+- normalize attempt logging and guard missing UI assets (BLDX-737 / BLDX-739) (#1108) (by @fyzanshaik-atlan in [81905af](https://github.com/atlanhq/application-sdk/commit/81905af))
+- bump Dapr CLI to 1.17.0 and widen temporalio bound to resolve CVEs (BLDX-744) (#1106) (by @praveenkmr in [3d6343e](https://github.com/atlanhq/application-sdk/commit/3d6343e))
 - align DockerHub image tag format with GHCR ({branch}-{sha7}abcd) (#1101) (by @nishantmunjal7 in [bbc3317](https://github.com/atlanhq/application-sdk/commit/bbc3317))
+
+### Performance
+
+- parallel multi-arch build — cut build time from ~3 min to <1 min (#1103) (by @nishantmunjal7 in [9d30a5a](https://github.com/atlanhq/application-sdk/commit/9d30a5a))
 
 
 ## v2.6.2 (March 10, 2026)
