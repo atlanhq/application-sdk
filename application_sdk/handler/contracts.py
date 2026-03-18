@@ -18,8 +18,8 @@ from application_sdk.contracts.types import MaxItems
 
 
 @dataclasses.dataclass(frozen=True)
-class Credential:
-    """A single credential key-value pair.
+class HandlerCredential:
+    """A single credential key-value pair for HTTP handler inputs.
 
     Credentials are always transmitted as opaque key/value strings.
     Interpretation (e.g., as OAuth token, API key, password) is the
@@ -31,6 +31,10 @@ class Credential:
 
     value: str
     """Credential value (sensitive — never log this directly)."""
+
+
+# Backward-compatible alias — will be removed in a future release
+Credential = HandlerCredential
 
 
 class AuthStatus(SerializableEnum):
@@ -46,7 +50,7 @@ class AuthStatus(SerializableEnum):
 class AuthInput(Input):
     """Input for the test_auth handler operation."""
 
-    credentials: Annotated[list[Credential], MaxItems(50)] = dataclasses.field(
+    credentials: Annotated[list[HandlerCredential], MaxItems(50)] = dataclasses.field(
         default_factory=list
     )
     """Credentials to authenticate with."""
@@ -111,7 +115,7 @@ class PreflightCheck:
 class PreflightInput(Input, allow_unbounded_fields=True):
     """Input for the preflight_check handler operation."""
 
-    credentials: Annotated[list[Credential], MaxItems(50)] = dataclasses.field(
+    credentials: Annotated[list[HandlerCredential], MaxItems(50)] = dataclasses.field(
         default_factory=list
     )
     """Credentials to use during preflight."""
@@ -193,7 +197,7 @@ class MetadataObject:
 class MetadataInput(Input, allow_unbounded_fields=True):
     """Input for the fetch_metadata handler operation."""
 
-    credentials: Annotated[list[Credential], MaxItems(50)] = dataclasses.field(
+    credentials: Annotated[list[HandlerCredential], MaxItems(50)] = dataclasses.field(
         default_factory=list
     )
     """Credentials to use for metadata discovery."""

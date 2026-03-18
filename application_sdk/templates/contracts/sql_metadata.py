@@ -7,10 +7,13 @@ These replace the ``Dict[str, Any]`` interfaces used by
 from __future__ import annotations
 
 import dataclasses
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import MaxItems
+
+if TYPE_CHECKING:
+    from application_sdk.credentials import CredentialRef
 
 
 @dataclasses.dataclass
@@ -25,6 +28,9 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
 
     credential_guid: str = ""
     """GUID of credentials stored in the secret store."""
+
+    credential_ref: "CredentialRef | None" = None
+    """Typed credential reference — preferred over credential_guid for new apps."""
 
     output_prefix: str = ""
     """Object store prefix for all output artifacts."""

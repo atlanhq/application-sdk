@@ -13,6 +13,8 @@ from application_sdk.contracts.base import HeartbeatDetails
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
+    from application_sdk.credentials.ref import CredentialRef
+    from application_sdk.credentials.types import Credential
     from application_sdk.execution.heartbeat import HeartbeatController
     from application_sdk.infrastructure.secrets import SecretStore
     from application_sdk.infrastructure.state import StateStore
@@ -315,6 +317,46 @@ class AppContext:
     def log_warning(self, message: str, **kwargs: Any) -> None:
         """Log a warning message."""
         self.logger.warning(message, **kwargs)
+
+    async def resolve_credential(self, ref: "CredentialRef") -> "Credential":
+        """Resolve a CredentialRef to a typed Credential.
+
+        Args:
+            ref: The CredentialRef to resolve.
+
+        Returns:
+            A typed Credential instance.
+
+        Raises:
+            RuntimeError: If no secret store is configured.
+            CredentialNotFoundError: If the credential cannot be found.
+            CredentialParseError: If parsing fails.
+        """
+        if self._secret_store is None:
+            raise RuntimeError("No secret store configured")
+        from application_sdk.credentials.resolver import CredentialResolver
+
+        resolver = CredentialResolver(self._secret_store)
+        return await resolver.resolve(ref)
+
+    async def resolve_credential_raw(self, ref: "CredentialRef") -> dict[str, Any]:
+        """Resolve a CredentialRef to a raw dict (for legacy client compat).
+
+        Args:
+            ref: The CredentialRef to resolve.
+
+        Returns:
+            The raw credential data as a dict.
+
+        Raises:
+            RuntimeError: If no secret store is configured.
+        """
+        if self._secret_store is None:
+            raise RuntimeError("No secret store configured")
+        from application_sdk.credentials.resolver import CredentialResolver
+
+        resolver = CredentialResolver(self._secret_store)
+        return await resolver.resolve_raw(ref)
 
     def log_error(self, message: str, **kwargs: Any) -> None:
         """Log an error message."""

@@ -58,6 +58,12 @@ BINDING_ERROR = ErrorCode("INF", 3)
 SECRET_STORE_ERROR = ErrorCode("INF", 4)
 SECRET_NOT_FOUND = ErrorCode("INF", 5)
 
+# CRD - Credential errors
+CREDENTIAL_ERROR = ErrorCode("CRD", 1)
+CREDENTIAL_NOT_FOUND = ErrorCode("CRD", 2)
+CREDENTIAL_PARSE_ERROR = ErrorCode("CRD", 3)
+CREDENTIAL_VALIDATION_ERROR = ErrorCode("CRD", 4)
+
 # DSC - Discovery errors
 DISCOVERY_ERROR = ErrorCode("DSC", 1)
 

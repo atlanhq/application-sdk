@@ -129,11 +129,19 @@ class SqlMetadataExtractor(App):
         logger.info("Starting SQL metadata extraction", workflow_id=workflow_id)
 
         try:
+            # Prefer credential_ref; fall back to legacy credential_guid
+            cred_ref = input.credential_ref
+            if cred_ref is None and input.credential_guid:
+                from application_sdk.credentials import legacy_credential_ref
+
+                cred_ref = legacy_credential_ref(input.credential_guid)
+
             # Fetch all metadata types in parallel
             workflow_args = {
                 "workflow_id": workflow_id,
                 "connection": input.connection,
                 "credential_guid": input.credential_guid,
+                "credential_ref": cred_ref,
                 "output_prefix": input.output_prefix,
                 "output_path": input.output_path,
                 "exclude_filter": input.exclude_filter,

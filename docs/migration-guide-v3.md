@@ -280,6 +280,120 @@ class MyApp(App, app_name="my-app"):
 
 ---
 
+## Step 7: Migrate to Typed Credentials
+
+v3 introduces a typed credential system that replaces bare `credential_guid: str` +
+`Dict[str, Any]` with a `CredentialRef` → typed `Credential` pipeline.
+
+### Before (credential_guid pattern)
+
+```python
+from dataclasses import dataclass
+from application_sdk.contracts.base import Input
+
+@dataclass
+class ExtractionInput(Input, allow_unbounded_fields=True):
+    credential_guid: str = ""
+
+# In @task method:
+from application_sdk.services.secretstore import SecretStore  # deprecated v2
+
+credentials = await SecretStore.get_credentials({"credential_guid": input.credential_guid})
+await client.load(credentials)  # dict[str, Any]
+```
+
+### After (CredentialRef pattern)
+
+```python
+from dataclasses import dataclass
+from application_sdk.contracts.base import Input
+from application_sdk.credentials import CredentialRef, api_key_ref, ApiKeyCredential
+
+@dataclass
+class ExtractionInput(Input, allow_unbounded_fields=True):
+    credential_ref: CredentialRef | None = None
+
+# In @task method:
+cred = await self.context.resolve_credential(input.credential_ref)
+assert isinstance(cred, ApiKeyCredential)
+headers = cred.to_headers()  # {"X-API-Key": "secret"}
+```
+
+### Backward compatibility
+
+Both `credential_guid` and `credential_ref` work on `ExtractionInput` and
+`QueryExtractionInput`. When only `credential_guid` is provided, the SDK
+auto-wraps it via `legacy_credential_ref()`:
+
+```python
+# These are both valid:
+ExtractionInput(credential_guid="abc-123")       # legacy — still works
+ExtractionInput(credential_ref=api_key_ref("prod-key"))  # new typed path
+```
+
+If you need to call a legacy client that expects a raw dict, use
+`resolve_credential_raw()`:
+
+```python
+raw = await self.context.resolve_credential_raw(ref)
+await client.load(raw)  # dict[str, Any] — same as before
+```
+
+### Available credential types
+
+| Type | Factory | Utility |
+|------|---------|---------|
+| `BasicCredential` | `basic_ref(name)` | `to_auth_header()` |
+| `ApiKeyCredential` | `api_key_ref(name)` | `to_headers()` |
+| `BearerTokenCredential` | `bearer_token_ref(name)` | `to_auth_header()`, `is_expired()` |
+| `OAuthClientCredential` | `oauth_client_ref(name)` | `to_headers()`, `needs_refresh()` |
+| `CertificateCredential` | `certificate_ref(name)` | — |
+| `GitSshCredential` | `git_ssh_ref(name)` | — |
+| `GitTokenCredential` | `git_token_ref(name)` | `to_auth_header()` |
+| `AtlanApiToken` | `atlan_api_token_ref(name)` | `to_auth_header()`, `validate()` |
+| `AtlanOAuthClient` | `atlan_oauth_client_ref(name)` | `to_headers()`, `validate()` |
+
+### Custom credential types
+
+```python
+from application_sdk.credentials import register_credential_type
+import dataclasses
+
+@dataclasses.dataclass(frozen=True)
+class MyCredential:
+    api_token: str
+
+    @property
+    def credential_type(self) -> str:
+        return "my_service"
+
+    async def validate(self) -> None:
+        pass
+
+def _parse_my(data):
+    return MyCredential(api_token=data.get("api_token", ""))
+
+register_credential_type("my_service", MyCredential, _parse_my)
+```
+
+### Testing with MockCredentialStore
+
+Instead of mocking Dapr or patching secret stores:
+
+```python
+from application_sdk.test_utils.credentials import MockCredentialStore
+from application_sdk.credentials.resolver import CredentialResolver
+
+mock = MockCredentialStore()
+ref = mock.add_api_key("test-key", api_key="test-secret")
+
+resolver = CredentialResolver(mock.secret_store)
+cred = await resolver.resolve(ref)
+assert cred.api_key == "test-secret"
+```
+
+---
+
 ## Removed in v3.1.0
 
 The following modules will be removed:

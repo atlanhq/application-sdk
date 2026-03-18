@@ -15,7 +15,7 @@ from uuid import UUID, uuid4
 from loguru import logger
 
 if TYPE_CHECKING:
-    from application_sdk.handler.contracts import Credential
+    from application_sdk.handler.contracts import HandlerCredential
     from application_sdk.infrastructure.secrets import SecretStore
     from application_sdk.infrastructure.state import StateStore
 
@@ -46,7 +46,7 @@ class HandlerContext:
     started_at: datetime = field(default_factory=_utc_now)
     """When the request started."""
 
-    _credentials: list[Credential] = field(default_factory=list, repr=False)
+    _credentials: list[HandlerCredential] = field(default_factory=list, repr=False)
     """Credentials extracted from request (omitted from repr for security)."""
 
     _secret_store: "SecretStore | None" = field(default=None, repr=False)
@@ -64,7 +64,7 @@ class HandlerContext:
         return str(self.request_id)
 
     @property
-    def credentials(self) -> list[Credential]:
+    def credentials(self) -> list[HandlerCredential]:
         """Credentials extracted from the HTTP request."""
         return self._credentials
 
