@@ -669,40 +669,37 @@ class DuckDBUI:
             return result == 0
 
     def start_ui(self):
-        """Start DuckDB UI and create views for Hive partitioned parquet files."""
+        """Start DuckDB UI and create views for Hive partitioned json.gz files."""
         if not self._is_duckdb_ui_running():
             os.makedirs(self.observability_dir, exist_ok=True)
             con = duckdb.connect(self.db_path)
 
-            def process_partitioned_files(directory, prefix=""):
-                """Process Hive partitioned parquet files and create views."""
-                # Skip if directory doesn't exist
+            def process_partitioned_files(directory, view_name):
+                """Process Hive partitioned json.gz files and create views."""
                 if not os.path.exists(directory):
                     return
 
-                # Check if there are any parquet files in the directory
-                if not any(Path(directory).rglob("*.parquet")):
+                # Check if there are any json.gz files in the directory
+                if not any(Path(directory).rglob("*.json.gz")):
                     return
 
-                # Create view name based on data type
-                view_name = prefix if prefix else "data"
-
-                # Create a view that reads all parquet files in the directory
+                # Create a view that reads all json.gz files in the directory
                 # using DuckDB's native Hive partitioning support
                 view_query = f"""
                 CREATE OR REPLACE VIEW {view_name} AS
                 SELECT *
-                FROM read_parquet('{directory}/**/*.parquet',
-                                hive_partitioning = true,
-                                hive_types = {{'year': INTEGER, 'month': INTEGER, 'day': INTEGER}})
+                FROM read_json_auto('{directory}/**/*.json.gz',
+                                   hive_partitioning = true,
+                                   hive_types = {{'year': INTEGER, 'month': INTEGER, 'day': INTEGER, 'hour': INTEGER}})
                 """
                 con.execute(view_query)
 
-            # Process each type of data
-            for data_type in ["logs", "metrics", "traces"]:
-                data_dir = os.path.join(self.observability_dir, data_type)
+            # Process each signal type under the mode directory (sdr/ or non-sdr/)
+            mode_dir = os.path.join(self.observability_dir, _OBS_MODE)
+            for signal_type in ["logs", "metrics", "traces"]:
+                data_dir = os.path.join(mode_dir, signal_type)
                 if os.path.exists(data_dir):
-                    process_partitioned_files(data_dir, data_type)
+                    process_partitioned_files(data_dir, signal_type)
 
             # Start DuckDB UI
             con.execute("CALL start_ui();")
