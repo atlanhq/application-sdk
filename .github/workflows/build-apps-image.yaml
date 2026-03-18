@@ -309,7 +309,7 @@ jobs:
           severity: CRITICAL,HIGH
           scanners: vuln
           ignore-unfixed: true
-          github_token: ${{ secrets.ORG_PAT_GITHUB }}
+          token-setup-trivy: ${{ secrets.ORG_PAT_GITHUB }}
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
