@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.7.3 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.2...v2.7.3
+
+### Features
+
+- centralized SDR path with json.gz format (#1111) (by @EuclidStellar in [41a98db](https://github.com/atlanhq/application-sdk/commit/41a98db))
+
+### Bug Fixes
+
+- pass github_token to trivy-action to avoid rate limit on binary download (#1127) (by @nishantmunjal7 in [3a2b410](https://github.com/atlanhq/application-sdk/commit/3a2b410))
+- replace Snyk with Trivy container scan — bypass broken trivy-action (#1130) (by @nishantmunjal7 in [4ecb9a6](https://github.com/atlanhq/application-sdk/commit/4ecb9a6))
+- disable daft analytics via Dockerfile ENV to avoid Temporal non-determinism (#1131) (by @vishalkatlan in [3bdff48](https://github.com/atlanhq/application-sdk/commit/3bdff48))
+
+
 ## v2.7.2 (March 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.1...v2.7.2
