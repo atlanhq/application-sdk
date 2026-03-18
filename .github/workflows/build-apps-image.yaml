@@ -291,6 +291,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     continue-on-error: true  # never block a release on a security scan
+    permissions:
+      security-events: write  # upload SARIF
+      actions: read           # codeql-action telemetry (GET /actions/workflow-runs)
 
     steps:
       - name: Log in to GHCR
@@ -300,22 +303,36 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
+      - name: Install Trivy
+        # Download the binary directly from GitHub releases — bypasses setup-trivy
+        # which fetches install.sh from trivy@main (currently broken).
+        env:
+          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          TRIVY_VERSION=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            https://api.github.com/repos/aquasecurity/trivy/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+          curl -sL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            -o /tmp/trivy.tar.gz
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo mv /tmp/trivy /usr/local/bin/trivy
+
       - name: Run Trivy container scan
-        uses: aquasecurity/trivy-action@0.33.1
-        with:
-          image-ref: ${{ needs.prepare.outputs.ghcr_image }}
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          scanners: vuln
-          ignore-unfixed: true
-          github_token: ${{ secrets.ORG_PAT_GITHUB }}
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        run: |
+          trivy image \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity CRITICAL,HIGH \
+            --scanners vuln \
+            --ignore-unfixed \
+            ${{ needs.prepare.outputs.ghcr_image }}
 
       - name: Upload Trivy SARIF to GitHub Security
         if: always() && hashFiles('trivy-results.sarif') != ''
+        continue-on-error: true  # codeql telemetry endpoint is not accessible in reusable workflow context
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
