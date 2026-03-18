@@ -5,6 +5,7 @@ including their initialization, configuration, and execution with graceful shutd
 """
 
 import asyncio
+import os
 import signal
 import sys
 import threading
@@ -248,9 +249,27 @@ class Worker:
             3. Worker exits early if activities finish, or at timeout
         """
         if daemon:
-            worker_thread = threading.Thread(
-                target=lambda: asyncio.run(self.start(daemon=False)), daemon=True
-            )
+
+            def _run_daemon() -> None:
+                try:
+                    asyncio.run(self.start(daemon=False))
+                except (SystemExit, KeyboardInterrupt):
+                    return
+                except Exception as e:
+                    logger.error(f"Worker daemon crashed: {e}", exc_info=True)
+                else:
+                    logger.warning("Worker daemon exited without error")
+
+                # Worker exited while the main thread (server) is still alive —
+                # the pod is now broken. Send SIGTERM so k8s can restart it.
+                if threading.main_thread().is_alive():
+                    logger.error(
+                        "Worker stopped while server is still running. "
+                        "Sending SIGTERM to trigger pod restart."
+                    )
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            worker_thread = threading.Thread(target=_run_daemon, daemon=True)
             worker_thread.start()
             return
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.7.1 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.0...v2.7.1
+
+### Features
+
+- add app deployment dispatcher job in build workflow (#1121) (by @Lalit3716-atlan in [e5f524c](https://github.com/atlanhq/application-sdk/commit/e5f524c))
+
+### Bug Fixes
+
+- Crash the server if the worker crashes (#1118) (by @SanilK2108 in [0a7b2ad](https://github.com/atlanhq/application-sdk/commit/0a7b2ad))
+
+
 ## v2.7.0 (March 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.2...v2.7.0
