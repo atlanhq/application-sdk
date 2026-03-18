@@ -312,6 +312,7 @@ jobs:
           token-setup-trivy: ${{ secrets.ORG_PAT_GITHUB }}
           github-pat: ${{ secrets.ORG_PAT_GITHUB }}
         env:
+          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
