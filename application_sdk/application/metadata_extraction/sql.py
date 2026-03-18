@@ -19,6 +19,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
+from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
@@ -45,7 +46,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         name: str,
         client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[BaseSQLHandler]] = None,
-        transformer_class: Optional[Type[QueryBasedTransformer]] = None,
+        transformer_class: Optional[Type[TransformerInterface]] = None,
         server: Optional[APIServer] = None,
     ):
         """

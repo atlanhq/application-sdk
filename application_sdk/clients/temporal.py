@@ -7,10 +7,10 @@ from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
+from temporalio.common import VersioningBehavior
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
-from temporalio.worker._worker import VersioningBehavior
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
@@ -487,9 +487,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 use_worker_versioning=True,
                 default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
             )
-            logger.info(
-                f"Worker versioning enabled with build_id={TEMPORAL_BUILD_ID}"
-            )
+            logger.info(f"Worker versioning enabled with build_id={TEMPORAL_BUILD_ID}")
 
         # Build interceptors list
         interceptors = [

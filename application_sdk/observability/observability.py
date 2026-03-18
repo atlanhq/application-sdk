@@ -405,9 +405,9 @@ class AtlanObservability(Generic[T], ABC):
         This method:
         - Groups records by partition (year/month/day/hour)
         - Writes json.gz format (lightweight, no pandas dependency)
-        - Uses centralized path based on ENABLE_ATLAN_UPLOAD:
-          - SDR: artifacts/apps/observability/sdr-logs/ (MDLH reads from Atlan bucket)
-          - Non-SDR: artifacts/apps/observability/logs/ (to be deprecated)
+        - Uses centralized path based on ENABLE_ATLAN_UPLOAD.
+          SDR: artifacts/apps/observability/sdr-logs/ (MDLH reads from Atlan bucket).
+          Non-SDR: artifacts/apps/observability/logs/ (to be deprecated).
         - Uploads to customer bucket (DEPLOYMENT_OBJECT_STORE) always
         - Uploads to Atlan bucket (UPSTREAM_OBJECT_STORE) when ENABLE_ATLAN_UPLOAD=true
         """
