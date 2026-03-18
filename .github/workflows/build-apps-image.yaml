@@ -329,11 +329,7 @@ jobs:
         id: extract_app_name
         run: |
           repo_name=$(basename "$GITHUB_REPOSITORY")
-          if [[ ! "$repo_name" =~ ^atlan-(.+)-app$ ]]; then
-            echo "::error::Repository '${repo_name}' does not match expected 'atlan-*-app' naming convention"
-            exit 1
-          fi
-          app_name="${BASH_REMATCH[1]}"
+          app_name=$(echo "$repo_name" | sed -E 's/^atlan-(.*)-app$/\1/')
           echo "app_name=${app_name}" >> $GITHUB_OUTPUT
 
       - name: Repository Dispatch
