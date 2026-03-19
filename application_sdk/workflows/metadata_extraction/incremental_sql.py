@@ -188,7 +188,7 @@ class IncrementalSQLMetadataExtractionWorkflow(BaseSQLMetadataExtractionWorkflow
     # ════════════════════════════════════════════════════════════════════════════
 
     @workflow.run
-    async def run(self, workflow_config: Dict[str, Any]) -> None:
+    async def run(self, workflow_config: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the incremental SQL metadata extraction workflow.
 
         This method orchestrates the 4-phase incremental extraction process:
@@ -244,7 +244,7 @@ class IncrementalSQLMetadataExtractionWorkflow(BaseSQLMetadataExtractionWorkflow
         # ── PHASE 2: Base Extraction (SDK handles fetch + transform) ───────────
         # Note: super().run() calls get_workflow_args internally, which reads our
         # saved state from StateStore (including marker_timestamp and current_state).
-        await super().run(workflow_config)
+        base_result = await super().run(workflow_config)
 
         # ── PHASE 3: Incremental Column Extraction (if prerequisites met) ──────
         args = IncrementalWorkflowArgs.model_validate(workflow_args)
@@ -280,3 +280,5 @@ class IncrementalSQLMetadataExtractionWorkflow(BaseSQLMetadataExtractionWorkflow
         )
 
         await self.run_exit_activities(workflow_args)
+
+        return base_result

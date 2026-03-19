@@ -35,9 +35,7 @@ on:
       ORG_PAT_GITHUB:
         required: true
         description: "Org-level PAT for GHCR login — needed to pull private base images from other repos in the org"
-      SNYK_TOKEN:
-        required: false
-        description: "Snyk API token for container scanning (optional — scan is non-blocking)"
+      # Note: no SNYK_TOKEN needed — scanning is done with Trivy (no auth required)
       DOCKER_HUB_PAT_RW:
         required: false
         description: "DockerHub PAT (read/write) — only needed when atlan.yaml self_deployed_runtime=true"
@@ -45,7 +43,7 @@ on:
 permissions:
   contents: read
   packages: write
-  security-events: write  # For Snyk SARIF upload
+  security-events: write  # For Trivy SARIF upload
 
 jobs:
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
@@ -54,6 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      app_name:         ${{ steps.manifest.outputs.app_name }}
       dockerfile:       ${{ steps.manifest.outputs.dockerfile }}
       enable_sdr:       ${{ steps.manifest.outputs.enable_sdr }}
       branch:           ${{ steps.tags.outputs.branch }}
@@ -88,17 +87,23 @@ jobs:
               print(f'::error::atlan.yaml is invalid YAML: {e}', file=sys.stderr)
               sys.exit(1)
 
+          app_name   = d.get('name', '')
           build_tag  = d.get('build_tag', 'v1')
           dockerfile = d.get('dockerfile', './Dockerfile')
           # self_deployed_runtime: true → push image to shared external registry
           # so customers can pull it into their own environment.
           enable_sdr = 'true' if d.get('self_deployed_runtime', False) else 'false'
 
+          if not app_name:
+              print('::error::atlan.yaml is missing required "name" field', file=sys.stderr)
+              sys.exit(1)
+
           if build_tag != 'v1':
               print(f"::error::Unsupported build_tag '{build_tag}'. Only 'v1' is supported by this template version.", file=sys.stderr)
               sys.exit(1)
 
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'app_name={app_name}\n')
               out.write(f'build_tag={build_tag}\n')
               out.write(f'dockerfile={dockerfile}\n')
               out.write(f'enable_sdr={enable_sdr}\n')
@@ -279,20 +284,18 @@ jobs:
           echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Job 4: Snyk scan — non-blocking, runs after manifest is available ─────────
-  snyk:
-    name: Snyk Container Scan
+  # ── Job 4: Trivy scan — non-blocking, runs after manifest is available ──────
+  trivy:
+    name: Trivy Container Scan
     needs: [prepare, merge]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     continue-on-error: true  # never block a release on a security scan
+    permissions:
+      security-events: write  # upload SARIF
+      actions: read           # codeql-action telemetry (GET /actions/workflow-runs)
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -300,17 +303,59 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
-      - name: Snyk container scan
-        # Pinned to commit SHA — avoids silent breakage if snyk/actions@master changes
-        uses: snyk/actions/docker@9adf32b1121593767fc3c057af55b55db032dc04
+      - name: Install Trivy
+        # Download the binary directly from GitHub releases — bypasses setup-trivy
+        # which fetches install.sh from trivy@main (currently broken).
         env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          image: ${{ needs.prepare.outputs.ghcr_image }}
-          args: --severity-threshold=high --file=${{ needs.prepare.outputs.dockerfile }}
+          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          TRIVY_VERSION=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            https://api.github.com/repos/aquasecurity/trivy/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+          curl -sL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            -o /tmp/trivy.tar.gz
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo mv /tmp/trivy /usr/local/bin/trivy
 
-      - name: Upload Snyk SARIF to GitHub Security
-        if: always() && hashFiles('snyk.sarif') != ''
+      - name: Run Trivy container scan
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        run: |
+          trivy image \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity CRITICAL,HIGH \
+            --scanners vuln \
+            --ignore-unfixed \
+            ${{ needs.prepare.outputs.ghcr_image }}
+
+      - name: Upload Trivy SARIF to GitHub Security
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        continue-on-error: true  # codeql telemetry endpoint is not accessible in reusable workflow context
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: snyk.sarif
+          sarif_file: trivy-results.sarif
+          category: trivy-container
+
+  # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
+  app-deployment-dispatcher:
+    name: Dispatch App Deployment
+    needs: [prepare, merge]
+    if: github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repo: ['atlanhq/atlan-apps-deployment']
+    steps:
+      - name: Repository Dispatch
+        uses: peter-evans/repository-dispatch@v3.0.0
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+          repository: ${{ matrix.repo }}
+          event-type: dispatch_app_builder_workflow
+          client-payload: |-
+            {
+                "app_name": "${{ needs.prepare.outputs.app_name }}",
+                "image_name": "${{ needs.prepare.outputs.dockerhub_image }}"
+            }

@@ -7,9 +7,10 @@ from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
+from temporalio.common import VersioningBehavior
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.types import CallableType, ClassType
-from temporalio.worker import Worker
+from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
@@ -24,6 +25,8 @@ from application_sdk.constants import (
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
+    TEMPORAL_BUILD_ID,
+    TEMPORAL_DEPLOYMENT_NAME,
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
@@ -461,6 +464,31 @@ class TemporalWorkflowClient(WorkflowClient):
         # Create activities lookup dict for interceptors
         activities_dict = {getattr(a, "__name__", str(a)): a for a in final_activities}
 
+        deployment_config = None
+        if TEMPORAL_BUILD_ID and TEMPORAL_DEPLOYMENT_NAME:
+            deployment_config = WorkerDeploymentConfig(
+                version=WorkerDeploymentVersion(
+                    deployment_name=TEMPORAL_DEPLOYMENT_NAME,
+                    build_id=TEMPORAL_BUILD_ID,
+                ),
+                use_worker_versioning=True,
+                default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
+            )
+            logger.info(
+                f"Worker Deployment versioning enabled: "
+                f"deployment={TEMPORAL_DEPLOYMENT_NAME}, build_id={TEMPORAL_BUILD_ID}"
+            )
+        elif TEMPORAL_BUILD_ID:
+            deployment_config = WorkerDeploymentConfig(
+                version=WorkerDeploymentVersion(
+                    deployment_name=TEMPORAL_BUILD_ID,
+                    build_id=TEMPORAL_BUILD_ID,
+                ),
+                use_worker_versioning=True,
+                default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
+            )
+            logger.info(f"Worker versioning enabled with build_id={TEMPORAL_BUILD_ID}")
+
         # Build interceptors list
         interceptors = [
             CorrelationContextInterceptor(),
@@ -500,6 +528,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 seconds=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
             ),
             interceptors=interceptors,
+            deployment_config=deployment_config,
         )
 
     async def get_workflow_run_status(
