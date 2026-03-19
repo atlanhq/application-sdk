@@ -91,6 +91,8 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
+            ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:latest
+            ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:${{ needs.prepare.outputs.version }}
             ghcr.io/atlanhq/${{ github.event.repository.name }}-${{ needs.prepare.outputs.lowercase_branch }}:latest
             ghcr.io/atlanhq/${{ github.event.repository.name }}-${{ needs.prepare.outputs.lowercase_branch }}:${{ needs.prepare.outputs.version }}
           build-args: |
