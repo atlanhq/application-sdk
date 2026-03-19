@@ -397,3 +397,12 @@ class ActivityError(AtlanError):
     LOCK_TIMEOUT_ERROR = ErrorCode(
         ErrorComponent.ACTIVITY, "408", "00", "Lock acquisition timeout"
     )
+    LAKEHOUSE_LOAD_ERROR = ErrorCode(
+        ErrorComponent.ACTIVITY, "500", "10", "Lakehouse load error"
+    )
+    LAKEHOUSE_LOAD_TIMEOUT_ERROR = ErrorCode(
+        ErrorComponent.ACTIVITY, "408", "01", "Lakehouse load polling timeout"
+    )
+    LAKEHOUSE_LOAD_API_ERROR = ErrorCode(
+        ErrorComponent.ACTIVITY, "502", "00", "Lakehouse load API error"
+    )

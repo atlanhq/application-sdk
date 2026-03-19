@@ -16,7 +16,13 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
-from application_sdk.constants import APPLICATION_NAME
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    ENABLE_LAKEHOUSE_LOAD,
+    LH_LOAD_RAW_MODE,
+    LH_LOAD_RAW_NAMESPACE,
+    LH_LOAD_RAW_TABLE_NAME,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
@@ -71,6 +77,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             activities.fetch_procedures,
             activities.transform_data,
             activities.upload_to_atlan,  # this will only be executed if ENABLE_ATLAN_UPLOAD is True
+            activities.load_to_lakehouse,  # only executed if ENABLE_LAKEHOUSE_LOAD is True
         ]
         return base_activities
 
@@ -234,6 +241,25 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
 
             await asyncio.gather(*fetch_and_transforms)
             logger.info(f"Extraction workflow completed for {workflow_id}")
+
+            # Load raw data to lakehouse (once, after all fetches complete)
+            if (
+                ENABLE_LAKEHOUSE_LOAD
+                and LH_LOAD_RAW_NAMESPACE
+                and LH_LOAD_RAW_TABLE_NAME
+            ):
+                await self._execute_lakehouse_load(
+                    workflow_args,
+                    output_path=f"{workflow_args.get('output_path', '')}/raw",
+                    namespace=LH_LOAD_RAW_NAMESPACE,
+                    table_name=LH_LOAD_RAW_TABLE_NAME,
+                    mode=LH_LOAD_RAW_MODE,
+                    file_extension=".parquet",
+                )
+
+            # Load transformed data + upload to atlan
+            await self.run_exit_activities(workflow_args)
+
             workflow_success = True
 
             # Build output paths for AE downstream nodes (e.g. publish app)

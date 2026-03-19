@@ -1,13 +1,30 @@
+import asyncio
 from typing import Any, Dict, Optional, Type
 
+import aiohttp
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
-from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
+from application_sdk.activities.common.models import (
+    ActivityStatistics,
+    LhLoadRequest,
+    LhLoadResponse,
+    LhLoadStatusResponse,
+)
+from application_sdk.activities.common.utils import (
+    auto_heartbeater,
+    get_object_store_prefix,
+    get_workflow_id,
+)
 from application_sdk.clients.base import BaseClient
 from application_sdk.common.error_codes import ActivityError
-from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
+from application_sdk.constants import (
+    APP_TENANT_ID,
+    APPLICATION_NAME,
+    LH_LOAD_MAX_POLL_ATTEMPTS,
+    LH_LOAD_POLL_INTERVAL_SECONDS,
+    MDLH_BASE_URL,
+)
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.atlan_storage import AtlanStorage
@@ -159,4 +176,107 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
             total_record_count=upload_stats.migrated_files,
             chunk_count=upload_stats.total_files,
             typename="atlan-upload-completed",
+        )
+
+    @activity.defn
+    @auto_heartbeater
+    async def load_to_lakehouse(
+        self, workflow_args: Dict[str, Any]
+    ) -> ActivityStatistics:
+        """Load data files to Iceberg lakehouse via MDLH REST API.
+
+        Expects workflow_args to contain lh_load_config dict with:
+            - output_path: str — local path prefix (will be converted to S3 key)
+            - namespace: str — Iceberg namespace
+            - table_name: str — Iceberg table name
+            - mode: str — "APPEND" or "UPSERT"
+            - file_extension: str — ".parquet" or ".jsonl"
+        """
+        return await _do_lakehouse_load(workflow_args)
+
+
+_TERMINAL_FAILURE_STATES = {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}
+
+
+async def _do_lakehouse_load(workflow_args: Dict[str, Any]) -> ActivityStatistics:
+    """Shared implementation for lakehouse load activity."""
+    lh_config = workflow_args.get("lh_load_config")
+    if not lh_config:
+        raise ActivityError(
+            f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: Missing lh_load_config in workflow_args"
+        )
+
+    output_path = lh_config.get("output_path", "")
+    namespace = lh_config.get("namespace", "")
+    table_name = lh_config.get("table_name", "")
+    mode = lh_config.get("mode", "APPEND")
+    file_extension = lh_config.get("file_extension", "")
+
+    if not namespace or not table_name or not output_path or not file_extension:
+        raise ActivityError(
+            f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: "
+            "Missing required fields in lh_load_config (namespace, table_name, output_path, file_extension)"
+        )
+
+    s3_prefix = get_object_store_prefix(output_path)
+    pattern = f"{s3_prefix}/**/*{file_extension}"
+
+    request = LhLoadRequest(
+        patterns=[pattern],
+        namespace=namespace,
+        table_name=table_name,
+        mode=mode,
+    )
+    request_payload = request.model_dump(by_alias=True, exclude_none=True)
+
+    base_url = f"{MDLH_BASE_URL}/atlan/lh/v1/{APP_TENANT_ID}/load"
+
+    async with aiohttp.ClientSession() as session:
+        # Submit load job
+        async with session.post(base_url, json=request_payload) as resp:
+            if resp.status != 202:
+                body = await resp.text()
+                raise ActivityError(
+                    f"{ActivityError.LAKEHOUSE_LOAD_API_ERROR}: "
+                    f"MDLH load API returned {resp.status}: {body}"
+                )
+            response_data = await resp.json()
+
+        load_response = LhLoadResponse.model_validate(response_data)
+        job_id = load_response.job_id
+        logger.info(f"Lakehouse load job submitted: job_id={job_id}")
+
+        # Poll for completion
+        status_url = f"{base_url}/{job_id}/status"
+        for attempt in range(LH_LOAD_MAX_POLL_ATTEMPTS):
+            await asyncio.sleep(LH_LOAD_POLL_INTERVAL_SECONDS)
+            try:
+                async with session.get(status_url) as resp:
+                    if resp.status != 200:
+                        logger.warning(
+                            f"Lakehouse load status poll returned {resp.status}, retrying..."
+                        )
+                        continue
+                    status_data = await resp.json()
+            except aiohttp.ClientError as e:
+                logger.warning(f"Lakehouse load status poll error: {e}, retrying...")
+                continue
+
+            status_response = LhLoadStatusResponse.model_validate(status_data)
+            current_status = status_response.status.upper()
+
+            if current_status == "COMPLETED":
+                logger.info(f"Lakehouse load job completed: job_id={job_id}")
+                return ActivityStatistics(typename="lakehouse-load-completed")
+
+            if current_status in _TERMINAL_FAILURE_STATES:
+                raise ActivityError(
+                    f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: "
+                    f"Lakehouse load job {job_id} ended with status: {current_status}"
+                )
+
+        raise ActivityError(
+            f"{ActivityError.LAKEHOUSE_LOAD_TIMEOUT_ERROR}: "
+            f"Lakehouse load job {job_id} did not complete within "
+            f"{LH_LOAD_MAX_POLL_ATTEMPTS * LH_LOAD_POLL_INTERVAL_SECONDS}s"
         )
