@@ -1,0 +1,508 @@
+<mxfile host="app.diagrams.net" modified="2026-03-19T00:00:00.000Z" agent="Claude" version="21.0.0" type="device">
+  <diagram id="current-arch" name="Current Architecture">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title1" value="Current Architecture — S3 as Primary Storage" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="400" y="20" width="500" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Source Database -->
+        <mxCell id="src-db" value="&lt;b&gt;Source Database&lt;/b&gt;&lt;br&gt;(Snowflake, Postgres, etc.)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="50" y="160" width="160" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Extract Activity -->
+        <mxCell id="extract" value="&lt;b&gt;Extract&lt;/b&gt;&lt;br&gt;(Temporal Activity)&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;fetch_databases&lt;br&gt;fetch_schemas&lt;br&gt;fetch_tables&lt;br&gt;fetch_columns&lt;br&gt;fetch_procedures&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="300" y="130" width="170" height="160" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Source → Extract -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jetSize=auto;html=1;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" source="src-db" target="extract" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e1-label" value="SQL queries" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e1">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- Deployment S3 (Raw) -->
+        <mxCell id="deploy-s3-raw" value="&lt;b&gt;Deployment S3&lt;/b&gt;&lt;br&gt;{output}/raw/&lt;br&gt;&lt;font style=&quot;font-size:10px;color:#888&quot;&gt;*.parquet&lt;/font&gt;" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;fillColor=#FF9900;strokeColor=#ffffff;labelPosition=right;verticalLabelPosition=middle;align=left;verticalAlign=middle;whiteSpace=wrap;html=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="560" y="110" width="50" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Extract → Deployment S3 Raw -->
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jetSize=auto;html=1;strokeWidth=2;strokeColor=#82b366;" edge="1" source="extract" target="deploy-s3-raw" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2-label" value="Parquet" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e2">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- Transform Activity -->
+        <mxCell id="transform" value="&lt;b&gt;Transform&lt;/b&gt;&lt;br&gt;(Temporal Activity)&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Raw → Atlas entities&lt;br&gt;ParquetFileReader&lt;br&gt;→ JsonFileWriter&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="770" y="130" width="170" height="130" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Deployment S3 Raw → Transform -->
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jetSize=auto;html=1;strokeWidth=2;strokeColor=#FF9900;" edge="1" source="deploy-s3-raw" target="transform" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3-label" value="ParquetFileReader" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e3">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- Deployment S3 (Transformed) -->
+        <mxCell id="deploy-s3-transformed" value="&lt;b&gt;Deployment S3&lt;/b&gt;&lt;br&gt;{output}/transformed/&lt;br&gt;&lt;font style=&quot;font-size:10px;color:#888&quot;&gt;*.jsonl&lt;/font&gt;" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;fillColor=#FF9900;strokeColor=#ffffff;labelPosition=right;verticalLabelPosition=middle;align=left;verticalAlign=middle;whiteSpace=wrap;html=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="110" width="50" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Transform → Deployment S3 Transformed -->
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jetSize=auto;html=1;strokeWidth=2;strokeColor=#d6b656;" edge="1" source="transform" target="deploy-s3-transformed" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4-label" value="JSONL" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e4">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- Publish App -->
+        <mxCell id="publish" value="&lt;b&gt;Publish App&lt;/b&gt;&lt;br&gt;(AE Activity)&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;ParquetFileReader&lt;br&gt;nest_atlas_entities()&lt;br&gt;bulk upsert API&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="130" width="170" height="130" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Deployment S3 Transformed → Publish -->
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jetSize=auto;html=1;strokeWidth=2;strokeColor=#FF9900;" edge="1" source="deploy-s3-transformed" target="publish" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5-label" value="ParquetFileReader" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e5">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- Atlas -->
+        <mxCell id="atlas" value="&lt;b&gt;Atlas&lt;/b&gt;&lt;br&gt;Metastore" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1500" y="145" width="120" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Publish → Atlas -->
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jetSize=auto;html=1;strokeWidth=2;strokeColor=#9673a6;" edge="1" source="publish" target="atlas" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6-label" value="Bulk Upsert API" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e6">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- upload_to_atlan -->
+        <mxCell id="upload-atlan" value="&lt;b&gt;upload_to_atlan&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Deployment S3 → Upstream S3&lt;br&gt;(full re-upload)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=11;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="600" y="320" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Upstream S3 -->
+        <mxCell id="upstream-s3" value="&lt;b&gt;Upstream S3&lt;/b&gt;&lt;br&gt;(Atlan Object Store)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;fillColor=#FF9900;strokeColor=#ffffff;labelPosition=right;verticalLabelPosition=middle;align=left;verticalAlign=middle;whiteSpace=wrap;html=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="930" y="325" width="50" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: deploy S3 → upload_to_atlan -->
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jetSize=auto;html=1;strokeWidth=1;strokeColor=#999999;dashed=1;" edge="1" source="deploy-s3-raw" target="upload-atlan" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: upload_to_atlan → upstream S3 -->
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jetSize=auto;html=1;strokeWidth=1;strokeColor=#999999;dashed=1;" edge="1" source="upload-atlan" target="upstream-s3" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Lakehouse side-load box -->
+        <mxCell id="lh-group" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#0066CC;strokeWidth=2;dashed=1;dashPattern=8 4;" vertex="1" parent="1">
+          <mxGeometry x="450" y="440" width="750" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="lh-group-label" value="Optional Side-Load (ENABLE_LAKEHOUSE_LOAD=true)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontStyle=3;fontColor=#0066CC;" vertex="1" parent="1">
+          <mxGeometry x="460" y="445" width="350" height="25" as="geometry" />
+        </mxCell>
+
+        <!-- load_to_lakehouse -->
+        <mxCell id="load-lh" value="&lt;b&gt;load_to_lakehouse&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;POST to MDLH load API&lt;br&gt;with S3 glob pattern&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#deebf7;strokeColor=#0066CC;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="500" y="490" width="180" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- MDLH -->
+        <mxCell id="mdlh" value="&lt;b&gt;MDLH&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;REST API&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#deebf7;strokeColor=#0066CC;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="760" y="490" width="100" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Iceberg Tables -->
+        <mxCell id="iceberg-raw" value="&lt;b&gt;Iceberg&lt;/b&gt;&lt;br&gt;Raw Table" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#deebf7;strokeColor=#0066CC;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="940" y="480" width="100" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="iceberg-transformed" value="&lt;b&gt;Iceberg&lt;/b&gt;&lt;br&gt;Transformed" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#deebf7;strokeColor=#0066CC;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1070" y="480" width="100" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Arrows: load_to_lakehouse flow -->
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jetSize=auto;html=1;strokeWidth=1;strokeColor=#0066CC;" edge="1" source="load-lh" target="mdlh" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jetSize=auto;html=1;strokeWidth=1;strokeColor=#0066CC;" edge="1" source="mdlh" target="iceberg-raw" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jetSize=auto;html=1;strokeWidth=1;strokeColor=#0066CC;" edge="1" source="mdlh" target="iceberg-transformed" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Pain points callouts -->
+        <mxCell id="pain1" value="&#x26A0; Dual-write overhead" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#CC0000;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="620" y="390" width="140" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="pain2" value="&#x26A0; Brittle path coupling" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#CC0000;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="95" width="140" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="pain3" value="&#x26A0; No incremental publish" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#CC0000;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="270" width="160" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- Legend -->
+        <mxCell id="legend-box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="50" y="340" width="300" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-title" value="&lt;b&gt;Legend&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="345" width="100" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legend1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="70" y="370" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="legend1t" value="SDK Activity" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="100" y="368" width="80" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legend2" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="70" y="392" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="legend2t" value="Transform Activity" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="100" y="390" width="100" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legend3" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="70" y="414" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="legend3t" value="AE Publish Activity" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="100" y="412" width="110" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legend4" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#deebf7;strokeColor=#0066CC;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="70" y="436" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="legend4t" value="Lakehouse (Iceberg/MDLH)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="100" y="434" width="150" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legend5" value="" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;fillColor=#FF9900;strokeColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry x="200" y="368" width="20" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legend5t" value="S3 Object Store" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="225" y="368" width="100" height="20" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram id="proposed-arch" name="Proposed Architecture (Phase 2)">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="p-title" value="Proposed Architecture — Phase 2: Publish Reads from Lakehouse" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="350" y="20" width="600" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Source Database -->
+        <mxCell id="p-src-db" value="&lt;b&gt;Source Database&lt;/b&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="80" y="200" width="140" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Extract -->
+        <mxCell id="p-extract" value="&lt;b&gt;Extract&lt;/b&gt;&lt;br&gt;(Temporal Activity)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="300" y="200" width="160" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Source → Extract -->
+        <mxCell id="pe1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" source="p-src-db" target="p-extract" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Deployment S3 (staging only) -->
+        <mxCell id="p-deploy-s3" value="&lt;b&gt;Deployment S3&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px;color:#888&quot;&gt;Staging area for MDLH&lt;/font&gt;" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;fillColor=#FF9900;strokeColor=#ffffff;labelPosition=right;verticalLabelPosition=middle;align=left;verticalAlign=middle;whiteSpace=wrap;html=1;fontSize=11;opacity=60;" vertex="1" parent="1">
+          <mxGeometry x="540" y="135" width="50" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Extract → S3 -->
+        <mxCell id="pe2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=1;strokeColor=#CCCCCC;dashed=1;" edge="1" source="p-extract" target="p-deploy-s3" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="pe2-label" value="Parquet (staging)" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=9;fontColor=#999999;" vertex="1" connectable="0" parent="pe2">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- load_to_lakehouse (raw) -->
+        <mxCell id="p-load-raw" value="&lt;b&gt;load_to_lakehouse&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Raw data&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#deebf7;strokeColor=#0066CC;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="520" y="210" width="160" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Extract → load_to_lakehouse raw -->
+        <mxCell id="pe3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;strokeColor=#82b366;" edge="1" source="p-extract" target="p-load-raw" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- MDLH -->
+        <mxCell id="p-mdlh" value="&lt;b&gt;MDLH&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#deebf7;strokeColor=#0066CC;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="740" y="210" width="80" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: load raw → MDLH -->
+        <mxCell id="pe4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;strokeColor=#0066CC;" edge="1" source="p-load-raw" target="p-mdlh" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Iceberg Raw Table -->
+        <mxCell id="p-iceberg-raw" value="&lt;b&gt;Iceberg&lt;/b&gt;&lt;br&gt;Raw Table&lt;br&gt;&lt;font style=&quot;font-size:10px;color:#555&quot;&gt;Partitioned by typename&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#deebf7;strokeColor=#0066CC;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="880" y="185" width="170" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: MDLH → Iceberg Raw -->
+        <mxCell id="pe5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;strokeColor=#0066CC;" edge="1" source="p-mdlh" target="p-iceberg-raw" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Transform (still reads from S3 in Phase 2) -->
+        <mxCell id="p-transform" value="&lt;b&gt;Transform&lt;/b&gt;&lt;br&gt;(Temporal Activity)&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Still reads from S3&lt;br&gt;in Phase 2&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="300" y="380" width="160" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: S3 → Transform (Phase 2 still uses S3) -->
+        <mxCell id="pe6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=1;strokeColor=#CCCCCC;dashed=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" source="p-deploy-s3" target="p-transform" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="380" y="160" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="pe6-label" value="ParquetFileReader&lt;br&gt;(Phase 2 — unchanged)" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=9;fontColor=#999999;" vertex="1" connectable="0" parent="pe6">
+          <mxGeometry x="0.3" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- load_to_lakehouse (transformed) -->
+        <mxCell id="p-load-transformed" value="&lt;b&gt;load_to_lakehouse&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Per entity type&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#deebf7;strokeColor=#0066CC;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="520" y="400" width="160" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Transform → load_to_lakehouse transformed -->
+        <mxCell id="pe7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;strokeColor=#d6b656;" edge="1" source="p-transform" target="p-load-transformed" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: load transformed → MDLH -->
+        <mxCell id="pe8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;strokeColor=#0066CC;" edge="1" source="p-load-transformed" target="p-mdlh" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="780" y="425" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Iceberg Transformed Tables -->
+        <mxCell id="p-iceberg-t-group" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#0066CC;strokeWidth=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="870" y="340" width="500" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="p-iceberg-t-label" value="Iceberg Transformed Tables (per entity type)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=3;fontColor=#0066CC;" vertex="1" parent="1">
+          <mxGeometry x="880" y="345" width="300" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="p-ice-db" value="&lt;b&gt;databases&lt;/b&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=8;fillColor=#deebf7;strokeColor=#0066CC;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="890" y="380" width="80" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="p-ice-schema" value="&lt;b&gt;schemas&lt;/b&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=8;fillColor=#deebf7;strokeColor=#0066CC;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="985" y="380" width="80" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="p-ice-table" value="&lt;b&gt;tables&lt;/b&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=8;fillColor=#deebf7;strokeColor=#0066CC;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="380" width="80" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="p-ice-col" value="&lt;b&gt;columns&lt;/b&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=8;fillColor=#deebf7;strokeColor=#0066CC;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1175" y="380" width="80" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="p-ice-proc" value="&lt;b&gt;procedures&lt;/b&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=8;fillColor=#deebf7;strokeColor=#0066CC;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1270" y="380" width="80" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Publish App -->
+        <mxCell id="p-publish" value="&lt;b&gt;Publish App&lt;/b&gt;&lt;br&gt;(AE Activity)&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;IcebergReader (new)&lt;br&gt;or MDLH query API&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="540" width="170" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Iceberg tables → Publish -->
+        <mxCell id="pe9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=3;strokeColor=#0066CC;" edge="1" source="p-ice-table" target="p-publish" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="pe9-label" value="&lt;b&gt;NEW: Read from Lakehouse&lt;/b&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontColor=#0066CC;" vertex="1" connectable="0" parent="pe9">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- Atlas -->
+        <mxCell id="p-atlas" value="&lt;b&gt;Atlas&lt;/b&gt;&lt;br&gt;Metastore" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1300" y="550" width="120" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Publish → Atlas -->
+        <mxCell id="pe10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;strokeColor=#9673a6;" edge="1" source="p-publish" target="p-atlas" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="pe10-label" value="Bulk Upsert API" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="pe10">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- Crossed out: upload_to_atlan -->
+        <mxCell id="p-no-upload" value="&lt;s&gt;upload_to_atlan&lt;/s&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px;color:#888&quot;&gt;No longer needed&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#CC0000;fontColor=#CC0000;fontSize=11;dashed=1;opacity=50;" vertex="1" parent="1">
+          <mxGeometry x="80" y="550" width="160" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Benefits callouts -->
+        <mxCell id="benefit1" value="&#x2705; Single source of truth" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontColor=#006600;" vertex="1" parent="1">
+          <mxGeometry x="80" y="680" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="benefit2" value="&#x2705; Iceberg time travel &amp; auditability" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontColor=#006600;" vertex="1" parent="1">
+          <mxGeometry x="80" y="705" width="250" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="benefit3" value="&#x2705; Incremental publish (snapshot-based)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontColor=#006600;" vertex="1" parent="1">
+          <mxGeometry x="80" y="730" width="280" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="benefit4" value="&#x2705; No dual S3 write (upload_to_atlan eliminated)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontColor=#006600;" vertex="1" parent="1">
+          <mxGeometry x="80" y="755" width="320" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="benefit5" value="&#x2705; Per-type tables enable partial retry" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontColor=#006600;" vertex="1" parent="1">
+          <mxGeometry x="80" y="780" width="280" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- Blocker callout -->
+        <mxCell id="blocker" value="&lt;b&gt;&#x1F6A7; BLOCKER:&lt;/b&gt; MDLH read/query API required&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Options: PyIceberg direct | MDLH query endpoint | Trino gateway&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=11;fontColor=#BF360C;" vertex="1" parent="1">
+          <mxGeometry x="830" y="680" width="380" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram id="migration-phases" name="Migration Phases">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="700" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="m-title" value="Migration Phases" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="500" y="20" width="300" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 1 -->
+        <mxCell id="phase1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#4CAF50;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="80" width="300" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="phase1-title" value="&lt;b&gt;Phase 1: Side-Load&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#4CAF50&quot;&gt;&#x2705; DONE&lt;/font&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="80" y="90" width="220" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="phase1-body" value="&lt;div style=&quot;text-align:left;font-size:11px;line-height:1.6&quot;&gt;&#xa;&lt;b&gt;S3:&lt;/b&gt; Primary storage&lt;br&gt;&#xa;&lt;b&gt;Lakehouse:&lt;/b&gt; Optional side-load&lt;br&gt;&#xa;&lt;b&gt;Transform reads:&lt;/b&gt; S3&lt;br&gt;&#xa;&lt;b&gt;Publish reads:&lt;/b&gt; S3&lt;br&gt;&#xa;&lt;b&gt;upload_to_atlan:&lt;/b&gt; Required&lt;br&gt;&#xa;&lt;hr&gt;&#xa;&lt;b&gt;Flag:&lt;/b&gt; ENABLE_LAKEHOUSE_LOAD&lt;br&gt;&#xa;&lt;b&gt;Tables:&lt;/b&gt; Single per stage&lt;br&gt;&#xa;&lt;/div&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="55" y="135" width="270" height="190" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow 1→2 -->
+        <mxCell id="m-arrow1" value="" style="shape=singleArrow;direction=east;fillColor=#666666;strokeColor=none;arrowWidth=0.4;arrowSize=0.3;" vertex="1" parent="1">
+          <mxGeometry x="350" y="195" width="40" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 2 -->
+        <mxCell id="phase2" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1976D2;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="400" y="80" width="300" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="phase2-title" value="&lt;b&gt;Phase 2: Publish from Lakehouse&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#1976D2&quot;&gt;&#x1F6A7; NEXT&lt;/font&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="420" y="90" width="260" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="phase2-body" value="&lt;div style=&quot;text-align:left;font-size:11px;line-height:1.6&quot;&gt;&#xa;&lt;b&gt;S3:&lt;/b&gt; Staging for MDLH&lt;br&gt;&#xa;&lt;b&gt;Lakehouse:&lt;/b&gt; Primary for publish&lt;br&gt;&#xa;&lt;b&gt;Transform reads:&lt;/b&gt; S3 (unchanged)&lt;br&gt;&#xa;&lt;b&gt;Publish reads:&lt;/b&gt; &lt;font color=&quot;#1976D2&quot;&gt;&lt;b&gt;Lakehouse&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&#xa;&lt;b&gt;upload_to_atlan:&lt;/b&gt; Fallback only&lt;br&gt;&#xa;&lt;hr&gt;&#xa;&lt;b&gt;Flag:&lt;/b&gt; PUBLISH_SOURCE=lakehouse|s3&lt;br&gt;&#xa;&lt;b&gt;Tables:&lt;/b&gt; Hybrid (1 raw, N transformed)&lt;br&gt;&#xa;&lt;b&gt;Blocker:&lt;/b&gt; MDLH read API&lt;br&gt;&#xa;&lt;/div&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="415" y="135" width="270" height="190" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow 2→3 -->
+        <mxCell id="m-arrow2" value="" style="shape=singleArrow;direction=east;fillColor=#666666;strokeColor=none;arrowWidth=0.4;arrowSize=0.3;" vertex="1" parent="1">
+          <mxGeometry x="710" y="195" width="40" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 3 -->
+        <mxCell id="phase3" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#F57C00;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="760" y="80" width="300" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="phase3-title" value="&lt;b&gt;Phase 3: Transform from Lakehouse&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#F57C00&quot;&gt;OPTIONAL&lt;/font&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="780" y="90" width="260" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="phase3-body" value="&lt;div style=&quot;text-align:left;font-size:11px;line-height:1.6&quot;&gt;&#xa;&lt;b&gt;S3:&lt;/b&gt; Staging for MDLH&lt;br&gt;&#xa;&lt;b&gt;Lakehouse:&lt;/b&gt; Primary for all reads&lt;br&gt;&#xa;&lt;b&gt;Transform reads:&lt;/b&gt; &lt;font color=&quot;#F57C00&quot;&gt;&lt;b&gt;Lakehouse&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&#xa;&lt;b&gt;Publish reads:&lt;/b&gt; Lakehouse&lt;br&gt;&#xa;&lt;b&gt;upload_to_atlan:&lt;/b&gt; Deprecated&lt;br&gt;&#xa;&lt;hr&gt;&#xa;&lt;b&gt;Flag:&lt;/b&gt; TRANSFORM_SOURCE=lakehouse|s3&lt;br&gt;&#xa;&lt;b&gt;Prereq:&lt;/b&gt; IcebergReader abstraction&lt;br&gt;&#xa;&lt;b&gt;Prereq:&lt;/b&gt; Latency benchmark passed&lt;br&gt;&#xa;&lt;/div&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="775" y="135" width="270" height="190" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow 3→4 -->
+        <mxCell id="m-arrow3" value="" style="shape=singleArrow;direction=east;fillColor=#666666;strokeColor=none;arrowWidth=0.4;arrowSize=0.3;" vertex="1" parent="1">
+          <mxGeometry x="1070" y="195" width="40" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 4 -->
+        <mxCell id="phase4" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#C62828;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="80" width="260" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="phase4-title" value="&lt;b&gt;Phase 4: S3 Deprecation&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#C62828&quot;&gt;FUTURE&lt;/font&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="90" width="220" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="phase4-body" value="&lt;div style=&quot;text-align:left;font-size:11px;line-height:1.6&quot;&gt;&#xa;&lt;b&gt;S3:&lt;/b&gt; &lt;font color=&quot;#C62828&quot;&gt;Debug/backup only&lt;/font&gt;&lt;br&gt;&#xa;&lt;b&gt;Lakehouse:&lt;/b&gt; &lt;b&gt;Only storage&lt;/b&gt;&lt;br&gt;&#xa;&lt;b&gt;Transform reads:&lt;/b&gt; Lakehouse&lt;br&gt;&#xa;&lt;b&gt;Publish reads:&lt;/b&gt; Lakehouse&lt;br&gt;&#xa;&lt;b&gt;upload_to_atlan:&lt;/b&gt; &lt;s&gt;Removed&lt;/s&gt;&lt;br&gt;&#xa;&lt;hr&gt;&#xa;&lt;b&gt;Write path:&lt;/b&gt; Direct Iceberg write&lt;br&gt;&#xa;&lt;b&gt;Prereq:&lt;/b&gt; MDLH push API&lt;br&gt;&#xa;or PyIceberg direct writes&lt;br&gt;&#xa;&lt;/div&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="135" width="240" height="190" as="geometry" />
+        </mxCell>
+
+        <!-- Table structure decision -->
+        <mxCell id="table-title" value="Table Structure Decision: Hybrid (Option C)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=16;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="400" y="380" width="500" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Raw table -->
+        <mxCell id="raw-box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#4CAF50;" vertex="1" parent="1">
+          <mxGeometry x="140" y="430" width="300" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="raw-label" value="&lt;b&gt;Raw Stage — Single Table&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=13;fontColor=#2E7D32;" vertex="1" parent="1">
+          <mxGeometry x="170" y="438" width="240" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="raw-table" value="&lt;b&gt;raw_metadata.{connector}_raw&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Partitioned by: typename, date(extracted_at)&lt;br&gt;All entity types in one table&lt;br&gt;Wide/sparse schema (Iceberg evolution)&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#C8E6C9;strokeColor=#4CAF50;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="185" y="475" width="210" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow -->
+        <mxCell id="m-arrow-tables" value="Transform" style="shape=singleArrow;direction=east;fillColor=#666666;strokeColor=none;arrowWidth=0.4;arrowSize=0.3;" vertex="1" parent="1">
+          <mxGeometry x="460" y="510" width="60" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Transformed tables -->
+        <mxCell id="transformed-box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1976D2;" vertex="1" parent="1">
+          <mxGeometry x="540" y="430" width="750" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="transformed-label" value="&lt;b&gt;Transformed Stage — Per-Entity-Type Tables&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=13;fontColor=#1565C0;" vertex="1" parent="1">
+          <mxGeometry x="640" y="438" width="340" height="25" as="geometry" />
+        </mxCell>
+
+        <mxCell id="t-db" value="&lt;b&gt;databases&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;guid, typeName&lt;br&gt;name, qualifiedName&lt;br&gt;...db fields&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=8;fillColor=#BBDEFB;strokeColor=#1976D2;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="560" y="475" width="120" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="t-schema" value="&lt;b&gt;schemas&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;guid, typeName&lt;br&gt;name, qualifiedName&lt;br&gt;...schema fields&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=8;fillColor=#BBDEFB;strokeColor=#1976D2;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="700" y="475" width="120" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="t-table" value="&lt;b&gt;tables&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;guid, typeName&lt;br&gt;name, qualifiedName&lt;br&gt;...table fields&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=8;fillColor=#BBDEFB;strokeColor=#1976D2;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="840" y="475" width="120" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="t-col" value="&lt;b&gt;columns&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;guid, typeName&lt;br&gt;data_type, ordinal&lt;br&gt;...column fields&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=8;fillColor=#BBDEFB;strokeColor=#1976D2;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="980" y="475" width="120" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="t-proc" value="&lt;b&gt;procedures&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;guid, typeName&lt;br&gt;name, qualifiedName&lt;br&gt;...proc fields&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=8;fillColor=#BBDEFB;strokeColor=#1976D2;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="475" width="120" height="100" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
