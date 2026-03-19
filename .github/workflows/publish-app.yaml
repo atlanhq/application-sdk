@@ -1,7 +1,8 @@
 # Reusable publish workflow for Atlan first-party app repos.
 #
 # Uses the `atlan` CLI to build the image and register the version in the
-# Global Marketplace as a **draft** release that requires admin approval.
+# Global Marketplace. Draft/active status is determined by GM based on
+# the target channel and caller's tenant.
 #
 # The CLI handles:
 #   - Reading atlan.yaml for app name and config
@@ -111,7 +112,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          ARGS="--draft"
+          ARGS=""
 
           if [ -n "$REF" ]; then
             ARGS="$ARGS --ref $REF"
