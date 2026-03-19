@@ -33,7 +33,7 @@ on:
         description: "Target channel (e.g. 'all' for draft release requiring approval). Ignored when tenants is set."
         required: false
         type: string
-        default: ""
+        default: "all"
       tenants:
         description: "Comma-separated tenant IDs for targeted publish. Takes precedence over channel."
         required: false
@@ -45,17 +45,17 @@ on:
         type: string
         default: "https://home.atlan.com"
       cli_version:
-        description: "Atlan CLI version to install (default: latest)"
+        description: "Atlan CLI version to install"
         required: false
         type: string
-        default: "latest"
+        default: "v0.1.9"
     secrets:
       ORG_PAT_GITHUB:
         required: true
         description: "Org-level PAT for GHCR login and gh CLI auth"
       APP_PUBLISH_TOKEN:
         required: true
-        description: "API token from home.atlan.com for marketplace publish"
+        description: "API token for marketplace publish"
 
 permissions:
   contents: read
