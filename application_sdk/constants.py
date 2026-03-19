@@ -75,6 +75,10 @@ CLEANUP_BASE_PATHS = [
 # Key used to store tracked FileReference objects in _app_state during a workflow run
 TRACKED_FILE_REFS_KEY = "_tracked_file_refs"
 
+# Object-store prefixes that must never be deleted by cleanup_storage.
+# These store cross-run persistent state (connection configs, incremental markers, etc.)
+PROTECTED_STORAGE_PREFIXES = ("persistent-artifacts/",)
+
 # State Store Constants
 #: Path template for state store files.
 #:

@@ -32,3 +32,34 @@ class CleanupOutput(Output, allow_unbounded_fields=True):
     """
 
     path_results: dict[str, bool] = field(default_factory=dict)
+
+
+@dataclass
+class StorageCleanupInput(Input, allow_unbounded_fields=True):
+    """Input for ``App.cleanup_storage``.
+
+    Args:
+        include_prefix_cleanup: When ``True``, also delete objects under the
+            run-scoped prefix ``artifacts/apps/{app}/workflows/{wf_id}/{run_id}/``
+            in addition to tracked ``file_refs/`` objects.  Off by default
+            because run artifacts may be needed by downstream systems after
+            completion.
+    """
+
+    include_prefix_cleanup: bool = False
+
+
+@dataclass
+class StorageCleanupOutput(Output, allow_unbounded_fields=True):
+    """Output from ``App.cleanup_storage``.
+
+    Args:
+        deleted_count: Number of object-store keys successfully deleted.
+        skipped_count: Number of keys skipped (protected prefix or
+            non-transient path).
+        error_count: Number of keys that failed to delete.
+    """
+
+    deleted_count: int = 0
+    skipped_count: int = 0
+    error_count: int = 0

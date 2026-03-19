@@ -17,7 +17,12 @@ from application_sdk.app.context import AppContext, TaskExecutionContext
 from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
-from application_sdk.contracts.cleanup import CleanupInput, CleanupOutput
+from application_sdk.contracts.cleanup import (
+    CleanupInput,
+    CleanupOutput,
+    StorageCleanupInput,
+    StorageCleanupOutput,
+)
 from application_sdk.contracts.storage import (
     DownloadInput,
     DownloadOutput,
@@ -991,6 +996,124 @@ class App(ABC):
 
         return CleanupOutput(path_results=path_results)
 
+    @task(
+        timeout_seconds=300,
+        retry_max_attempts=1,
+        heartbeat_timeout_seconds=None,
+        auto_heartbeat_seconds=None,
+    )
+    async def cleanup_storage(self, input: StorageCleanupInput) -> StorageCleanupOutput:
+        """Framework task: delete transient object-store files after a workflow run.
+
+        Deletes two categories of object-store objects:
+
+        1. **Tracked ``file_refs/`` refs** (always): auto-persisted intermediary
+           files that use random UUIDs (``file_refs/{uuid4_hex}{suffix}``).
+           Each key and its ``.sha256`` sidecar are deleted.
+        2. **Run-scoped prefix** (opt-in via ``input.include_prefix_cleanup``):
+           all objects under ``artifacts/apps/{app}/workflows/{wf_id}/{run_id}/``.
+
+        Objects under ``persistent-artifacts/`` are never deleted.
+
+        If no object store is configured (local dev), returns immediately with
+        zero counts.  Individual delete errors increment ``error_count`` but
+        never abort the task.
+        """
+        import asyncio
+
+        import obstore as obs
+
+        from application_sdk.constants import (
+            PROTECTED_STORAGE_PREFIXES,
+            TRACKED_FILE_REFS_KEY,
+        )
+        from application_sdk.execution._temporal.activity_utils import build_output_path
+        from application_sdk.storage.ops import _resolve_store, delete
+
+        store = self.context.storage if self._context is not None else None
+        if store is None:
+            return StorageCleanupOutput()
+
+        resolved = _resolve_store(store)
+
+        deleted = 0
+        skipped = 0
+        errors = 0
+
+        MAX_CONCURRENT_DELETES = 20
+        sem = asyncio.Semaphore(MAX_CONCURRENT_DELETES)
+
+        async def _delete_one(key: str) -> bool:
+            async with sem:
+                try:
+                    await delete(key, store, normalize=False)
+                    return True
+                except Exception:
+                    return False
+
+        # 1. Delete tracked file_refs/ objects.
+        tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY)
+        if tracked_refs:
+            for ref in tracked_refs:
+                storage_path: str | None = getattr(ref, "storage_path", None)
+                if not storage_path:
+                    continue
+                if any(storage_path.startswith(p) for p in PROTECTED_STORAGE_PREFIXES):
+                    skipped += 1
+                    continue
+                if not storage_path.startswith("file_refs/"):
+                    skipped += 1
+                    continue
+                if storage_path.endswith("/"):
+                    # Directory ref — stream-and-delete sub-keys.
+                    for batch in obs.list(resolved, prefix=storage_path):
+                        tasks = []
+                        for item in batch:
+                            key = str(item["path"])
+                            if any(
+                                key.startswith(p) for p in PROTECTED_STORAGE_PREFIXES
+                            ):
+                                skipped += 1
+                                continue
+                            tasks.append(_delete_one(key))
+                        results = await asyncio.gather(*tasks)
+                        for ok in results:
+                            if ok:
+                                deleted += 1
+                            else:
+                                errors += 1
+                else:
+                    # Single file — delete key and .sha256 sidecar.
+                    for key in (storage_path, storage_path + ".sha256"):
+                        if await _delete_one(key):
+                            deleted += 1
+                        else:
+                            errors += 1
+
+        # 2. Delete run-scoped prefix (opt-in).
+        if input.include_prefix_cleanup:
+            prefix = build_output_path() + "/"
+            for batch in obs.list(resolved, prefix=prefix):
+                tasks = []
+                for item in batch:
+                    key = str(item["path"])
+                    if any(key.startswith(p) for p in PROTECTED_STORAGE_PREFIXES):
+                        skipped += 1
+                        continue
+                    tasks.append(_delete_one(key))
+                results = await asyncio.gather(*tasks)
+                for ok in results:
+                    if ok:
+                        deleted += 1
+                    else:
+                        errors += 1
+
+        return StorageCleanupOutput(
+            deleted_count=deleted,
+            skipped_count=skipped,
+            error_count=errors,
+        )
+
     async def on_complete(self) -> None:
         """Lifecycle hook called after ``run()`` finishes (success or failure).
 
@@ -1009,10 +1132,23 @@ class App(ABC):
             "APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true"
         ).lower() not in ("0", "false", "no")
         if cleanup_enabled:
-            try:
-                await self.cleanup_files(CleanupInput())
-            except Exception:
-                _safe_log("warning", "cleanup_files task failed during on_complete")
+            import asyncio
+
+            async def _local_cleanup() -> None:
+                try:
+                    await self.cleanup_files(CleanupInput())
+                except Exception:
+                    _safe_log("warning", "cleanup_files task failed during on_complete")
+
+            async def _storage_cleanup() -> None:
+                try:
+                    await self.cleanup_storage(StorageCleanupInput())
+                except Exception:
+                    _safe_log(
+                        "warning", "cleanup_storage task failed during on_complete"
+                    )
+
+            await asyncio.gather(_local_cleanup(), _storage_cleanup())
 
 
 # =============================================================================

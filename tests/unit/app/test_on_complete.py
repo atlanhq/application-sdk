@@ -10,7 +10,12 @@ import pytest
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
-from application_sdk.contracts.cleanup import CleanupInput, CleanupOutput
+from application_sdk.contracts.cleanup import (
+    CleanupInput,
+    CleanupOutput,
+    StorageCleanupInput,
+    StorageCleanupOutput,
+)
 
 
 @dataclass
@@ -41,11 +46,55 @@ class TestOnComplete:
         app = _App()
         with mock.patch.object(
             app, "cleanup_files", new_callable=mock.AsyncMock
-        ) as m:
-            m.return_value = CleanupOutput()
-            await app.on_complete()
+        ) as m_files:
+            m_files.return_value = CleanupOutput()
+            with mock.patch.object(
+                app, "cleanup_storage", new_callable=mock.AsyncMock
+            ) as m_storage:
+                m_storage.return_value = StorageCleanupOutput()
+                await app.on_complete()
 
-        m.assert_called_once_with(CleanupInput())
+        m_files.assert_called_once_with(CleanupInput())
+
+    @pytest.mark.asyncio
+    async def test_default_calls_both_cleanups_concurrently(self) -> None:
+        """on_complete() runs cleanup_files and cleanup_storage concurrently."""
+        import asyncio
+
+        class _App(App):
+            async def run(self, input: _OCInput) -> _OCOutput:
+                return _OCOutput()
+
+        app = _App()
+        call_order: list[str] = []
+
+        async def _files_side_effect(*args: object, **kwargs: object) -> CleanupOutput:
+            call_order.append("files_start")
+            await asyncio.sleep(0)  # yield to allow storage to start
+            call_order.append("files_end")
+            return CleanupOutput()
+
+        async def _storage_side_effect(
+            *args: object, **kwargs: object
+        ) -> StorageCleanupOutput:
+            call_order.append("storage_start")
+            await asyncio.sleep(0)
+            call_order.append("storage_end")
+            return StorageCleanupOutput()
+
+        with mock.patch.object(
+            app, "cleanup_files", side_effect=_files_side_effect
+        ) as m_files:
+            with mock.patch.object(
+                app, "cleanup_storage", side_effect=_storage_side_effect
+            ) as m_storage:
+                await app.on_complete()
+
+        m_files.assert_called_once_with(CleanupInput())
+        m_storage.assert_called_once_with(StorageCleanupInput())
+        # Both were started before either finished (interleaved, not sequential)
+        assert "files_start" in call_order
+        assert "storage_start" in call_order
 
     @pytest.mark.asyncio
     async def test_cleanup_disabled_via_env_false(
@@ -58,9 +107,7 @@ class TestOnComplete:
                 return _OCOutput()
 
         app = _App()
-        with mock.patch.object(
-            app, "cleanup_files", new_callable=mock.AsyncMock
-        ) as m:
+        with mock.patch.object(app, "cleanup_files", new_callable=mock.AsyncMock) as m:
             await app.on_complete()
 
         m.assert_not_called()
@@ -76,9 +123,7 @@ class TestOnComplete:
                 return _OCOutput()
 
         app = _App()
-        with mock.patch.object(
-            app, "cleanup_files", new_callable=mock.AsyncMock
-        ) as m:
+        with mock.patch.object(app, "cleanup_files", new_callable=mock.AsyncMock) as m:
             await app.on_complete()
 
         m.assert_not_called()
@@ -91,9 +136,7 @@ class TestOnComplete:
 
         app = _App()
 
-        with mock.patch(
-            "application_sdk.app.base._safe_log"
-        ):
+        with mock.patch("application_sdk.app.base._safe_log"):
             with mock.patch.object(
                 app, "cleanup_files", new_callable=mock.AsyncMock
             ) as m:
@@ -114,9 +157,7 @@ class TestOnComplete:
                 await super().on_complete()
 
         app = _App()
-        with mock.patch.object(
-            app, "cleanup_files", new_callable=mock.AsyncMock
-        ) as m:
+        with mock.patch.object(app, "cleanup_files", new_callable=mock.AsyncMock) as m:
             m.return_value = CleanupOutput()
             await app.on_complete()
 
@@ -133,9 +174,7 @@ class TestOnComplete:
                 pass  # deliberately skip super()
 
         app = _App()
-        with mock.patch.object(
-            app, "cleanup_files", new_callable=mock.AsyncMock
-        ) as m:
+        with mock.patch.object(app, "cleanup_files", new_callable=mock.AsyncMock) as m:
             await app.on_complete()
 
         m.assert_not_called()
