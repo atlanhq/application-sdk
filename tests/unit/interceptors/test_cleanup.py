@@ -41,7 +41,9 @@ class TestCleanupWorkflowInboundInterceptor:
 
         mock_input = mock.MagicMock()
 
-        with mock.patch("application_sdk.interceptors.cleanup.workflow") as mock_wf:
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.cleanup.workflow"
+        ) as mock_wf:
             mock_wf.execute_activity = mock.AsyncMock(return_value=None)
             result = await interceptor.execute_workflow(mock_input)
 
@@ -56,7 +58,9 @@ class TestCleanupWorkflowInboundInterceptor:
 
         mock_input = mock.MagicMock()
 
-        with mock.patch("application_sdk.interceptors.cleanup.workflow") as mock_wf:
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.cleanup.workflow"
+        ) as mock_wf:
             mock_wf.execute_activity = mock.AsyncMock(return_value=None)
             await interceptor.execute_workflow(mock_input)
 
@@ -72,7 +76,9 @@ class TestCleanupWorkflowInboundInterceptor:
 
         mock_input = mock.MagicMock()
 
-        with mock.patch("application_sdk.interceptors.cleanup.workflow") as mock_wf:
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.cleanup.workflow"
+        ) as mock_wf:
             mock_wf.execute_activity = mock.AsyncMock(return_value=None)
             with pytest.raises(RuntimeError, match="workflow failed"):
                 await interceptor.execute_workflow(mock_input)
@@ -85,7 +91,9 @@ class TestCleanupWorkflowInboundInterceptor:
 
         mock_input = mock.MagicMock()
 
-        with mock.patch("application_sdk.interceptors.cleanup.workflow") as mock_wf:
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.cleanup.workflow"
+        ) as mock_wf:
             mock_wf.execute_activity = mock.AsyncMock(
                 side_effect=Exception("cleanup error")
             )
@@ -106,11 +114,11 @@ class TestCleanupActivity:
         (test_dir / "some-file.txt").write_text("data")
 
         with mock.patch(
-            "application_sdk.interceptors.cleanup.build_output_path",
+            "application_sdk.execution._temporal.interceptors.cleanup.build_output_path",
             return_value="test-run-id",
         ):
             with mock.patch(
-                "application_sdk.interceptors.cleanup.CLEANUP_BASE_PATHS",
+                "application_sdk.execution._temporal.interceptors.cleanup.CLEANUP_BASE_PATHS",
                 [str(test_dir)],
             ):
                 result = await cleanup()
@@ -123,11 +131,11 @@ class TestCleanupActivity:
         missing_dir = str(tmp_path / "nonexistent-dir")
 
         with mock.patch(
-            "application_sdk.interceptors.cleanup.build_output_path",
+            "application_sdk.execution._temporal.interceptors.cleanup.build_output_path",
             return_value="test-run-id",
         ):
             with mock.patch(
-                "application_sdk.interceptors.cleanup.CLEANUP_BASE_PATHS",
+                "application_sdk.execution._temporal.interceptors.cleanup.CLEANUP_BASE_PATHS",
                 [missing_dir],
             ):
                 result = await cleanup()
@@ -141,11 +149,11 @@ class TestCleanupActivity:
         test_dir.mkdir()
 
         with mock.patch(
-            "application_sdk.interceptors.cleanup.build_output_path",
+            "application_sdk.execution._temporal.interceptors.cleanup.build_output_path",
             return_value="test-run-id",
         ):
             with mock.patch(
-                "application_sdk.interceptors.cleanup.CLEANUP_BASE_PATHS",
+                "application_sdk.execution._temporal.interceptors.cleanup.CLEANUP_BASE_PATHS",
                 [str(test_dir)],
             ):
                 result = await cleanup()

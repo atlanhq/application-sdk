@@ -68,12 +68,14 @@ async def _emit_worker_start_event(
     namespace: str = "",
 ) -> None:
     """Emit a worker_start lifecycle event via the v3 infrastructure event binding."""
-    from application_sdk.interceptors.events import _publish_event_via_binding
-    from application_sdk.interceptors.models import (
+    from application_sdk.contracts.events import (
         ApplicationEventNames,
         Event,
         EventTypes,
         WorkerStartEventData,
+    )
+    from application_sdk.execution._temporal.interceptors.events import (
+        _publish_event_via_binding,
     )
 
     deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
@@ -166,18 +168,24 @@ def create_worker(
     )
 
     if interceptor_settings.enable_event_interceptor:
-        from application_sdk.interceptors.events import EventInterceptor, publish_event
+        from application_sdk.execution._temporal.interceptors.events import (
+            EventInterceptor,
+            publish_event,
+        )
 
         all_interceptors.append(EventInterceptor())
         task_activities = [*task_activities, publish_event]
 
     if interceptor_settings.enable_cleanup_interceptor:
-        from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
+        from application_sdk.execution._temporal.interceptors.cleanup import (
+            CleanupInterceptor,
+            cleanup,
+        )
 
         all_interceptors.append(CleanupInterceptor())
         task_activities = [*task_activities, cleanup]
 
-    from application_sdk.interceptors.activity_failure_logging import (
+    from application_sdk.execution._temporal.interceptors.activity_failure_logging import (
         TaskFailureLoggingInterceptor,
     )
 

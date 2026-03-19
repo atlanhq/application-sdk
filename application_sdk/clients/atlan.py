@@ -1,3 +1,13 @@
+# ruff: noqa: E402
+import warnings
+
+warnings.warn(
+    "application_sdk.clients.atlan is deprecated and will be removed in v3.1.0. "
+    "Use application_sdk.credentials.atlan_client (create_async_atlan_client, AtlanClientMixin) instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from typing import Optional
 
 from pyatlan.client.aio import AsyncAtlanClient

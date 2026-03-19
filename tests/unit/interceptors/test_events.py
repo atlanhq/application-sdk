@@ -50,7 +50,7 @@ class TestEventActivityInboundInterceptor:
         mock_input = mock.MagicMock()
 
         with mock.patch(
-            "application_sdk.interceptors.events._publish_event_via_binding",
+            "application_sdk.execution._temporal.interceptors.events._publish_event_via_binding",
             new_callable=mock.AsyncMock,
         ):
             result = await interceptor.execute_activity(mock_input)
@@ -66,7 +66,7 @@ class TestEventActivityInboundInterceptor:
         mock_input = mock.MagicMock()
 
         with mock.patch(
-            "application_sdk.interceptors.events._publish_event_via_binding",
+            "application_sdk.execution._temporal.interceptors.events._publish_event_via_binding",
             new_callable=mock.AsyncMock,
         ) as mock_publish:
             await interceptor.execute_activity(mock_input)
@@ -87,7 +87,7 @@ class TestEventActivityInboundInterceptor:
             published_events.append(event)
 
         with mock.patch(
-            "application_sdk.interceptors.events._publish_event_via_binding",
+            "application_sdk.execution._temporal.interceptors.events._publish_event_via_binding",
             side_effect=capture_event,
         ):
             await interceptor.execute_activity(mock_input)
@@ -108,7 +108,7 @@ class TestEventActivityInboundInterceptor:
         mock_input = mock.MagicMock()
 
         with mock.patch(
-            "application_sdk.interceptors.events._publish_event_via_binding",
+            "application_sdk.execution._temporal.interceptors.events._publish_event_via_binding",
             new_callable=mock.AsyncMock,
         ):
             with pytest.raises(ValueError, match="activity failed"):
@@ -122,7 +122,7 @@ class TestEventActivityInboundInterceptor:
         mock_input = mock.MagicMock()
 
         with mock.patch(
-            "application_sdk.interceptors.events._publish_event_via_binding",
+            "application_sdk.execution._temporal.interceptors.events._publish_event_via_binding",
             new_callable=mock.AsyncMock,
         ) as mock_publish:
             with pytest.raises(RuntimeError):
@@ -144,7 +144,7 @@ class TestPublishEventActivity:
         }
 
         with mock.patch(
-            "application_sdk.interceptors.events._publish_event_via_binding",
+            "application_sdk.execution._temporal.interceptors.events._publish_event_via_binding",
             new_callable=mock.AsyncMock,
         ) as mock_publish:
             await publish_event(event_data)
@@ -160,7 +160,7 @@ class TestPublishEventActivity:
         }
 
         with mock.patch(
-            "application_sdk.interceptors.events._publish_event_via_binding",
+            "application_sdk.execution._temporal.interceptors.events._publish_event_via_binding",
             new_callable=mock.AsyncMock,
             side_effect=Exception("store down"),
         ):

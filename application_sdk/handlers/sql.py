@@ -1,3 +1,13 @@
+# ruff: noqa: E402
+import warnings
+
+warnings.warn(
+    "application_sdk.handlers.sql is deprecated and will be removed in v3.1.0. "
+    "SQL handler logic is being absorbed into application_sdk.templates.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import asyncio
 import os
 import re

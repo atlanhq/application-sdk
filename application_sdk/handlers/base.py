@@ -1,3 +1,13 @@
+# ruff: noqa: E402
+import warnings
+
+warnings.warn(
+    "application_sdk.handlers.base is deprecated and will be removed in v3.1.0. "
+    "Use application_sdk.handler.base.DefaultHandler instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from typing import Any, Dict, Optional
 
 from application_sdk.clients.base import BaseClient

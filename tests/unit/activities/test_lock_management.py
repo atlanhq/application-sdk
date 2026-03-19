@@ -16,7 +16,7 @@ from application_sdk.common.error_codes import ActivityError
 class TestAcquireDistributedLock:
     """Test acquire_distributed_lock activity."""
 
-    @patch("application_sdk.activities.lock_management.RedisClientAsync")
+    @patch("application_sdk.execution._temporal.lock_activities.RedisClientAsync")
     async def test_acquire_lock_success_first_try(self, mock_redis_client_class):
         """Test successful lock acquisition on first try."""
         # Setup mock
@@ -35,7 +35,7 @@ class TestAcquireDistributedLock:
         assert result["owner_id"] == "owner1"
         assert 0 <= result["slot_id"] < 5
 
-    @patch("application_sdk.activities.lock_management.RedisClientAsync")
+    @patch("application_sdk.execution._temporal.lock_activities.RedisClientAsync")
     async def test_acquire_lock_invalid_max_locks(self, mock_redis_client_class):
         """Test lock acquisition with invalid max_locks."""
         with pytest.raises(ApplicationError) as exc_info:
@@ -44,7 +44,7 @@ class TestAcquireDistributedLock:
         assert "ATLAN-ACTIVITY-503-01" in str(exc_info.value)
         assert "max_locks must be greater than 0" in str(exc_info.value)
 
-    @patch("application_sdk.activities.lock_management.RedisClientAsync")
+    @patch("application_sdk.execution._temporal.lock_activities.RedisClientAsync")
     async def test_acquire_lock_redis_error(self, mock_redis_client_class):
         """Test lock acquisition with Redis error."""
         # Setup mock to raise exception
@@ -59,7 +59,7 @@ class TestAcquireDistributedLock:
         assert "Redis error during lock acquisition" in str(exc_info.value)
         assert "Redis connection failed" in str(exc_info.value)
 
-    @patch("application_sdk.activities.lock_management.RedisClientAsync")
+    @patch("application_sdk.execution._temporal.lock_activities.RedisClientAsync")
     async def test_acquire_lock_not_available(self, mock_redis_client_class):
         """Test lock acquisition when lock is not available."""
         # Setup mock to return False (lock not acquired)
@@ -78,7 +78,7 @@ class TestAcquireDistributedLock:
 class TestReleaseDistributedLock:
     """Test release_distributed_lock activity."""
 
-    @patch("application_sdk.activities.lock_management.RedisClientAsync")
+    @patch("application_sdk.execution._temporal.lock_activities.RedisClientAsync")
     async def test_release_lock_success(self, mock_redis_client_class):
         """Test successful lock release."""
         # Setup mock
@@ -93,7 +93,7 @@ class TestReleaseDistributedLock:
         assert result is True
         mock_client._release_lock.assert_called_once_with("test:resource:0", "owner1")
 
-    @patch("application_sdk.activities.lock_management.RedisClientAsync")
+    @patch("application_sdk.execution._temporal.lock_activities.RedisClientAsync")
     async def test_release_lock_wrong_owner(self, mock_redis_client_class):
         """Test lock release with wrong owner."""
         # Setup mock
@@ -107,7 +107,7 @@ class TestReleaseDistributedLock:
         # Verify
         assert result is False
 
-    @patch("application_sdk.activities.lock_management.RedisClientAsync")
+    @patch("application_sdk.execution._temporal.lock_activities.RedisClientAsync")
     async def test_release_lock_redis_error(self, mock_redis_client_class):
         """Test lock release with Redis error (should not raise)."""
         # Setup mock to raise exception
@@ -125,7 +125,7 @@ class TestReleaseDistributedLock:
 class TestLockManagementIntegration:
     """Integration tests for lock management activities."""
 
-    @patch("application_sdk.activities.lock_management.RedisClientAsync")
+    @patch("application_sdk.execution._temporal.lock_activities.RedisClientAsync")
     async def test_complete_lock_cycle(self, mock_redis_client_class):
         """Test complete acquire -> release cycle."""
         # Setup mock

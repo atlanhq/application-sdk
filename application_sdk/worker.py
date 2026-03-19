@@ -1,8 +1,18 @@
+# ruff: noqa: E402
 """Worker module for managing Temporal workers.
 
 This module provides the Worker class for managing Temporal workflow workers,
 including their initialization, configuration, and execution with graceful shutdown support.
 """
+
+import warnings
+
+warnings.warn(
+    "application_sdk.worker is deprecated and will be removed in v3.1.0. "
+    "Use application_sdk.execution._temporal.worker.create_worker instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import asyncio
 import os

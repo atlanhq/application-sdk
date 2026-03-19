@@ -1,7 +1,6 @@
 import os
 
 from pydantic import BaseModel, Field
-from temporalio import activity, workflow
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -57,7 +56,9 @@ def get_workflow_context() -> WorkflowContext:
     context = WorkflowContext(in_workflow="false", in_activity="false")
 
     try:
-        workflow_info = workflow.info()
+        from temporalio import workflow as _workflow
+
+        workflow_info = _workflow.info()
         if workflow_info:
             context.workflow_id = workflow_info.workflow_id or ""
             context.workflow_run_id = workflow_info.run_id or ""
@@ -70,7 +71,9 @@ def get_workflow_context() -> WorkflowContext:
         pass
 
     try:
-        activity_info = activity.info()
+        from temporalio import activity as _activity
+
+        activity_info = _activity.info()
         if activity_info:
             context.in_activity = "true"
             context.workflow_id = activity_info.workflow_id or ""

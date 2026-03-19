@@ -2,7 +2,6 @@ import os
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
 
 import orjson
-from temporalio import activity
 
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.common.types import DataframeType
@@ -24,7 +23,6 @@ if TYPE_CHECKING:
 from application_sdk.io import Reader, Writer
 
 logger = get_logger(__name__)
-activity.logger = logger
 
 
 class JsonFileReader(Reader):

@@ -1,3 +1,13 @@
+# ruff: noqa: E402
+import warnings
+
+warnings.warn(
+    "application_sdk.handlers is deprecated and will be removed in v3.1.0. "
+    "Use application_sdk.handler.base.Handler instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import json
 import logging
 from abc import ABC, abstractmethod

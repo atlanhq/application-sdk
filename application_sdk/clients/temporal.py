@@ -1,3 +1,14 @@
+# ruff: noqa: E402
+import warnings
+
+warnings.warn(
+    "application_sdk.clients.temporal is deprecated and will be removed in v3.1.0. "
+    "Use application_sdk.execution._temporal.backend and "
+    "application_sdk.execution._temporal.worker instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import asyncio
 import time
 import uuid

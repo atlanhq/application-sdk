@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Incremental SQL metadata extraction workflow implementation.
 
 This module provides the IncrementalSQLMetadataExtractionWorkflow class that extends
@@ -10,6 +11,15 @@ and finalization (write current state, update marker, upload).
 """
 
 from __future__ import annotations
+
+import warnings
+
+warnings.warn(
+    "application_sdk.workflows.metadata_extraction.incremental_sql is deprecated and will be removed in v3.1.0. "
+    "An incremental extraction template will be provided in a future v3 release.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import asyncio
 from typing import Any, Callable, Dict, List, Sequence, Type

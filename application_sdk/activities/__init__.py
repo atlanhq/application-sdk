@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Activities module for workflow task implementations.
 
 This module provides base classes and interfaces for implementing workflow activities.
@@ -12,6 +13,15 @@ Example:
     ...         state = await self._get_state(workflow_args)
     ...         await state.handler.do_something()
 """
+
+import warnings
+
+warnings.warn(
+    "application_sdk.activities is deprecated and will be removed in v3.1.0. "
+    "Use application_sdk.app.App with @task-decorated methods instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import json
 import os

@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from application_sdk.activities.common import sql_utils
 from application_sdk.activities.metadata_extraction.sql import (
     ActivityStatistics,
     BaseSQLMetadataExtractionActivities,
     BaseSQLMetadataExtractionActivitiesState,
 )
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common import sql_utils
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.io.parquet import ParquetFileWriter
 from application_sdk.transformers import TransformerInterface
@@ -576,9 +576,9 @@ class TestBaseSQLMetadataExtractionActivities:
         new_callable=AsyncMock,
     )
     @patch("application_sdk.io.parquet.ParquetFileWriter.write_batches")
-    @patch("application_sdk.activities.common.sql_utils.get_database_names")
-    @patch("application_sdk.activities.common.sql_utils.prepare_query")
-    @patch("application_sdk.activities.common.sql_utils.parse_credentials_extra")
+    @patch("application_sdk.common.sql_utils.get_database_names")
+    @patch("application_sdk.common.sql_utils.prepare_query")
+    @patch("application_sdk.common.sql_utils.parse_credentials_extra")
     async def test_query_executor_multidb_success(
         self,
         mock_parse_credentials_extra,
@@ -642,7 +642,7 @@ class TestBaseSQLMetadataExtractionActivities:
 
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
-    @patch("application_sdk.activities.common.sql_utils.get_database_names")
+    @patch("application_sdk.common.sql_utils.get_database_names")
     async def test_query_executor_multidb_no_databases(
         self,
         mock_get_database_names,
@@ -688,7 +688,7 @@ class TestBaseSQLMetadataExtractionActivities:
 
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
-    @patch("application_sdk.activities.common.sql_utils.get_database_names")
+    @patch("application_sdk.common.sql_utils.get_database_names")
     @patch(
         "application_sdk.io.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
@@ -936,9 +936,9 @@ class TestBaseSQLMetadataExtractionActivities:
         "application_sdk.io.parquet.ParquetFileWriter.write",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.activities.common.sql_utils.get_database_names")
-    @patch("application_sdk.activities.common.sql_utils.prepare_query")
-    @patch("application_sdk.activities.common.sql_utils.parse_credentials_extra")
+    @patch("application_sdk.common.sql_utils.get_database_names")
+    @patch("application_sdk.common.sql_utils.prepare_query")
+    @patch("application_sdk.common.sql_utils.parse_credentials_extra")
     async def test_query_executor_multidb_concatenate_success(
         self,
         mock_parse_credentials_extra,
@@ -1018,9 +1018,9 @@ class TestBaseSQLMetadataExtractionActivities:
         "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.activities.common.sql_utils.get_database_names")
-    @patch("application_sdk.activities.common.sql_utils.prepare_query")
-    @patch("application_sdk.activities.common.sql_utils.parse_credentials_extra")
+    @patch("application_sdk.common.sql_utils.get_database_names")
+    @patch("application_sdk.common.sql_utils.prepare_query")
+    @patch("application_sdk.common.sql_utils.parse_credentials_extra")
     async def test_query_executor_multidb_concatenate_return_dataframe(
         self,
         mock_parse_credentials_extra,

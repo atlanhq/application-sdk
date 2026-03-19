@@ -1,3 +1,13 @@
+# ruff: noqa: E402
+import warnings
+
+warnings.warn(
+    "application_sdk.clients.workflow is deprecated and will be removed in v3.1.0. "
+    "Use application_sdk.execution._temporal.backend instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum

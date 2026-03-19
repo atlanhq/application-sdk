@@ -22,7 +22,6 @@ from typing import (
 from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
-from temporalio import activity
 
 from application_sdk.clients import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
@@ -36,7 +35,6 @@ from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-activity.logger = logger
 
 if TYPE_CHECKING:
     import daft

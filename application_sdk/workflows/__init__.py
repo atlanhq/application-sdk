@@ -1,8 +1,18 @@
+# ruff: noqa: E402
 """Workflow interface module for Temporal workflows.
 
 This module provides the base workflow interface and common functionality for
 all workflow implementations in the application SDK.
 """
+
+import warnings
+
+warnings.warn(
+    "application_sdk.workflows is deprecated and will be removed in v3.1.0. "
+    "Use application_sdk.app.App with @task decorators instead (see ADR-0005).",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from abc import ABC
 from datetime import timedelta

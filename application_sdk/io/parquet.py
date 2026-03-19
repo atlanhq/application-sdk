@@ -11,8 +11,6 @@ from typing import (
     cast,
 )
 
-from temporalio import activity
-
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
     DAPR_MAX_GRPC_MESSAGE_LENGTH,
@@ -31,7 +29,6 @@ from application_sdk.observability.metrics_adaptor import MetricType, get_metric
 from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
-activity.logger = logger
 
 if TYPE_CHECKING:
     import daft  # type: ignore

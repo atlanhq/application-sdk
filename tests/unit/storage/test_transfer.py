@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-from pathlib import Path
-
 import pytest
 
-from application_sdk.contracts.storage import DownloadInput, DownloadOutput, UploadInput, UploadOutput
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts.storage import UploadOutput
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.transfer import download, upload
 
@@ -55,12 +50,15 @@ class TestUploadSingleFile:
 
     async def test_upload_nonexistent_path_raises(self, store) -> None:
         from application_sdk.storage.errors import StorageError
+
         with pytest.raises(StorageError):
             await upload("/nonexistent/path.txt", store=store)
 
 
 class TestUploadDirectory:
-    async def test_upload_directory_returns_correct_file_count(self, store, tmp_path) -> None:
+    async def test_upload_directory_returns_correct_file_count(
+        self, store, tmp_path
+    ) -> None:
         (tmp_path / "a.txt").write_bytes(b"a")
         (tmp_path / "b.txt").write_bytes(b"b")
         sub = tmp_path / "sub"
@@ -83,7 +81,7 @@ class TestDownloadSingleFile:
     async def test_roundtrip_single_file(self, store, tmp_path) -> None:
         f = tmp_path / "src.txt"
         f.write_bytes(b"roundtrip")
-        up = await upload(str(f), "rt/src.txt", store=store)
+        await upload(str(f), "rt/src.txt", store=store)
 
         dest = tmp_path / "dest.txt"
         dl = await download("rt/src.txt", str(dest), store=store)
@@ -106,6 +104,7 @@ class TestDownloadSingleFile:
 
     async def test_download_missing_key_raises(self, store, tmp_path) -> None:
         from application_sdk.storage.errors import StorageNotFoundError
+
         with pytest.raises(StorageNotFoundError):
             await download("no/such/key.txt", str(tmp_path / "out.txt"), store=store)
 
@@ -124,7 +123,9 @@ class TestDownloadDirectory:
         assert (dest / "a.txt").read_bytes() == b"a"
         assert (dest / "b.txt").read_bytes() == b"b"
 
-    async def test_sidecar_files_excluded_from_file_count(self, store, tmp_path) -> None:
+    async def test_sidecar_files_excluded_from_file_count(
+        self, store, tmp_path
+    ) -> None:
         src = tmp_path / "src"
         src.mkdir()
         (src / "data.txt").write_bytes(b"data")

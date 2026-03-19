@@ -20,7 +20,7 @@ from application_sdk.activities.common.utils import (
 class TestGetWorkflowId:
     """Test cases for get_workflow_id function."""
 
-    @patch("application_sdk.activities.common.utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
     def test_get_workflow_id_success(self, mock_activity):
         """Test successful workflow ID retrieval."""
         mock_activity.info.return_value.workflow_id = "test-workflow-123"
@@ -30,7 +30,7 @@ class TestGetWorkflowId:
         assert result == "test-workflow-123"
         mock_activity.info.assert_called_once()
 
-    @patch("application_sdk.activities.common.utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
     def test_get_workflow_id_activity_error(self, mock_activity):
         """Test workflow ID retrieval when activity.info() fails."""
         mock_activity.info.side_effect = Exception("Activity context error")
@@ -42,7 +42,10 @@ class TestGetWorkflowId:
 class TestGetObjectStorePrefix:
     """Test cases for get_object_store_prefix function - Real World Scenarios."""
 
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
+    @patch(
+        "application_sdk.execution._temporal.activity_utils.TEMPORARY_PATH",
+        "./local/tmp",
+    )
     @patch("os.path.abspath")
     @patch("os.path.relpath")
     @patch("os.path.commonpath")
@@ -67,7 +70,10 @@ class TestGetObjectStorePrefix:
 
         assert result == "artifacts/apps/myapp/workflows/wf-123/run-456"
 
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
+    @patch(
+        "application_sdk.execution._temporal.activity_utils.TEMPORARY_PATH",
+        "./local/tmp",
+    )
     @patch("os.path.abspath")
     def test_user_relative_object_store_paths(self, mock_abspath):
         """Test common user-provided relative object store paths."""
@@ -96,7 +102,10 @@ class TestGetObjectStorePrefix:
                 result == expected
             ), f"Failed for {input_path}: got {result}, expected {expected}"
 
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
+    @patch(
+        "application_sdk.execution._temporal.activity_utils.TEMPORARY_PATH",
+        "./local/tmp",
+    )
     @patch("os.path.abspath")
     @patch("os.path.commonpath")
     @patch("os.path.normpath")
@@ -135,7 +144,10 @@ class TestGetObjectStorePrefix:
                 result == expected
             ), f"Failed for {input_path}: got {result}, expected {expected}"
 
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
+    @patch(
+        "application_sdk.execution._temporal.activity_utils.TEMPORARY_PATH",
+        "./local/tmp",
+    )
     @patch("os.path.abspath")
     @patch("os.path.commonpath")
     @patch("os.path.normpath")
@@ -175,7 +187,10 @@ class TestGetObjectStorePrefix:
                 result == expected
             ), f"Failed for object store key '{object_store_key}': got '{result}', expected '{expected}'"
 
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
+    @patch(
+        "application_sdk.execution._temporal.activity_utils.TEMPORARY_PATH",
+        "./local/tmp",
+    )
     @patch("os.path.abspath")
     @patch("os.path.commonpath")
     def test_security_path_normalization(self, mock_commonpath, mock_abspath):
@@ -206,8 +221,8 @@ class TestGetObjectStorePrefix:
 class TestAutoHeartbeater:
     """Test cases for auto_heartbeater decorator."""
 
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.send_periodic_heartbeat")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.send_periodic_heartbeat")
     async def test_auto_heartbeater_success(self, mock_send_heartbeat, mock_activity):
         """Test successful auto_heartbeater decorator."""
         # Mock activity info
@@ -223,8 +238,8 @@ class TestAutoHeartbeater:
         assert result == "success"
         mock_send_heartbeat.assert_called_once()
 
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.send_periodic_heartbeat")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.send_periodic_heartbeat")
     async def test_auto_heartbeater_default_timeout(
         self, mock_send_heartbeat, mock_activity
     ):
@@ -241,8 +256,8 @@ class TestAutoHeartbeater:
         assert result == "success"
         mock_send_heartbeat.assert_called_once()
 
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.send_periodic_heartbeat")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.send_periodic_heartbeat")
     async def test_auto_heartbeater_runtime_error(
         self, mock_send_heartbeat, mock_activity
     ):
@@ -258,8 +273,8 @@ class TestAutoHeartbeater:
         assert result == "success"
         mock_send_heartbeat.assert_called_once()
 
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.send_periodic_heartbeat")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.send_periodic_heartbeat")
     async def test_auto_heartbeater_function_error(
         self, mock_send_heartbeat, mock_activity
     ):
@@ -276,7 +291,7 @@ class TestAutoHeartbeater:
         # Heartbeat task should still be created and cancelled
         mock_send_heartbeat.assert_called_once()
 
-    @patch("application_sdk.activities.common.utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
     def test_auto_heartbeater_sync_function_returns_value(self, mock_activity):
         """Test that sync functions return plain values (not coroutines)."""
         mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=60)
@@ -307,7 +322,7 @@ class TestAutoHeartbeater:
 
         assert asyncio.iscoroutinefunction(async_activity)
 
-    @patch("application_sdk.activities.common.utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
     def test_auto_heartbeater_sync_function_error(self, mock_activity):
         """Test that sync function errors propagate correctly."""
         mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=60)
@@ -319,7 +334,7 @@ class TestAutoHeartbeater:
         with pytest.raises(ValueError, match="Sync error"):
             sync_activity()
 
-    @patch("application_sdk.activities.common.utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
     def test_auto_heartbeater_sync_with_arguments(self, mock_activity):
         """Test auto_heartbeater with sync function arguments."""
         mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=60)
@@ -331,8 +346,8 @@ class TestAutoHeartbeater:
         result = sync_activity("a", "b", kwarg1="c")
         assert result == "a_b_c"
 
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.send_periodic_heartbeat")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.send_periodic_heartbeat")
     async def test_auto_heartbeater_with_arguments(
         self, mock_send_heartbeat, mock_activity
     ):
@@ -352,8 +367,8 @@ class TestAutoHeartbeater:
 class TestSendPeriodicHeartbeat:
     """Test cases for send_periodic_heartbeat function."""
 
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.asyncio.sleep")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.asyncio.sleep")
     async def test_send_periodic_heartbeat_success(self, mock_sleep, mock_activity):
         mock_sleep.return_value = None
         task = asyncio.create_task(send_periodic_heartbeat(0.1, "test_detail"))
@@ -365,8 +380,8 @@ class TestSendPeriodicHeartbeat:
             pass
         # Just ensure no exception is raised (heartbeat may not be called before cancel)
 
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.asyncio.sleep")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.asyncio.sleep")
     async def test_send_periodic_heartbeat_multiple_details(
         self, mock_sleep, mock_activity
     ):
@@ -380,8 +395,8 @@ class TestSendPeriodicHeartbeat:
             pass
         # Just ensure no exception is raised
 
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.asyncio.sleep")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.asyncio.sleep")
     async def test_send_periodic_heartbeat_no_details(self, mock_sleep, mock_activity):
         mock_sleep.return_value = None
         task = asyncio.create_task(send_periodic_heartbeat(0.1))
@@ -393,8 +408,8 @@ class TestSendPeriodicHeartbeat:
             pass
         # Just ensure no exception is raised
 
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.asyncio.sleep")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.asyncio.sleep")
     async def test_send_periodic_heartbeat_sleep_error(self, mock_sleep, mock_activity):
         """Test periodic heartbeat when sleep raises an error."""
         mock_sleep.side_effect = asyncio.CancelledError()
@@ -411,7 +426,7 @@ class TestSendPeriodicHeartbeat:
 class TestSendPeriodicHeartbeatSync:
     """Test cases for send_periodic_heartbeat_sync function."""
 
-    @patch("application_sdk.activities.common.utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
     def test_heartbeat_called_and_stops(self, mock_activity):
         """Test that heartbeats are sent and the thread stops on event."""
         stop_event = threading.Event()
@@ -430,7 +445,7 @@ class TestSendPeriodicHeartbeatSync:
         assert not thread.is_alive(), "Heartbeat thread failed to terminate"
         assert mock_activity.heartbeat.call_count >= 2
 
-    @patch("application_sdk.activities.common.utils.activity")
+    @patch("application_sdk.execution._temporal.activity_utils.activity")
     def test_stops_immediately_on_pre_set_event(self, mock_activity):
         """Test that a pre-set event prevents any heartbeats."""
         stop_event = threading.Event()
