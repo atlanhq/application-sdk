@@ -110,11 +110,33 @@ For each issue found across all passes, assign a confidence score from 0 to 100:
 - General code quality concerns not explicitly required in CLAUDE.md or BUGBOT.md
 - Issues silenced in code via lint-ignore comments
 
-## Step 6: Post summary comment
+## Step 6: Check for previous reviews
 
-Use `gh pr comment` to post a single comment with this exact structure. Use a HEREDOC for the body. Do not use emojis anywhere.
+Before posting, check if a previous review comment exists on this PR:
+
+```bash
+gh api repos/{owner}/{repo}/issues/{pr_number}/comments --jq '.[] | select(.body | contains("<!-- CLAUDE_REVIEW -->")) | {id: .id, body: .body}'
+```
+
+If a previous review exists:
+1. Parse the `REVIEW_DATA` JSON block from the previous comment
+2. For each previously reported issue, check if it still exists in the current diff:
+   - If fixed → mark as `RESOLVED`
+   - If still present → mark as `STILL PRESENT`
+3. New issues found in this review → mark as `NEW`
+4. **Update the existing comment** instead of posting a new one:
+   ```bash
+   gh api repos/{owner}/{repo}/issues/comments/{comment_id} -X PATCH -f body="..."
+   ```
+
+If no previous review exists, post a new comment.
+
+## Step 7: Post summary comment
+
+Use `gh pr comment` (or PATCH for updates) to post a single comment with this exact structure. Use a HEREDOC for the body. Do not use emojis anywhere.
 
 ```
+<!-- CLAUDE_REVIEW -->
 ## Code Review
 
 <2-3 sentence summary of what this PR does and its approach. Be specific about the technical change.>
@@ -162,7 +184,29 @@ sequenceDiagram
 <If no findings:>
 
 No issues found. Checked for bugs, security, and CLAUDE.md compliance.
+
+### Review History
+
+<If this is a re-review (previous CLAUDE_REVIEW comment found):>
+
+| Issue | Status |
+|---|---|
+| <previous issue summary> | RESOLVED |
+| <previous issue summary> | STILL PRESENT |
+| <new issue summary> | NEW |
+
+<If this is the first review, omit this section.>
+
+<!-- REVIEW_DATA
+{"issues": [{"id": "<hash>", "severity": "critical|warning|info", "file": "<path>", "line": <n>, "summary": "<one-line>", "status": "open|resolved"}], "reviewed_commit": "<full-sha>"}
+-->
 ```
+
+Rules for the `REVIEW_DATA` block:
+- Must be valid JSON
+- `reviewed_commit` is the HEAD SHA at time of review
+- When updating, preserve previous `reviewed_commit` in the history and set the new SHA as current
+- Each issue gets a stable `id` (hash of file + line + summary) so status can be tracked across re-reviews
 
 **Confidence Score Rubric:**
 - **5/5**: Safe to merge — no issues, follows all standards, well-tested
@@ -171,7 +215,7 @@ No issues found. Checked for bugs, security, and CLAUDE.md compliance.
 - **2/5**: Significant concerns — security, performance, or correctness issues found
 - **1/5**: Do not merge — critical problems requiring substantial rework
 
-## Step 7: Post inline comments
+## Step 8: Post inline comments
 
 For each finding in the Findings table, post an inline comment using `mcp__github_inline_comment__create_inline_comment`.
 
