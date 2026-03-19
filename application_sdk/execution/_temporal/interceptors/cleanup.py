@@ -1,5 +1,6 @@
 import os
 import shutil
+import warnings
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Type
@@ -16,6 +17,14 @@ from temporalio.worker import (
 from application_sdk.constants import CLEANUP_BASE_PATHS, TEMPORARY_PATH
 from application_sdk.execution._temporal.activity_utils import build_output_path
 from application_sdk.observability.logger_adaptor import get_logger
+
+warnings.warn(
+    "application_sdk.execution._temporal.interceptors.cleanup is deprecated. "
+    "Post-run cleanup is now handled by App.on_complete() / App.cleanup_files(). "
+    "CleanupInterceptor is no longer registered by default and will be removed in a future release.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = get_logger(__name__)
 activity.logger = logger

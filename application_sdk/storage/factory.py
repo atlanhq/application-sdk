@@ -28,7 +28,7 @@ def create_local_store(root_path: str | Path) -> "LocalStore":
 
     path = Path(root_path)
     path.mkdir(parents=True, exist_ok=True)
-    return LocalStore(root_path=str(path.resolve()))
+    return LocalStore(prefix=str(path.resolve()))
 
 
 def create_memory_store() -> "MemoryStore":

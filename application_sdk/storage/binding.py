@@ -116,7 +116,7 @@ def create_store_from_binding(
         az_config: dict[str, str] = {"azure_storage_account_name": account}
         if "accountKey" in meta:
             az_config["azure_storage_account_key"] = meta["accountKey"]
-        return AzureStore(container=container, config=az_config)
+        return AzureStore(container_name=container, config=az_config)
 
     if store_kind == "gcs":
         from obstore.store import GCSStore

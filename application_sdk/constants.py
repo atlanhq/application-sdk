@@ -72,6 +72,9 @@ CLEANUP_BASE_PATHS = [
     if path.strip()
 ]
 
+# Key used to store tracked FileReference objects in _app_state during a workflow run
+TRACKED_FILE_REFS_KEY = "_tracked_file_refs"
+
 # State Store Constants
 #: Path template for state store files.
 #:

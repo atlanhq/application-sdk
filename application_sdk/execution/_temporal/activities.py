@@ -22,7 +22,9 @@ from temporalio import activity
 
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata
+from application_sdk.constants import TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import FileReference
 
 
 @dataclasses.dataclass
@@ -46,6 +48,22 @@ class TaskContext:
 
     auto_heartbeat_seconds: int | None = 20
     """Auto-heartbeat interval in seconds. Set to None for manual heartbeats only."""
+
+
+def _track_file_refs(workflow_id: str, *refs: FileReference) -> None:
+    """Add FileReference objects to the per-workflow tracking set in _app_state.
+
+    Thread-safe: acquires _app_state_lock for the full read-modify-write so
+    concurrent activities cannot clobber each other's additions.
+    """
+    if not refs:
+        return
+    from application_sdk.app.base import _app_state, _app_state_lock
+
+    with _app_state_lock:
+        state = _app_state.setdefault(workflow_id, {})
+        tracked: set[FileReference] = state.setdefault(TRACKED_FILE_REFS_KEY, set())
+        tracked.update(refs)
 
 
 def create_activity_from_task(
@@ -155,6 +173,13 @@ def create_activity_from_task(
             # Persist any ephemeral FileReferences in the output after the task completes.
             if store is not None and has_refs_to_persist(result):
                 result = await persist_file_refs(store, result)
+
+            # Track all FileReference local paths for on_complete() cleanup.
+            from application_sdk.storage.file_ref_sync import _find_file_refs
+
+            all_refs = _find_file_refs(input_data) + _find_file_refs(result)
+            if all_refs:
+                _track_file_refs(activity.info().workflow_id, *all_refs)
 
             return cast("Output", result)
 

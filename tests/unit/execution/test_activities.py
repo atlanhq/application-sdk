@@ -162,8 +162,8 @@ class TestGetAllTaskActivities:
                 return _ActOutput()
 
         activities = get_all_task_activities()
-        # 2 user tasks + 2 framework tasks (upload, download) = 4
-        assert len(activities) == 4
+        # 2 user tasks + 3 framework tasks (upload, download, cleanup_files) = 5
+        assert len(activities) == 5
 
     def test_filters_by_app_names(self) -> None:
         class _AppA(App):
@@ -210,8 +210,8 @@ class TestGetAllTaskActivities:
                 return _Out2()
 
         activities = get_all_task_activities(app_names=None)
-        # 1 user task per app + 2 framework tasks (upload, download) per app = 6
-        assert len(activities) == 6
+        # 1 user task per app + 3 framework tasks (upload, download, cleanup_files) per app = 8
+        assert len(activities) == 8
 
 
 class TestGetActivityOptions:

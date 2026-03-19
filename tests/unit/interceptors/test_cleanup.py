@@ -1,17 +1,35 @@
-"""Unit tests for the cleanup interceptor."""
+"""Unit tests for the cleanup interceptor (deprecated).
+
+CleanupInterceptor is deprecated in favour of App.on_complete() /
+App.cleanup_files().  These tests verify backward-compatibility of the
+legacy interceptor code; new cleanup logic is tested in
+tests/unit/app/test_on_complete.py and tests/unit/app/test_cleanup_files.py.
+"""
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 from unittest import mock
 
 import pytest
 
-from application_sdk.interceptors.cleanup import (
-    CleanupInterceptor,
-    CleanupWorkflowInboundInterceptor,
-    cleanup,
-)
+
+@pytest.fixture(autouse=True)
+def _suppress_cleanup_deprecation_warning() -> None:
+    """Suppress DeprecationWarning from the legacy cleanup interceptor module."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        yield
+
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    from application_sdk.interceptors.cleanup import (
+        CleanupInterceptor,
+        CleanupWorkflowInboundInterceptor,
+        cleanup,
+    )
 
 
 class TestCleanupInterceptor:

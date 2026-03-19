@@ -184,15 +184,6 @@ def create_worker(
         all_interceptors.append(EventInterceptor())
         task_activities = [*task_activities, publish_event]
 
-    if interceptor_settings.enable_cleanup_interceptor:
-        from application_sdk.execution._temporal.interceptors.cleanup import (
-            CleanupInterceptor,
-            cleanup,
-        )
-
-        all_interceptors.append(CleanupInterceptor())
-        task_activities = [*task_activities, cleanup]
-
     from application_sdk.execution._temporal.interceptors.activity_failure_logging import (
         TaskFailureLoggingInterceptor,
     )

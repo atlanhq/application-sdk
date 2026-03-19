@@ -117,7 +117,8 @@ class TestCreateWorker:
         interceptor_types = [type(i).__name__ for i in interceptors_used]
         assert "CorrelationContextInterceptor" in interceptor_types
         assert "EventInterceptor" in interceptor_types
-        assert "CleanupInterceptor" in interceptor_types
+        # CleanupInterceptor is no longer registered — cleanup is via App.on_complete()
+        assert "CleanupInterceptor" not in interceptor_types
         assert "TaskFailureLoggingInterceptor" in interceptor_types
 
     def test_event_interceptor_disabled_via_env(

@@ -98,9 +98,10 @@ class TestInterceptorSettingsDefaults:
         settings = InterceptorSettings()
         assert settings.enable_correlation_interceptor is True
 
-    def test_cleanup_interceptor_enabled_by_default(self) -> None:
+    def test_cleanup_interceptor_disabled_by_default(self) -> None:
+        # CleanupInterceptor is deprecated in v3; cleanup is via App.on_complete()
         settings = InterceptorSettings()
-        assert settings.enable_cleanup_interceptor is True
+        assert settings.enable_cleanup_interceptor is False
 
 
 class TestLoadInterceptorSettingsFromEnv:

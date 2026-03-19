@@ -2,6 +2,7 @@
 
 import importlib.metadata
 import inspect
+import os
 import re
 import threading
 from abc import ABC, abstractmethod
@@ -16,6 +17,7 @@ from application_sdk.app.context import AppContext, TaskExecutionContext
 from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
+from application_sdk.contracts.cleanup import CleanupInput, CleanupOutput
 from application_sdk.contracts.storage import (
     DownloadInput,
     DownloadOutput,
@@ -928,6 +930,90 @@ class App(ABC):
             store=store,
         )
 
+    @task(timeout_seconds=300, retry_max_attempts=3)
+    async def cleanup_files(self, input: CleanupInput) -> CleanupOutput:
+        """Framework task: clean up local files after a workflow run.
+
+        Removes two categories of local files:
+        1. ``FileReference`` local paths tracked during the run (auto-materialised
+           or persisted files, including their ``.sha256`` sidecars).
+        2. Convention-based temp directories: ``input.extra_paths`` if provided,
+           otherwise ``CLEANUP_BASE_PATHS`` / ``TEMPORARY_PATH + build_output_path()``.
+
+        All errors are swallowed per-path so a cleanup failure never fails the
+        workflow.
+
+        Call this from ``on_complete()`` (the default implementation does so
+        automatically).  Do not call it directly from ``run()``.
+        """
+        import shutil
+
+        from application_sdk.constants import (
+            CLEANUP_BASE_PATHS,
+            TEMPORARY_PATH,
+            TRACKED_FILE_REFS_KEY,
+        )
+        from application_sdk.execution._temporal.activity_utils import build_output_path
+
+        path_results: dict[str, bool] = {}
+
+        # 1. Delete tracked FileReference local paths (+ .sha256 sidecars).
+        tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY)
+        if tracked_refs:
+            for ref in tracked_refs:
+                if ref.local_path:
+                    for p in (ref.local_path, ref.local_path + ".sha256"):
+                        try:
+                            if os.path.exists(p):
+                                os.remove(p)
+                            path_results[p] = True
+                        except Exception:
+                            path_results[p] = False
+
+        # 2. Delete convention-based temp directories.
+        if input.extra_paths:
+            dir_paths: list[str] = input.extra_paths
+        elif CLEANUP_BASE_PATHS:
+            dir_paths = CLEANUP_BASE_PATHS
+        else:
+            dir_paths = [os.path.join(TEMPORARY_PATH, build_output_path())]
+
+        for base_path in dir_paths:
+            try:
+                if os.path.exists(base_path):
+                    if os.path.isdir(base_path):
+                        shutil.rmtree(base_path)
+                    else:
+                        os.remove(base_path)
+                path_results[base_path] = True
+            except Exception:
+                path_results[base_path] = False
+
+        return CleanupOutput(path_results=path_results)
+
+    async def on_complete(self) -> None:
+        """Lifecycle hook called after ``run()`` finishes (success or failure).
+
+        The default implementation deletes local files produced during the run
+        when cleanup is enabled (``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR``
+        not set to a falsy value).
+
+        Override this method to add custom post-run logic.  Call
+        ``await super().on_complete()`` to preserve the default file cleanup::
+
+            async def on_complete(self) -> None:
+                await self.send_notification()
+                await super().on_complete()
+        """
+        cleanup_enabled = os.environ.get(
+            "APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true"
+        ).lower() not in ("0", "false", "no")
+        if cleanup_enabled:
+            try:
+                await self.cleanup_files(CleanupInput())
+            except Exception:
+                _safe_log("warning", "cleanup_files task failed during on_complete")
+
 
 # =============================================================================
 # Registration helpers
@@ -1092,6 +1178,15 @@ def _apply_app_registration(
             raise
 
         finally:
+            # Run the lifecycle hook before clearing state so on_complete()
+            # can still access self.context and _app_state tracked refs.
+            try:
+                await self.on_complete()
+            except Exception:
+                _safe_log(
+                    "warning", "on_complete() hook raised an unexpected exception"
+                )
+
             end_time = _safe_now()
             duration_ms = round((end_time - start_time).total_seconds() * 1000, 2)
 
