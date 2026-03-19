@@ -22,7 +22,6 @@ Fixtures (import into conftest.py or test files)::
     )
 """
 
-from application_sdk.test_utils.credentials import MockCredentialStore
 from application_sdk.testing.fixtures import (
     app_context,
     clean_app_registry,
@@ -36,6 +35,7 @@ from application_sdk.testing.fixtures import (
 )
 from application_sdk.testing.mocks import (
     MockBinding,
+    MockCredentialStore,
     MockHeartbeatController,
     MockPubSub,
     MockSecretStore,

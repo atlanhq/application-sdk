@@ -6,8 +6,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
-from temporalio import workflow
-
 from application_sdk.contracts.base import HeartbeatDetails
 
 if TYPE_CHECKING:
@@ -32,12 +30,11 @@ def _is_in_workflow() -> bool:
     """Check if we're in a Temporal workflow context.
 
     Returns True only inside workflow code, False in activities or elsewhere.
+    Reads from the ExecutionContext ContextVar — no Temporal import needed.
     """
-    try:
-        workflow.info()
-        return True
-    except Exception:
-        return False
+    from application_sdk.observability.context import get_execution_context
+
+    return get_execution_context().execution_type == "workflow"
 
 
 class _WorkflowSafeLogger:
@@ -65,7 +62,9 @@ class _WorkflowSafeLogger:
     def _get_structlog_logger(self) -> Any:
         """Get or create the fallback logger (for activity/non-workflow use)."""
         if self._structlog_logger is None:
-            with workflow.unsafe.imports_passed_through():
+            from temporalio import workflow as _workflow
+
+            with _workflow.unsafe.imports_passed_through():
                 from loguru import logger as _loguru_logger
             self._structlog_logger = _loguru_logger.bind(**self._context)
         return self._structlog_logger
@@ -78,11 +77,13 @@ class _WorkflowSafeLogger:
             self.logger.info("Done", records=count)
         """
         if _is_in_workflow():
+            from temporalio import workflow as _workflow
+
             # In workflow: use workflow.logger (standard logging).
             # Pass kwargs via extra={"_structlog_attrs": ...} — the single nested
             # key avoids LogRecord reserved attribute collisions while preserving
             # structured context for the ProcessorFormatter pipeline.
-            log_method = getattr(workflow.logger, level)
+            log_method = getattr(_workflow.logger, level)
             exc_info = kwargs.get("exc_info", False)
             attrs = {k: v for k, v in kwargs.items() if k != "exc_info"}
             extra = {"_structlog_attrs": {**self._context, **attrs}}

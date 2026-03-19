@@ -24,9 +24,8 @@ from typing import (
 )
 
 import orjson
-from temporalio import activity
 
-from application_sdk.activities.common.models import ActivityStatistics
+from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import ENABLE_ATLAN_UPLOAD, UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.io.utils import (
@@ -39,7 +38,6 @@ from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
-activity.logger = logger
 
 
 if TYPE_CHECKING:
@@ -235,7 +233,7 @@ class Writer(ABC):
     extension: str
     dataframe_type: DataframeType
     _is_closed: bool = False
-    _statistics: Optional[ActivityStatistics] = None
+    _statistics: Optional[TaskStatistics] = None
 
     async def __aenter__(self) -> "Writer":
         """Enter the async context manager.
@@ -552,17 +550,17 @@ class Writer(ABC):
         pass
 
     @property
-    def statistics(self) -> ActivityStatistics:
+    def statistics(self) -> TaskStatistics:
         """Get current statistics without closing the writer.
 
         Returns:
-            ActivityStatistics: Current statistics (record count, chunk count, partitions).
+            TaskStatistics: Current statistics (record count, chunk count, partitions).
 
         Note:
             This returns the current state. For final statistics after all
             writes complete, use close() instead.
         """
-        return ActivityStatistics(
+        return TaskStatistics(
             total_record_count=self.total_record_count,
             chunk_count=len(self.partitions),
             partitions=self.partitions,
@@ -576,7 +574,7 @@ class Writer(ABC):
         """
         pass
 
-    async def close(self) -> ActivityStatistics:
+    async def close(self) -> TaskStatistics:
         """Close the writer, flush buffers, upload files, and return statistics.
 
         This method finalizes all pending writes, uploads any remaining files to
@@ -587,7 +585,7 @@ class Writer(ABC):
         if it was set during initialization.
 
         Returns:
-            ActivityStatistics: Final statistics including total_record_count,
+            TaskStatistics: Final statistics including total_record_count,
                 chunk_count, and partitions.
 
         Raises:
@@ -619,7 +617,7 @@ class Writer(ABC):
             if not statistics_dict:
                 raise ValueError("No statistics data available")
 
-            self._statistics = ActivityStatistics.model_validate(statistics_dict)
+            self._statistics = TaskStatistics.model_validate(statistics_dict)
             if typename:
                 self._statistics.typename = typename
 

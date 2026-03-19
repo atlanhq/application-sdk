@@ -12,7 +12,7 @@ from typing import (
 )
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.models import ActivityStatistics
+from application_sdk.common.models import TaskStatistics
 from application_sdk.common.utils import (
     get_database_names,
     parse_credentials_extra,
@@ -136,7 +136,7 @@ async def finalize_multidb_results(
     ],
     output_path: str,
     typename: str,
-) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
+) -> Optional[Union[TaskStatistics, "pd.DataFrame"]]:
     """Finalize results for multi-database execution.
 
     Args:
@@ -223,7 +223,7 @@ async def execute_multidb_flow(
     parquet_output: Optional[ParquetFileWriter],
     temp_table_regex_sql: str,
     setup_parquet_output_func: Callable[[str, bool], Optional[ParquetFileWriter]],
-) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
+) -> Optional[Union[TaskStatistics, "pd.DataFrame"]]:
     """Execute multi-database flow with proper error handling and result finalization.
 
     Args:

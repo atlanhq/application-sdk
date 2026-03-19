@@ -138,10 +138,7 @@ class LogRecordModel(BaseModel):
             extra=extra,
         )
 
-    class Config:
-        """Pydantic model configuration for LogRecordModel."""
-
-        arbitrary_types_allowed = True
+    model_config = {"arbitrary_types_allowed": True}
 
 
 def _format_exception_stacktrace(exception: Any) -> str:

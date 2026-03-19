@@ -1,9 +1,9 @@
 import os
 import shutil
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Type
 
-from pydantic import BaseModel
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.worker import (
@@ -13,8 +13,8 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
-from application_sdk.activities.common.utils import build_output_path
 from application_sdk.constants import CLEANUP_BASE_PATHS, TEMPORARY_PATH
+from application_sdk.execution._temporal.activity_utils import build_output_path
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -22,14 +22,15 @@ activity.logger = logger
 workflow.logger = logger
 
 
-class CleanupResult(BaseModel):
+@dataclass
+class CleanupResult:
     """Result model for cleanup operations.
 
     Attributes:
-        path_results (Dict[str, bool]): Cleanup results for each path (True=success, False=failure)
+        path_results: Cleanup results for each path (True=success, False=failure)
     """
 
-    path_results: Dict[str, bool]
+    path_results: Dict[str, bool] = field(default_factory=dict)
 
 
 @activity.defn

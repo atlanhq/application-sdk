@@ -152,7 +152,15 @@ def create_worker(
     task_activities = get_all_task_activities(app_names=app_names)
 
     interceptor_settings = load_interceptor_settings()
-    all_interceptors: list[TemporalInterceptor] = list(interceptors or [])
+
+    # ExecutionContextInterceptor is always first — it populates the ContextVar that
+    # all downstream interceptors and user code read for observability context.
+    from application_sdk.execution._temporal.interceptors.execution_context_interceptor import (
+        ExecutionContextInterceptor,
+    )
+
+    all_interceptors: list[TemporalInterceptor] = [ExecutionContextInterceptor()]
+    all_interceptors.extend(interceptors or [])
 
     if interceptor_settings.enable_correlation_interceptor:
         from application_sdk.execution._temporal.interceptors.correlation_interceptor import (

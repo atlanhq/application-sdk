@@ -143,8 +143,7 @@ class Event(BaseModel, ABC):
         """
         return self.event_type
 
-    class Config:
-        extra = "allow"
+    model_config = {"extra": "allow"}
 
 
 class WorkerStartEventData(BaseModel):

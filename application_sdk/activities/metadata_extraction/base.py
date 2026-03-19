@@ -1,3 +1,13 @@
+# ruff: noqa: E402
+import warnings
+
+warnings.warn(
+    "application_sdk.activities.metadata_extraction.base is deprecated and will be "
+    "removed in v3.1.0. Use application_sdk.templates.BaseMetadataExtractor instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from typing import Any, Dict, Optional, Type
 
 from temporalio import activity

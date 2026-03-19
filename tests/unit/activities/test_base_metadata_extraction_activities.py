@@ -54,7 +54,6 @@ class TestUploadToAtlan:
         assert result.total_record_count == 10
         assert result.chunk_count == 10
         assert result.typename == "atlan-upload-completed"
-
         mock_migrate.assert_called_once_with(prefix=workflow_args["output_path"])
 
     @patch(

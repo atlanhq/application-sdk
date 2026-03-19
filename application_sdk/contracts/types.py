@@ -13,10 +13,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, TypeVar
+from typing import Annotated, TypeVar
 
-if TYPE_CHECKING:
-    from application_sdk.credentials.ref import CredentialRef
+from application_sdk.credentials.ref import CredentialRef
 
 T = TypeVar("T")
 K = TypeVar("K")

@@ -152,6 +152,7 @@ venv = ".venv"
 typeCheckingMode = "standard"
 exclude = [
     "application_sdk/test_utils/**",
+    "application_sdk/testing/scale_data_generator/**",
     ".github/**",
     "tests"
 ]
@@ -173,6 +174,7 @@ markers = ["integration: tests requiring local Temporal server"]
 omit = [
     "tests/**",
     "application_sdk/test_utils/**",
+    "application_sdk/testing/scale_data_generator/**",
 ]
 source = ["application_sdk"]
 

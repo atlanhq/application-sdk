@@ -9,10 +9,12 @@ Usage::
     from application_sdk.templates import SqlMetadataExtractor, SqlQueryExtractor
 """
 
+from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.sql_metadata_extractor import SqlMetadataExtractor
 from application_sdk.templates.sql_query_extractor import SqlQueryExtractor
 
 __all__ = [
+    "BaseMetadataExtractor",
     "SqlMetadataExtractor",
     "SqlQueryExtractor",
 ]

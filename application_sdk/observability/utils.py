@@ -49,46 +49,33 @@ def get_observability_dir() -> str:
 def get_workflow_context() -> WorkflowContext:
     """Get the workflow context.
 
+    Reads from the ``ExecutionContext`` ContextVar set by
+    ``ExecutionContextInterceptor`` — no Temporal imports required.
+    Outside Temporal (tests, CLI) the default context returns
+    ``in_workflow="false"`` and ``in_activity="false"``.
+
     Returns:
         WorkflowContext: The workflow context.
     """
+    from application_sdk.observability.context import get_execution_context
 
-    context = WorkflowContext(in_workflow="false", in_activity="false")
+    ctx = get_execution_context()
+    context = WorkflowContext(
+        in_workflow=str(ctx.execution_type == "workflow").lower(),
+        in_activity=str(ctx.execution_type == "activity").lower(),
+    )
+    context.workflow_id = ctx.workflow_id
+    context.workflow_run_id = ctx.workflow_run_id
+    context.workflow_type = ctx.workflow_type
+    context.namespace = ctx.namespace
+    context.task_queue = ctx.task_queue
+    context.attempt = str(ctx.attempt)
+    context.activity_id = ctx.activity_id
+    context.activity_type = ctx.activity_type
 
-    try:
-        from temporalio import workflow as _workflow
-
-        workflow_info = _workflow.info()
-        if workflow_info:
-            context.workflow_id = workflow_info.workflow_id or ""
-            context.workflow_run_id = workflow_info.run_id or ""
-            context.workflow_type = workflow_info.workflow_type or ""
-            context.namespace = workflow_info.namespace or ""
-            context.task_queue = workflow_info.task_queue or ""
-            context.attempt = str(workflow_info.attempt or 0)
-            context.in_workflow = "true"
-    except Exception:
-        pass
-
-    try:
-        from temporalio import activity as _activity
-
-        activity_info = _activity.info()
-        if activity_info:
-            context.in_activity = "true"
-            context.workflow_id = activity_info.workflow_id or ""
-            context.workflow_run_id = activity_info.workflow_run_id or ""
-            context.activity_id = activity_info.activity_id or ""
-            context.activity_type = activity_info.activity_type or ""
-            context.task_queue = activity_info.task_queue or ""
-            context.attempt = str(activity_info.attempt or 0)
-    except Exception:
-        pass
-
-    # Get correlation context from context variable (atlan- prefixed headers)
+    # Merge correlation context (atlan- prefixed headers for distributed tracing)
     corr_ctx = correlation_context.get()
     if corr_ctx:
-        # Add all correlation context fields as extra attributes
         for key, value in corr_ctx.items():
             if key.startswith("atlan-") and value:
                 setattr(context, key, str(value))
