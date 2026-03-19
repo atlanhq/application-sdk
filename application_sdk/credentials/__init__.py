@@ -47,6 +47,7 @@ from application_sdk.credentials.errors import (
     CredentialValidationError,
 )
 from application_sdk.credentials.git import GitSshCredential, GitTokenCredential
+from application_sdk.credentials.oauth import OAuthTokenError, OAuthTokenService
 from application_sdk.credentials.ref import (
     CredentialRef,
     api_key_ref,
@@ -104,6 +105,9 @@ __all__ = [
     # Atlan types
     "AtlanApiToken",
     "AtlanOAuthClient",
+    # OAuth token service
+    "OAuthTokenService",
+    "OAuthTokenError",
     # Atlan client
     "create_async_atlan_client",
     "AtlanClientMixin",

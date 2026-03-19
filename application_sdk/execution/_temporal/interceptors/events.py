@@ -33,6 +33,56 @@ logger = get_logger(__name__)
 activity.logger = logger
 workflow.logger = logger
 
+# Module-level OAuthTokenService for event-publishing auth headers.
+# Constructed lazily on first use; None when auth is not configured.
+_event_token_service: "OAuthTokenService | None" = None
+
+
+def _get_event_token_service() -> "OAuthTokenService | None":
+    """Return the singleton OAuthTokenService for event auth, or None if unconfigured."""
+    global _event_token_service  # noqa: PLW0603
+
+    from application_sdk.constants import AUTH_ENABLED
+
+    if not AUTH_ENABLED:
+        return None
+
+    if _event_token_service is None:
+        from application_sdk.constants import (
+            AUTH_URL,
+            WORKFLOW_AUTH_CLIENT_ID_KEY,
+            WORKFLOW_AUTH_CLIENT_SECRET_KEY,
+        )
+        from application_sdk.credentials.oauth import OAuthTokenService
+        from application_sdk.credentials.types import OAuthClientCredential
+        from application_sdk.services.secretstore import SecretStore
+
+        client_id = SecretStore.get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
+        client_secret = SecretStore.get_deployment_secret(
+            WORKFLOW_AUTH_CLIENT_SECRET_KEY
+        )
+        token_url = AUTH_URL
+
+        if not client_id or not client_secret or not token_url:
+            return None
+
+        cred = OAuthClientCredential(
+            client_id=client_id,
+            client_secret=client_secret,
+            token_url=token_url,
+        )
+        _event_token_service = OAuthTokenService(cred)
+
+    return _event_token_service
+
+
+# Type alias for the annotation above (resolved at import time by TYPE_CHECKING
+# would be circular; plain string forward-reference is fine here).
+from typing import TYPE_CHECKING  # noqa: E402
+
+if TYPE_CHECKING:
+    from application_sdk.credentials.oauth import OAuthTokenService
+
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
 )
@@ -190,10 +240,9 @@ async def _publish_event_via_binding(event: Event) -> None:
     binding_metadata: dict[str, str] = {"content-type": "application/json"}
 
     try:
-        from application_sdk.clients.atlan_auth import AtlanAuthClient
-
-        auth_client = AtlanAuthClient()
-        binding_metadata.update(await auth_client.get_authenticated_headers())
+        token_service = _get_event_token_service()
+        if token_service is not None:
+            binding_metadata.update(await token_service.get_headers())
     except Exception:
         pass  # Degrade gracefully without auth headers
 

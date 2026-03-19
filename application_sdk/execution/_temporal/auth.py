@@ -4,6 +4,10 @@ Manages OAuth token lifecycle for long-running Temporal worker connections:
 1. Acquires an initial OAuth token via client credentials flow
 2. Runs a background asyncio task that refreshes the token before expiry
 3. Updates the Temporal client's api_key in-place when tokens are refreshed
+
+Token exchange is delegated to ``credentials.oauth.OAuthTokenService``; this
+module owns only the Temporal-specific lifecycle (background loop, client
+api_key update, event emission).
 """
 
 from __future__ import annotations
@@ -11,13 +15,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
 if TYPE_CHECKING:
     from temporalio.client import Client
+
+    from application_sdk.credentials.oauth import OAuthTokenService
 
 # Refresh timing constants
 _MIN_REFRESH_INTERVAL_SECONDS = 30
@@ -46,36 +52,23 @@ class TemporalAuthConfig:
 
 
 @dataclass
-class _TokenInfo:
-    """Holds an acquired OAuth access token with its expiry."""
-
-    access_token: str
-    expires_at: datetime | None = None
-
-
-@dataclass
 class TemporalAuthManager:
     """Manages OAuth token lifecycle for Temporal client connections.
 
     Acquires initial tokens and runs background refresh to keep
-    long-running workers connected.
+    long-running workers connected.  Token exchange is handled by an
+    internal ``OAuthTokenService``; this class owns the Temporal-specific
+    concerns (background loop timing, ``client.api_key`` update).
     """
 
     config: TemporalAuthConfig
-    _token: _TokenInfo | None = field(default=None, repr=False)
+    _token_service: OAuthTokenService | None = field(default=None, repr=False)
     _refresh_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _shutdown_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
-    def _resolve_token_url(self) -> str:
-        """Derive token URL from config."""
-        if self.config.token_url:
-            return self.config.token_url
-        if self.config.base_url:
-            base = self.config.base_url.rstrip("/")
-            return f"{base}/auth/realms/default/protocol/openid-connect/token"
-        raise ValueError(
-            "Either token_url or base_url must be set in TemporalAuthConfig"
-        )
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     async def acquire_initial_token(self) -> str:
         """Acquire the initial OAuth token via client credentials flow.
@@ -86,10 +79,7 @@ class TemporalAuthManager:
         Raises:
             RuntimeError: If token acquisition fails.
         """
-        import httpx
-
         token_url = self._resolve_token_url()
-        scopes = [s.strip() for s in self.config.scopes.split(",") if s.strip()]
 
         logger.info(
             "Acquiring initial Temporal auth token",
@@ -97,30 +87,14 @@ class TemporalAuthManager:
             token_url=token_url,
         )
 
-        data: dict[str, str] = {
-            "grant_type": "client_credentials",
-            "client_id": self.config.client_id,
-            "client_secret": self.config.client_secret,
-        }
-        if scopes:
-            data["scope"] = " ".join(scopes)
+        try:
+            access_token = await self._get_token_service().get_token(force_refresh=True)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to acquire initial Temporal auth token: {exc}"
+            ) from exc
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(token_url, data=data)
-            response.raise_for_status()
-            body = response.json()
-
-        access_token = body.get("access_token", "")
-        if not access_token:
-            raise RuntimeError(f"OAuth token response missing access_token: {body}")
-
-        expires_in = body.get("expires_in")
-        expires_at: datetime | None = None
-        if expires_in is not None:
-            expires_at = datetime.now(UTC) + timedelta(seconds=int(expires_in))
-
-        self._token = _TokenInfo(access_token=access_token, expires_at=expires_at)
-
+        expires_at = self._get_token_service().current_expires_at
         logger.info(
             "Initial Temporal auth token acquired",
             expires_at=str(expires_at) if expires_at else "unknown",
@@ -145,14 +119,63 @@ class TemporalAuthManager:
         )
         logger.info("Background token refresh task started")
 
+    async def shutdown(self) -> None:
+        """Shut down the background refresh task."""
+        self._shutdown_event.set()
+
+        if self._refresh_task is not None:
+            try:
+                await asyncio.wait_for(self._refresh_task, timeout=5.0)
+            except TimeoutError:
+                logger.warning("Token refresh task did not stop in time, cancelling")
+                self._refresh_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._refresh_task
+            self._refresh_task = None
+
+        logger.info("Auth manager shut down")
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _get_token_service(self) -> OAuthTokenService:
+        """Lazily construct the OAuthTokenService from TemporalAuthConfig."""
+        if self._token_service is None:
+            from application_sdk.credentials.oauth import OAuthTokenService
+            from application_sdk.credentials.types import OAuthClientCredential
+
+            cred = OAuthClientCredential(
+                client_id=self.config.client_id,
+                client_secret=self.config.client_secret,
+                token_url=self._resolve_token_url(),
+                scopes=tuple(
+                    s.strip() for s in self.config.scopes.split(",") if s.strip()
+                ),
+            )
+            self._token_service = OAuthTokenService(cred)
+        return self._token_service
+
+    def _resolve_token_url(self) -> str:
+        """Derive token URL from config."""
+        if self.config.token_url:
+            return self.config.token_url
+        if self.config.base_url:
+            base = self.config.base_url.rstrip("/")
+            return f"{base}/auth/realms/default/protocol/openid-connect/token"
+        raise ValueError(
+            "Either token_url or base_url must be set in TemporalAuthConfig"
+        )
+
     async def _refresh_loop(self, client: Client) -> None:
         """Background loop that refreshes tokens before expiry."""
         while not self._shutdown_event.is_set():
             sleep_seconds = self._calculate_sleep_seconds()
 
+            expires_at = self._get_token_service().current_expires_at
             logger.debug(
                 f"Token refresh sleeping {sleep_seconds:.0f}s, "
-                f"expires_at={self._token.expires_at if self._token else 'unknown'}"
+                f"expires_at={expires_at or 'unknown'}"
             )
 
             try:
@@ -183,36 +206,10 @@ class TemporalAuthManager:
         logger.info("Token refresh loop exiting")
 
     async def _do_refresh(self, client: Client) -> None:
-        """Perform a single token refresh."""
-        import httpx
+        """Perform a single token refresh and update the Temporal client."""
+        access_token = await self._get_token_service().get_token(force_refresh=True)
+        expires_at = self._get_token_service().current_expires_at
 
-        token_url = self._resolve_token_url()
-        scopes = [s.strip() for s in self.config.scopes.split(",") if s.strip()]
-
-        data: dict[str, str] = {
-            "grant_type": "client_credentials",
-            "client_id": self.config.client_id,
-            "client_secret": self.config.client_secret,
-        }
-        if scopes:
-            data["scope"] = " ".join(scopes)
-
-        async with httpx.AsyncClient(timeout=30.0) as http_client:
-            response = await http_client.post(token_url, data=data)
-            response.raise_for_status()
-            body = response.json()
-
-        access_token = body.get("access_token", "")
-        if not access_token:
-            logger.warning("Token refresh returned no access_token")
-            return
-
-        expires_in = body.get("expires_in")
-        expires_at: datetime | None = None
-        if expires_in is not None:
-            expires_at = datetime.now(UTC) + timedelta(seconds=int(expires_in))
-
-        self._token = _TokenInfo(access_token=access_token, expires_at=expires_at)
         client.api_key = access_token
 
         logger.info(
@@ -261,11 +258,12 @@ class TemporalAuthManager:
 
     def _calculate_sleep_seconds(self) -> float:
         """Calculate how long to sleep before next refresh."""
-        if self._token is None or self._token.expires_at is None:
+        expires_at = self._get_token_service().current_expires_at
+        if expires_at is None:
             return float(_MAX_REFRESH_INTERVAL_SECONDS)
 
         now = datetime.now(UTC)
-        remaining = (self._token.expires_at - now).total_seconds()
+        remaining = (expires_at - now).total_seconds()
 
         if remaining <= 0:
             return 0
@@ -275,19 +273,3 @@ class TemporalAuthManager:
             float(_MIN_REFRESH_INTERVAL_SECONDS),
             min(sleep, float(_MAX_REFRESH_INTERVAL_SECONDS)),
         )
-
-    async def shutdown(self) -> None:
-        """Shut down the background refresh task."""
-        self._shutdown_event.set()
-
-        if self._refresh_task is not None:
-            try:
-                await asyncio.wait_for(self._refresh_task, timeout=5.0)
-            except TimeoutError:
-                logger.warning("Token refresh task did not stop in time, cancelling")
-                self._refresh_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._refresh_task
-            self._refresh_task = None
-
-        logger.info("Auth manager shut down")

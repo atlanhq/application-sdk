@@ -1,4 +1,15 @@
+# ruff: noqa: E402
 """OAuth2 token manager with automatic secret store discovery."""
+
+import warnings
+
+warnings.warn(
+    "application_sdk.clients.atlan_auth is deprecated and will be removed in v3.1.0. "
+    "Use application_sdk.credentials.OAuthTokenService instead, constructing an "
+    "OAuthClientCredential from your secret store and passing it to OAuthTokenService.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import time
 from typing import Dict, Optional
