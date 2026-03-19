@@ -346,6 +346,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             record["extra"]["_trace_id_str"] = (
                 f" trace_id={trace_id}" if trace_id else ""
             )
+            record["extra"].setdefault("logger_name", "")
 
             if colorize:
                 return (
