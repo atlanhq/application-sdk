@@ -19,7 +19,7 @@ from application_sdk.constants import (
     DAPR_BINDING_OPERATION_CREATE,
     EVENT_STORE_NAME,
 )
-from application_sdk.interceptors.models import (
+from application_sdk.contracts.events import (
     ApplicationEventNames,
     Event,
     EventMetadata,

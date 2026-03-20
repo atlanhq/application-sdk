@@ -16,7 +16,10 @@ from application_sdk.constants import (
     UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    from application_sdk.services.objectstore import ObjectStore
 
 warnings.warn(
     "application_sdk.services.statestore is deprecated. "
