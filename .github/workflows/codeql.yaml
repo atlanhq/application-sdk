@@ -26,17 +26,85 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6.0.2
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
+
       - name: Autobuild
         uses: github/codeql-action/autobuild@v4
+
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{matrix.language}}"
+          upload: never
+          output: codeql-results
 
+      - name: Upload to Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        continue-on-error: true
+        with:
+          sarif_file: codeql-results/python.sarif
+          category: "/language:${{matrix.language}}"
+
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "## CodeQL Security Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          SARIF="codeql-results/python.sarif"
+          if [ -f "$SARIF" ]; then
+            COUNT=$(python3 -c "
+          import json
+          with open('$SARIF') as f:
+              sarif = json.load(f)
+          total = sum(len(run.get('results', [])) for run in sarif.get('runs', []))
+          print(total)
+          " 2>/dev/null || echo "unknown")
+
+            if [ "$COUNT" = "0" ]; then
+              echo "No security findings detected." >> $GITHUB_STEP_SUMMARY
+            elif [ "$COUNT" = "unknown" ]; then
+              echo "Analysis complete — could not parse results." >> $GITHUB_STEP_SUMMARY
+            else
+              echo "**$COUNT finding(s) detected.** Review the SARIF artifact for details." >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+
+              python3 -c "
+          import json
+          with open('$SARIF') as f:
+              sarif = json.load(f)
+          print('| Rule | Message | File | Line |')
+          print('|------|---------|------|------|')
+          shown = 0
+          for run in sarif.get('runs', []):
+              for result in run.get('results', []):
+                  if shown >= 10:
+                      break
+                  rule = result.get('ruleId', 'unknown')
+                  msg = result.get('message', {}).get('text', '').replace('|', '\\\\|')[:80]
+                  locs = result.get('locations', [{}])
+                  phys = locs[0].get('physicalLocation', {}) if locs else {}
+                  path = phys.get('artifactLocation', {}).get('uri', '?')
+                  line = phys.get('region', {}).get('startLine', '?')
+                  print(f'| \`{rule}\` | {msg} | \`{path}\` | {line} |')
+                  shown += 1
+          " >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
+            fi
+          else
+            echo "No SARIF output found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload SARIF as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codeql-sarif
+          path: codeql-results/
+          retention-days: 30
 
   # Code Quality Checks
   lint:
