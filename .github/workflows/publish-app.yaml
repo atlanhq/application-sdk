@@ -123,10 +123,7 @@ jobs:
             ARGS="$ARGS --tenants $TENANTS"
           elif [ -n "$CHANNEL" ]; then
             ARGS="$ARGS --channel $CHANNEL"
-          else
-            echo "::error::Either 'channel' or 'tenants' input must be provided"
-            exit 1
           fi
 
           echo "Running: atlan app publish $ARGS"
-          atlan app publish $ARGS
+          eval atlan app publish $ARGS
