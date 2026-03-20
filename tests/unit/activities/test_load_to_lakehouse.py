@@ -10,7 +10,7 @@ from application_sdk.activities.common.models import (
     LhLoadStatusResponse,
     LhTableWriteMode,
 )
-from application_sdk.activities.metadata_extraction.base import _do_lakehouse_load
+from application_sdk.activities.metadata_extraction.base import do_lakehouse_load
 from application_sdk.common.error_codes import ActivityError
 
 
@@ -54,16 +54,20 @@ class _MockResponse:
 
 
 class _MockSession:
-    """Mock aiohttp.ClientSession."""
+    """Mock aiohttp.ClientSession.
 
-    def __init__(self, post_response, get_responses):
+    Supports being used as both a context manager (poll loop creates
+    a new session per iteration) and for direct .post()/.get() calls.
+    """
+
+    def __init__(self, post_response=None, get_responses=None):
         self._post_response = post_response
-        self._get_responses = iter(get_responses)
+        self._get_responses = iter(get_responses or [])
 
-    def post(self, url, json=None):
+    def post(self, url, json=None, headers=None):
         return self._post_response
 
-    def get(self, url):
+    def get(self, url, headers=None):
         return next(self._get_responses)
 
     async def __aenter__(self):
@@ -73,23 +77,44 @@ class _MockSession:
         pass
 
 
-class TestLoadToLakehouse:
-    @patch(
+class _MockSessionFactory:
+    """Returns the same _MockSession for every ClientSession() call."""
+
+    def __init__(self, post_response=None, get_responses=None):
+        self._session = _MockSession(post_response, get_responses)
+
+    def __call__(self, **kwargs):
+        return self._session
+
+
+_COMMON_PATCHES = [
+    patch(
         "application_sdk.activities.metadata_extraction.base.LH_LOAD_POLL_INTERVAL_SECONDS",
         0,
-    )
-    @patch(
+    ),
+    patch(
         "application_sdk.activities.metadata_extraction.base.LH_LOAD_MAX_POLL_ATTEMPTS",
         5,
-    )
-    @patch(
+    ),
+    patch(
         "application_sdk.activities.metadata_extraction.base.MDLH_BASE_URL",
         "http://test:4541",
-    )
-    @patch(
+    ),
+    patch(
         "application_sdk.activities.metadata_extraction.base.APP_TENANT_ID",
         "test-tenant",
-    )
+    ),
+]
+
+
+def _apply_common_patches(func):
+    for p in reversed(_COMMON_PATCHES):
+        func = p(func)
+    return func
+
+
+class TestLoadToLakehouse:
+    @_apply_common_patches
     @patch(
         "application_sdk.activities.metadata_extraction.base.get_object_store_prefix"
     )
@@ -104,28 +129,14 @@ class TestLoadToLakehouse:
             202, {"jobId": "j1", "workflowId": "w1", "status": "ACCEPTED"}
         )
         get_resp = _MockResponse(200, {"jobId": "j1", "status": "COMPLETED"})
-        mock_aiohttp.ClientSession.return_value = _MockSession(post_resp, [get_resp])
+        mock_aiohttp.ClientSession = _MockSessionFactory(post_resp, [get_resp])
         mock_aiohttp.ClientError = Exception
+        mock_aiohttp.ClientTimeout = lambda total: None
 
-        result = await _do_lakehouse_load(_make_workflow_args())
+        result = await do_lakehouse_load(_make_workflow_args())
         assert result.typename == "lakehouse-load-completed"
 
-    @patch(
-        "application_sdk.activities.metadata_extraction.base.LH_LOAD_POLL_INTERVAL_SECONDS",
-        0,
-    )
-    @patch(
-        "application_sdk.activities.metadata_extraction.base.LH_LOAD_MAX_POLL_ATTEMPTS",
-        5,
-    )
-    @patch(
-        "application_sdk.activities.metadata_extraction.base.MDLH_BASE_URL",
-        "http://test:4541",
-    )
-    @patch(
-        "application_sdk.activities.metadata_extraction.base.APP_TENANT_ID",
-        "test-tenant",
-    )
+    @_apply_common_patches
     @patch(
         "application_sdk.activities.metadata_extraction.base.get_object_store_prefix"
     )
@@ -138,11 +149,12 @@ class TestLoadToLakehouse:
             202, {"jobId": "j1", "workflowId": "w1", "status": "ACCEPTED"}
         )
         get_resp = _MockResponse(200, {"jobId": "j1", "status": "FAILED"})
-        mock_aiohttp.ClientSession.return_value = _MockSession(post_resp, [get_resp])
+        mock_aiohttp.ClientSession = _MockSessionFactory(post_resp, [get_resp])
         mock_aiohttp.ClientError = Exception
+        mock_aiohttp.ClientTimeout = lambda total: None
 
         with pytest.raises(ActivityError, match="LAKEHOUSE_LOAD_ERROR|FAILED"):
-            await _do_lakehouse_load(_make_workflow_args())
+            await do_lakehouse_load(_make_workflow_args())
 
     @patch(
         "application_sdk.activities.metadata_extraction.base.LH_LOAD_POLL_INTERVAL_SECONDS",
@@ -174,15 +186,14 @@ class TestLoadToLakehouse:
         running_responses = [
             _MockResponse(200, {"jobId": "j1", "status": "RUNNING"}) for _ in range(3)
         ]
-        mock_aiohttp.ClientSession.return_value = _MockSession(
-            post_resp, running_responses
-        )
+        mock_aiohttp.ClientSession = _MockSessionFactory(post_resp, running_responses)
         mock_aiohttp.ClientError = Exception
+        mock_aiohttp.ClientTimeout = lambda total: None
 
         with pytest.raises(
             ActivityError, match="LAKEHOUSE_LOAD_TIMEOUT|did not complete"
         ):
-            await _do_lakehouse_load(_make_workflow_args())
+            await do_lakehouse_load(_make_workflow_args())
 
     @patch(
         "application_sdk.activities.metadata_extraction.base.MDLH_BASE_URL",
@@ -201,21 +212,42 @@ class TestLoadToLakehouse:
         mock_get_prefix.return_value = "prefix/raw"
 
         post_resp = _MockResponse(400, text_data="Bad Request")
-        mock_aiohttp.ClientSession.return_value = _MockSession(post_resp, [])
+        mock_aiohttp.ClientSession = _MockSessionFactory(post_resp, [])
         mock_aiohttp.ClientError = Exception
+        mock_aiohttp.ClientTimeout = lambda total: None
 
         with pytest.raises(ActivityError, match="LAKEHOUSE_LOAD_API_ERROR|400"):
-            await _do_lakehouse_load(_make_workflow_args())
+            await do_lakehouse_load(_make_workflow_args())
+
+    @_apply_common_patches
+    @patch(
+        "application_sdk.activities.metadata_extraction.base.get_object_store_prefix"
+    )
+    @patch("application_sdk.activities.metadata_extraction.base.aiohttp")
+    async def test_load_non_retryable_poll_status(self, mock_aiohttp, mock_get_prefix):
+        """Poll returns 404 → fails fast instead of burning all attempts."""
+        mock_get_prefix.return_value = "prefix/raw"
+
+        post_resp = _MockResponse(
+            202, {"jobId": "j1", "workflowId": "w1", "status": "ACCEPTED"}
+        )
+        get_resp = _MockResponse(404, text_data="Not Found")
+        mock_aiohttp.ClientSession = _MockSessionFactory(post_resp, [get_resp])
+        mock_aiohttp.ClientError = Exception
+        mock_aiohttp.ClientTimeout = lambda total: None
+
+        with pytest.raises(ActivityError, match="non-retryable.*404"):
+            await do_lakehouse_load(_make_workflow_args())
 
     async def test_load_missing_config(self):
         """No lh_load_config → raises ActivityError."""
         with pytest.raises(ActivityError, match="Missing lh_load_config"):
-            await _do_lakehouse_load({})
+            await do_lakehouse_load({})
 
     async def test_load_missing_fields(self):
         """Missing required fields → raises ActivityError."""
         with pytest.raises(ActivityError, match="Missing required fields"):
-            await _do_lakehouse_load(
+            await do_lakehouse_load(
                 {"lh_load_config": {"output_path": "/tmp/test", "namespace": "ns"}}
             )
 
@@ -256,6 +288,11 @@ class TestLhLoadRequestSerialization:
         s3_prefix = "artifacts/apps/pg/workflows/wf-1/run-1/transformed"
         pattern = f"{s3_prefix}/**/*.jsonl"
         assert pattern.endswith("**/*.jsonl")
+
+    def test_requires_file_keys_or_patterns(self):
+        """Neither file_keys nor patterns → raises ValidationError."""
+        with pytest.raises(ValueError, match="file_keys or patterns"):
+            LhLoadRequest(namespace="ns", table_name="tbl")
 
 
 class TestLhLoadResponseModels:

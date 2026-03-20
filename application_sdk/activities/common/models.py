@@ -7,7 +7,7 @@ needed by activities, such as statistics and configuration.
 from enum import Enum
 from typing import Any, Dict, List, Optional, TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ActivityStatistics(BaseModel):
@@ -64,6 +64,12 @@ class LhLoadRequest(BaseModel):
     mode: LhTableWriteMode = LhTableWriteMode.APPEND
     catalog_name: Optional[str] = Field(default=None, serialization_alias="catalogName")
     job_id: Optional[str] = Field(default=None, serialization_alias="jobId")
+
+    @model_validator(mode="after")
+    def _require_file_keys_or_patterns(self) -> "LhLoadRequest":
+        if not self.file_keys and not self.patterns:
+            raise ValueError("At least one of file_keys or patterns must be provided")
+        return self
 
 
 class LhLoadResponse(BaseModel):

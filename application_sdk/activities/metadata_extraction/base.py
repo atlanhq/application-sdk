@@ -31,6 +31,9 @@ from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.services.secretstore import SecretStore
 from application_sdk.transformers import TransformerInterface
 
+_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
+_NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404, 405, 422}
+
 logger = get_logger(__name__)
 activity.logger = logger
 
@@ -192,14 +195,18 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
             - mode: str — "APPEND" or "UPSERT"
             - file_extension: str — ".parquet" or ".jsonl"
         """
-        return await _do_lakehouse_load(workflow_args)
+        return await do_lakehouse_load(workflow_args)
 
 
 _TERMINAL_FAILURE_STATES = {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}
 
 
-async def _do_lakehouse_load(workflow_args: Dict[str, Any]) -> ActivityStatistics:
-    """Shared implementation for lakehouse load activity."""
+async def do_lakehouse_load(workflow_args: Dict[str, Any]) -> ActivityStatistics:
+    """Shared implementation for lakehouse load activity.
+
+    Called from both BaseMetadataExtractionActivities and
+    BaseSQLMetadataExtractionActivities.
+    """
     lh_config = workflow_args.get("lh_load_config")
     if not lh_config:
         raise ActivityError(
@@ -230,10 +237,13 @@ async def _do_lakehouse_load(workflow_args: Dict[str, Any]) -> ActivityStatistic
     request_payload = request.model_dump(by_alias=True, exclude_none=True)
 
     base_url = f"{MDLH_BASE_URL}/atlan/lh/v1/{APP_TENANT_ID}/load"
+    headers = {"X-Atlan-Tenant-Id": APP_TENANT_ID}
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
         # Submit load job
-        async with session.post(base_url, json=request_payload) as resp:
+        async with session.post(
+            base_url, json=request_payload, headers=headers
+        ) as resp:
             if resp.status != 202:
                 body = await resp.text()
                 raise ActivityError(
@@ -246,37 +256,50 @@ async def _do_lakehouse_load(workflow_args: Dict[str, Any]) -> ActivityStatistic
         job_id = load_response.job_id
         logger.info(f"Lakehouse load job submitted: job_id={job_id}")
 
-        # Poll for completion
-        status_url = f"{base_url}/{job_id}/status"
-        for attempt in range(LH_LOAD_MAX_POLL_ATTEMPTS):
-            await asyncio.sleep(LH_LOAD_POLL_INTERVAL_SECONDS)
-            try:
-                async with session.get(status_url) as resp:
+    # Poll for completion (fresh session per poll to avoid stale connections)
+    status_url = f"{base_url}/{job_id}/status"
+    poll_headers = {**headers, "X-Lakehouse-Job-Id": job_id}
+    for attempt in range(LH_LOAD_MAX_POLL_ATTEMPTS):
+        await asyncio.sleep(LH_LOAD_POLL_INTERVAL_SECONDS)
+        try:
+            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+                async with session.get(status_url, headers=poll_headers) as resp:
+                    if resp.status in _NON_RETRYABLE_STATUS_CODES:
+                        body = await resp.text()
+                        raise ActivityError(
+                            f"{ActivityError.LAKEHOUSE_LOAD_API_ERROR}: "
+                            f"MDLH status poll returned non-retryable {resp.status}: {body}"
+                        )
                     if resp.status != 200:
                         logger.warning(
-                            f"Lakehouse load status poll returned {resp.status}, retrying..."
+                            f"Lakehouse load status poll returned {resp.status} "
+                            f"(attempt {attempt + 1}/{LH_LOAD_MAX_POLL_ATTEMPTS}), retrying..."
                         )
                         continue
                     status_data = await resp.json()
-            except aiohttp.ClientError as e:
-                logger.warning(f"Lakehouse load status poll error: {e}, retrying...")
-                continue
+        except ActivityError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.warning(
+                f"Lakehouse load status poll error (attempt {attempt + 1}/{LH_LOAD_MAX_POLL_ATTEMPTS}): {e}, retrying..."
+            )
+            continue
 
-            status_response = LhLoadStatusResponse.model_validate(status_data)
-            current_status = status_response.status.upper()
+        status_response = LhLoadStatusResponse.model_validate(status_data)
+        current_status = status_response.status.upper()
 
-            if current_status == "COMPLETED":
-                logger.info(f"Lakehouse load job completed: job_id={job_id}")
-                return ActivityStatistics(typename="lakehouse-load-completed")
+        if current_status == "COMPLETED":
+            logger.info(f"Lakehouse load job completed: job_id={job_id}")
+            return ActivityStatistics(typename="lakehouse-load-completed")
 
-            if current_status in _TERMINAL_FAILURE_STATES:
-                raise ActivityError(
-                    f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: "
-                    f"Lakehouse load job {job_id} ended with status: {current_status}"
-                )
+        if current_status in _TERMINAL_FAILURE_STATES:
+            raise ActivityError(
+                f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: "
+                f"Lakehouse load job {job_id} ended with status: {current_status}"
+            )
 
-        raise ActivityError(
-            f"{ActivityError.LAKEHOUSE_LOAD_TIMEOUT_ERROR}: "
-            f"Lakehouse load job {job_id} did not complete within "
-            f"{LH_LOAD_MAX_POLL_ATTEMPTS * LH_LOAD_POLL_INTERVAL_SECONDS}s"
-        )
+    raise ActivityError(
+        f"{ActivityError.LAKEHOUSE_LOAD_TIMEOUT_ERROR}: "
+        f"Lakehouse load job {job_id} did not complete within "
+        f"{LH_LOAD_MAX_POLL_ATTEMPTS * LH_LOAD_POLL_INTERVAL_SECONDS}s"
+    )
