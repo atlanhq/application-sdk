@@ -1,0 +1,53 @@
+name: Lint Helm Chart
+
+on:
+  push:
+    paths:
+      - helm/atlan-app/**
+  pull_request:
+    paths:
+      - helm/atlan-app/**
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: helm lint
+        run: helm lint helm/atlan-app
+
+      - name: helm template (default values)
+        run: |
+          helm template test-release helm/atlan-app \
+            --set appName=test-app \
+            --set appModule=mypackage.app:MyApp
+
+      - name: helm template (TLS + auth + storage + eventstore)
+        run: |
+          helm template test-release helm/atlan-app \
+            --set appName=test-app \
+            --set appModule=mypackage.app:MyApp \
+            --set temporal.tls.enabled=true \
+            --set temporal.tls.secretName=my-tls-secret \
+            --set temporal.auth.enabled=true \
+            --set storage.type=bindings.aws.s3 \
+            --set eventstore.url=https://example.atlan.com/api/eventingress/ \
+            --set imagePullSecret.create=true \
+            --set imagePullSecret.username=user \
+            --set imagePullSecret.password=pass \
+            --set keda.enabled=true
+
+      - name: helm template (KEDA disabled)
+        run: |
+          helm template test-release helm/atlan-app \
+            --set appName=test-app \
+            --set appModule=mypackage.app:MyApp \
+            --set keda.enabled=false
