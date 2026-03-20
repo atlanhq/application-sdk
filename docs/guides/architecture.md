@@ -81,7 +81,7 @@ async def my_task(self, input: TaskInput) -> TaskOutput:
 
 - `@task` validates the single-dataclass contract (one `Input`, one `Output`) **at class definition time** — before any code runs.
 - Tasks run outside the Temporal sandbox; they can import any library without passthrough concerns.
-- Auto-heartbeating is built in. Use `self.task_context.run_in_thread(fn, *args)` to run blocking code without blocking the event loop (see [ADR-0011](../adr/0011-async-first-blocking-code.md)).
+- Auto-heartbeating is built in. Use `self.task_context.run_in_thread(fn, *args)` to run blocking code without blocking the event loop (see [ADR-0010](../adr/0010-async-first-blocking-code.md)).
 
 ### Typed Contracts — Input and Output
 
@@ -202,7 +202,7 @@ Higher-level: `App` provides `self.upload()` and `self.download()` framework tas
 
 Structured logs and OTel traces flow from every worker and handler pod to the cluster's central OTLP collector. Workers configure `OTEL_EXPORTER_OTLP_ENDPOINT` to the node IP (`$(K8S_NODE_IP):4317`) at deploy time; the Helm chart wires this automatically.
 
-`self.logger` is available in both `run()` and `@task` methods. It is automatically bound with `app_name`, `run_id`, and `correlation_id` on every entry. When apps call other apps, the correlation ID propagates automatically, linking distributed traces across services. See [ADR-0003](../adr/0003-per-app-observability.md) and [ADR-0013](../adr/0013-logging-level-guidelines.md).
+`self.logger` is available in both `run()` and `@task` methods. It is automatically bound with `app_name`, `run_id`, and `correlation_id` on every entry. When apps call other apps, the correlation ID propagates automatically, linking distributed traces across services. See [ADR-0003](../adr/0003-per-app-observability.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
 
 Errors carry structured codes in `AAF-{COMPONENT}-{ID}` format.
 
@@ -315,5 +315,5 @@ The following Architecture Decision Records document the key choices made in the
 | [ADR-0007](../adr/0007-apps-as-coordination-unit.md) | Apps coordinate via child workflows (not shared activities) |
 | [ADR-0008](../adr/0008-payload-safe-bounded-types.md) | Import-time payload safety validation (prevents 2MB Temporal limit failures) |
 | [ADR-0009](../adr/0009-separate-handler-worker-deployments.md) | Separate handler and worker Kubernetes deployments |
-| [ADR-0011](../adr/0011-async-first-blocking-code.md) | Async-first design; `run_in_thread()` for blocking code |
-| [ADR-0013](../adr/0013-logging-level-guidelines.md) | Structured logging level conventions |
+| [ADR-0010](../adr/0010-async-first-blocking-code.md) | Async-first design; `run_in_thread()` for blocking code |
+| [ADR-0011](../adr/0011-logging-level-guidelines.md) | Structured logging level conventions |

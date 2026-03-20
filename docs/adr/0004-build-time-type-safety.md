@@ -16,13 +16,13 @@ We needed to decide when and how to validate contracts (inputs/outputs for Apps 
 
 ## Decision
 
-We chose **build-time type safety**: plain Python dataclasses with pyright in CI and `__init_subclass__`/decorator hooks that validate contracts at class-definition time (import time). No runtime type validation libraries like Pydantic.
+We chose **build-time type safety**: strongly-typed contracts with pyright in CI and `__init_subclass__`/decorator hooks that validate contracts at class-definition time (import time). The specific typing mechanism (plain dataclasses, Pydantic v2, msgspec, etc.) is left to the implementer, provided it is statically analysable by pyright and serialises correctly through Temporal's JSON data converter.
 
 ## Options Considered
 
-### Option 1: Build-Time Validation with Dataclasses (Chosen)
+### Option 1: Build-Time Validation with Strongly-Typed Contracts (Chosen)
 
-All contracts are plain Python dataclasses. Type checking happens through:
+Contracts are strongly-typed classes (the current SDK uses plain dataclasses; Pydantic v2 and msgspec are also acceptable). Type checking happens through:
 1. pyright strict mode in CI
 2. `__init_subclass__` hooks that validate contracts at class definition time (import time)
 3. `@task` decorator validation at decoration time
@@ -56,17 +56,7 @@ async def fetch_data(self, input: FetchInput) -> FetchOutput:
 - **No runtime protection**: Invalid data passed at runtime won't be caught automatically
 - **Requires discipline**: Developers must run pyright and pay attention to type hints
 
-### Option 2: Runtime Validation with Pydantic (Not Chosen)
-
-Use Pydantic models for all contracts, with validation on every instantiation.
-
-**Cons:**
-- **Performance overhead**: Validation runs on every object creation
-- **Fights static analysis**: Pydantic's metaclass magic complicates pyright integration
-- **Hidden behavior**: Coercion and validation rules can surprise developers
-- **Serialization complexity**: Pydantic models require special handling for Temporal's data converters
-
-### Option 3: No Validation (Not Chosen)
+### Option 2: No Validation (Not Chosen)
 
 Skip all validation, rely purely on duck typing.
 

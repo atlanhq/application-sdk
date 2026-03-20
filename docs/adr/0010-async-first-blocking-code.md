@@ -1,4 +1,4 @@
-# ADR-0011: Async-First Design and Blocking Code Pitfalls
+# ADR-0010: Async-First Design and Blocking Code Pitfalls
 
 ## Status
 **Accepted**
