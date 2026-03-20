@@ -43,7 +43,7 @@ Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 # Optional dependencies for specific functionality - Install using: uv sync --extra workflows
 [project.optional-dependencies]
 workflows = [
-    "dapr==1.16.0",
+    "dapr==1.17.2",
     "temporalio>=1.7.1,<1.24.0",
     "orjson>=3.11.6,<3.12.0",
 ]
