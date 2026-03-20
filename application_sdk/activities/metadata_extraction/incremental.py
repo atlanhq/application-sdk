@@ -36,12 +36,17 @@ Usage:
         def build_incremental_column_sql(self, table_ids, workflow_args) -> str:
             # App builds the SQL query for these table_ids
             return self._build_where_in_query(table_ids, workflow_args)
+
+.. deprecated::
+    Use ``application_sdk.templates.IncrementalSqlMetadataExtractor`` instead.
+    This module will be removed in v3.1.0.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import warnings
 from abc import abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, cast
@@ -94,6 +99,14 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
 from application_sdk.services.statestore import StateStore, StateType
 
+warnings.warn(
+    "application_sdk.activities.metadata_extraction.incremental is deprecated. "
+    "Use application_sdk.templates.IncrementalSqlMetadataExtractor instead. "
+    "This module will be removed in v3.1.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 logger = get_logger(__name__)
 activity.logger = logger
 
@@ -120,6 +133,23 @@ def _ensure_batches_dir(workflow_args: Dict[str, Any]) -> Path:
     return bdir
 
 
+def _extract_conn_and_app(
+    workflow_args: Dict[str, Any],
+) -> tuple[str, str]:
+    """Extract connection_qualified_name and application_name from workflow_args.
+
+    Args:
+        workflow_args: Dictionary containing workflow configuration.
+
+    Returns:
+        Tuple of (connection_qualified_name, application_name).
+    """
+    args = IncrementalWorkflowArgs.model_validate(workflow_args)
+    conn_qn = args.connection.connection_qualified_name or ""
+    app_name = args.application_name or ""
+    return conn_qn, app_name
+
+
 class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivities):
     """Activities for incremental SQL metadata extraction.
 
@@ -142,6 +172,10 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
     ``incremental_state`` in customAttributes. This field is silently
     skipped during full extraction and flows through during incremental
     extraction.
+
+    .. deprecated::
+        Use ``application_sdk.templates.IncrementalSqlMetadataExtractor`` instead.
+        This class will be removed in v3.1.0.
     """
 
     # Incremental SQL queries — auto-loaded from app/sql/ via read_sql_files().
@@ -441,9 +475,14 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             logger.info("Incremental extraction disabled - skipping marker fetch")
             return args.model_dump(by_alias=True, exclude_none=True)
 
+        conn_qn, app_name = _extract_conn_and_app(workflow_args)
+        existing_marker = workflow_args.get("metadata", {}).get("marker_timestamp")
+
         # Fetch marker and create next marker using helper
         marker, next_marker = await fetch_marker_from_storage(
-            workflow_args=workflow_args,
+            connection_qualified_name=conn_qn,
+            application_name=app_name,
+            existing_marker=existing_marker,
             prepone_enabled=args.metadata.prepone_marker_timestamp,
             prepone_hours=args.metadata.prepone_marker_hours,
         )
@@ -481,10 +520,13 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
                 "This should have been set by fetch_incremental_marker activity."
             )
 
+        conn_qn, app_name = _extract_conn_and_app(workflow_args)
+
         # Persist marker using helper function
         return await persist_marker_to_storage(
-            workflow_args=workflow_args,
+            connection_qualified_name=conn_qn,
             marker_value=next_marker_value,
+            application_name=app_name,
         )
 
     @activity.defn
@@ -500,13 +542,17 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         """
         try:
             args = IncrementalWorkflowArgs.model_validate(workflow_args)
+            conn_qn, app_name = _extract_conn_and_app(workflow_args)
 
             (
                 current_state_dir,
                 current_state_s3_prefix,
                 exists,
                 json_count,
-            ) = await download_current_state(workflow_args)
+            ) = await download_current_state(
+                connection_qualified_name=conn_qn,
+                application_name=app_name,
+            )
 
             args.metadata.current_state_path = str(current_state_dir)
             args.metadata.current_state_available = exists
@@ -534,6 +580,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         workflow_id = workflow_args.get("workflow_id", "unknown")
         run_id = workflow_args.get("workflow_run_id", "unknown")
         args = IncrementalWorkflowArgs.model_validate(workflow_args)
+        conn_qn, app_name = _extract_conn_and_app(workflow_args)
 
         logger.info(
             f"Starting write_current_state with ancestral merge "
@@ -545,24 +592,26 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             output_path_str = str(workflow_args.get("output_path", "")).strip()
             transformed_dir = await download_transformed_data(output_path_str)
 
-            s3_prefix = get_persistent_s3_prefix(workflow_args)
+            s3_prefix = get_persistent_s3_prefix(conn_qn, app_name)
             current_state_dir = get_persistent_artifacts_path(
-                workflow_args, "current-state"
+                conn_qn, "current-state", app_name
             )
 
             previous_state_dir = await prepare_previous_state(
-                workflow_args=workflow_args,
+                connection_qualified_name=conn_qn,
                 current_state_available=args.metadata.current_state_available,
                 current_state_dir=current_state_dir,
+                application_name=app_name,
             )
 
             result = await create_current_state_snapshot(
-                workflow_args=workflow_args,
+                connection_qualified_name=conn_qn,
                 transformed_dir=transformed_dir,
                 previous_state_dir=previous_state_dir,
                 current_state_dir=current_state_dir,
                 s3_prefix=s3_prefix,
                 run_id=run_id,
+                application_name=app_name,
                 copy_workers=args.metadata.copy_workers,
                 column_chunk_size=args.metadata.column_chunk_size,
                 get_backfill_tables_fn=self.get_backfill_tables,
@@ -612,6 +661,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             Dictionary with batch counts and table statistics.
         """
         args = IncrementalWorkflowArgs.model_validate(workflow_args)
+        conn_qn, app_name = _extract_conn_and_app(workflow_args)
 
         if not args.output_path:
             raise FileNotFoundError("No output_path provided in workflow_args")
@@ -638,10 +688,10 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         previous_current_state_dir = None
 
         if current_state_available:
-            s3_prefix = get_persistent_s3_prefix(workflow_args)
+            s3_prefix = get_persistent_s3_prefix(conn_qn, app_name)
             current_state_s3_prefix = f"{s3_prefix}/current-state"
             previous_current_state_dir = get_persistent_artifacts_path(
-                workflow_args, "current-state"
+                conn_qn, "current-state", app_name
             )
 
             previous_current_state_dir.mkdir(parents=True, exist_ok=True)

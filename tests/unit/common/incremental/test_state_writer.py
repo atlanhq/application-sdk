@@ -161,20 +161,15 @@ class TestPrepareCurrentStateDirectory:
 class TestPreparePreviousState:
     """Tests for prepare_previous_state (conditional download)."""
 
-    def _make_workflow_args(self, qualified_name="t/c/123"):
-        return {
-            "connection": {"connection_qualified_name": qualified_name},
-            "application_name": "oracle",
-        }
-
     @pytest.mark.asyncio
     async def test_returns_none_when_not_available(self):
         """Returns None when current_state_available is False."""
         with tempfile.TemporaryDirectory() as temp_dir:
             result = await prepare_previous_state(
-                self._make_workflow_args(),
+                connection_qualified_name="t/c/123",
                 current_state_available=False,
                 current_state_dir=Path(temp_dir) / "state",
+                application_name="oracle",
             )
 
         assert result is None
@@ -192,9 +187,10 @@ class TestPreparePreviousState:
                 new_callable=AsyncMock,
             ):
                 result = await prepare_previous_state(
-                    self._make_workflow_args(),
+                    connection_qualified_name="t/c/123",
                     current_state_available=True,
                     current_state_dir=state_dir,
+                    application_name="oracle",
                 )
 
             assert result is not None
@@ -216,9 +212,10 @@ class TestPreparePreviousState:
             ):
                 with pytest.raises(Exception, match="S3 failure"):
                     await prepare_previous_state(
-                        self._make_workflow_args(),
+                        connection_qualified_name="t/c/123",
                         current_state_available=True,
                         current_state_dir=state_dir,
+                        application_name="oracle",
                     )
 
             # Temp dir should be cleaned up after failure

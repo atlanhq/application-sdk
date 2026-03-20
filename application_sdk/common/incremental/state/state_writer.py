@@ -28,7 +28,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Callable, Dict, Optional, Set
 
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.incremental.helpers import (
@@ -126,9 +126,10 @@ async def download_transformed_data(output_path: str) -> Path:
 
 
 async def prepare_previous_state(
-    workflow_args: Dict[str, Any],
+    connection_qualified_name: str,
     current_state_available: bool,
     current_state_dir: Path,
+    application_name: str = "",
 ) -> Optional[Path]:
     """Download previous state to a temporary location for comparison.
 
@@ -136,15 +137,20 @@ async def prepare_previous_state(
     to support ancestral column merging and incremental diff generation.
 
     Args:
-        workflow_args: Workflow arguments containing connection info
+        connection_qualified_name: The connection qualified name.
         current_state_available: Whether previous state exists in S3
         current_state_dir: Path to current-state directory
+        application_name: Optional application name override.
 
     Returns:
         Path to temporary previous state directory, or None if no previous state
 
     Example:
-        >>> prev_dir = await prepare_previous_state(args, True, current_state_dir)
+        >>> prev_dir = await prepare_previous_state(
+        ...     connection_qualified_name="default/oracle/1764230875",
+        ...     current_state_available=True,
+        ...     current_state_dir=current_state_dir,
+        ... )
         >>> if prev_dir:
         ...     # Use previous state for comparison
         ...     pass
@@ -152,7 +158,7 @@ async def prepare_previous_state(
     if not current_state_available:
         return None
 
-    s3_prefix = get_persistent_s3_prefix(workflow_args)
+    s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     current_state_s3_prefix = f"{s3_prefix}/current-state"
 
     previous_state_temp_dir = current_state_dir.parent.joinpath(
@@ -222,7 +228,8 @@ def copy_non_column_entities(
 
 async def upload_current_state(
     current_state_dir: Path,
-    workflow_args: Dict[str, Any],
+    connection_qualified_name: str,
+    application_name: str = "",
 ) -> str:
     """Upload current-state snapshot to S3.
 
@@ -231,16 +238,20 @@ async def upload_current_state(
 
     Args:
         current_state_dir: Path to local current-state directory
-        workflow_args: Workflow arguments for S3 path resolution
+        connection_qualified_name: The connection qualified name.
+        application_name: Optional application name override.
 
     Returns:
         S3 prefix where current-state was uploaded
 
     Example:
-        >>> s3_prefix = await upload_current_state(state_dir, workflow_args)
+        >>> s3_prefix = await upload_current_state(
+        ...     state_dir,
+        ...     connection_qualified_name="default/oracle/1764230875",
+        ... )
         >>> print(f"Uploaded to: {s3_prefix}")
     """
-    s3_prefix = get_persistent_s3_prefix(workflow_args)
+    s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     current_state_s3_prefix = f"{s3_prefix}/current-state"
 
     await ObjectStore.upload_prefix(
@@ -293,12 +304,13 @@ def prepare_current_state_directory(current_state_dir: Path) -> None:
 
 
 async def create_current_state_snapshot(
-    workflow_args: Dict[str, Any],
+    connection_qualified_name: str,
     transformed_dir: Path,
     previous_state_dir: Optional[Path],
     current_state_dir: Path,
     s3_prefix: str,
     run_id: str,
+    application_name: str = "",
     copy_workers: int = 4,
     column_chunk_size: int = 10000,
     get_backfill_tables_fn: Optional[
@@ -320,12 +332,13 @@ async def create_current_state_snapshot(
     and testable independently.
 
     Args:
-        workflow_args: Workflow arguments for S3 path resolution
+        connection_qualified_name: The connection qualified name.
         transformed_dir: Path to current run's transformed output
         previous_state_dir: Path to previous state (or None for first run)
         current_state_dir: Path where current state will be created
         s3_prefix: S3 prefix for persistent artifacts
         run_id: Workflow run ID for diff naming
+        application_name: Optional application name override.
         copy_workers: Number of parallel workers for file operations
         column_chunk_size: Batch size for column processing
         get_backfill_tables_fn: Optional function to detect backfill tables
@@ -338,7 +351,7 @@ async def create_current_state_snapshot(
 
     Example:
         >>> result = await create_current_state_snapshot(
-        ...     workflow_args=args,
+        ...     connection_qualified_name="default/oracle/1764230875",
         ...     transformed_dir=Path("./transformed"),
         ...     previous_state_dir=Path("./previous-state"),
         ...     current_state_dir=Path("./current-state"),
@@ -411,7 +424,9 @@ async def create_current_state_snapshot(
                     run_id=run_id
                 )
                 incremental_diff_dir = get_persistent_artifacts_path(
-                    workflow_args, incremental_diff_subpath
+                    connection_qualified_name,
+                    incremental_diff_subpath,
+                    application_name,
                 )
                 incremental_diff_s3_prefix = f"{s3_prefix}/{incremental_diff_subpath}"
 

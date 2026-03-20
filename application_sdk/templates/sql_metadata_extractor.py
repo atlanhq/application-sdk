@@ -47,6 +47,8 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchColumnsOutput,
     FetchDatabasesInput,
     FetchDatabasesOutput,
+    FetchProceduresInput,
+    FetchProceduresOutput,
     FetchSchemasInput,
     FetchSchemasOutput,
     FetchTablesInput,
@@ -109,6 +111,28 @@ class SqlMetadataExtractor(App):
         )
 
     @task(timeout_seconds=1800)
+    async def fetch_procedures(
+        self, input: FetchProceduresInput
+    ) -> FetchProceduresOutput:
+        """Fetch stored procedures from the source system.
+
+        This task is optional — connectors that do not support stored procedures
+        should return ``FetchProceduresOutput()`` with zero counts rather than
+        raising an error.
+
+        This task is NOT called from the base ``run()`` method. Connectors that
+        need it should call it from their own ``run()`` override.
+
+        Override this method in your connector subclass if procedure extraction
+        is required.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement fetch_procedures(), "
+            "or return FetchProceduresOutput() with zero counts for connectors "
+            "that do not support stored procedures."
+        )
+
+    @task(timeout_seconds=1800)
     async def transform_data(self, input: TransformInput) -> TransformOutput:
         """Transform raw extracted data into the target format."""
         raise NotImplementedError(
@@ -137,28 +161,68 @@ class SqlMetadataExtractor(App):
                 cred_ref = legacy_credential_ref(input.credential_guid)
 
             # Fetch all metadata types in parallel
-            workflow_args = {
-                "workflow_id": workflow_id,
-                "connection": input.connection,
-                "credential_guid": input.credential_guid,
-                "credential_ref": cred_ref,
-                "output_prefix": input.output_prefix,
-                "output_path": input.output_path,
-                "exclude_filter": input.exclude_filter,
-                "include_filter": input.include_filter,
-                "temp_table_regex": input.temp_table_regex,
-            }
-
             (
                 db_result,
                 schema_result,
                 table_result,
                 column_result,
             ) = await asyncio.gather(
-                self.fetch_databases(FetchDatabasesInput(workflow_args=workflow_args)),
-                self.fetch_schemas(FetchSchemasInput(workflow_args=workflow_args)),
-                self.fetch_tables(FetchTablesInput(workflow_args=workflow_args)),
-                self.fetch_columns(FetchColumnsInput(workflow_args=workflow_args)),
+                self.fetch_databases(
+                    FetchDatabasesInput(
+                        workflow_id=workflow_id,
+                        connection=input.connection,
+                        credential_guid=input.credential_guid,
+                        credential_ref=cred_ref,
+                        output_prefix=input.output_prefix,
+                        output_path=input.output_path,
+                        exclude_filter=input.exclude_filter,
+                        include_filter=input.include_filter,
+                        temp_table_regex=input.temp_table_regex,
+                        source_tag_prefix=input.source_tag_prefix,
+                    )
+                ),
+                self.fetch_schemas(
+                    FetchSchemasInput(
+                        workflow_id=workflow_id,
+                        connection=input.connection,
+                        credential_guid=input.credential_guid,
+                        credential_ref=cred_ref,
+                        output_prefix=input.output_prefix,
+                        output_path=input.output_path,
+                        exclude_filter=input.exclude_filter,
+                        include_filter=input.include_filter,
+                        temp_table_regex=input.temp_table_regex,
+                        source_tag_prefix=input.source_tag_prefix,
+                    )
+                ),
+                self.fetch_tables(
+                    FetchTablesInput(
+                        workflow_id=workflow_id,
+                        connection=input.connection,
+                        credential_guid=input.credential_guid,
+                        credential_ref=cred_ref,
+                        output_prefix=input.output_prefix,
+                        output_path=input.output_path,
+                        exclude_filter=input.exclude_filter,
+                        include_filter=input.include_filter,
+                        temp_table_regex=input.temp_table_regex,
+                        source_tag_prefix=input.source_tag_prefix,
+                    )
+                ),
+                self.fetch_columns(
+                    FetchColumnsInput(
+                        workflow_id=workflow_id,
+                        connection=input.connection,
+                        credential_guid=input.credential_guid,
+                        credential_ref=cred_ref,
+                        output_prefix=input.output_prefix,
+                        output_path=input.output_path,
+                        exclude_filter=input.exclude_filter,
+                        include_filter=input.include_filter,
+                        temp_table_regex=input.temp_table_regex,
+                        source_tag_prefix=input.source_tag_prefix,
+                    )
+                ),
             )
 
             logger.info(

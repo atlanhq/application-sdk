@@ -69,24 +69,16 @@ class TestProcessMarkerTimestamp:
 class TestFetchMarkerFromStorage:
     """Tests for fetch_marker_from_storage (multi-source fallback)."""
 
-    def _make_workflow_args(self, marker=None, qualified_name="t/c/123"):
-        args = {
-            "connection": {"connection_qualified_name": qualified_name},
-            "metadata": {},
-        }
-        if marker:
-            args["metadata"]["marker_timestamp"] = marker
-        return args
-
     @pytest.mark.asyncio
-    async def test_marker_from_workflow_args(self):
-        """Marker provided in workflow_args is used directly (no S3 call)."""
-        args = self._make_workflow_args(marker="2025-01-15T10:00:00Z")
-
+    async def test_marker_from_existing_marker_param(self):
+        """Marker provided via existing_marker is used directly (no S3 call)."""
         with patch(
             "application_sdk.common.incremental.marker.download_marker_from_s3"
         ) as mock_s3:
-            marker, next_marker = await fetch_marker_from_storage(args)
+            marker, next_marker = await fetch_marker_from_storage(
+                connection_qualified_name="t/c/123",
+                existing_marker="2025-01-15T10:00:00Z",
+            )
 
         assert marker == "2025-01-15T10:00:00Z"
         assert next_marker  # Should be a valid timestamp string
@@ -94,30 +86,30 @@ class TestFetchMarkerFromStorage:
 
     @pytest.mark.asyncio
     async def test_marker_from_s3_fallback(self):
-        """When not in workflow_args, marker is downloaded from S3."""
-        args = self._make_workflow_args()
-
+        """When existing_marker is not provided, marker is downloaded from S3."""
         with patch(
             "application_sdk.common.incremental.marker.download_marker_from_s3",
             new_callable=AsyncMock,
             return_value="2025-01-10T08:00:00Z",
         ):
-            marker, next_marker = await fetch_marker_from_storage(args)
+            marker, next_marker = await fetch_marker_from_storage(
+                connection_qualified_name="t/c/123"
+            )
 
         assert marker == "2025-01-10T08:00:00Z"
         assert next_marker
 
     @pytest.mark.asyncio
     async def test_no_marker_returns_none(self):
-        """First run: no marker in args or S3 returns (None, next_marker)."""
-        args = self._make_workflow_args()
-
+        """First run: no existing_marker and S3 returns None → (None, next_marker)."""
         with patch(
             "application_sdk.common.incremental.marker.download_marker_from_s3",
             new_callable=AsyncMock,
             return_value=None,
         ):
-            marker, next_marker = await fetch_marker_from_storage(args)
+            marker, next_marker = await fetch_marker_from_storage(
+                connection_qualified_name="t/c/123"
+            )
 
         assert marker is None
         assert next_marker  # next_marker is always set
@@ -125,10 +117,11 @@ class TestFetchMarkerFromStorage:
     @pytest.mark.asyncio
     async def test_marker_with_prepone(self):
         """Fetched marker is preponed when enabled."""
-        args = self._make_workflow_args(marker="2025-01-15T10:00:00Z")
-
         marker, _ = await fetch_marker_from_storage(
-            args, prepone_enabled=True, prepone_hours=2
+            connection_qualified_name="t/c/123",
+            existing_marker="2025-01-15T10:00:00Z",
+            prepone_enabled=True,
+            prepone_hours=2,
         )
 
         assert marker == "2025-01-15T08:00:00Z"
@@ -136,14 +129,14 @@ class TestFetchMarkerFromStorage:
     @pytest.mark.asyncio
     async def test_next_marker_always_generated(self):
         """next_marker is always a fresh timestamp regardless of existing marker."""
-        args = self._make_workflow_args()
-
         with patch(
             "application_sdk.common.incremental.marker.download_marker_from_s3",
             new_callable=AsyncMock,
             return_value=None,
         ):
-            _, next_marker = await fetch_marker_from_storage(args)
+            _, next_marker = await fetch_marker_from_storage(
+                connection_qualified_name="t/c/123"
+            )
 
         # next_marker should be parseable as a timestamp
         assert "T" in next_marker
@@ -158,23 +151,19 @@ class TestFetchMarkerFromStorage:
 class TestPersistMarkerToStorage:
     """Tests for persist_marker_to_storage (local write + S3 upload)."""
 
-    def _make_workflow_args(self, qualified_name="t/c/123", app_name="oracle"):
-        return {
-            "connection": {"connection_qualified_name": qualified_name},
-            "application_name": app_name,
-        }
-
     @pytest.mark.asyncio
     async def test_writes_and_uploads_marker(self):
         """Writes marker to local file and uploads to S3."""
-        args = self._make_workflow_args()
-
         with patch(
             "application_sdk.common.incremental.marker.ObjectStore"
         ) as mock_store:
             mock_store.upload_file = AsyncMock()
 
-            result = await persist_marker_to_storage(args, "2025-01-15T10:00:00Z")
+            result = await persist_marker_to_storage(
+                connection_qualified_name="t/c/123",
+                marker_value="2025-01-15T10:00:00Z",
+                application_name="oracle",
+            )
 
         assert result["marker_written"] is True
         assert result["marker_timestamp"] == "2025-01-15T10:00:00Z"
@@ -185,12 +174,14 @@ class TestPersistMarkerToStorage:
     @pytest.mark.asyncio
     async def test_s3_upload_failure_raises(self):
         """S3 upload failure propagates the exception."""
-        args = self._make_workflow_args()
-
         with patch(
             "application_sdk.common.incremental.marker.ObjectStore"
         ) as mock_store:
             mock_store.upload_file = AsyncMock(side_effect=Exception("S3 unavailable"))
 
             with pytest.raises(Exception, match="S3 unavailable"):
-                await persist_marker_to_storage(args, "2025-01-15T10:00:00Z")
+                await persist_marker_to_storage(
+                    connection_qualified_name="t/c/123",
+                    marker_value="2025-01-15T10:00:00Z",
+                    application_name="oracle",
+                )

@@ -13,9 +13,14 @@ S3 Path Structure:
     persistent-artifacts/apps/{application_name}/connection/{connection_id}/marker.txt
 
 Example:
-    >>> marker, next_marker = await fetch_marker_from_storage(workflow_args)
+    >>> marker, next_marker = await fetch_marker_from_storage(
+    ...     connection_qualified_name="default/oracle/1764230875"
+    ... )
     >>> # ... perform extraction with marker filter ...
-    >>> await persist_marker_to_storage(workflow_args, next_marker)
+    >>> await persist_marker_to_storage(
+    ...     connection_qualified_name="default/oracle/1764230875",
+    ...     marker_value=next_marker,
+    ... )
 """
 
 from __future__ import annotations
@@ -93,20 +98,24 @@ def process_marker_timestamp(
 
 
 async def fetch_marker_from_storage(
-    workflow_args: Dict[str, Any],
+    connection_qualified_name: str,
+    application_name: str = "",
+    existing_marker: Optional[str] = None,
     prepone_enabled: bool = False,
     prepone_hours: float = 0,
 ) -> Tuple[Optional[str], str]:
     """Fetch and process the incremental marker from storage.
 
     Attempts to retrieve an existing marker from:
-    1. workflow_args (if provided directly)
+    1. existing_marker parameter (if provided directly)
     2. S3 persistent storage (from previous successful run)
 
     Also creates the next_marker timestamp for the current run.
 
     Args:
-        workflow_args: Workflow arguments containing connection info
+        connection_qualified_name: The connection qualified name.
+        application_name: Optional application name override.
+        existing_marker: Pre-existing marker value (e.g., from manual override).
         prepone_enabled: Whether to prepone the marker timestamp
         prepone_hours: Hours to prepone (move marker back in time)
 
@@ -116,7 +125,9 @@ async def fetch_marker_from_storage(
         - next_marker: New timestamp for current run
 
     Example:
-        >>> marker, next_marker = await fetch_marker_from_storage(args)
+        >>> marker, next_marker = await fetch_marker_from_storage(
+        ...     connection_qualified_name="default/oracle/1764230875"
+        ... )
         >>> if marker:
         ...     print(f"Incremental from: {marker}")
         ... else:
@@ -124,20 +135,21 @@ async def fetch_marker_from_storage(
     """
     next_marker = create_next_marker()
 
-    # Check if marker provided in workflow args (e.g., manual override)
-    existing_marker = workflow_args.get("metadata", {}).get("marker_timestamp")
+    marker = existing_marker
 
-    if not existing_marker:
+    if not marker:
         # Try to download from S3
-        existing_marker = await download_marker_from_s3(workflow_args)
+        marker = await download_marker_from_s3(
+            connection_qualified_name, application_name
+        )
 
-    if not existing_marker:
+    if not marker:
         logger.info(f"No marker found - full extraction (next_marker={next_marker})")
         return None, next_marker
 
     # Process the marker (normalize and optionally prepone)
     processed_marker = process_marker_timestamp(
-        marker=existing_marker,
+        marker=marker,
         prepone_enabled=prepone_enabled,
         prepone_hours=prepone_hours,
     )
@@ -150,8 +162,9 @@ async def fetch_marker_from_storage(
 
 
 async def persist_marker_to_storage(
-    workflow_args: Dict[str, Any],
+    connection_qualified_name: str,
     marker_value: str,
+    application_name: str = "",
 ) -> Dict[str, Any]:
     """Persist marker timestamp to S3 storage.
 
@@ -160,8 +173,9 @@ async def persist_marker_to_storage(
     point for the next incremental extraction.
 
     Args:
-        workflow_args: Workflow arguments containing connection info
+        connection_qualified_name: The connection qualified name.
         marker_value: Marker timestamp string to persist
+        application_name: Optional application name override.
 
     Returns:
         Dictionary with marker write details:
@@ -174,12 +188,17 @@ async def persist_marker_to_storage(
         Exception: If upload to S3 fails
 
     Example:
-        >>> result = await persist_marker_to_storage(args, "2024-01-15 10:30:45")
+        >>> result = await persist_marker_to_storage(
+        ...     connection_qualified_name="default/oracle/1764230875",
+        ...     marker_value="2024-01-15T10:30:45Z",
+        ... )
         >>> print(f"Marker saved to: {result['s3_key']}")
     """
-    s3_prefix = get_persistent_s3_prefix(workflow_args)
+    s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     marker_s3_key = f"{s3_prefix}/marker.txt"
-    local_marker_path = get_persistent_artifacts_path(workflow_args, "marker.txt")
+    local_marker_path = get_persistent_artifacts_path(
+        connection_qualified_name, "marker.txt", application_name
+    )
 
     # Ensure local directory exists
     local_marker_path.parent.mkdir(parents=True, exist_ok=True)

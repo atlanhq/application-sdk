@@ -16,17 +16,9 @@ from application_sdk.common.incremental.state.state_reader import download_curre
 class TestDownloadCurrentState:
     """Tests for download_current_state (S3 download with first-run handling)."""
 
-    def _make_workflow_args(self, qualified_name="t/c/123"):
-        return {
-            "connection": {"connection_qualified_name": qualified_name},
-            "application_name": "oracle",
-        }
-
     @pytest.mark.asyncio
     async def test_first_run_returns_not_exists(self):
         """First run (S3 raises exception) returns exists=False."""
-        args = self._make_workflow_args()
-
         with (
             patch(
                 "application_sdk.common.incremental.state.state_reader.ObjectStore"
@@ -44,7 +36,10 @@ class TestDownloadCurrentState:
                 state_dir.mkdir(parents=True)
                 mock_path.return_value = state_dir
 
-                _, _, exists, json_count = await download_current_state(args)
+                _, _, exists, json_count = await download_current_state(
+                    connection_qualified_name="t/c/123",
+                    application_name="oracle",
+                )
 
         assert exists is False
         assert json_count == 0
@@ -52,8 +47,6 @@ class TestDownloadCurrentState:
     @pytest.mark.asyncio
     async def test_existing_state_returns_exists(self):
         """Existing state with JSON files returns exists=True and file count."""
-        args = self._make_workflow_args()
-
         with (
             patch(
                 "application_sdk.common.incremental.state.state_reader.ObjectStore"
@@ -78,7 +71,8 @@ class TestDownloadCurrentState:
                 mock_store.download_prefix = AsyncMock(side_effect=fake_download)
 
                 dir_result, prefix, exists, json_count = await download_current_state(
-                    args
+                    connection_qualified_name="t/c/123",
+                    application_name="oracle",
                 )
 
         assert exists is True
@@ -87,8 +81,6 @@ class TestDownloadCurrentState:
     @pytest.mark.asyncio
     async def test_empty_download_returns_not_exists(self):
         """Download that results in zero JSON files returns exists=False."""
-        args = self._make_workflow_args()
-
         with (
             patch(
                 "application_sdk.common.incremental.state.state_reader.ObjectStore"
@@ -105,7 +97,10 @@ class TestDownloadCurrentState:
 
                 mock_store.download_prefix = AsyncMock()
 
-                _, _, exists, json_count = await download_current_state(args)
+                _, _, exists, json_count = await download_current_state(
+                    connection_qualified_name="t/c/123",
+                    application_name="oracle",
+                )
 
         assert exists is False
         assert json_count == 0
@@ -113,8 +108,6 @@ class TestDownloadCurrentState:
     @pytest.mark.asyncio
     async def test_clears_stale_directory(self):
         """Clears existing stale directory before downloading."""
-        args = self._make_workflow_args()
-
         with (
             patch(
                 "application_sdk.common.incremental.state.state_reader.ObjectStore"
@@ -133,7 +126,10 @@ class TestDownloadCurrentState:
 
                 mock_store.download_prefix = AsyncMock()
 
-                _, _, exists, json_count = await download_current_state(args)
+                _, _, exists, json_count = await download_current_state(
+                    connection_qualified_name="t/c/123",
+                    application_name="oracle",
+                )
 
         # Stale file should be removed (directory was cleared)
         assert json_count == 0

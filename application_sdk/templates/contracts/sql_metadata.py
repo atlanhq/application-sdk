@@ -66,11 +66,29 @@ class ExtractionOutput(Output):
 
 
 @dataclasses.dataclass
-class FetchDatabasesInput(Input, allow_unbounded_fields=True):
-    """Input for fetching databases from the source."""
+class ExtractionTaskInput(Input, allow_unbounded_fields=True):
+    """Fields shared by all per-task inputs derived from ExtractionInput.
 
-    workflow_args: dict[str, Any] = dataclasses.field(default_factory=dict)
-    """Full workflow args dict passed through from ExtractionInput."""
+    Rather than passing a workflow_args dict[str, Any] blob, each task receives
+    exactly the typed fields it needs, constructed from the top-level ExtractionInput
+    by the run() method.
+    """
+
+    workflow_id: str = ""
+    connection: dict[str, Any] = dataclasses.field(default_factory=dict)
+    credential_guid: str = ""
+    credential_ref: "CredentialRef | None" = None
+    output_prefix: str = ""
+    output_path: str = ""
+    exclude_filter: str = ""
+    include_filter: str = ""
+    temp_table_regex: str = ""
+    source_tag_prefix: str = ""
+
+
+@dataclasses.dataclass
+class FetchDatabasesInput(ExtractionTaskInput, allow_unbounded_fields=True):
+    """Input for fetching databases from the source."""
 
 
 @dataclasses.dataclass
@@ -85,10 +103,8 @@ class FetchDatabasesOutput(Output):
 
 
 @dataclasses.dataclass
-class FetchSchemasInput(Input, allow_unbounded_fields=True):
+class FetchSchemasInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Input for fetching schemas from the source."""
-
-    workflow_args: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -103,10 +119,8 @@ class FetchSchemasOutput(Output):
 
 
 @dataclasses.dataclass
-class FetchTablesInput(Input, allow_unbounded_fields=True):
+class FetchTablesInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Input for fetching tables from the source."""
-
-    workflow_args: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -121,10 +135,8 @@ class FetchTablesOutput(Output):
 
 
 @dataclasses.dataclass
-class FetchColumnsInput(Input, allow_unbounded_fields=True):
+class FetchColumnsInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Input for fetching columns from the source."""
-
-    workflow_args: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -136,10 +148,22 @@ class FetchColumnsOutput(Output):
 
 
 @dataclasses.dataclass
-class TransformInput(Input, allow_unbounded_fields=True):
+class FetchProceduresInput(ExtractionTaskInput, allow_unbounded_fields=True):
+    """Input for fetching stored procedures from the source."""
+
+
+@dataclasses.dataclass
+class FetchProceduresOutput(Output):
+    """Output from fetching stored procedures."""
+
+    chunk_count: int = 0
+    total_record_count: int = 0
+
+
+@dataclasses.dataclass
+class TransformInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Input for the transform_data task."""
 
-    workflow_args: dict[str, Any] = dataclasses.field(default_factory=dict)
     typename: str = ""
     file_names: Annotated[list[str], MaxItems(10000)] = dataclasses.field(
         default_factory=list

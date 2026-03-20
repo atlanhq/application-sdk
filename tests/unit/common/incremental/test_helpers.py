@@ -79,33 +79,22 @@ class TestExtractEpochId:
 class TestGetPersistentS3Prefix:
     """Tests for get_persistent_s3_prefix (S3 path construction)."""
 
-    def _make_workflow_args(self, qualified_name, app_name=None):
-        args = {
-            "connection": {"connection_qualified_name": qualified_name},
-        }
-        if app_name:
-            args["application_name"] = app_name
-        return args
-
     def test_constructs_correct_prefix(self):
         """Constructs S3 prefix from connection qualified name and app name."""
-        args = self._make_workflow_args("default/oracle/1764230875", app_name="oracle")
-        result = get_persistent_s3_prefix(args)
+        result = get_persistent_s3_prefix("default/oracle/1764230875", "oracle")
         assert result == "persistent-artifacts/apps/oracle/connection/1764230875"
 
     def test_uses_env_app_name_as_fallback(self):
         """Falls back to ATLAN_APPLICATION_NAME env var when not in args."""
-        args = self._make_workflow_args("tenant/ch/999")
         with patch.dict("os.environ", {"ATLAN_APPLICATION_NAME": "clickhouse"}):
-            result = get_persistent_s3_prefix(args)
+            result = get_persistent_s3_prefix("tenant/ch/999")
         assert "clickhouse" in result
         assert "999" in result
 
     def test_missing_qualified_name_raises(self):
         """Raises ValueError when connection_qualified_name is empty."""
-        args = self._make_workflow_args("")
         with pytest.raises(ValueError):
-            get_persistent_s3_prefix(args)
+            get_persistent_s3_prefix("")
 
 
 # ---------------------------------------------------------------------------
@@ -175,58 +164,43 @@ class TestPreponeMarkerTimestamp:
 
 
 class TestIsIncrementalRun:
-    """Tests for is_incremental_run (multi-condition prerequisite check)."""
+    """Tests for is_incremental_run (deprecated — emits DeprecationWarning).
 
-    def test_all_conditions_met(self):
-        """Returns True when all three conditions are met."""
-        args = {
-            "metadata": {
-                "incremental-extraction": True,
-                "marker_timestamp": "2025-01-15T10:30:00Z",
-                "current_state_available": True,
-            }
-        }
-        assert is_incremental_run(args) is True
+    The function now accepts connection_qualified_name: str and returns True
+    when it is non-empty.  All calls must produce a DeprecationWarning.
+    """
 
-    def test_incremental_extraction_disabled(self):
-        """Returns False when incremental_extraction is False."""
-        args = {
-            "metadata": {
-                "incremental-extraction": False,
-                "marker_timestamp": "2025-01-15T10:30:00Z",
-                "current_state_available": True,
-            }
-        }
-        assert is_incremental_run(args) is False
+    def test_non_empty_qualified_name_returns_true(self):
+        """Non-empty connection_qualified_name returns True."""
+        import warnings
 
-    def test_no_marker_timestamp(self):
-        """Returns False when marker_timestamp is absent (first run)."""
-        args = {
-            "metadata": {
-                "incremental-extraction": True,
-                "current_state_available": True,
-            }
-        }
-        assert is_incremental_run(args) is False
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            result = is_incremental_run("default/oracle/123")
+        assert result is True
 
-    def test_current_state_not_available(self):
-        """Returns False when current_state_available is False."""
-        args = {
-            "metadata": {
-                "incremental-extraction": True,
-                "marker_timestamp": "2025-01-15T10:30:00Z",
-                "current_state_available": False,
-            }
-        }
-        assert is_incremental_run(args) is False
+    def test_empty_qualified_name_returns_false(self):
+        """Empty string returns False."""
+        import warnings
 
-    def test_empty_metadata(self):
-        """Returns False when metadata section is empty."""
-        assert is_incremental_run({"metadata": {}}) is False
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            result = is_incremental_run("")
+        assert result is False
 
-    def test_missing_metadata(self):
-        """Returns False when metadata section is missing entirely."""
-        assert is_incremental_run({}) is False
+    def test_emits_deprecation_warning(self):
+        """Calling is_incremental_run always emits a DeprecationWarning."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            is_incremental_run("default/oracle/123")
+
+        deprecation_warnings = [
+            w for w in caught if issubclass(w.category, DeprecationWarning)
+        ]
+        assert len(deprecation_warnings) >= 1
+        assert "deprecated" in str(deprecation_warnings[0].message).lower()
 
 
 # ---------------------------------------------------------------------------

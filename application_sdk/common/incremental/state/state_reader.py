@@ -12,7 +12,7 @@ connection, used for:
 
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Tuple
 
 from application_sdk.common.incremental.helpers import (
     count_json_files_recursive,
@@ -27,7 +27,8 @@ logger = get_logger(__name__)
 
 
 async def download_current_state(
-    workflow_args: Dict[str, Any],
+    connection_qualified_name: str,
+    application_name: str = "",
 ) -> Tuple[Path, str, bool, int]:
     """Download current-state folder from S3 to local storage.
 
@@ -39,9 +40,8 @@ async def download_current_state(
     S3 Path: persistent-artifacts/apps/{app}/connection/{connection_id}/current-state/
 
     Args:
-        workflow_args: Dictionary containing workflow configuration with:
-            - connection.connection_qualified_name: Connection identifier
-            - Other workflow metadata
+        connection_qualified_name: The connection qualified name.
+        application_name: Optional application name override.
 
     Returns:
         Tuple containing:
@@ -51,15 +51,19 @@ async def download_current_state(
             - json_count: Number of JSON files in the current state
 
     Example:
-        >>> dir, prefix, exists, count = await download_current_state(workflow_args)
+        >>> dir, prefix, exists, count = await download_current_state(
+        ...     connection_qualified_name="default/oracle/1764230875"
+        ... )
         >>> if exists:
         ...     print(f"Downloaded {count} files to {dir}")
         ... else:
         ...     print("First run - no previous state")
     """
-    s3_prefix = get_persistent_s3_prefix(workflow_args)
+    s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     current_state_s3_prefix = f"{s3_prefix}/current-state"
-    current_state_dir = get_persistent_artifacts_path(workflow_args, "current-state")
+    current_state_dir = get_persistent_artifacts_path(
+        connection_qualified_name, "current-state", application_name
+    )
 
     # Clear and recreate local directory to prevent stale data from prior runs
     if current_state_dir.exists():

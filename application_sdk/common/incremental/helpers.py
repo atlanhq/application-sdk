@@ -11,12 +11,12 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 
-from application_sdk.common.incremental.models import IncrementalWorkflowArgs
 from application_sdk.constants import (
     APPLICATION_NAME,
     MARKER_TIMESTAMP_FORMAT,
@@ -70,14 +70,18 @@ def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
     return connection_id
 
 
-def get_persistent_s3_prefix(workflow_args: Dict[str, Any]) -> str:
+def get_persistent_s3_prefix(
+    connection_qualified_name: str,
+    application_name: str = "",
+) -> str:
     """Get the S3 key prefix for connection-scoped persistent artifacts.
 
     This prefix is used for storing marker.txt and current-state folder
     that persist across workflow runs for incremental extraction.
 
     Args:
-        workflow_args: Dictionary containing workflow configuration.
+        connection_qualified_name: The connection qualified name.
+        application_name: Optional application name override.
 
     Returns:
         S3 key prefix like 'persistent-artifacts/apps/oracle/connection/1764230875'
@@ -85,47 +89,46 @@ def get_persistent_s3_prefix(workflow_args: Dict[str, Any]) -> str:
     Raises:
         ValueError: If connection_qualified_name is not provided
     """
-    args = IncrementalWorkflowArgs.model_validate(workflow_args)
-
-    if not args.connection.connection_qualified_name:
+    if not connection_qualified_name:
         raise ValueError("connection_qualified_name is required")
 
-    connection_id = extract_epoch_id_from_qualified_name(
-        args.connection.connection_qualified_name
-    )
+    connection_id = extract_epoch_id_from_qualified_name(connection_qualified_name)
 
-    application_name = args.application_name or os.getenv(
+    resolved_app_name = application_name or os.getenv(
         "ATLAN_APPLICATION_NAME", APPLICATION_NAME
     )
 
     s3_prefix = PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE.format(
-        application_name=application_name,
+        application_name=resolved_app_name,
         connection_id=connection_id,
     )
 
     logger.debug(
-        f"S3 prefix for connection '{args.connection.connection_qualified_name}' -> '{s3_prefix}'"
+        f"S3 prefix for connection '{connection_qualified_name}' -> '{s3_prefix}'"
     )
     return s3_prefix
 
 
 def get_persistent_artifacts_path(
-    workflow_args: Dict[str, Any], artifact_subpath: str
+    connection_qualified_name: str,
+    artifact_subpath: str,
+    application_name: str = "",
 ) -> Path:
     """Get local filesystem path for connection-scoped persistent artifacts.
 
     Args:
-        workflow_args: Dictionary containing workflow configuration.
+        connection_qualified_name: The connection qualified name.
         artifact_subpath: Relative path under connection prefix.
             Examples:
             - "marker.txt" → connection-level marker
             - "current-state" → connection-level current state
             - "runs/{run_id}/incremental-diff" → run-specific incremental diff
+        application_name: Optional application name override.
 
     Returns:
         Local filesystem Path for the artifact.
     """
-    s3_prefix = get_persistent_s3_prefix(workflow_args)
+    s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     return Path(TEMPORARY_PATH).joinpath(s3_prefix, artifact_subpath)
 
 
@@ -137,7 +140,7 @@ def normalize_marker_timestamp(marker: str) -> str:
     return normalized
 
 
-def prepone_marker_timestamp(marker: str, hours: int) -> str:
+def prepone_marker_timestamp(marker: str, hours: float) -> str:
     """Move marker timestamp back by specified hours.
 
     This handles edge cases where objects created very close to the marker
@@ -170,18 +173,24 @@ def prepone_marker_timestamp(marker: str, hours: int) -> str:
     return adjusted_str
 
 
-async def download_marker_from_s3(workflow_args: Dict[str, Any]) -> Optional[str]:
+async def download_marker_from_s3(
+    connection_qualified_name: str,
+    application_name: str = "",
+) -> Optional[str]:
     """Download marker.txt from S3 and return its content, or None if not found.
 
     Args:
-        workflow_args: Dictionary containing workflow configuration.
+        connection_qualified_name: The connection qualified name.
+        application_name: Optional application name override.
 
     Returns:
         Marker timestamp string if found, None otherwise
     """
-    s3_prefix = get_persistent_s3_prefix(workflow_args)
+    s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     marker_s3_key = f"{s3_prefix}/marker.txt"
-    local_marker_path = get_persistent_artifacts_path(workflow_args, "marker.txt")
+    local_marker_path = get_persistent_artifacts_path(
+        connection_qualified_name, "marker.txt", application_name
+    )
     local_marker_path.parent.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Downloading marker from S3: {marker_s3_key}")
@@ -203,22 +212,28 @@ async def download_marker_from_s3(workflow_args: Dict[str, Any]) -> Optional[str
     return None
 
 
-def is_incremental_run(workflow_args: Dict[str, Any]) -> bool:
+def is_incremental_run(connection_qualified_name: str) -> bool:
     """Check if this is an incremental extraction run.
 
-    Returns True only if:
-    - incremental_extraction is enabled
-    - marker_timestamp is present
-    - current_state_available is True
+    .. deprecated::
+        Use ``IncrementalRunContext.is_incremental_ready()`` instead.
+        This function only checks if connection_qualified_name is set,
+        which is insufficient for determining incremental readiness.
 
     Args:
-        workflow_args: Dictionary containing workflow configuration.
+        connection_qualified_name: The connection qualified name.
 
     Returns:
-        True if all prerequisites for incremental extraction are met
+        True if connection_qualified_name is non-empty (deprecated check)
     """
-    args = IncrementalWorkflowArgs.model_validate(workflow_args)
-    return args.is_incremental_ready()
+    warnings.warn(
+        "is_incremental_run() is deprecated. "
+        "Use IncrementalRunContext.is_incremental_ready() instead. "
+        "This function will be removed in v3.1.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return bool(connection_qualified_name)
 
 
 async def download_s3_prefix_with_structure(
