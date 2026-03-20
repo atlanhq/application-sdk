@@ -303,3 +303,106 @@ async def do_lakehouse_load(workflow_args: Dict[str, Any]) -> ActivityStatistics
         f"Lakehouse load job {job_id} did not complete within "
         f"{LH_LOAD_MAX_POLL_ATTEMPTS * LH_LOAD_POLL_INTERVAL_SECONDS}s"
     )
+
+
+# ---- Raw-to-lakehouse preparation ----
+
+# Maps SDK typename to the raw column that holds the entity name.
+_RAW_ENTITY_NAME_FIELDS: Dict[str, str] = {
+    "database": "database_name",
+    "schema": "schema_name",
+    "table": "table_name",
+    "column": "column_name",
+}
+
+
+@activity.defn
+async def prepare_raw_for_lakehouse(
+    raw_output_path: str,
+    typenames: list[str],
+    connection_qualified_name: str,
+    workflow_id: str,
+    workflow_run_id: str,
+    extracted_at: int,
+    tenant_id: str,
+) -> str:
+    """Convert raw parquet files into common-schema JSONL for lakehouse ingestion.
+
+    For each typename's parquet files under ``raw_output_path/{typename}/``, every
+    row is wrapped into a per-connector table schema:
+
+        typename, connection_qualified_name,
+        workflow_id, workflow_run_id, extracted_at, tenant_id,
+        entity_name, raw_record (full row as JSON string)
+
+    The table name is the connector name (e.g. ``raw_metadata.redshift``).
+
+    The output JSONL files are written next to the raw directory under
+    ``{raw_output_path}/../raw_lakehouse/{typename}/``.
+
+    Returns the root output directory (``…/raw_lakehouse``).
+    """
+    import json
+    import os
+
+    import orjson
+
+    from application_sdk.common.file_ops import SafeFileOps
+    from application_sdk.io.utils import download_files
+
+    base_dir = os.path.normpath(os.path.join(raw_output_path, "..", "raw_lakehouse"))
+
+    for typename in typenames:
+        src_dir = os.path.join(raw_output_path, typename)
+        parquet_files = await download_files(src_dir, ".parquet", file_names=None)
+
+        if not parquet_files:
+            logger.info(f"No raw parquet files for typename={typename}, skipping")
+            continue
+
+        out_dir = os.path.join(base_dir, typename)
+        SafeFileOps.makedirs(out_dir, exist_ok=True)
+
+        entity_name_field = _RAW_ENTITY_NAME_FIELDS.get(typename)
+        chunk_idx = 0
+
+        for pq_file in parquet_files:
+            try:
+                import daft
+
+                df = daft.read_parquet(pq_file)
+                rows = df.to_pydict()
+                col_names = list(rows.keys())
+                n_rows = len(rows[col_names[0]]) if col_names else 0
+            except Exception as e:
+                logger.warning(f"Failed to read parquet {pq_file}: {e}, skipping")
+                continue
+
+            out_file = os.path.join(out_dir, f"chunk-{chunk_idx}.jsonl")
+            with open(out_file, "wb") as f:
+                for i in range(n_rows):
+                    raw_row = {col: rows[col][i] for col in col_names}
+                    entity_name = (
+                        str(raw_row.get(entity_name_field, ""))
+                        if entity_name_field
+                        else ""
+                    )
+                    record = {
+                        "typename": typename,
+                        "connection_qualified_name": connection_qualified_name,
+                        "workflow_id": workflow_id,
+                        "workflow_run_id": workflow_run_id,
+                        "extracted_at": extracted_at,
+                        "tenant_id": tenant_id,
+                        "entity_name": entity_name,
+                        "raw_record": json.dumps(raw_row, default=str),
+                    }
+                    f.write(orjson.dumps(record, option=orjson.OPT_APPEND_NEWLINE))
+
+            chunk_idx += 1
+            logger.info(
+                f"Prepared {n_rows} raw rows for lakehouse: "
+                f"typename={typename}, file={out_file}"
+            )
+
+    return base_dir

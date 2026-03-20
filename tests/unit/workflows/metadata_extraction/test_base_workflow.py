@@ -90,11 +90,7 @@ class TestRunExitActivities:
     @patch("application_sdk.workflows.metadata_extraction.ENABLE_LAKEHOUSE_LOAD", True)
     @patch(
         "application_sdk.workflows.metadata_extraction.LH_LOAD_TRANSFORMED_NAMESPACE",
-        "test_ns",
-    )
-    @patch(
-        "application_sdk.workflows.metadata_extraction.LH_LOAD_TRANSFORMED_TABLE_NAME",
-        "test_table",
+        "entity_metadata",
     )
     @patch(
         "application_sdk.workflows.metadata_extraction.LH_LOAD_TRANSFORMED_MODE",
@@ -102,30 +98,104 @@ class TestRunExitActivities:
     )
     @patch("application_sdk.workflows.metadata_extraction.ENABLE_ATLAN_UPLOAD", False)
     @patch("temporalio.workflow.execute_activity_method")
-    async def test_run_exit_activities_lakehouse_enabled(
+    async def test_run_exit_activities_lakehouse_loads_per_entity_type(
         self,
         mock_execute_activity,
         workflow,
         workflow_args,
     ):
-        """Test run_exit_activities calls load_to_lakehouse when enabled."""
+        """Test run_exit_activities calls load_to_lakehouse once per extracted typename."""
         mock_execute_activity.return_value = {"status": "success"}
+        workflow_args["_extracted_typenames"] = ["database", "table", "column"]
 
         await workflow.run_exit_activities(workflow_args)
 
-        # Should have been called once for lakehouse load
-        mock_execute_activity.assert_called_once()
-        call_args = mock_execute_activity.call_args
+        # Should have been called 3 times (one per typename)
+        assert mock_execute_activity.call_count == 3
 
-        # Verify the activity method being called is load_to_lakehouse
-        assert call_args[0][0] == BaseMetadataExtractionActivities.load_to_lakehouse
+        # Verify each call targets the correct Iceberg table
+        expected = [
+            ("database", "database"),
+            ("table", "table"),
+            ("column", "column"),
+        ]
+        for i, (typename, iceberg_table) in enumerate(expected):
+            call_args = mock_execute_activity.call_args_list[i]
+            assert (
+                call_args[0][0]
+                == BaseMetadataExtractionActivities.load_to_lakehouse
+            )
+            lh_config = call_args[1]["args"][0]["lh_load_config"]
+            assert lh_config["namespace"] == "entity_metadata"
+            assert lh_config["table_name"] == iceberg_table
+            assert lh_config["file_extension"] == ".jsonl"
+            assert lh_config["output_path"].endswith(f"/transformed/{typename}")
 
-        # Verify lh_load_config is in the args
-        called_args = call_args[1]["args"][0]
-        assert "lh_load_config" in called_args
-        assert called_args["lh_load_config"]["namespace"] == "test_ns"
-        assert called_args["lh_load_config"]["table_name"] == "test_table"
-        assert called_args["lh_load_config"]["file_extension"] == ".jsonl"
+    @patch("application_sdk.workflows.metadata_extraction.ENABLE_LAKEHOUSE_LOAD", True)
+    @patch(
+        "application_sdk.workflows.metadata_extraction.LH_LOAD_TRANSFORMED_NAMESPACE",
+        "entity_metadata",
+    )
+    @patch("application_sdk.workflows.metadata_extraction.ENABLE_ATLAN_UPLOAD", False)
+    @patch("temporalio.workflow.execute_activity_method")
+    async def test_run_exit_activities_lakehouse_no_typenames(
+        self,
+        mock_execute_activity,
+        workflow,
+        workflow_args,
+    ):
+        """Test run_exit_activities skips lakehouse when no typenames extracted."""
+        # No _extracted_typenames key
+        await workflow.run_exit_activities(workflow_args)
+
+        mock_execute_activity.assert_not_called()
+
+    @patch("application_sdk.workflows.metadata_extraction.ENABLE_LAKEHOUSE_LOAD", True)
+    @patch(
+        "application_sdk.workflows.metadata_extraction.LH_LOAD_TRANSFORMED_NAMESPACE",
+        "entity_metadata",
+    )
+    @patch("application_sdk.workflows.metadata_extraction.ENABLE_ATLAN_UPLOAD", False)
+    @patch("temporalio.workflow.execute_activity_method")
+    async def test_run_exit_activities_lakehouse_skips_unknown_typename(
+        self,
+        mock_execute_activity,
+        workflow,
+        workflow_args,
+    ):
+        """Test unknown typenames are skipped with a warning."""
+        mock_execute_activity.return_value = {"status": "success"}
+        workflow_args["_extracted_typenames"] = ["table", "unknown-type"]
+
+        await workflow.run_exit_activities(workflow_args)
+
+        # Only "table" should be loaded, "unknown-type" skipped
+        assert mock_execute_activity.call_count == 1
+        lh_config = mock_execute_activity.call_args[1]["args"][0]["lh_load_config"]
+        assert lh_config["table_name"] == "table"
+
+    @patch("application_sdk.workflows.metadata_extraction.ENABLE_LAKEHOUSE_LOAD", True)
+    @patch(
+        "application_sdk.workflows.metadata_extraction.LH_LOAD_TRANSFORMED_NAMESPACE",
+        "entity_metadata",
+    )
+    @patch("application_sdk.workflows.metadata_extraction.ENABLE_ATLAN_UPLOAD", False)
+    @patch("temporalio.workflow.execute_activity_method")
+    async def test_run_exit_activities_lakehouse_procedure_mapping(
+        self,
+        mock_execute_activity,
+        workflow,
+        workflow_args,
+    ):
+        """Test extras-procedure maps to procedure Iceberg table."""
+        mock_execute_activity.return_value = {"status": "success"}
+        workflow_args["_extracted_typenames"] = ["extras-procedure"]
+
+        await workflow.run_exit_activities(workflow_args)
+
+        assert mock_execute_activity.call_count == 1
+        lh_config = mock_execute_activity.call_args[1]["args"][0]["lh_load_config"]
+        assert lh_config["table_name"] == "procedure"
 
     @patch("application_sdk.workflows.metadata_extraction.ENABLE_LAKEHOUSE_LOAD", False)
     @patch("application_sdk.workflows.metadata_extraction.ENABLE_ATLAN_UPLOAD", False)

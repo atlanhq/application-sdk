@@ -5,7 +5,8 @@ that loads extracted data into an Iceberg lakehouse via the MDLH service.
 After extraction and transformation, the SDK automatically calls the MDLH
 REST API to load:
   1. Raw parquet files into a "raw" Iceberg table (after all fetches complete)
-  2. Transformed jsonl files into a "transformed" Iceberg table (during exit)
+  2. Transformed jsonl files into per-entity-type Iceberg tables in
+     entity_metadata (e.g. database, schema, table, column)
 
 **No code changes are required** — lakehouse loading is enabled entirely
 through environment variables. This example shows the env var configuration
@@ -20,10 +21,10 @@ Required environment variables for lakehouse load:
   LH_LOAD_RAW_TABLE_NAME=postgres_raw
   LH_LOAD_RAW_MODE=APPEND                 (default; or UPSERT)
 
-  # Transformed table (loaded after transformation)
-  LH_LOAD_TRANSFORMED_NAMESPACE=transformed_metadata
-  LH_LOAD_TRANSFORMED_TABLE_NAME=postgres_transformed
-  LH_LOAD_TRANSFORMED_MODE=APPEND         (default; or UPSERT)
+  # Transformed tables (loaded per entity type after transformation)
+  # Table name is derived from typename (e.g. "database" -> entity_metadata.database)
+  LH_LOAD_TRANSFORMED_NAMESPACE=entity_metadata  (default)
+  LH_LOAD_TRANSFORMED_MODE=APPEND                (default; or UPSERT)
 
   # Optional polling tuning
   LH_LOAD_POLL_INTERVAL_SECONDS=10        (default)
@@ -191,6 +192,5 @@ if __name__ == "__main__":
     #   export ENABLE_LAKEHOUSE_LOAD=true
     #   export LH_LOAD_RAW_NAMESPACE=raw_metadata
     #   export LH_LOAD_RAW_TABLE_NAME=postgres_raw
-    #   export LH_LOAD_TRANSFORMED_NAMESPACE=transformed_metadata
-    #   export LH_LOAD_TRANSFORMED_TABLE_NAME=postgres_transformed
+    #   export LH_LOAD_TRANSFORMED_NAMESPACE=entity_metadata
     asyncio.run(application_sql_with_lakehouse_load(daemon=False))

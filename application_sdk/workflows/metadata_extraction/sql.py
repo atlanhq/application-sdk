@@ -6,7 +6,7 @@ including databases, schemas, tables, and columns.
 
 import asyncio
 from time import time
-from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Sequence, Type
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -17,6 +17,7 @@ from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
 from application_sdk.constants import (
+    APP_TENANT_ID,
     APPLICATION_NAME,
     ENABLE_LAKEHOUSE_LOAD,
     LH_LOAD_RAW_MODE,
@@ -66,6 +67,10 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 in order, including preflight check, fetching databases, schemas,
                 tables, columns, and transforming data.
         """
+        from application_sdk.activities.metadata_extraction.base import (
+            prepare_raw_for_lakehouse,
+        )
+
         # Base activities that always run
         base_activities: List[Any] = [
             activities.preflight_check,
@@ -78,6 +83,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             activities.transform_data,
             activities.upload_to_atlan,  # this will only be executed if ENABLE_ATLAN_UPLOAD is True
             activities.load_to_lakehouse,  # only executed if ENABLE_LAKEHOUSE_LOAD is True
+            prepare_raw_for_lakehouse,  # standalone activity for raw→lakehouse prep
         ]
         return base_activities
 
@@ -88,7 +94,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         ],
         workflow_args: Dict[str, Any],
         retry_policy: RetryPolicy,
-    ) -> None:
+    ) -> Optional[str]:
         """Fetch and transform metadata using the provided fetch function.
 
         This method executes a fetch operation and transforms the resulting data. It handles
@@ -98,6 +104,9 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             fetch_fn (Callable): The function to fetch metadata.
             workflow_args (Dict[str, Any]): Arguments for the workflow execution.
             retry_policy (RetryPolicy): The retry policy for activity execution.
+
+        Returns:
+            The typename that was fetched and transformed, or None if no data.
 
         Raises:
             ValueError: If chunk_count, raw_total_record_count, or typename is invalid.
@@ -110,7 +119,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
         if raw_statistics is None:
-            return
+            return None
 
         activity_statistics = ActivityStatistics.model_validate(raw_statistics)
         transform_activities: List[Any] = []
@@ -121,7 +130,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             or not activity_statistics.partitions
         ):
             # to handle the case where the fetch_fn returns None or no chunks
-            return
+            return None
 
         if activity_statistics.typename is None:
             raise ValueError("Invalid typename")
@@ -157,6 +166,8 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             metadata_model = ActivityStatistics.model_validate(record_count)
             total_record_count += metadata_model.total_record_count
             chunk_count += metadata_model.chunk_count
+
+        return activity_statistics.typename
 
     def get_transform_batches(
         self, chunk_count: int, typename: str, partitions: List[int]
@@ -239,22 +250,54 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 for fetch_function in fetch_functions
             ]
 
-            await asyncio.gather(*fetch_and_transforms)
-            logger.info(f"Extraction workflow completed for {workflow_id}")
+            typenames = await asyncio.gather(*fetch_and_transforms)
+            # Collect typenames that produced data (filter out None)
+            extracted_typenames = [t for t in typenames if t is not None]
+            workflow_args["_extracted_typenames"] = extracted_typenames
+            logger.info(
+                f"Extraction workflow completed for {workflow_id}, "
+                f"typenames: {extracted_typenames}"
+            )
 
             # Load raw data to lakehouse (once, after all fetches complete)
+            # Raw parquet is first converted to the common connector_extractions
+            # schema (JSONL with metadata columns + raw_record), then loaded via MDLH.
             if (
                 ENABLE_LAKEHOUSE_LOAD
                 and LH_LOAD_RAW_NAMESPACE
                 and LH_LOAD_RAW_TABLE_NAME
+                and extracted_typenames
             ):
+                from application_sdk.activities.metadata_extraction.base import (
+                    prepare_raw_for_lakehouse,
+                )
+
+                output_path = workflow_args.get("output_path", "")
+                connection_qn = workflow_args.get("connection", {}).get(
+                    "connection_qualified_name", ""
+                )
+                raw_lh_dir = await workflow.execute_activity(
+                    prepare_raw_for_lakehouse,
+                    args=[
+                        f"{output_path}/raw",
+                        extracted_typenames,
+                        connection_qn,
+                        workflow_args.get("workflow_id", ""),
+                        workflow_args.get("workflow_run_id", ""),
+                        int(time() * 1000),
+                        APP_TENANT_ID,
+                    ],
+                    retry_policy=retry_policy,
+                    start_to_close_timeout=self.default_start_to_close_timeout,
+                    heartbeat_timeout=self.default_heartbeat_timeout,
+                )
                 await self._execute_lakehouse_load(
                     workflow_args,
-                    output_path=f"{workflow_args.get('output_path', '')}/raw",
+                    output_path=raw_lh_dir,
                     namespace=LH_LOAD_RAW_NAMESPACE,
                     table_name=LH_LOAD_RAW_TABLE_NAME,
                     mode=LH_LOAD_RAW_MODE,
-                    file_extension=".parquet",
+                    file_extension=".jsonl",
                 )
 
             # Load transformed data + upload to atlan
