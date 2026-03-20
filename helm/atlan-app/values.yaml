@@ -40,17 +40,7 @@ logLevel: "INFO"
 otel:
   centralEndpoint: "opentelemetry-collector-otlp-collector.monitoring.svc.cluster.local:4317"
   exporter:
-    enabled: true  # Enable to forward logs to node-level DaemonSet collector via otlp/node
-  collector:
-    image: otel/opentelemetry-collector-contrib:0.96.0
-    resources:
-      requests:
-        memory: "64Mi"
-        cpu: "25m"
-      limits:
-        memory: "256Mi"
-        cpu: "250m"
-    logVolumeSizeLimit: 500Mi
+    enabled: true  # Enable to set OTEL_RESOURCE_ATTRIBUTES with cluster/pod metadata
 
 # Object storage for DAPR binding (type + provider-specific metadata)
 # For S3, bucket/region auto-resolve from atlan-defaults ConfigMap if not set.

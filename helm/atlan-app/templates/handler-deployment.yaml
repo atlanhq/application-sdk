@@ -31,12 +31,6 @@ spec:
         {{- toYaml .Values.securityContext | nindent 8 }}
 
       volumes:
-        - name: otel-config
-          configMap:
-            name: {{ include "atlan-app.otelConfigMapName" . }}
-        - name: otel-logs
-          emptyDir:
-            sizeLimit: {{ .Values.otel.collector.logVolumeSizeLimit }}
         - name: dapr-components
           projected:
             sources:
@@ -90,8 +84,12 @@ spec:
                   key: temporal_namespace
             - name: ATLAN_TASK_QUEUE
               value: {{ include "atlan-app.taskQueue" . | quote }}
+            - name: K8S_NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "localhost:4317"
+              value: "$(K8S_NODE_IP):4317"
             - name: OTEL_SERVICE_NAME
               value: "{{ include "atlan-app.appName" . }}-handler"
             {{- if .Values.otel.exporter.enabled }}
@@ -186,9 +184,6 @@ spec:
           resources:
             {{- toYaml .Values.handler.resources | nindent 12 }}
           volumeMounts:
-            - name: otel-logs
-              mountPath: /var/log/otel
-              readOnly: true
             - name: dapr-components
               mountPath: /app/components
               readOnly: true
@@ -197,57 +192,6 @@ spec:
               mountPath: /etc/temporal/tls
               readOnly: true
             {{- end }}
-          securityContext:
-            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
-
-        # OTLP Collector Sidecar - Telemetry aggregation and forwarding
-        - name: otel-collector
-          image: {{ .Values.otel.collector.image }}
-          args:
-            - "--config=/etc/otel/otel-collector-config.yaml"
-          env:
-            - name: GOMAXPROCS
-              value: "1"
-            {{- if .Values.otel.exporter.enabled }}
-            - name: K8S_NODE_IP
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.hostIP
-            {{- end }}
-          ports:
-            - name: otlp-grpc
-              containerPort: 4317
-              protocol: TCP
-            - name: otlp-http
-              containerPort: 4318
-              protocol: TCP
-            - name: health
-              containerPort: 13133
-              protocol: TCP
-          volumeMounts:
-            - name: otel-config
-              mountPath: /etc/otel
-              readOnly: true
-            - name: otel-logs
-              mountPath: /var/log/otel
-          livenessProbe:
-            httpGet:
-              path: /
-              port: health
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /
-              port: health
-            initialDelaySeconds: 3
-            periodSeconds: 5
-            timeoutSeconds: 2
-            failureThreshold: 3
-          resources:
-            {{- toYaml .Values.otel.collector.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
 

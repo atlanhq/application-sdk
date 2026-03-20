@@ -54,13 +54,6 @@ ConfigMap name.
 {{- end -}}
 
 {{/*
-OTEL ConfigMap name.
-*/}}
-{{- define "atlan-app.otelConfigMapName" -}}
-{{- printf "%s-otel-config" (include "atlan-app.appName" .) -}}
-{{- end -}}
-
-{{/*
 Handler deployment name.
 */}}
 {{- define "atlan-app.handlerName" -}}
@@ -72,13 +65,6 @@ Worker deployment name.
 */}}
 {{- define "atlan-app.workerName" -}}
 {{- printf "%s-worker" (include "atlan-app.appName" .) -}}
-{{- end -}}
-
-{{/*
-Worker OTEL endpoint (points to handler's OTLP sidecar).
-*/}}
-{{- define "atlan-app.workerOtelEndpoint" -}}
-{{- printf "%s-handler.%s.svc.cluster.local:4317" (include "atlan-app.appName" .) (include "atlan-app.namespace" .) -}}
 {{- end -}}
 
 {{/*

@@ -253,6 +253,50 @@ jobs:
             --set appModule=test:App \
             --debug
 
+  # K8s E2E Tests (label-gated on 'e2e-k8s')
+  e2e-k8s:
+    name: E2E K8s
+    needs: changes
+    if: |
+      (github.event.action == 'labeled' && github.event.label.name == 'e2e-k8s') ||
+      contains(github.event.pull_request.labels.*.name, 'e2e-k8s')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+
+      - uses: "./.github/actions/setup-deps"
+
+      - name: Build app image
+        run: |
+          docker build -t test-app:e2e .
+
+      - name: Load image into kind
+        run: |
+          kind load docker-image test-app:e2e
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Run e2e tests
+        env:
+          E2E_APP_NAME: test-app
+          E2E_APP_MODULE: ${{ vars.E2E_APP_MODULE }}
+          E2E_IMAGE: localhost/test-app:e2e
+          E2E_TIMEOUT: "300"
+        run: |
+          uv run pytest tests/e2e/ -m e2e -v
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-logs
+          path: test-logs/
+
   # Documentation
   docs:
     name: Docs

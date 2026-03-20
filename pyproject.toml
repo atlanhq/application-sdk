@@ -73,6 +73,7 @@ azure = [
 tests = [
     "pytest-order>=1.3.0,<1.4.0",
     "pandera[io]>=0.23.1,<0.28.0",
+    "httpx>=0.27.0,<0.29.0",
 ]
 scale_data_generator = [
     "faker>=37.1.0,<39.1.0",
@@ -168,7 +169,10 @@ reportInvalidTypeForm = "warning"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["integration: tests requiring local Temporal server"]
+markers = [
+    "integration: tests requiring local Temporal server",
+    "e2e: tests requiring a live K8s cluster",
+]
 
 [tool.coverage.run]
 omit = [
