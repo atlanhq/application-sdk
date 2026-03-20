@@ -56,11 +56,24 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
-      - uses: anthropics/claude-code-action@v1
+      - name: Claude — mention (opus)
+        id: mention-opus
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           claude_args: |
             --model claude-opus-4-6
+            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(git show:*),Bash(git blame:*),mcp__github_inline_comment__create_inline_comment"
+            --append-system-prompt "When a user comment contains '/review' or asks you to review a PR, you MUST invoke the /review slash command. Do not attempt a freeform review."
+
+      - name: Claude — mention (sonnet fallback)
+        if: steps.mention-opus.outcome == 'failure'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          claude_args: |
+            --model claude-sonnet-4-6
             --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(git show:*),Bash(git blame:*),mcp__github_inline_comment__create_inline_comment"
             --append-system-prompt "When a user comment contains '/review' or asks you to review a PR, you MUST invoke the /review slash command. Do not attempt a freeform review."
 
@@ -103,7 +116,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - uses: anthropics/claude-code-action@v1
+      - name: Review (opus)
+        id: review-opus
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           show_full_output: true
@@ -113,6 +129,19 @@ jobs:
             You MUST invoke the /review slash command to perform the review. Do not attempt a freeform review.
           claude_args: |
             --model claude-opus-4-6 --timeout 600 --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr review:*),Bash(gh api:*),mcp__github_inline_comment__create_inline_comment"
+
+      - name: Review (sonnet fallback)
+        if: steps.review-opus.outcome == 'failure'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          show_full_output: true
+          prompt: |
+            Review PR #${{ steps.pr.outputs.number }} for repo ${{ github.repository }}.
+            IMPORTANT: Full git history is already checked out locally. Do NOT run `git fetch`.
+            You MUST invoke the /review slash command to perform the review. Do not attempt a freeform review.
+          claude_args: |
+            --model claude-sonnet-4-6 --timeout 600 --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr review:*),Bash(gh api:*),mcp__github_inline_comment__create_inline_comment"
 
   # Devil's advocate review — triggered by 'challenge' label
   challenge:
@@ -141,7 +170,10 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
-      - uses: anthropics/claude-code-action@v1
+      - name: Challenge (opus)
+        id: challenge-opus
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           show_full_output: true
@@ -168,3 +200,33 @@ jobs:
             6. Do NOT approve or request changes — always comment only.
           claude_args: |
             --model claude-opus-4-6 --timeout 600 --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git blame:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh api:*)"
+
+      - name: Challenge (sonnet fallback)
+        if: steps.challenge-opus.outcome == 'failure'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          show_full_output: true
+          prompt: |
+            Run a devil's advocate review on PR #${{ github.event.pull_request.number }} for repo ${{ github.repository }}.
+            IMPORTANT: Full git history is already checked out locally. Do NOT run `git fetch`.
+
+            You are a senior engineer who believes this PR should NOT be merged. Make the strongest possible case against merging.
+
+            1. Get the diff: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD`
+            2. Read every changed file in full for surrounding context.
+            3. Systematically try to break the code across these dimensions:
+               - Concurrency & race conditions (shared state, non-atomic checkpoints, Dapr state store races)
+               - Failure modes under pressure (10x/100x volume, retry storms, memory growth, Temporal timeouts)
+               - Silent data loss (dropped records, early pagination termination, ObjectStore failures)
+               - Production blind spots (swallowed exceptions, missing logging, workflow determinism violations)
+               - Security (credential leaks, auth bypass, sensitive data in logs)
+               - Contract assumptions (unvalidated API shapes, hardcoded values, Dapr config assumptions)
+            4. For each finding, describe the EXACT failure scenario — not just "this could be bad."
+            5. Post as a single PR comment:
+               `gh pr comment ${{ github.event.pull_request.number }} --body "..."`
+               Use this format: [BLOCK] for production incidents, [RISK] for eventual failures, [SMELL] for maintainability.
+               End with a verdict: DO NOT MERGE / MERGE WITH CAUTION / CLEAN.
+            6. Do NOT approve or request changes — always comment only.
+          claude_args: |
+            --model claude-sonnet-4-6 --timeout 600 --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git blame:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh api:*)"
