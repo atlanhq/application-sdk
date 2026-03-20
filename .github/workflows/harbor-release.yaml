@@ -62,6 +62,9 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
+            registry.atlan.com/public/app-runtime-base:main-latest
+            registry.atlan.com/public/app-runtime-base:main-${{ steps.get_version.outputs.version }}
+            registry.atlan.com/public/app-runtime-base:sha-${{ steps.get_sha.outputs.sha }}
             registry.atlan.com/public/application-sdk:main-latest
             registry.atlan.com/public/application-sdk:main-${{ steps.get_version.outputs.version }}
             registry.atlan.com/public/application-sdk:sha-${{ steps.get_sha.outputs.sha }}
