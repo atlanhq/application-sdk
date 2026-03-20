@@ -10,7 +10,6 @@ USER root
 # Install Dapr CLI (latest version for apps to use)
 RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s ${DAPR_CLI_VERSION}
 
-
 # Install Dapr runtime from Chainguard APK
 RUN apk add --no-cache ${DAPR_RUNTIME_PACKAGE}
 
