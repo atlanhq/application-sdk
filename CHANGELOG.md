@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.9.0 (March 20, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.0...v2.9.0
+
+### Features
+
+- add reusable publish-app workflow using atlan CLI (#1122) (by @adityachoudhury-cloud in [8e37fc0](https://github.com/atlanhq/application-sdk/commit/8e37fc0))
+- rename base image to app-runtime-base (#1139) (by @AtMrun in [bf84604](https://github.com/atlanhq/application-sdk/commit/bf84604))
+- add merge-and-push slash command for safe git workflows (#1141) (by @AtMrun in [fb53289](https://github.com/atlanhq/application-sdk/commit/fb53289))
+
+### Bug Fixes
+
+- bump up atlan CLI version for publish-action (#1136) (by @adityachoudhury-cloud in [4bd8481](https://github.com/atlanhq/application-sdk/commit/4bd8481))
+- update trivy-action to 0.35.0 to address updated versions (#1142) (by @akshanshjaiswal-atlan in [f458c84](https://github.com/atlanhq/application-sdk/commit/f458c84))
+
+
 ## v2.8.0 (March 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.4...v2.8.0
