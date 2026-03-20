@@ -34,18 +34,23 @@ poetry add atlan-application-sdk
 
 ## 🐳 Docker
 
-### Pre-built Images (Harbor)
+### Pre-built Base Image (Harbor)
+
+The `app-runtime-base` image provides the runtime environment (Python, Dapr, OS packages) for Atlan apps. It does **not** include the SDK itself — install `atlan-application-sdk` via pip/uv in your app's Dockerfile.
 
 ```bash
 # Latest main image
-docker pull registry.atlan.com/public/application-sdk:main-latest
+docker pull registry.atlan.com/public/app-runtime-base:main-latest
 
 # Versioned image
-docker pull registry.atlan.com/public/application-sdk:main-2.3.1
+docker pull registry.atlan.com/public/app-runtime-base:main-2.3.1
 
 # Commit-specific image
-docker pull registry.atlan.com/public/application-sdk:sha-49c027f
+docker pull registry.atlan.com/public/app-runtime-base:sha-49c027f
 ```
+
+> [!NOTE]
+> The old image name `registry.atlan.com/public/application-sdk` is deprecated but still published for backward compatibility. New apps should use `app-runtime-base`.
 
 ## Contributing
 
