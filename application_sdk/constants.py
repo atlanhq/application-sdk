@@ -125,12 +125,28 @@ MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"
 #: Temporal build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
 #: route tasks to the correct version during versioned deployments.
+#: @deprecated Use ATLAN_APP_BUILD_ID. This will be removed in v3.1.0.
 TEMPORAL_BUILD_ID = os.getenv("TEMPORAL_BUILD_ID", "")
 
 #: Temporal Worker Deployment name (injected by TWD controller).
 #: Format: "<namespace>/<twd-name>". When set together with TEMPORAL_BUILD_ID,
 #: workers register as a Worker Deployment version instead of using legacy Build ID versioning.
+#: @deprecated Use ATLAN_APP_DEPLOYMENT_NAME. This will be removed in v3.1.0.
 TEMPORAL_DEPLOYMENT_NAME = os.getenv("TEMPORAL_DEPLOYMENT_NAME", "")
+
+#: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
+#: When set, workers identify themselves with this build ID so the Temporal server can
+#: route tasks to the correct version during versioned deployments.
+#: Falls back to TEMPORAL_BUILD_ID for migration compatibility.
+APP_BUILD_ID = os.getenv("ATLAN_APP_BUILD_ID") or os.getenv("TEMPORAL_BUILD_ID", "")
+
+#: Worker Deployment name (injected by TWD controller).
+#: Format: "<namespace>/<twd-name>". When set together with APP_BUILD_ID,
+#: workers register as a Worker Deployment version instead of using legacy Build ID versioning.
+#: Falls back to TEMPORAL_DEPLOYMENT_NAME for migration compatibility.
+APP_DEPLOYMENT_NAME = os.getenv("ATLAN_APP_DEPLOYMENT_NAME") or os.getenv(
+    "TEMPORAL_DEPLOYMENT_NAME", ""
+)
 
 
 #: Name of the deployment secrets in the secret store

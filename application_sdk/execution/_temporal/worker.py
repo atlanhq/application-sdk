@@ -13,11 +13,13 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 from temporalio.client import Client
+from temporalio.common import VersioningBehavior
 from temporalio.worker import Interceptor as TemporalInterceptor
-from temporalio.worker import Worker
+from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 from application_sdk.app.registry import AppRegistry
+from application_sdk.constants import APP_BUILD_ID, APP_DEPLOYMENT_NAME
 from application_sdk.execution._temporal.activities import get_all_task_activities
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
 from application_sdk.execution.sandbox import SandboxConfig
@@ -66,6 +68,8 @@ async def _emit_worker_start_event(
     max_concurrent_activities: int,
     host: str = "",
     namespace: str = "",
+    build_id: str = "",
+    use_worker_versioning: bool = False,
 ) -> None:
     """Emit a worker_start lifecycle event via the v3 infrastructure event binding."""
     from application_sdk.contracts.events import (
@@ -92,6 +96,8 @@ async def _emit_worker_start_event(
         max_concurrent_activities=max_concurrent_activities,
         workflow_count=workflow_count,
         activity_count=activity_count,
+        build_id=build_id or None,
+        use_worker_versioning=use_worker_versioning,
     )
     event = Event(
         event_type=EventTypes.APPLICATION_EVENT.value,
@@ -220,8 +226,35 @@ def create_worker(
             load_execution_settings().graceful_shutdown_timeout_seconds
         )
 
-    worker = Worker(
-        client,
+    # Worker Deployment versioning — set by TWD controller via Kubernetes Downward API.
+    # ATLAN_APP_BUILD_ID alone: legacy build-ID mode (build ID doubles as deployment name).
+    # ATLAN_APP_BUILD_ID + ATLAN_APP_DEPLOYMENT_NAME: full Worker Deployment versioning.
+    deployment_config: WorkerDeploymentConfig | None = None
+    if APP_BUILD_ID and APP_DEPLOYMENT_NAME:
+        deployment_config = WorkerDeploymentConfig(
+            version=WorkerDeploymentVersion(
+                deployment_name=APP_DEPLOYMENT_NAME,
+                build_id=APP_BUILD_ID,
+            ),
+            use_worker_versioning=True,
+            default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
+        )
+        logger.info(
+            f"Worker Deployment versioning enabled: "
+            f"deployment={APP_DEPLOYMENT_NAME}, build_id={APP_BUILD_ID}"
+        )
+    elif APP_BUILD_ID:
+        deployment_config = WorkerDeploymentConfig(
+            version=WorkerDeploymentVersion(
+                deployment_name=APP_BUILD_ID,
+                build_id=APP_BUILD_ID,
+            ),
+            use_worker_versioning=True,
+            default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
+        )
+        logger.info(f"Worker versioning enabled with build_id={APP_BUILD_ID}")
+
+    worker_kwargs: dict = dict(
         task_queue=task_queue,
         workflows=app_workflows,
         activities=task_activities,
@@ -233,6 +266,10 @@ def create_worker(
         max_heartbeat_throttle_interval=timedelta(seconds=10),
         graceful_shutdown_timeout=timedelta(seconds=graceful_shutdown_timeout_seconds),
     )
+    if deployment_config is not None:
+        worker_kwargs["deployment_config"] = deployment_config
+
+    worker = Worker(client, **worker_kwargs)
 
     host = getattr(
         getattr(getattr(client, "service_client", None), "config", None),
@@ -251,5 +288,7 @@ def create_worker(
             "max_concurrent_activities": max_concurrent_activities,
             "host": host,
             "namespace": namespace,
+            "build_id": APP_BUILD_ID,
+            "use_worker_versioning": deployment_config is not None,
         },
     )
