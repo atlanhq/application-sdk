@@ -27,7 +27,7 @@ data:
     apiVersion: dapr.io/v1alpha1
     kind: Component
     metadata:
-      name: app-storage
+      name: objectstore
     spec:
       type: {{ .Values.storage.type }}
       version: v1

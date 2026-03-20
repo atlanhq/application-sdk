@@ -10,10 +10,14 @@ image:
   tag: latest
   pullPolicy: Always
 
-# Image pull secret for GHCR
+# Image pull secret for GHCR.
+# Kubed (kubed.appscode.com/sync) auto-copies `github-docker-registry` from the
+# `default` namespace into every new namespace, so create=false is the right
+# default for clusters that have Kubed configured. Set create=true and supply
+# credentials only if you need to provision the secret yourself.
 imagePullSecret:
-  create: true
-  name: ghcr-secret
+  create: false
+  name: github-docker-registry
   registry: ghcr.io
   username: ""       # REQUIRED when create=true
   password: ""       # REQUIRED when create=true

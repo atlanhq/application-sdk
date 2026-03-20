@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Entrypoint script for Application SDK containers.
 #
 # Starts daprd (DAPR runtime) directly alongside the Python application,
@@ -26,24 +26,24 @@
 #                                     receiving SIGTERM (default: 3600). Must be >=
 #                                     APP_GRACEFUL_SHUTDOWN_TIMEOUT.
 
-set -euo pipefail
+set -eu
 
 # ---------------------------------------------------------------------------
-# Configuration with defaults
+# Configuration with defaults — exported so Python child process can read them
 # ---------------------------------------------------------------------------
-DAPR_APP_ID="${DAPR_APP_ID:-${ATLAN_SERVICE_NAME:-app}}"
-DAPR_APP_PORT="${DAPR_APP_PORT:-8080}"
-DAPR_HTTP_PORT="${DAPR_HTTP_PORT:-3500}"
-DAPR_GRPC_PORT="${DAPR_GRPC_PORT:-50001}"
-DAPR_COMPONENTS_PATH="${DAPR_COMPONENTS_PATH:-/app/components}"
-DAPR_LOG_LEVEL="${DAPR_LOG_LEVEL:-warn}"
-DAPR_METRICS_PORT="${DAPR_METRICS_PORT:-3100}"
-DAPR_MAX_BODY_SIZE="${DAPR_MAX_BODY_SIZE:-1024Mi}"
-DAPR_SCHEDULER_HOST_ADDRESS="${DAPR_SCHEDULER_HOST_ADDRESS:-}"
+export DAPR_APP_ID="${DAPR_APP_ID:-${ATLAN_SERVICE_NAME:-app}}"
+export DAPR_APP_PORT="${DAPR_APP_PORT:-8080}"
+export DAPR_HTTP_PORT="${DAPR_HTTP_PORT:-3500}"
+export DAPR_GRPC_PORT="${DAPR_GRPC_PORT:-50001}"
+export DAPR_COMPONENTS_PATH="${DAPR_COMPONENTS_PATH:-/app/components}"
+export DAPR_LOG_LEVEL="${DAPR_LOG_LEVEL:-warn}"
+export DAPR_METRICS_PORT="${DAPR_METRICS_PORT:-3100}"
+export DAPR_MAX_BODY_SIZE="${DAPR_MAX_BODY_SIZE:-1024Mi}"
+export DAPR_SCHEDULER_HOST_ADDRESS="${DAPR_SCHEDULER_HOST_ADDRESS:-}"
 # How long daprd waits for in-flight requests to complete after receiving SIGTERM.
 # Must be >= APP_GRACEFUL_SHUTDOWN_TIMEOUT and < terminationGracePeriodSeconds
 # so Kubernetes always gets the last word.
-DAPR_GRACEFUL_SHUTDOWN_SECONDS="${DAPR_GRACEFUL_SHUTDOWN_SECONDS:-3600}"
+export DAPR_GRACEFUL_SHUTDOWN_SECONDS="${DAPR_GRACEFUL_SHUTDOWN_SECONDS:-3600}"
 
 # PIDs managed by this script
 DAPRD_PID=""
@@ -90,7 +90,7 @@ daprd \
     --resources-path "${DAPR_COMPONENTS_PATH}" \
     --log-level "${DAPR_LOG_LEVEL}" \
     --metrics-port "${DAPR_METRICS_PORT}" \
-    --max-request-body-size "${DAPR_MAX_BODY_SIZE}" \
+    --max-body-size "${DAPR_MAX_BODY_SIZE}" \
     --placement-host-address "" \
     --scheduler-host-address "${DAPR_SCHEDULER_HOST_ADDRESS}" \
     --dapr-graceful-shutdown-seconds "${DAPR_GRACEFUL_SHUTDOWN_SECONDS}" &
@@ -118,7 +118,7 @@ echo "[entrypoint] daprd started (component init may still be in progress)"
 # Launch the Python application
 # ---------------------------------------------------------------------------
 echo "[entrypoint] Starting Python app"
-python -m application_sdk.main "$@" &
+uv run --no-sync python -m application_sdk.main "$@" &
 APP_PID=$!
 echo "[entrypoint] App started with PID ${APP_PID}"
 

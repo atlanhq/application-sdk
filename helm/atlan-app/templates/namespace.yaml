@@ -5,4 +5,5 @@ metadata:
   name: {{ include "atlan-app.namespace" . }}
   labels:
     {{- include "atlan-app.commonLabels" . | nindent 4 }}
+
 {{- end }}

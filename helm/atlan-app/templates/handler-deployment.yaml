@@ -27,6 +27,10 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "atlan-app.serviceAccountName" . }}
+      {{- if .Values.imagePullSecret.name }}
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret.name }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}
 
@@ -49,6 +53,9 @@ spec:
           secret:
             secretName: {{ .Values.temporal.tls.secretName }}
         {{- end }}
+        # uv requires a writable /tmp to create temp files at startup
+        - name: tmp
+          emptyDir: {}
 
       containers:
         # Handler Container - FastAPI application server
@@ -187,6 +194,8 @@ spec:
             - name: dapr-components
               mountPath: /app/components
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
             {{- if and .Values.temporal.tls.enabled .Values.temporal.tls.secretName }}
             - name: tls-certs
               mountPath: /etc/temporal/tls

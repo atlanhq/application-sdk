@@ -1,4 +1,3 @@
-{{- if .Values.eventstore.url }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -17,5 +16,4 @@ data:
       version: v1
       metadata:
         - name: url
-          value: {{ .Values.eventstore.url }}
-{{- end }}
+          value: {{ .Values.eventstore.url | default "" }}

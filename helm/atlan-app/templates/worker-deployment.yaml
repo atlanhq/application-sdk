@@ -27,6 +27,10 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "atlan-app.serviceAccountName" . }}
+      {{- if .Values.imagePullSecret.name }}
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret.name }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}
       volumes:
