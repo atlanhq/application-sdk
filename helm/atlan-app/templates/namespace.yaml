@@ -1,0 +1,8 @@
+{{- if not (lookup "v1" "Namespace" "" (include "atlan-app.namespace" .)) }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "atlan-app.namespace" . }}
+  labels:
+    {{- include "atlan-app.commonLabels" . | nindent 4 }}
+{{- end }}

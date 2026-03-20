@@ -1,0 +1,39 @@
+{{- if .Values.storage.type }}
+{{- $metadata := .Values.storage.metadata | default dict }}
+{{- /* For S3, fall back to atlan-defaults ConfigMap for bucket/region */ -}}
+{{- if eq .Values.storage.type "bindings.aws.s3" }}
+  {{- if not (index $metadata "bucket") }}
+    {{- $cm := (lookup "v1" "ConfigMap" "default" "atlan-defaults") }}
+    {{- if and $cm $cm.data (index $cm.data "bucket") }}
+      {{- $_ := set $metadata "bucket" (index $cm.data "bucket") }}
+    {{- end }}
+  {{- end }}
+  {{- if not (index $metadata "region") }}
+    {{- $cm := (lookup "v1" "ConfigMap" "default" "atlan-defaults") }}
+    {{- if and $cm $cm.data (index $cm.data "region") }}
+      {{- $_ := set $metadata "region" (index $cm.data "region") }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-storage-binding
+  namespace: {{ include "atlan-app.namespace" . }}
+  labels:
+    {{- include "atlan-app.commonLabels" . | nindent 4 }}
+data:
+  app-storage.yaml: |
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: app-storage
+    spec:
+      type: {{ .Values.storage.type }}
+      version: v1
+      metadata:
+      {{- range $key, $value := $metadata }}
+      - name: {{ $key }}
+        value: {{ $value | quote }}
+      {{- end }}
+{{- end }}

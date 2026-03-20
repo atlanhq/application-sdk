@@ -21,6 +21,7 @@ jobs:
     outputs:
       container: ${{ steps.filter.outputs.container }}
       code: ${{ steps.filter.outputs.code }}
+      helm: ${{ steps.filter.outputs.helm }}
     steps:
       - uses: actions/checkout@v6.0.2
       - uses: dorny/paths-filter@v3
@@ -36,6 +37,8 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - 'examples/**'
+            helm:
+              - 'helm/**'
 
   # Conventional Commits
   commits:
@@ -220,6 +223,35 @@ jobs:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
+
+  # Helm Chart Lint (label-gated)
+  helm-lint:
+    name: Helm Lint
+    needs: changes
+    if: |
+      needs.changes.outputs.helm == 'true' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'helm-test') ||
+      contains(github.event.pull_request.labels.*.name, 'helm-test')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Helm Lint
+        run: |
+          helm lint helm/atlan-app/ \
+            --values helm/atlan-app/values.yaml \
+            --set appName=test-app \
+            --set appModule=test:App
+
+      - name: Helm Template
+        run: |
+          helm template test helm/atlan-app/ \
+            --set appName=test-app \
+            --set appModule=test:App \
+            --debug
 
   # Documentation
   docs:

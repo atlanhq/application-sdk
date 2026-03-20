@@ -1,0 +1,209 @@
+# App identity (REQUIRED)
+appName: ""          # e.g., "relational-assets-pipeline"
+appModule: ""        # e.g., "examples.relational_assets_pipeline.pipeline:RelationalAssetsPipeline"
+namespaceOverride: "" # default: "app-{appName}"
+
+# Container image
+image:
+  registry: ghcr.io/atlanhq
+  repository: ""     # default: "application-sdk/{appName}"
+  tag: latest
+  pullPolicy: Always
+
+# Image pull secret for GHCR
+imagePullSecret:
+  create: true
+  name: ghcr-secret
+  registry: ghcr.io
+  username: ""       # REQUIRED when create=true
+  password: ""       # REQUIRED when create=true
+
+# Temporal
+temporal:
+  host: "temporal-cluster-internal-frontend-headless.temporal.svc.cluster.local:7236"
+  namespace: "default"
+  tls:
+    enabled: false
+    serverRootCaCertPath: ""
+    clientCertPath: ""
+    clientPrivateKeyPath: ""
+    domain: ""
+    secretName: ""  # K8s Secret containing TLS cert files
+  auth:
+    enabled: false
+    # Auth credentials come from externalCredentials or extraEnv (sensitive)
+
+# Logging
+logLevel: "INFO"
+
+# OpenTelemetry
+otel:
+  centralEndpoint: "opentelemetry-collector-otlp-collector.monitoring.svc.cluster.local:4317"
+  exporter:
+    enabled: true  # Enable to forward logs to node-level DaemonSet collector via otlp/node
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "25m"
+      limits:
+        memory: "256Mi"
+        cpu: "250m"
+    logVolumeSizeLimit: 500Mi
+
+# Object storage for DAPR binding (type + provider-specific metadata)
+# For S3, bucket/region auto-resolve from atlan-defaults ConfigMap if not set.
+storage:
+  type: bindings.aws.s3       # DAPR binding type
+  metadata: {}
+  # S3:    bucket, region, accessKey, secretKey, endpoint, forcePathStyle
+  # GCS:   bucket, project_id, client_email, private_key
+  # Azure: accountName, accountKey, containerName
+  # Local: rootPath
+
+# Connector credentials for DAPR secret store resolution (optional)
+# Map of credential name -> {type, data}. Each entry creates a K8s Secret
+# containing a JSON credential blob. The DAPR secretstore component reads
+# these at runtime. Sensitive values should be set at deploy time via --set.
+connectorCredentials: {}
+  # snowflake:
+  #   type: snowflake
+  #   data:
+  #     account: ""
+  #     user: ""
+  #     password: ""    # --set connectorCredentials.snowflake.data.password=<secret>
+  #
+  # atlan:
+  #   type: atlan_api_token
+  #   data:
+  #     token: ""       # --set connectorCredentials.atlan.data.token=atl-xxx
+  #     base_url: "INTERNAL"
+
+# External credentials: pull values from an existing K8s secret in another
+# namespace (looked up at helm install/upgrade time). Creates the same
+# credential secret format as connectorCredentials, but sourced from a
+# pre-existing secret rather than --set values.
+# If connectorCredentials defines the same name with non-empty data, the
+# external credential is skipped (allowing --set overrides for E2E tests).
+externalCredentials: {}
+  # atlan:
+  #   type: atlan_oauth_client
+  #   sourceNamespace: default
+  #   sourceSecret: argo-client-creds
+  #   fieldMapping:
+  #     client_id: login            # target field: source key
+  #     client_secret: password
+  #   extraData:
+  #     base_url: "INTERNAL"
+
+# DAPR (runs in-process via entrypoint.sh, component files mounted at /app/components)
+dapr:
+  logLevel: "warn"
+
+# DAPR eventstore binding — publishes lifecycle events to the Atlan event store.
+# Set url to the Atlan events endpoint in production.
+# Leave empty to disable (no eventstore component will be mounted).
+eventstore:
+  url: ""   # e.g. https://your-tenant.atlan.com/api/eventingress/
+
+# Handler
+handler:
+  replicas: 1
+  port: 8080
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  extraEnv: []
+  podAnnotations: {}
+  # Startup probe: gives the handler time to fully initialize (OTEL, imports,
+  # uvicorn) before the liveness probe kicks in. The handler only responds to
+  # /health after all observability is wired up, so this reflects true readiness.
+  # Maximum startup window = initialDelaySeconds + (periodSeconds * failureThreshold)
+  # = 10 + (5 * 18) = 100s — well above the ~30s worst-case cold-start.
+  startupProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 18
+
+# Worker
+worker:
+  replicas: 1
+  healthPort: 8081
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  storage:
+    size: "1Gi"
+    maxSize: "100Gi"
+  terminationGracePeriodSeconds: 3660
+  # How long daprd waits for in-flight requests to complete after SIGTERM.
+  # Must be < terminationGracePeriodSeconds so K8s always gets the last word.
+  # Set equal to APP_GRACEFUL_SHUTDOWN_TIMEOUT (default 3600s) so DAPR never
+  # kills Python before Temporal's activity drain completes.
+  gracefulShutdownSeconds: 3600
+  extraEnv: []
+  podAnnotations: {}
+  # Startup probe: gives the worker time to fully initialize (OTEL, Temporal
+  # connection, DAPR component init) before the liveness probe kicks in.
+  # The worker only responds to /health after all observability is wired up,
+  # so this reflects true readiness.
+  # Maximum startup window = initialDelaySeconds + (periodSeconds * failureThreshold)
+  # = 10 + (5 * 18) = 100s — well above the ~30s worst-case cold-start.
+  startupProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 18
+
+# Distributed capacity management (Redis-backed semaphore)
+capacity:
+  redis:
+    url: "redis://redis.redis.svc.cluster.local:6379"
+    maxPermits: 20
+    ttlSeconds: 120
+    poolName: "atlan-bulk-api"
+
+# KEDA (conditional on CRDs)
+keda:
+  enabled: true
+  pollingInterval: 15
+  cooldownPeriod: 600
+  minReplicaCount: 0
+  maxReplicaCount: 10
+  targetTasksPerWorker: "5"
+  scaleDown:
+    stabilizationWindowSeconds: 300
+    policy:
+      type: Percent
+      value: 50
+      periodSeconds: 60
+  scaleUp:
+    stabilizationWindowSeconds: 0
+    policy:
+      type: Percent
+      value: 100
+      periodSeconds: 15
+
+# Pod security
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL

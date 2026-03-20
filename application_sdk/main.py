@@ -110,6 +110,7 @@ class AppConfig:
     # Common
     log_level: str = "INFO"
     service_name: str = ""
+    health_port: int = 8081
 
     # TLS
     tls_enabled: bool = False
@@ -179,6 +180,8 @@ class AppConfig:
             or _env_int("ATLAN_HANDLER_PORT", 8080),
             log_level=getattr(args, "log_level", None)
             or _env("ATLAN_LOG_LEVEL", "INFO"),
+            health_port=getattr(args, "health_port", None)
+            or _env_int("ATLAN_HEALTH_PORT", 8081),
             service_name=service_name,
             # TLS
             tls_enabled=_env_bool("ATLAN_TEMPORAL_TLS_ENABLED"),
@@ -384,9 +387,15 @@ async def run_worker_mode(config: AppConfig) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _signal_handler)
 
+    from application_sdk.server.health import WorkerHealthServer
+
+    health_server = WorkerHealthServer(port=config.health_port)
+    health_server.set_temporal_client(client)
+
     logger.info("Worker started", app_name=app_name, task_queue=config.task_queue)
-    async with worker:
-        await shutdown_event.wait()
+    async with health_server:
+        async with worker:
+            await shutdown_event.wait()
 
     if auth_manager is not None:
         await auth_manager.shutdown()
@@ -624,17 +633,23 @@ async def run_combined_mode(config: AppConfig) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _signal_handler)
 
+    from application_sdk.server.health import WorkerHealthServer
+
+    health_server = WorkerHealthServer(port=config.health_port)
+    health_server.set_temporal_client(client)
+
     logger.info(
         "Combined mode started",
         app_name=app_name,
         task_queue=config.task_queue,
         handler_port=config.handler_port,
     )
-    async with worker:
-        await asyncio.gather(
-            uvicorn_server.serve(),
-            shutdown_event.wait(),
-        )
+    async with health_server:
+        async with worker:
+            await asyncio.gather(
+                uvicorn_server.serve(),
+                shutdown_event.wait(),
+            )
 
     if auth_manager is not None:
         await auth_manager.shutdown()
@@ -751,6 +766,7 @@ Environment Variables:
   ATLAN_TASK_QUEUE         Task queue name (default: app-framework)
   ATLAN_HANDLER_HOST       Handler bind host (default: 0.0.0.0)
   ATLAN_HANDLER_PORT       Handler bind port (default: 8080)
+  ATLAN_HEALTH_PORT        Worker health check port (default: 8081)
   ATLAN_LOG_LEVEL          Log level (default: INFO)
 
 Examples:
@@ -787,6 +803,9 @@ Examples:
     )
     handler_group.add_argument(
         "--handler-port", "--port", type=int, help="Handler bind port (default: 8080)"
+    )
+    handler_group.add_argument(
+        "--health-port", type=int, help="Worker health check port (default: 8081)"
     )
 
     common_group = parser.add_argument_group("Common options")

@@ -1,0 +1,15 @@
+App "{{ include "atlan-app.appName" . }}" deployed to namespace "{{ include "atlan-app.namespace" . }}".
+
+Module: {{ include "atlan-app.appModule" . }}
+Image:  {{ include "atlan-app.image" . }}
+
+Check status:
+  kubectl get pods -n {{ include "atlan-app.namespace" . }} -l app={{ include "atlan-app.appName" . }}
+
+View logs:
+  kubectl logs -n {{ include "atlan-app.namespace" . }} -l app={{ include "atlan-app.appName" . }},component=handler -c handler
+  kubectl logs -n {{ include "atlan-app.namespace" . }} -l app={{ include "atlan-app.appName" . }},component=worker
+
+Test health:
+  kubectl port-forward -n {{ include "atlan-app.namespace" . }} svc/{{ include "atlan-app.handlerName" . }} 8080:80
+  curl http://localhost:8080/health

@@ -1,0 +1,21 @@
+{{- if .Values.eventstore.url }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "atlan-app.appName" . }}-dapr-eventstore
+  namespace: {{ include "atlan-app.namespace" . }}
+  labels:
+    {{- include "atlan-app.commonLabels" . | nindent 4 }}
+data:
+  eventstore.yaml: |
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: eventstore
+    spec:
+      type: bindings.http
+      version: v1
+      metadata:
+        - name: url
+          value: {{ .Values.eventstore.url }}
+{{- end }}
