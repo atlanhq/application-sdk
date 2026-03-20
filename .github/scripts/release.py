@@ -89,18 +89,7 @@ def calculate_version_bump(
     )
     version = semver.VersionInfo.parse(current_version)
 
-    if current_branch == "develop":
-        if version.prerelease:
-            new_version = version.bump_prerelease()
-            logging.info(f"Bumping pre-release from {version} to {new_version}")
-            return str(new_version)
-        else:
-            new_version = version.bump_patch().bump_prerelease()
-            logging.info(
-                f"Bumping patch and pre-release from {version} to {new_version}"
-            )
-            return str(new_version)
-    elif current_branch == "main":
+    if current_branch == "main":
         is_breaking, is_feature, is_fix = parse_conventional_commits(commits=commits)
         logging.info(f"Breaking: {is_breaking}, Feature: {is_feature}, Fix: {is_fix}")
 
@@ -113,11 +102,9 @@ def calculate_version_bump(
             new_version = version.bump_minor()
             logging.info(f"Feature detected - bumping minor version to {new_version}")
         elif is_fix:
-            # Patch was already bumped in the develop branch
             new_version = version.next_version(part="patch")
             logging.info(f"Fix detected - bumping version to {new_version}")
         else:
-            # No changes were detected in the commits, remove the prerelease, as patch was already bumped in the develop branch
             new_version = version.next_version(part="patch")
             logging.info(
                 f"No changes detected - bumping patch version to {new_version}"

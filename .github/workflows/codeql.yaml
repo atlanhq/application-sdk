@@ -1,14 +1,14 @@
 # This workflow is used to run CodeQL analysis on the repository.
-# It is triggered on push or pull request to the main or develop branches.
+# It is triggered on push or pull request to the main branch.
 # It is also triggered daily at 12:45 UTC.
 # Note: Github Advanced Security CodeQL Analysis requires this to be in a separate workflow file.
 name: "CodeQL Advanced"
 
 on:
   push:
-    branches: [ "main", "develop" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "develop" ]
+    branches: [ "main" ]
   schedule:
     - cron: '45 12 * * 0'
 
