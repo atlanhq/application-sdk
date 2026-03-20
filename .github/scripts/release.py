@@ -112,8 +112,10 @@ def calculate_version_bump(
 
         return str(new_version)
     else:
-        logging.warning(f"Unexpected branch '{current_branch}'. Using current version.")
-        return current_version
+        logging.error(
+            f"Unexpected branch '{current_branch}'. Only 'main' is supported."
+        )
+        sys.exit(1)
 
 
 def update_pyproject_version(new_version: str) -> None:
