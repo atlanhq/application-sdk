@@ -8,7 +8,7 @@ on:
   issues:
     types: [opened, assigned]
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
     branches:
       - main
   workflow_dispatch:
@@ -110,23 +110,61 @@ jobs:
           prompt: |
             Review PR #${{ steps.pr.outputs.number }} for repo ${{ github.repository }}.
             IMPORTANT: Full git history is already checked out locally. Do NOT run `git fetch`.
-            You have limited time — be efficient. Do NOT load skills or run /review.
-
-            1. Get the diff: `git diff origin/${{ steps.pr.outputs.base_ref }}...HEAD`
-            2. Read changed files as needed for context.
-            3. Check for a previous review comment (containing <!-- CLAUDE_REVIEW -->) and track issue status across re-reviews.
-            4. Review for these categories:
-               - Performance & Scale — N+1 calls, unbounded iteration, memory accumulation, missing timeouts
-               - Edge Case Failures — null cursors, missing field fallbacks, late config validation
-               - Correctness — logic errors, wrong API usage, missing error handling
-               - SDK Standards — exception re-raise, AtlanLoggerAdapter usage, type hints, Temporal patterns
-            5. Post your review as a single PR comment (or update existing <!-- CLAUDE_REVIEW --> comment):
-               `gh pr comment ${{ steps.pr.outputs.number }} --body "..."`
-               Use markdown with severity labels: CRITICAL, WARNING, INFO.
-               Include a <!-- REVIEW_DATA {"issues": [...], "reviewed_commit": "<sha>"} --> block for tracking.
-            6. After posting the comment, make a decision:
-               - Small, safe PR with no critical issues -> `gh pr review ${{ steps.pr.outputs.number }} --approve -b "..."`
-               - Otherwise -> comment only (defer to human)
-               Never use --request-changes.
+            You MUST invoke the /review slash command to perform the review. Do not attempt a freeform review.
           claude_args: |
-            --model claude-sonnet-4-6 --timeout 600 --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr review:*),Bash(gh api:*)"
+            --model claude-sonnet-4-6 --timeout 600 --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr review:*),Bash(gh api:*),mcp__github_inline_comment__create_inline_comment"
+
+  # Devil's advocate review — triggered by 'challenge' label
+  challenge:
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'challenge'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    timeout-minutes: 25
+    concurrency:
+      group: claude-challenge-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Connect to VPN
+        uses: ./.github/actions/globalprotect-connect
+        with:
+          portal-url: vpn2.atlan.app
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          show_full_output: true
+          prompt: |
+            Run a devil's advocate review on PR #${{ github.event.pull_request.number }} for repo ${{ github.repository }}.
+            IMPORTANT: Full git history is already checked out locally. Do NOT run `git fetch`.
+
+            You are a senior engineer who believes this PR should NOT be merged. Make the strongest possible case against merging.
+
+            1. Get the diff: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD`
+            2. Read every changed file in full for surrounding context.
+            3. Systematically try to break the code across these dimensions:
+               - Concurrency & race conditions (shared state, non-atomic checkpoints, Dapr state store races)
+               - Failure modes under pressure (10x/100x volume, retry storms, memory growth, Temporal timeouts)
+               - Silent data loss (dropped records, early pagination termination, ObjectStore failures)
+               - Production blind spots (swallowed exceptions, missing logging, workflow determinism violations)
+               - Security (credential leaks, auth bypass, sensitive data in logs)
+               - Contract assumptions (unvalidated API shapes, hardcoded values, Dapr config assumptions)
+            4. For each finding, describe the EXACT failure scenario — not just "this could be bad."
+            5. Post as a single PR comment:
+               `gh pr comment ${{ github.event.pull_request.number }} --body "..."`
+               Use this format: [BLOCK] for production incidents, [RISK] for eventual failures, [SMELL] for maintainability.
+               End with a verdict: DO NOT MERGE / MERGE WITH CAUTION / CLEAN.
+            6. Do NOT approve or request changes — always comment only.
+          claude_args: |
+            --model claude-sonnet-4-6 --timeout 600 --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git blame:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh api:*)"
