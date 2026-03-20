@@ -5,5 +5,11 @@ metadata:
   name: {{ include "atlan-app.namespace" . }}
   labels:
     {{- include "atlan-app.commonLabels" . | nindent 4 }}
+    {{- if .Values.namespace.disableImageMapper }}
+    image-mapper.cs.sap.com/disabled: "true"
+    {{- end }}
+    {{- with .Values.namespace.extraLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 
 {{- end }}

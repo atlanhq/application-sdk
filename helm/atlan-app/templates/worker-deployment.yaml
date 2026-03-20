@@ -55,10 +55,8 @@ spec:
               - configMap:
                   name: app-storage-binding
               {{- end }}
-              {{- if .Values.eventstore.url }}
               - configMap:
                   name: {{ include "atlan-app.appName" . }}-dapr-eventstore
-              {{- end }}
         {{- if and .Values.temporal.tls.enabled .Values.temporal.tls.secretName }}
         - name: tls-certs
           secret:

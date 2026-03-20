@@ -12,8 +12,17 @@ data:
     metadata:
       name: eventstore
     spec:
+    {{- if .Values.eventstore.url }}
       type: bindings.http
       version: v1
       metadata:
         - name: url
-          value: {{ .Values.eventstore.url | default "" }}
+          value: {{ .Values.eventstore.url }}
+    {{- else }}
+      type: bindings.localstorage
+      version: v1
+      ignoreErrors: true
+      metadata:
+        - name: rootPath
+          value: /tmp/local/dapr/eventstore
+    {{- end }}

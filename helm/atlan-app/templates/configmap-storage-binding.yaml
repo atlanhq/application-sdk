@@ -23,7 +23,7 @@ metadata:
   labels:
     {{- include "atlan-app.commonLabels" . | nindent 4 }}
 data:
-  app-storage.yaml: |
+  objectstore.yaml: |
     apiVersion: dapr.io/v1alpha1
     kind: Component
     metadata:

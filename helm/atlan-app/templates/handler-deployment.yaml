@@ -44,17 +44,15 @@ spec:
               - configMap:
                   name: app-storage-binding
               {{- end }}
-              {{- if .Values.eventstore.url }}
               - configMap:
                   name: {{ include "atlan-app.appName" . }}-dapr-eventstore
-              {{- end }}
         {{- if and .Values.temporal.tls.enabled .Values.temporal.tls.secretName }}
         - name: tls-certs
           secret:
             secretName: {{ .Values.temporal.tls.secretName }}
         {{- end }}
         # uv requires a writable /tmp to create temp files at startup
-        - name: tmp
+        - name: handler-tmp
           emptyDir: {}
 
       containers:
@@ -194,7 +192,7 @@ spec:
             - name: dapr-components
               mountPath: /app/components
               readOnly: true
-            - name: tmp
+            - name: handler-tmp
               mountPath: /tmp
             {{- if and .Values.temporal.tls.enabled .Values.temporal.tls.secretName }}
             - name: tls-certs

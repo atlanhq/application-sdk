@@ -3,6 +3,14 @@ appName: ""          # e.g., "relational-assets-pipeline"
 appModule: ""        # e.g., "examples.relational_assets_pipeline.pipeline:RelationalAssetsPipeline"
 namespaceOverride: "" # default: "app-{appName}"
 
+# Namespace labels and webhook control
+namespace:
+  # Set to true on clusters with the SAP image-mapper webhook to disable ECR
+  # pull-through rewriting for the app namespace (prevents 403s for uncached
+  # GHCR images).
+  disableImageMapper: false
+  extraLabels: {}   # additional labels to add to the namespace
+
 # Container image
 image:
   registry: ghcr.io/atlanhq
@@ -97,7 +105,9 @@ dapr:
 
 # DAPR eventstore binding — publishes lifecycle events to the Atlan event store.
 # Set url to the Atlan events endpoint in production.
-# Leave empty to disable (no eventstore component will be mounted).
+# When url is empty (default), a bindings.localstorage no-op sink is used so
+# the component is always mounted and SDK eventstore calls never fail with
+# "binding not found". Set url to enable real event delivery.
 eventstore:
   url: ""   # e.g. https://your-tenant.atlan.com/api/eventingress/
 
