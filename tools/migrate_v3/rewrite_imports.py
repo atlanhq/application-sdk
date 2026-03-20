@@ -43,6 +43,7 @@ After running, check remaining structural work::
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -336,6 +337,98 @@ def rewrite_path(target: Path, *, dry_run: bool = False) -> dict[Path, list[str]
 
 
 # ---------------------------------------------------------------------------
+# Internal import rewriter (post-directory-consolidation)
+# ---------------------------------------------------------------------------
+
+
+class InternalImportRewriter(cst.CSTTransformer):
+    """
+    libcst transformer that rewrites connector-internal module paths.
+
+    Used after directory consolidation (Phase 2c) to fix broken imports in
+    test files that still reference old paths like ``app.activities.foo``.
+    Only the module path is rewritten; symbol names are preserved unchanged.
+    """
+
+    def __init__(self, mapping: dict[str, str]) -> None:
+        super().__init__()
+        self.mapping = mapping
+        self.changes: list[str] = []
+
+    def leave_ImportFrom(
+        self,
+        original_node: cst.ImportFrom,
+        updated_node: cst.ImportFrom,
+    ) -> cst.ImportFrom:
+        old_module = _module_to_str(updated_node.module)
+        if old_module not in self.mapping:
+            return updated_node
+        new_module_str = self.mapping[old_module]
+        self.changes.append(f"  {old_module} → {new_module_str}")
+        return updated_node.with_changes(module=_str_to_module(new_module_str))
+
+
+def rewrite_internal_file(
+    path: Path,
+    mapping: dict[str, str],
+    *,
+    dry_run: bool = False,
+) -> list[str]:
+    """
+    Rewrite internal module paths in *path* according to *mapping*.
+
+    Returns a list of human-readable change descriptions. The file is
+    modified in-place unless *dry_run* is True.
+    """
+    source = path.read_text(encoding="utf-8")
+    try:
+        tree = cst.parse_module(source)
+    except cst.ParserSyntaxError as exc:
+        print(f"  SKIP (parse error): {exc}", file=sys.stderr)
+        return []
+
+    rewriter = InternalImportRewriter(mapping)
+    new_tree = tree.visit(rewriter)
+
+    if not rewriter.changes:
+        return []
+
+    new_source = new_tree.code
+    if dry_run:
+        print(new_source)
+    else:
+        path.write_text(new_source, encoding="utf-8")
+
+    return rewriter.changes
+
+
+def rewrite_internal_imports(
+    target_dir: Path,
+    mapping: dict[str, str],
+    *,
+    dry_run: bool = False,
+) -> dict[Path, list[str]]:
+    """
+    Rewrite connector-internal module paths in all Python files under *target_dir*.
+
+    Used after directory consolidation (Phase 2c) to fix imports that still
+    reference old paths (e.g. ``app.activities.foo`` → ``app.foo``).
+
+    Only rewrites the module path in ``from X import Y`` statements; symbol
+    names are NOT changed.
+
+    Returns a mapping of path → changes for files that were modified.
+    """
+    paths = sorted(target_dir.rglob("*.py")) if target_dir.is_dir() else [target_dir]
+    results: dict[Path, list[str]] = {}
+    for p in paths:
+        changes = rewrite_internal_file(p, mapping, dry_run=dry_run)
+        if changes:
+            results[p] = changes
+    return results
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -359,11 +452,49 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the rewritten source to stdout instead of writing files.",
     )
+    parser.add_argument(
+        "--internal-map",
+        metavar="JSON",
+        help=(
+            "JSON object mapping old internal module paths to new paths. "
+            "Rewrites connector-internal imports after directory consolidation "
+            "(Phase 2c). Only the module path is rewritten; symbol names are "
+            'preserved. Example: \'{"app.activities.foo": "app.foo"}\''
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+
+    if args.internal_map is not None:
+        try:
+            mapping: dict[str, str] = json.loads(args.internal_map)
+        except ValueError as exc:
+            print(f"ERROR: --internal-map is not valid JSON: {exc}", file=sys.stderr)
+            return 2
+
+        total_files = 0
+        total_changes = 0
+        for raw in args.targets:
+            target = Path(raw)
+            if not target.exists():
+                print(f"ERROR: path does not exist: {target}", file=sys.stderr)
+                return 1
+            results = rewrite_internal_imports(target, mapping, dry_run=args.dry_run)
+            for path, changes in results.items():
+                total_files += 1
+                total_changes += len(changes)
+                if not args.dry_run:
+                    print(f"REWROTE  {path}")
+                    for line in changes:
+                        print(line)
+
+        if not args.dry_run:
+            print(f"\nDone. Rewrote {total_files} file(s), {total_changes} import(s).")
+        return 0
+
     total_files = 0
     total_changes = 0
 

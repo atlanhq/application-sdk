@@ -8,10 +8,11 @@ TODO comment).  The original source is never written to disk.
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 import libcst as cst
 
-from tools.migrate_v3.rewrite_imports import V3ImportRewriter
+from tools.migrate_v3.rewrite_imports import V3ImportRewriter, rewrite_internal_imports
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -235,3 +236,83 @@ class TestFullFileRewrite:
         assert "from typing import Dict, Any" in out
         # Changes logged
         assert len(changes) >= 4
+
+
+# ---------------------------------------------------------------------------
+# Tests for rewrite_internal_imports()
+# ---------------------------------------------------------------------------
+
+
+class TestInternalImportRewriter:
+    """Tests for rewrite_internal_imports() — fixes imports after dir consolidation."""
+
+    def test_rewrites_module_path(self, tmp_path: Path) -> None:
+        src = "from app.activities.metadata_extraction import MetadataExtractor\n"
+        f = tmp_path / "test_foo.py"
+        f.write_text(src, encoding="utf-8")
+        mapping = {"app.activities.metadata_extraction": "app.metadata_extraction"}
+        rewrite_internal_imports(tmp_path, mapping)
+        result = f.read_text(encoding="utf-8")
+        assert "from app.metadata_extraction import MetadataExtractor" in result
+
+    def test_symbol_name_preserved(self, tmp_path: Path) -> None:
+        src = "from app.activities.foo import FooActivities\n"
+        f = tmp_path / "test.py"
+        f.write_text(src, encoding="utf-8")
+        mapping = {"app.activities.foo": "app.foo"}
+        rewrite_internal_imports(tmp_path, mapping)
+        result = f.read_text(encoding="utf-8")
+        assert "from app.foo import FooActivities" in result
+
+    def test_non_matching_import_unchanged(self, tmp_path: Path) -> None:
+        src = "from app.utils import helper\n"
+        f = tmp_path / "test.py"
+        f.write_text(src, encoding="utf-8")
+        mapping = {"app.activities.foo": "app.foo"}
+        results = rewrite_internal_imports(tmp_path, mapping)
+        assert results == {}
+        assert f.read_text(encoding="utf-8") == src
+
+    def test_multiple_files_in_directory(self, tmp_path: Path) -> None:
+        mapping = {"app.activities.foo": "app.foo"}
+        for i in range(3):
+            f = tmp_path / f"test_{i}.py"
+            f.write_text(f"from app.activities.foo import Foo{i}\n", encoding="utf-8")
+        results = rewrite_internal_imports(tmp_path, mapping)
+        assert len(results) == 3
+
+    def test_empty_mapping_changes_nothing(self, tmp_path: Path) -> None:
+        src = "from app.activities.foo import Foo\n"
+        f = tmp_path / "test.py"
+        f.write_text(src, encoding="utf-8")
+        results = rewrite_internal_imports(tmp_path, {})
+        assert results == {}
+        assert f.read_text(encoding="utf-8") == src
+
+    def test_returns_change_descriptions(self, tmp_path: Path) -> None:
+        src = "from app.activities.foo import Foo\n"
+        f = tmp_path / "test.py"
+        f.write_text(src, encoding="utf-8")
+        mapping = {"app.activities.foo": "app.foo"}
+        results = rewrite_internal_imports(tmp_path, mapping)
+        assert f in results
+        assert any("app.activities.foo" in c for c in results[f])
+        assert any("app.foo" in c for c in results[f])
+
+    def test_multiple_symbols_same_module(self, tmp_path: Path) -> None:
+        src = "from app.activities.foo import Bar, Baz\n"
+        f = tmp_path / "test.py"
+        f.write_text(src, encoding="utf-8")
+        mapping = {"app.activities.foo": "app.foo"}
+        rewrite_internal_imports(tmp_path, mapping)
+        result = f.read_text(encoding="utf-8")
+        assert "from app.foo import Bar, Baz" in result
+
+    def test_single_file_target(self, tmp_path: Path) -> None:
+        src = "from app.activities.bar import BarClass\n"
+        f = tmp_path / "test.py"
+        f.write_text(src, encoding="utf-8")
+        mapping = {"app.activities.bar": "app.bar"}
+        results = rewrite_internal_imports(f, mapping)
+        assert f in results
+        assert "from app.bar import BarClass" in f.read_text(encoding="utf-8")

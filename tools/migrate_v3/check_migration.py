@@ -90,11 +90,13 @@ _RE_EXECUTE_ACTIVITY = re.compile(r"\bworkflow\.execute_activity_method\s*\(")
 _RE_SYNC_GET_CLIENT = re.compile(r"(?<!\bget_async_)(?<!\basync\s)\bget_client\s*\(")
 
 # App subclass existence — class inheriting from a v3 base.
+# re.DOTALL ensures \s* matches newlines in multiline class signatures.
 _RE_APP_SUBCLASS = re.compile(
     r"class\s+\w+\s*\(\s*(?:"
     r"App|SqlMetadataExtractor|IncrementalSqlMetadataExtractor|"
     r"SqlQueryExtractor|BaseMetadataExtractor"
-    r")\s*[,)]"
+    r")\s*[,)]",
+    re.DOTALL,
 )
 
 # Dict[str, Any] or dict[str, Any] near a @task decorator (warn only).
@@ -115,7 +117,14 @@ _RE_HANDLER_KWARGS = re.compile(
 _RE_UNBOUNDED_ESCAPE = re.compile(r"allow_unbounded_fields\s*=\s*True")
 
 # Entry point: run_dev_combined or application-sdk CLI reference.
-_RE_ENTRY_POINT = re.compile(r"run_dev_combined\s*\(|application[-_]sdk\s+--mode\b")
+# Handles both shell-style (`application-sdk --mode`) and Dockerfile JSON-array
+# style (`"application-sdk", "--mode"`) by allowing arbitrary non-newline chars
+# between the SDK name and the --mode flag.
+_RE_ENTRY_POINT = re.compile(r"run_dev_combined\s*\(|application[-_]sdk[^\n]*--mode\b")
+
+# Handler method definitions that carry a changed response format in v3.
+_RE_FETCH_METADATA_DEF = re.compile(r"async\s+def\s+fetch_metadata\s*\(")
+_RE_PREFLIGHT_CHECK_DEF = re.compile(r"async\s+def\s+preflight_check\s*\(")
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +270,55 @@ def check_file(path: Path) -> list[CheckResult]:
             ),
         )
 
+    # ── WARN: response format changed in v3 ──────────────────────────────
+    # Only fires for Handler subclasses — reminds developer to update
+    # frontend consumers and e2e tests that expect the v2 response shape.
+    if _RE_HANDLER_BASE.search(full_text):
+        if _RE_FETCH_METADATA_DEF.search(full_text):
+            results.append(
+                CheckResult(
+                    level=WARN,
+                    rule="response-format-change",
+                    message=(
+                        "fetch_metadata now returns MetadataOutput (flat list) instead of "
+                        "hierarchical [{value, title, children}]. Update frontend consumers."
+                    ),
+                    file=path,
+                )
+            )
+        if _RE_PREFLIGHT_CHECK_DEF.search(full_text):
+            results.append(
+                CheckResult(
+                    level=WARN,
+                    rule="response-format-change",
+                    message=(
+                        "preflight_check now returns PreflightOutput instead of "
+                        "{authenticationCheck, hostCheck, permissionsCheck}. "
+                        "Update e2e tests and frontend consumers."
+                    ),
+                    file=path,
+                )
+            )
+
     return results
+
+
+def _is_test_path(path: Path, root: Path | None = None) -> bool:
+    """
+    Return True if *path* is under a test directory.
+
+    When *root* is provided, only the path parts relative to *root* are
+    examined — this avoids false positives from pytest's tmp_path directory
+    names which start with the test function name.
+    """
+    if root is not None:
+        try:
+            parts = path.relative_to(root).parts
+        except ValueError:
+            parts = path.parts
+    else:
+        parts = path.parts
+    return any(part in ("test", "tests") or part.startswith("test_") for part in parts)
 
 
 def check_directory(
@@ -278,18 +335,38 @@ def check_directory(
     py_files = sorted(root.rglob("*.py")) if root.is_dir() else [root]
     all_results: list[CheckResult] = []
     combined_text = ""
+    # prod_text excludes test files — used for advisory checks that should only
+    # reflect production code (app-subclass-missing, entry-point).
+    prod_text = ""
 
+    scan_root = root if root.is_dir() else root.parent
     for path in py_files:
         all_results += check_file(path)
         try:
-            combined_text += path.read_text(encoding="utf-8") + "\n"
+            content = path.read_text(encoding="utf-8") + "\n"
+            combined_text += content
+            if not _is_test_path(path, root=scan_root):
+                prod_text += content
         except OSError:
             pass
+
+    # Extra text for entry-point detection: Dockerfile and pyproject.toml may
+    # contain `application-sdk --mode combined` in CMD or [project.scripts].
+    extra_entry_point_text = ""
+    if root.is_dir():
+        for fname in ("Dockerfile", "pyproject.toml"):
+            f = root / fname
+            if f.exists():
+                try:
+                    extra_entry_point_text += f.read_text(encoding="utf-8") + "\n"
+                except OSError:
+                    pass
 
     advisories: list[str] = []
 
     # ── WARN: no App subclass found ───────────────────────────────────────
-    if app_subclass_required and not _RE_APP_SUBCLASS.search(combined_text):
+    # Uses prod_text to avoid false negatives from test mock classes.
+    if app_subclass_required and not _RE_APP_SUBCLASS.search(prod_text):
         advisories.append(
             "WARN [app-subclass-missing]: No App subclass found. "
             "Create a class that inherits from App / SqlMetadataExtractor / "
@@ -306,7 +383,11 @@ def check_directory(
         )
 
     # ── WARN: entry point not updated ────────────────────────────────────
-    if entry_point_required and not _RE_ENTRY_POINT.search(combined_text):
+    # Uses prod_text + extra_entry_point_text to detect Dockerfile / pyproject.toml
+    # entry points that the Python scanner would otherwise miss.
+    if entry_point_required and not _RE_ENTRY_POINT.search(
+        prod_text + extra_entry_point_text
+    ):
         advisories.append(
             "WARN [entry-point]: No run_dev_combined() call or CLI reference found. "
             "Update the entry point to use 'application-sdk --mode combined' or "

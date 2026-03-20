@@ -30,6 +30,16 @@ Performs a complete v2 → v3 migration of an application-sdk connector.
    atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "refactor-v3" }
    ```
    If it still points to a v2 PyPI release (e.g. `atlan-application-sdk>=2.x`), add the `[tool.uv.sources]` block above and run `uv sync` in the connector repo before continuing. If it already has this source override or references a v3+ PyPI release, proceed.
+
+4b. **Check temporalio version.** The v3 SDK requires `temporalio` with `VersioningBehavior`. Run in the connector repo root (where `pyproject.toml` is):
+   ```bash
+   cd <connector-repo-root> && uv run python -c "from temporalio.common import VersioningBehavior"
+   ```
+   If this fails with `ImportError`, upgrade temporalio before continuing:
+   ```bash
+   cd <connector-repo-root> && uv add temporalio --upgrade && uv sync
+   ```
+
 5. Read `tools/migrate_v3/MIGRATION_PROMPT.md` in full. This is the authoritative reference for all structural changes you will make. Do not proceed to Phase 3 without having read it.
 6. Run an initial checker pass to establish the baseline — **do not fix anything yet**:
 
@@ -111,7 +121,15 @@ After completing the structural migration in 2b, consolidate the v2 directory la
 3. If `app/workflows/<name>.py` exists and only re-exports from activities (e.g. `from app.activities.<name> import MyConnector`), delete it.
 4. Delete the now-empty `app/activities/` and `app/workflows/` directories.
 5. Update all **production-code** imports that referenced the old paths.
-6. For **test-file** imports pointing to the old paths, add a `# TODO(v3-migration): update import to app.<app_name>` comment on the import line but leave the import unchanged (test files are out of bounds).
+6. For **test-file** imports pointing to the old paths:
+   a. Construct a JSON mapping of old module paths → new module paths from steps 1–4. For example, if `app/activities/metadata_extraction.py` moved to `app/metadata_extraction.py`, the mapping is `{"app.activities.metadata_extraction": "app.metadata_extraction"}`.
+   b. Run the internal import rewriter on the test directory:
+      ```bash
+      uv run python -m tools.migrate_v3.rewrite_imports \
+        --internal-map '{"app.activities.<name>": "app.<name>"}' \
+        <target-path>/tests/
+      ```
+   c. For any **symbol names** that also changed (e.g. `AnaplanMetadataExtractionActivities` → `AnaplanApp`), manually update the import line's symbol name in each affected test file AND add a comment at the top of that file: `# TODO(v3-migration): update references from OldClass to NewClass in test bodies`. Do NOT modify test bodies, assertions, fixtures, or mocks.
 7. Re-run the checker to confirm the `no-v2-directory-structure` advisory is gone.
 
 If the connector does not have an `activities/` or `workflows/` directory, skip this step.
@@ -158,11 +176,16 @@ Do **not** modify any test to make it pass. If tests fail:
 After the test suite run, check whether the connector has e2e tests using the v2 `BaseTest` / `TestInterface` pattern:
 
 1. Search for files under `tests/e2e/` (or `tests/integration/`) that import `BaseTest` or `TestInterface`.
-2. If found, generate a **new** equivalent e2e test file using the v3 `application_sdk.testing.e2e` API (§9 of MIGRATION_PROMPT.md).
-3. Place the new file alongside the original, named `tests/e2e/test_<connector_name>_v3.py`.
-4. Add `# TODO(v3-migration): human must validate this test is equivalent to the original` at the top of the new file.
-5. Do NOT delete or modify the original test file.
-6. Add the new test file to the manual follow-up list so the user knows to validate it.
+2. If found, **read the original v2 e2e test file completely**. List every test method and what it asserts before writing a single line of the new file.
+3. Generate a **new** equivalent e2e test file using the v3 `application_sdk.testing.e2e` API (§9 of MIGRATION_PROMPT.md):
+   - For **each** test method in the original, generate a corresponding `async def test_xxx(deployed_app)` function. The generated file MUST have at least as many test functions as the original has test methods.
+   - Extract actual payload values from the original (hardcoded dicts, `default_payload()` bodies, connection IDs) — do **not** substitute placeholder values like `"test-connection"` if the original has real values.
+   - If an assertion checks response fields whose format changed (e.g. `result['authenticationCheck']`), keep the assertion but add `# TODO(v3-migration): response format changed — update field names`.
+   - Use the `AppConfig` fixture with real values derived from the connector's `pyproject.toml` (`name`, `tool.poetry.name`, or Helm chart values) — not generic placeholders.
+4. Place the new file alongside the original, named `tests/e2e/test_<connector_name>_v3.py`.
+5. Add `# TODO(v3-migration): human must validate this test is equivalent to the original` at the top of the new file.
+6. Do NOT delete or modify the original test file.
+7. Add the new test file to the manual follow-up list so the user knows to validate it.
 
 If the connector has no v2-style e2e tests, skip this step.
 
@@ -204,7 +227,15 @@ Print a structured summary:
 ### Phase 4b — E2E test generation
 - v2 BaseTest files found: yes/no
 - New v3 e2e test file generated: <path or "N/A">
+- Original test method count: N
+- Generated test function count: N
 - Human validation required: yes/no
+
+### API Contract Changes (inform frontend consumers)
+<list any response-format-change WARNs from the checker — these indicate v3 handler
+methods that return a different response shape than v2, which may break frontends>
+- fetch_metadata: returns MetadataOutput (flat list) — was hierarchical [{value, title, children}]
+- preflight_check: returns PreflightOutput — was {authenticationCheck, hostCheck, permissionsCheck}
 
 ### Manual follow-up required
 <bulleted list of anything the AI skipped due to the test constraint or ambiguity>

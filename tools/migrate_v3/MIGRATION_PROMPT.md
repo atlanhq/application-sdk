@@ -490,7 +490,21 @@ async def test_metadata_extraction(deployed_app: AppDeployer) -> None:
 | `BaseTest` class | `AppConfig` + `AppDeployer` fixtures |
 | `self.run_workflow(name, payload)` | `run_workflow(namespace, service, port, name, payload)` |
 | Built-in wait/poll | `wait_for_workflow(namespace, service, port, workflow_id, timeout)` |
-| `self.default_payload()` | Explicit `payload` dict |
+| `self.default_payload()` | Explicit `payload` dict — extract values from the v2 method body |
+| `self.check_health()` / health-check step | `kube_http_call(namespace, service, port, "/healthz")` or skip if not applicable |
+| Ordered `test_*` methods in a class | Independent top-level `async def test_xxx(deployed_app)` functions |
+| `assert result['authenticationCheck']` | `assert result.status == AuthStatus.SUCCESS` (update field names) |
+| `assert result['hostCheck']` | `assert result.status == PreflightStatus.READY` (update field names) |
+| `result['metadata']` hierarchical list | `result.fields` flat list — response shape changed |
+| `connector_name = "foo"` class attribute | `AppConfig(app_name="foo", ...)` fixture parameter |
+
+### Generation rules
+
+1. **Count before you generate.** Count every test method in the original. The new file must have at least that many test functions.
+2. **Copy real payload values.** If `default_payload()` returns `{"connection_id": "abc-123", "tenant_id": "xyz"}`, use those exact values — not `"test-connection"`.
+3. **Map assertions, not just structure.** For each `assert` in the original, write an equivalent `assert` in the new test. If the response shape changed, keep the assert but add `# TODO(v3-migration): response format changed — update field names`.
+4. **One fixture, many tests.** All test functions share the `deployed_app` session-scoped fixture. Do not deploy/undeploy per-test.
+5. **Preserve test names.** Derive the new function name directly from the original method name (strip the `test_` prefix rule of the class if needed, but keep the semantic name).
 
 Place the new test at `tests/e2e/test_<connector_name>_v3.py` alongside the
 original. Do NOT delete the original test file — a human must verify equivalence.
