@@ -3,13 +3,12 @@ import atexit
 import logging
 import threading
 from time import time
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar, Dict, Optional
 
 from opentelemetry import metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.resources import Resource
 
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
@@ -21,21 +20,19 @@ from application_sdk.constants import (
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
-    OTEL_RESOURCE_ATTRIBUTES,
-    OTEL_WF_NODE_NAME,
     SEGMENT_API_URL,
     SEGMENT_BATCH_SIZE,
     SEGMENT_BATCH_TIMEOUT_SECONDS,
     SEGMENT_DEFAULT_USER_ID,
     SEGMENT_WRITE_KEY,
     SERVICE_NAME,
-    SERVICE_VERSION,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import MetricRecord, MetricType
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.segment_client import SegmentClient
 from application_sdk.observability.utils import (
+    build_otel_resource,
     get_observability_dir,
     get_workflow_context,
 )
@@ -59,7 +56,12 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     - Parquet file storage
     """
 
-    _flush_task_started = False
+    _flush_task_started: ClassVar[bool] = False
+
+    @classmethod
+    def _reset_for_testing(cls) -> None:
+        """Reset initialization state for test isolation."""
+        cls._flush_task_started = False
 
     def __init__(self):
         """Initialize the metrics adapter with configuration and setup.
@@ -123,26 +125,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             Exception: If setup fails, logs error and continues without OTLP
         """
         try:
-            # Get workflow node name for Argo environment
-            workflow_node_name = OTEL_WF_NODE_NAME
-
-            # Parse resource attributes
-            resource_attributes = self._parse_otel_resource_attributes(
-                OTEL_RESOURCE_ATTRIBUTES
-            )
-
-            # Add default service attributes if not present
-            if "service.name" not in resource_attributes:
-                resource_attributes["service.name"] = SERVICE_NAME
-            if "service.version" not in resource_attributes:
-                resource_attributes["service.version"] = SERVICE_VERSION
-
-            # Add workflow node name if running in Argo
-            if workflow_node_name:
-                resource_attributes["k8s.workflow.node.name"] = workflow_node_name
-
             # Create resource
-            resource = Resource.create(resource_attributes)
+            resource = build_otel_resource()
 
             # Create OTLP exporter
             exporter = OTLPMetricExporter(
@@ -170,31 +154,6 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
 
         except Exception as e:
             logging.error(f"Failed to setup OTLP metrics: {e}")
-
-    def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
-        """Parse OpenTelemetry resource attributes from environment variable.
-
-        Args:
-            env_var (str): Comma-separated string of key-value pairs
-
-        Returns:
-            dict[str, str]: Dictionary of parsed resource attributes
-
-        Example:
-            Input: "service.name=myapp,service.version=1.0"
-            Output: {"service.name": "myapp", "service.version": "1.0"}
-        """
-        try:
-            if env_var:
-                attributes = env_var.split(",")
-                return {
-                    item.split("=")[0].strip(): item.split("=")[1].strip()
-                    for item in attributes
-                    if "=" in item
-                }
-        except Exception as e:
-            logging.error(f"Failed to parse OTLP resource attributes: {e}")
-        return {}
 
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic metric flushing.

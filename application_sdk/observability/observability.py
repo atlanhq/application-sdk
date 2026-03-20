@@ -9,11 +9,13 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from pathlib import Path
 from time import time
-from typing import Any, Dict, Generic, List, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Generic, List, TypeVar
 
 import duckdb
 import orjson
-from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from obstore.store import ObjectStore
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -51,34 +53,7 @@ OBSERVABILITY_S3_PREFIX_MAP = {
 }
 
 
-class LogRecord(BaseModel):
-    """A Pydantic model representing a log record in the system.
-
-    This model defines the structure for log data with fields for timestamp,
-    level, logger name, message, and source location information.
-
-    Attributes:
-        timestamp (float): Unix timestamp when the log was recorded
-        level (str): Log level (DEBUG, INFO, WARNING, ERROR, etc.)
-        logger_name (str): Name of the logger that created the record
-        message (str): The actual log message
-        file (str): Source file where the log was created
-        line (int): Line number in the source file
-        function (str): Function name where the log was created
-        extra (Dict[str, Any]): Additional context data for the log
-    """
-
-    timestamp: float
-    level: str
-    logger_name: str
-    message: str
-    file: str
-    line: int
-    function: str
-    extra: Dict[str, Any]
-
-
-T = TypeVar("T", bound=BaseModel)
+T = TypeVar("T")
 
 
 class AtlanObservability(Generic[T], ABC):
@@ -101,9 +76,9 @@ class AtlanObservability(Generic[T], ABC):
     """
 
     _last_cleanup_key = "last_cleanup_time"
-    _instances = []
-    _deployment_store = None
-    _upstream_store = None
+    _instances: ClassVar[list[Any]] = []
+    _deployment_store: ClassVar["ObjectStore | None"] = None
+    _upstream_store: ClassVar["ObjectStore | None"] = None
 
     @classmethod
     def _get_deployment_store(cls):
@@ -130,7 +105,7 @@ class AtlanObservability(Generic[T], ABC):
     ):
         """Initialize the observability base class."""
         # Initialize instance variables
-        self._buffer: List[Dict[str, Any]] = []
+        self._buffer: list[dict[str, object]] = []
         self._buffer_lock = threading.Lock()
         self._last_flush_time = time()
         self._batch_size = batch_size
@@ -186,16 +161,16 @@ class AtlanObservability(Generic[T], ABC):
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # If we're in an async context, create a task
-                    asyncio.create_task(self._flush_all_instances())
+                    asyncio.create_task(self.flush_all())
                 else:
                     # If we have a loop but it's not running, run the flush
-                    loop.run_until_complete(self._flush_all_instances())
+                    loop.run_until_complete(self.flush_all())
             except RuntimeError:
                 # If no event loop exists, create a new one
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(self._flush_all_instances())
+                    loop.run_until_complete(self.flush_all())
                 finally:
                     loop.close()
         except Exception as e:
@@ -225,16 +200,16 @@ class AtlanObservability(Generic[T], ABC):
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # If we're in an async context, create a task
-                    asyncio.create_task(self._flush_all_instances())
+                    asyncio.create_task(self.flush_all())
                 else:
                     # If we have a loop but it's not running, run the flush
-                    loop.run_until_complete(self._flush_all_instances())
+                    loop.run_until_complete(self.flush_all())
             except RuntimeError:
                 # If no event loop exists, create a new one
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(self._flush_all_instances())
+                    loop.run_until_complete(self.flush_all())
                 finally:
                     loop.close()
         except Exception as e:
@@ -243,7 +218,7 @@ class AtlanObservability(Generic[T], ABC):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
     @classmethod
-    async def _flush_all_instances(cls):
+    async def flush_all(cls) -> None:
         """Flush all instances of AtlanObservability.
 
         This method attempts to flush all registered instances,
@@ -254,6 +229,17 @@ class AtlanObservability(Generic[T], ABC):
                 await instance._flush_buffer(force=True)
             except Exception as e:
                 logging.error(f"Error flushing instance: {e}")
+
+    @classmethod
+    def _reset_for_testing(cls) -> None:
+        """Reset global state for test isolation.
+
+        This method should only be used in tests to allow fresh initialization
+        for each test case.
+        """
+        cls._instances.clear()
+        cls._deployment_store = None
+        cls._upstream_store = None
 
     def _get_signal_type(self) -> str:
         """Map file_name to signal type (logs, metrics, traces).
@@ -302,7 +288,7 @@ class AtlanObservability(Generic[T], ABC):
         self.parquet_path = os.path.join(partition_path, "data.parquet")
 
     @abstractmethod
-    def process_record(self, record: Any) -> Dict[str, Any]:
+    def process_record(self, record: T) -> Dict[str, Any]:
         """Process a record into a dictionary format.
 
         Args:
@@ -316,7 +302,7 @@ class AtlanObservability(Generic[T], ABC):
         pass
 
     @abstractmethod
-    def export_record(self, record: Any) -> None:
+    def export_record(self, record: T) -> None:
         """Export a record to external systems.
 
         Args:
@@ -366,51 +352,6 @@ class AtlanObservability(Generic[T], ABC):
                 buffer_copy = None
         if buffer_copy:
             await self._flush_records(buffer_copy)
-
-    async def parquet_sink(self, message: Any):
-        """Process and buffer a log message for parquet storage.
-
-        Args:
-            message: The log message to process
-
-        This method:
-        - Creates a LogRecord from the message
-        - Adds it to the buffer
-        - Triggers flush if buffer size or time threshold is reached
-        """
-        try:
-            log_record = LogRecord(
-                timestamp=message.record["time"].timestamp(),
-                level=message.record["level"].name,
-                logger_name=message.record["extra"].get("logger_name", ""),
-                message=message.record["message"],
-                file=str(message.record["file"].path),
-                line=message.record["line"],
-                function=message.record["function"],
-                extra={
-                    k: v
-                    for k, v in message.record["extra"].items()
-                    if k != "logger_name"
-                },
-            )
-
-            with self._buffer_lock:
-                self._buffer.append(log_record.model_dump())
-                now = time()
-                if (
-                    len(self._buffer) >= self._batch_size
-                    or (now - self._last_flush_time) >= self._flush_interval
-                ):
-                    self._last_flush_time = now
-                    buffer_copy = self._buffer[:]
-                    self._buffer.clear()
-                else:
-                    buffer_copy = None
-
-            if buffer_copy is not None:
-                await self._flush_records(buffer_copy)
-        except Exception as e:
-            logging.error(f"Error buffering log: {e}")
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
         """Flush records to json.gz files and upload to object stores.
@@ -627,7 +568,7 @@ class AtlanObservability(Generic[T], ABC):
         except Exception as e:
             logging.error(f"Error cleaning up old records: {e}")
 
-    def add_record(self, record: Any):
+    def add_record(self, record: T):
         """Add a record to the buffer and process it.
 
         Args:

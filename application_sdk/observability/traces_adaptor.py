@@ -2,25 +2,20 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar, Dict, Optional
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.trace import SpanKind
-from pydantic import BaseModel
 
 from application_sdk.constants import (
     ENABLE_OTLP_TRACES,
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
-    OTEL_RESOURCE_ATTRIBUTES,
-    OTEL_WF_NODE_NAME,
     SERVICE_NAME,
-    SERVICE_VERSION,
     TRACES_BATCH_SIZE,
     TRACES_CLEANUP_ENABLED,
     TRACES_FILE_NAME,
@@ -28,41 +23,15 @@ from application_sdk.constants import (
     TRACES_RETENTION_DAYS,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.models import TraceRecord
 from application_sdk.observability.observability import AtlanObservability
-from application_sdk.observability.utils import get_observability_dir
+from application_sdk.observability.utils import (
+    build_otel_resource,
+    get_observability_dir,
+)
 
-
-class TraceRecord(BaseModel):
-    """A Pydantic model representing a trace record in the system.
-
-    This model defines the structure for distributed tracing data with fields for
-    trace identification, timing, status, and additional context.
-
-    Attributes:
-        timestamp (float): Unix timestamp when the trace was recorded
-        trace_id (str): Unique identifier for the trace
-        span_id (str): Unique identifier for this span
-        parent_span_id (Optional[str]): ID of the parent span, if any
-        name (str): Name of the trace/span
-        kind (str): Type of span (SERVER, CLIENT, INTERNAL, etc.)
-        status_code (str): Status of the trace (OK, ERROR, etc.)
-        status_message (Optional[str]): Additional status information
-        attributes (Dict[str, Any]): Key-value pairs for trace context
-        events (Optional[list[Dict[str, Any]]]): List of events in the trace
-        duration_ms (float): Duration of the trace in milliseconds
-    """
-
-    timestamp: float
-    trace_id: str
-    span_id: str
-    parent_span_id: Optional[str] = None
-    name: str
-    kind: str  # SERVER, CLIENT, INTERNAL, etc.
-    status_code: str  # OK, ERROR, etc.
-    status_message: Optional[str] = None
-    attributes: Dict[str, Any]
-    events: Optional[list[Dict[str, Any]]] = None
-    duration_ms: float
+# Re-export for backwards compatibility
+__all__ = ["TraceRecord", "AtlanTracesAdapter", "get_traces"]
 
 
 class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
@@ -79,7 +48,12 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
     - Parquet file storage
     """
 
-    _flush_task_started = False
+    _flush_task_started: ClassVar[bool] = False
+
+    @classmethod
+    def _reset_for_testing(cls) -> None:
+        """Reset initialization state for test isolation."""
+        cls._flush_task_started = False
 
     def __init__(self):
         """Initialize the traces adapter with configuration and setup.
@@ -129,26 +103,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         Falls back to console-only tracing if setup fails.
         """
         try:
-            # Get workflow node name for Argo environment
-            workflow_node_name = OTEL_WF_NODE_NAME
-
-            # Parse resource attributes
-            resource_attributes = self._parse_otel_resource_attributes(
-                OTEL_RESOURCE_ATTRIBUTES
-            )
-
-            # Add default service attributes if not present
-            if "service.name" not in resource_attributes:
-                resource_attributes["service.name"] = SERVICE_NAME
-            if "service.version" not in resource_attributes:
-                resource_attributes["service.version"] = SERVICE_VERSION
-
-            # Add workflow node name if running in Argo
-            if workflow_node_name:
-                resource_attributes["k8s.workflow.node.name"] = workflow_node_name
-
             # Create resource
-            resource = Resource.create(resource_attributes)
+            resource = build_otel_resource()
 
             # Create exporters
             exporters = []
@@ -211,12 +167,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         """
         try:
             # Create resource with basic attributes
-            resource = Resource.create(
-                {
-                    "service.name": SERVICE_NAME,
-                    "service.version": SERVICE_VERSION,
-                }
-            )
+            resource = build_otel_resource()
 
             # Create console exporter
             console_exporter = ConsoleSpanExporter()
@@ -241,31 +192,6 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
 
         except Exception as e:
             logging.error(f"Failed to setup console-only tracing: {e}")
-
-    def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
-        """Parse OpenTelemetry resource attributes from environment variable.
-
-        Args:
-            env_var (str): Comma-separated string of key-value pairs
-
-        Returns:
-            dict[str, str]: Dictionary of parsed resource attributes
-
-        Example:
-            Input: "service.name=myapp,service.version=1.0"
-            Output: {"service.name": "myapp", "service.version": "1.0"}
-        """
-        try:
-            if env_var:
-                attributes = env_var.split(",")
-                return {
-                    item.split("=")[0].strip(): item.split("=")[1].strip()
-                    for item in attributes
-                    if "=" in item
-                }
-        except Exception as e:
-            logging.error(f"Failed to parse OTLP resource attributes: {e}")
-        return {}
 
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic trace flushing.

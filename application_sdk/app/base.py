@@ -1150,6 +1150,13 @@ class App(ABC):
 
             await asyncio.gather(_local_cleanup(), _storage_cleanup())
 
+        try:
+            from application_sdk.observability.observability import AtlanObservability
+
+            await AtlanObservability.flush_all()
+        except Exception:
+            _safe_log("warning", "flush_all() failed during on_complete")
+
 
 # =============================================================================
 # Registration helpers

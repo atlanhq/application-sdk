@@ -4,14 +4,13 @@ import sys
 import threading
 import traceback as tb_module
 from time import time_ns
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, ClassVar, Dict, Optional, Tuple
 
 from loguru import logger
 from opentelemetry._logs import LogRecord, SeverityNumber
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
-from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace.span import TraceFlags
 from pydantic import BaseModel, Field
 
@@ -31,15 +30,13 @@ from application_sdk.constants import (
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     OTEL_QUEUE_SIZE,
-    OTEL_RESOURCE_ATTRIBUTES,
-    OTEL_WF_NODE_NAME,
     OTEL_WORKFLOW_LOGS_ENDPOINT,
     SERVICE_NAME,
-    SERVICE_VERSION,
 )
 from application_sdk.observability.context import correlation_context, request_context
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.utils import (
+    build_otel_resource,
     get_observability_dir,
     get_workflow_context,
 )
@@ -268,9 +265,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
     - Temporal workflow and activity context integration
     """
 
-    _flush_task_started = False
-    _flush_task = None
-    _initialized = False
+    _flush_task_started: ClassVar[bool] = False
+    _flush_task: ClassVar[Any] = None
+    _initialized: ClassVar[bool] = False
 
     @classmethod
     def _reset_for_testing(cls) -> None:
@@ -427,22 +424,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 )
 
             if otlp_processors:
-                resource_attributes = {}
-                if OTEL_RESOURCE_ATTRIBUTES:
-                    resource_attributes = self._parse_otel_resource_attributes(
-                        OTEL_RESOURCE_ATTRIBUTES
-                    )
-                if "service.name" not in resource_attributes:
-                    resource_attributes["service.name"] = SERVICE_NAME
-                if "service.version" not in resource_attributes:
-                    resource_attributes["service.version"] = SERVICE_VERSION
-                resource_attributes["sdk.version"] = _SDK_VERSION
-                workflow_node_name = OTEL_WF_NODE_NAME
-                if workflow_node_name:
-                    resource_attributes["k8s.workflow.node.name"] = workflow_node_name
-
                 self.logger_provider = LoggerProvider(
-                    resource=Resource.create(resource_attributes)
+                    resource=build_otel_resource(
+                        extra_attrs={"sdk.version": _SDK_VERSION}
+                    )
                 )
                 for processor in otlp_processors:
                     self.logger_provider.add_log_record_processor(processor)
@@ -454,34 +439,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
         # Mark initialization complete only after all sinks are successfully added
         AtlanLoggerAdapter._initialized = True
-
-    def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
-        """Parse OpenTelemetry resource attributes from environment variable.
-
-        Args:
-            env_var (str): Comma-separated string of key-value pairs.
-
-        Returns:
-            dict[str, str]: Dictionary of parsed resource attributes.
-
-        Example:
-            Input: "service.name=myapp,service.version=1.0"
-            Output: {"service.name": "myapp", "service.version": "1.0"}
-        """
-        try:
-            # Check if the environment variable is not empty
-            if env_var:
-                # Split the string by commas to get individual key-value pairs
-                attributes = env_var.split(",")
-                # Create a dictionary from the key-value pairs
-                return {
-                    item.split("=")[0].strip(): item.split("=")[1].strip()
-                    for item in attributes
-                    if "=" in item
-                }
-        except Exception as e:
-            logging.error(f"Failed to parse OTLP resource attributes: {str(e)}")
-        return {}
 
     def process_record(self, record: Any) -> Dict[str, Any]:
         """Process a log record into a standardized dictionary format.

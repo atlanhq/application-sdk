@@ -2,19 +2,24 @@ import functools
 import inspect
 import time
 import uuid
-from typing import Any, Callable, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Callable, TypeVar, cast
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.observability.traces_adaptor import get_traces
 
+if TYPE_CHECKING:
+    from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter
+    from application_sdk.observability.metrics_adaptor import AtlanMetricsAdapter
+    from application_sdk.observability.traces_adaptor import AtlanTracesAdapter
+
 T = TypeVar("T")
 
 
 def _record_success_observability(
-    logger: Any,
-    metrics: Any,
-    traces: Any,
+    logger: "AtlanLoggerAdapter",
+    metrics: "AtlanMetricsAdapter",
+    traces: "AtlanTracesAdapter",
     func_name: str,
     func_doc: str,
     func_module: str,
@@ -72,9 +77,9 @@ def _record_success_observability(
 
 
 def _record_error_observability(
-    logger: Any,
-    metrics: Any,
-    traces: Any,
+    logger: "AtlanLoggerAdapter",
+    metrics: "AtlanMetricsAdapter",
+    traces: "AtlanTracesAdapter",
     func_name: str,
     func_doc: str,
     func_module: str,
@@ -138,9 +143,9 @@ def _record_error_observability(
 
 
 def observability(
-    logger: Any = None,
-    metrics: Any = None,
-    traces: Any = None,
+    logger: "AtlanLoggerAdapter | None" = None,
+    metrics: "AtlanMetricsAdapter | None" = None,
+    traces: "AtlanTracesAdapter | None" = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator for adding observability to functions.
 

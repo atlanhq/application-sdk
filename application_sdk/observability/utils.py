@@ -1,11 +1,17 @@
+import logging
 import os
 
+from opentelemetry.sdk.resources import Resource
 from pydantic import BaseModel, Field
 
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
     OBSERVABILITY_DIR,
+    OTEL_RESOURCE_ATTRIBUTES,
+    OTEL_WF_NODE_NAME,
+    SERVICE_NAME,
+    SERVICE_VERSION,
     TEMPORARY_PATH,
 )
 from application_sdk.observability.context import correlation_context
@@ -81,3 +87,34 @@ def get_workflow_context() -> WorkflowContext:
                 setattr(context, key, str(value))
 
     return context
+
+
+def parse_otel_resource_attributes(env_var: str) -> dict[str, str]:
+    """Parse 'key=val,key=val' OTEL_RESOURCE_ATTRIBUTES into a dict."""
+    try:
+        if env_var:
+            attributes = env_var.split(",")
+            return {
+                item.split("=")[0].strip(): item.split("=")[1].strip()
+                for item in attributes
+                if "=" in item
+            }
+    except Exception as e:
+        logging.error(f"Failed to parse OTLP resource attributes: {e}")
+    return {}
+
+
+def build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource:
+    """Build an OTel Resource with standard Atlan service attributes."""
+    resource_attributes: dict[str, str] = {}
+    if OTEL_RESOURCE_ATTRIBUTES:
+        resource_attributes = parse_otel_resource_attributes(OTEL_RESOURCE_ATTRIBUTES)
+    if "service.name" not in resource_attributes:
+        resource_attributes["service.name"] = SERVICE_NAME
+    if "service.version" not in resource_attributes:
+        resource_attributes["service.version"] = SERVICE_VERSION
+    if OTEL_WF_NODE_NAME:
+        resource_attributes["k8s.workflow.node.name"] = OTEL_WF_NODE_NAME
+    if extra_attrs:
+        resource_attributes.update(extra_attrs)
+    return Resource.create(resource_attributes)
