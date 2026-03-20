@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - chore/bump-dapr-1.17.2
     paths:
       - 'Dockerfile'
       - 'pyproject.toml'
