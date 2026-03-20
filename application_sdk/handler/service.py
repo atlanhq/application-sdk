@@ -8,9 +8,9 @@ Routes:
     POST /workflows/v1/check - Run preflight checks
     POST /workflows/v1/metadata - Fetch metadata
     POST /workflows/v1/start - Start workflow execution
-    POST /workflows/v1/stop/{workflow_id}/{run_id} - Stop workflow
+    POST /workflows/v1/stop/{workflow_id}/{run_id:path} - Stop workflow
     GET  /workflows/v1/result/{workflow_id} - Get workflow result
-    GET  /workflows/v1/status/{workflow_id}/{run_id} - Get workflow status
+    GET  /workflows/v1/status/{workflow_id}/{run_id:path} - Get workflow status
     GET  /workflows/v1/config/{config_id} - Get workflow config
     POST /workflows/v1/config/{config_id} - Update workflow config
     POST /workflows/v1/file - Upload file to object storage
@@ -27,10 +27,12 @@ Usage::
 from __future__ import annotations
 
 import dataclasses
+import json
 import mimetypes
 from dataclasses import asdict
 from datetime import UTC, datetime
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
@@ -43,9 +45,11 @@ from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
     AuthInput,
     Credential,
+    EventTriggerConfig,
     FileUploadResponse,
     MetadataInput,
     PreflightInput,
+    SubscriptionConfig,
 )
 
 if TYPE_CHECKING:
@@ -134,6 +138,9 @@ _handler_auth_manager: Any | None = None
 _state_store: StateStore | None = None
 _storage: ObjectStore | None = None
 
+# Directory where generated contract JSON files are stored
+CONTRACT_GENERATED_DIR = Path.cwd() / "contract" / "generated"
+
 
 async def _get_temporal_client() -> Client:
     """Get or lazily create the singleton Temporal client."""
@@ -217,6 +224,8 @@ def create_app_handler_service(
     auth_scopes: str = "",
     state_store: StateStore | None = None,
     storage: ObjectStore | None = None,
+    event_triggers: list[EventTriggerConfig] | None = None,
+    subscriptions: list[SubscriptionConfig] | None = None,
     title: str = "Handler Service",
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
@@ -288,6 +297,11 @@ def create_app_handler_service(
         )
     else:
         app = FastAPI(title=title, description=description, version=version)
+
+    from application_sdk.server.middleware import LogMiddleware, MetricsMiddleware
+
+    app.add_middleware(MetricsMiddleware)
+    app.add_middleware(LogMiddleware)
 
     def _create_context(credentials: list[Credential]) -> HandlerContext:
         from application_sdk.infrastructure.context import get_infrastructure
@@ -598,7 +612,7 @@ def create_app_handler_service(
                 status_code=500, detail=f"Failed to start workflow: {e}"
             ) from None
 
-    @app.post("/workflows/v1/stop/{workflow_id}/{run_id}")
+    @app.post("/workflows/v1/stop/{workflow_id}/{run_id:path}")
     async def stop_workflow(workflow_id: str, run_id: str) -> JSONResponse:
         if not _workflow_config.is_configured():
             raise HTTPException(
@@ -740,7 +754,7 @@ def create_app_handler_service(
                 status_code=500, detail=f"Failed to get workflow result: {error_msg}"
             ) from None
 
-    @app.get("/workflows/v1/status/{workflow_id}/{run_id}")
+    @app.get("/workflows/v1/status/{workflow_id}/{run_id:path}")
     async def get_workflow_status(workflow_id: str, run_id: str) -> JSONResponse:
         if not _workflow_config.is_configured():
             raise HTTPException(
@@ -898,6 +912,171 @@ def create_app_handler_service(
             content=_wrap_response(
                 cast("dict[str, JsonSerializable]", response_obj.to_wire_dict()),
                 message="File uploaded successfully",
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Dapr pub/sub and event-triggered workflow endpoints
+    # ------------------------------------------------------------------
+
+    _event_triggers: list[EventTriggerConfig] = list(event_triggers or [])
+    _subscriptions: list[SubscriptionConfig] = list(subscriptions or [])
+
+    @app.get("/dapr/subscribe")
+    async def get_dapr_subscriptions() -> JSONResponse:
+        from application_sdk.constants import EVENT_STORE_NAME
+
+        result: list[dict[str, Any]] = []
+
+        for sub in _subscriptions:
+            sub_dict: dict[str, Any] = {
+                "pubsubname": sub.component_name,
+                "topic": sub.topic,
+                "route": f"/subscriptions/v1/{sub.route}",
+            }
+            if sub.bulk_enabled:
+                sub_dict["bulkSubscribe"] = {
+                    "enabled": sub.bulk_enabled,
+                    "maxMessagesCount": sub.bulk_max_messages,
+                    "maxAwaitDurationMs": sub.bulk_max_await_ms,
+                }
+            if sub.dead_letter_topic:
+                sub_dict["deadLetterTopic"] = sub.dead_letter_topic
+            result.append(sub_dict)
+
+        for trigger in _event_triggers:
+            filters = [
+                f"({f.path} {f.operator} '{f.value}')" for f in trigger.event_filters
+            ]
+            filters.append(f"event.data.event_name == '{trigger.event_name}'")
+            filters.append(f"event.data.event_type == '{trigger.event_type}'")
+
+            result.append(
+                {
+                    "pubsubname": EVENT_STORE_NAME,
+                    "topic": trigger.event_type,
+                    "routes": {
+                        "rules": [
+                            {
+                                "match": " && ".join(filters),
+                                "path": f"/events/v1/event/{trigger.event_id}",
+                            }
+                        ],
+                        "default": "/events/v1/drop",
+                    },
+                }
+            )
+
+        return JSONResponse(content=result)
+
+    @app.post("/events/v1/event/{event_id}")
+    async def handle_event(event_id: str, request: Request) -> JSONResponse:
+        if not _workflow_config.is_configured():
+            raise HTTPException(
+                status_code=503, detail="Workflow execution not configured."
+            )
+
+        trigger = next((t for t in _event_triggers if t.event_id == event_id), None)
+        if trigger is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No trigger registered for event_id: {event_id}",
+            )
+
+        app_cls = _workflow_config.app_class
+        if app_cls is None:
+            raise HTTPException(status_code=503, detail="App class not provided.")
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body") from None
+
+        try:
+            client = await _get_temporal_client()
+
+            input_type = getattr(app_cls, "_input_type", None)
+            if input_type is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"App class {app_cls.__name__} does not define _input_type.",
+                )
+
+            event_data: dict[str, Any] = body.get("data", body)
+            input_data = (
+                input_type(**event_data)
+                if isinstance(event_data, dict)
+                else input_type()
+            )
+
+            workflow_id = f"{app_name}-event-{event_id}-{uuid4().hex[:8]}"
+
+            handle = await client.start_workflow(
+                app_cls._app_name,  # type: ignore[attr-defined]
+                args=[input_data],
+                id=workflow_id,
+                task_queue=_workflow_config.task_queue,
+            )
+            return JSONResponse(
+                content={
+                    "status": "SUCCESS",
+                    "workflow_id": handle.id,
+                    "run_id": handle.result_run_id,
+                }
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to start event-triggered workflow",
+                event_id=event_id,
+                error=str(e),
+            )
+            return JSONResponse(content={"status": "RETRY"}, status_code=500)
+
+    @app.post("/events/v1/drop")
+    async def drop_event() -> JSONResponse:
+        return JSONResponse(content={"success": False, "status": "DROP"})
+
+    # Register dynamic subscription routes
+    for _sub in _subscriptions:
+        _sub_route = f"/subscriptions/v1/{_sub.route}"
+        app.add_api_route(_sub_route, _sub.handler, methods=["POST"])
+
+    # ------------------------------------------------------------------
+    # ConfigMap endpoints
+    # ------------------------------------------------------------------
+
+    @app.get("/workflows/v1/configmap/{config_map_id}")
+    async def get_configmap(config_map_id: str) -> JSONResponse:
+        if CONTRACT_GENERATED_DIR.exists():
+            for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
+                if json_file.stem == config_map_id:
+                    with open(json_file) as f:
+                        raw = json.load(f)
+                    configmap = {
+                        "kind": "ConfigMap",
+                        "apiVersion": "v1",
+                        "metadata": {"name": config_map_id},
+                        "data": {"config": json.dumps(raw.get("config", raw))},
+                    }
+                    return JSONResponse(
+                        content=_wrap_response(
+                            cast("dict[str, JsonSerializable]", configmap),
+                            message="ConfigMap fetched successfully",
+                        )
+                    )
+        return JSONResponse(content=_wrap_response({}, message="ConfigMap not found"))
+
+    @app.get("/workflows/v1/configmaps")
+    async def list_configmaps() -> JSONResponse:
+        configmap_ids: list[str] = []
+        if CONTRACT_GENERATED_DIR.exists():
+            for json_file in CONTRACT_GENERATED_DIR.glob("*.json"):
+                if json_file.stem != "manifest":
+                    configmap_ids.append(json_file.stem)
+        return JSONResponse(
+            content=_wrap_response(
+                cast("dict[str, JsonSerializable]", {"configmaps": configmap_ids}),
+                message="ConfigMaps listed successfully",
             )
         )
 

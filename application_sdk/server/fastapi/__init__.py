@@ -1,7 +1,17 @@
+# ruff: noqa: E402
 import os
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Type
+
+warnings.warn(
+    "application_sdk.server.fastapi.APIServer is deprecated. "
+    "Use application_sdk.handler.service.create_app_handler_service instead. "
+    "This module will be removed in v3.1.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 # Import with full paths to avoid naming conflicts
 from fastapi import File, Form, HTTPException, UploadFile, status

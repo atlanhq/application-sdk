@@ -11,6 +11,7 @@ Plus supporting types for credentials, log streaming, and file uploads.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 from application_sdk.contracts.base import Input, Output, SerializableEnum
@@ -235,6 +236,80 @@ class MetadataOutput(Output):
 
     fetch_duration_ms: float = 0.0
     """Total fetch time in milliseconds."""
+
+
+@dataclasses.dataclass(frozen=True)
+class EventFilterRule:
+    """A single filter rule for matching incoming Dapr cloud events."""
+
+    path: str
+    """CEL path to evaluate (e.g., 'event.data.type')."""
+
+    operator: str
+    """Comparison operator (e.g., '==')."""
+
+    value: str
+    """Expected value (e.g., 'metadata_extraction')."""
+
+
+@dataclasses.dataclass(frozen=True)
+class EventTriggerConfig:
+    """Configuration for an event-triggered workflow."""
+
+    event_id: str
+    """Unique identifier used as the route segment (e.g., 'my-trigger')."""
+
+    event_type: str
+    """Dapr topic / event type (e.g., 'metadata_extraction')."""
+
+    event_name: str
+    """Logical event name used in subscription filter rules."""
+
+    event_filters: list[EventFilterRule] = dataclasses.field(default_factory=list)
+    """Additional CEL filter rules applied to the event."""
+
+
+@dataclasses.dataclass(frozen=True)
+class SubscriptionConfig:
+    """Configuration for a Dapr pub/sub subscription with a custom handler."""
+
+    component_name: str
+    """Dapr pubsub component name."""
+
+    topic: str
+    """Topic to subscribe to."""
+
+    route: str
+    """Route path segment served at /subscriptions/v1/{route}."""
+
+    handler: Callable[..., Awaitable[Any]]
+    """Async callback invoked when a message arrives on this topic."""
+
+    bulk_enabled: bool = False
+    """Enable bulk subscribe for higher throughput."""
+
+    bulk_max_messages: int = 100
+    """Maximum messages per bulk batch."""
+
+    bulk_max_await_ms: int = 40
+    """Maximum milliseconds to wait for a full bulk batch."""
+
+    dead_letter_topic: str | None = None
+    """Optional dead-letter topic for failed messages."""
+
+
+@dataclasses.dataclass
+class CloudEventEnvelope:
+    """Minimal representation of a Dapr CloudEvent envelope."""
+
+    id: str
+    source: str
+    specversion: str
+    type: str
+    time: str
+    topic: str
+    data: dict[str, Any]
+    datacontenttype: str = "application/json"
 
 
 @dataclasses.dataclass

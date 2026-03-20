@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -11,11 +13,14 @@ from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
     AuthStatus,
+    EventFilterRule,
+    EventTriggerConfig,
     MetadataInput,
     MetadataOutput,
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
+    SubscriptionConfig,
 )
 from application_sdk.handler.service import (
     _convert_enums_recursive,
@@ -300,3 +305,187 @@ class TestWrapResponse:
         result = _wrap_response({"error": "oops"}, success=False, message="failed")
         assert result["success"] is False
         assert result["message"] == "failed"
+
+
+class TestRunIdPathParam:
+    """Tests for stop and status endpoints using slash-containing run_ids."""
+
+    def test_status_with_slash_run_id(self) -> None:
+        # Without a configured Temporal client the service returns 503,
+        # but the route itself must resolve (not 404/405).
+        client = _make_client()
+        response = client.get("/workflows/v1/status/my-workflow/some/slashed/run-id")
+        # 503 = route resolved but Temporal not configured; proves :path matched
+        assert response.status_code == 503
+
+    def test_stop_with_slash_run_id(self) -> None:
+        client = _make_client()
+        response = client.post("/workflows/v1/stop/my-workflow/some/slashed/run-id")
+        assert response.status_code == 503
+
+
+class TestConfigMapEndpoints:
+    """Tests for GET /workflows/v1/configmap/{id} and /configmaps."""
+
+    def test_configmap_not_found_returns_empty(self, tmp_path: Path) -> None:
+        from application_sdk.handler import service as svc_module
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmap/nonexistent")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["data"] == {}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_returns_wrapped_k8s_shape(self, tmp_path: Path) -> None:
+        from application_sdk.handler import service as svc_module
+
+        raw = {"config": {"key": "value"}}
+        (tmp_path / "my-config.json").write_text(json.dumps(raw))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmap/my-config")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["kind"] == "ConfigMap"
+            assert data["apiVersion"] == "v1"
+            assert data["metadata"]["name"] == "my-config"
+            parsed_config = json.loads(data["data"]["config"])
+            assert parsed_config == {"key": "value"}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmaps_lists_stems_excluding_manifest(self, tmp_path: Path) -> None:
+        from application_sdk.handler import service as svc_module
+
+        (tmp_path / "config-a.json").write_text("{}")
+        (tmp_path / "config-b.json").write_text("{}")
+        (tmp_path / "manifest.json").write_text("{}")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmaps")
+            assert response.status_code == 200
+            configmaps = response.json()["data"]["configmaps"]
+            assert "config-a" in configmaps
+            assert "config-b" in configmaps
+            assert "manifest" not in configmaps
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmaps_empty_when_dir_missing(self, tmp_path: Path) -> None:
+        from application_sdk.handler import service as svc_module
+
+        missing = tmp_path / "nonexistent"
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = missing
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmaps")
+            assert response.status_code == 200
+            assert response.json()["data"]["configmaps"] == []
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+
+class TestDaprSubscribeEndpoint:
+    """Tests for GET /dapr/subscribe."""
+
+    def test_subscribe_empty_when_no_triggers_or_subs(self) -> None:
+        client = _make_client()
+        response = client.get("/dapr/subscribe")
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_subscribe_includes_event_trigger(self) -> None:
+        handler = _TestHandler()
+        trigger = EventTriggerConfig(
+            event_id="my-trigger",
+            event_type="metadata_extraction",
+            event_name="extraction_requested",
+            event_filters=[
+                EventFilterRule(path="event.data.type", operator="==", value="meta")
+            ],
+        )
+        app = create_app_handler_service(
+            handler, app_name="test-app", event_triggers=[trigger]
+        )
+        client = TestClient(app)
+        response = client.get("/dapr/subscribe")
+        assert response.status_code == 200
+        subs = response.json()
+        assert len(subs) == 1
+        sub = subs[0]
+        assert sub["topic"] == "metadata_extraction"
+        routes = sub["routes"]
+        assert routes["rules"][0]["path"] == "/events/v1/event/my-trigger"
+        assert routes["default"] == "/events/v1/drop"
+
+    def test_subscribe_includes_subscription_config(self) -> None:
+        handler = _TestHandler()
+
+        async def my_handler(request: object) -> dict:
+            return {"status": "SUCCESS"}
+
+        sub = SubscriptionConfig(
+            component_name="my-pubsub",
+            topic="my-topic",
+            route="my-route",
+            handler=my_handler,
+        )
+        app = create_app_handler_service(
+            handler, app_name="test-app", subscriptions=[sub]
+        )
+        client = TestClient(app)
+        response = client.get("/dapr/subscribe")
+        assert response.status_code == 200
+        subs = response.json()
+        assert len(subs) == 1
+        assert subs[0]["pubsubname"] == "my-pubsub"
+        assert subs[0]["topic"] == "my-topic"
+        assert subs[0]["route"] == "/subscriptions/v1/my-route"
+
+
+class TestDropEventEndpoint:
+    """Tests for POST /events/v1/drop."""
+
+    def test_drop_returns_drop_status(self) -> None:
+        client = _make_client()
+        response = client.post("/events/v1/drop")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "DROP"
+        assert body["success"] is False
+
+
+class TestDynamicSubscriptionRoutes:
+    """Tests for dynamic /subscriptions/v1/{route} endpoints."""
+
+    def test_subscription_route_is_registered(self) -> None:
+        handler = _TestHandler()
+
+        async def my_handler() -> dict:
+            return {"status": "SUCCESS"}
+
+        sub = SubscriptionConfig(
+            component_name="pubsub",
+            topic="topic",
+            route="my-handler",
+            handler=my_handler,
+        )
+        app = create_app_handler_service(
+            handler, app_name="test-app", subscriptions=[sub]
+        )
+        client = TestClient(app)
+        response = client.post("/subscriptions/v1/my-handler")
+        assert response.status_code == 200
+        assert response.json() == {"status": "SUCCESS"}
