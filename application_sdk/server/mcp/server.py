@@ -89,6 +89,52 @@ class MCPServer:
         tools = await self.server.get_tools()
         self.logger.info(f"Registered {len(tools)} tools: {list(tools.keys())}")
 
+    async def register_tools_from_registry(self, app_name: str) -> None:
+        """Discover @mcp_tool-decorated tasks via the v3 TaskRegistry.
+
+        This is the v3 equivalent of ``register_tools()``. Instead of iterating
+        ``(WorkflowInterface, ActivitiesInterface)`` pairs, it reads
+        ``TaskRegistry`` for the given app and checks each ``TaskMetadata.func``
+        for the ``MCP_METADATA_KEY`` attribute set by ``@mcp_tool``.
+
+        Args:
+            app_name: The app name used to look up tasks in the registry.
+        """
+        from application_sdk.app.registry import TaskRegistry
+        from application_sdk.constants import MCP_METADATA_KEY
+
+        tasks = TaskRegistry.get_instance().get_tasks_for_app(app_name)
+        for task_meta in tasks:
+            mcp_metadata: Optional[MCPMetadata] = getattr(
+                task_meta.func, MCP_METADATA_KEY, None
+            )
+            if not mcp_metadata:
+                self.logger.info(
+                    f"No MCP metadata found on task {task_meta.name}. Skipping tool registration"
+                )
+                continue
+
+            if mcp_metadata.visible:
+                self.logger.info(
+                    f"Registering tool {mcp_metadata.name} with description: {mcp_metadata.description}"
+                )
+                self.server.tool(
+                    task_meta.func,
+                    name=mcp_metadata.name,
+                    description=mcp_metadata.description,
+                    *mcp_metadata.args,
+                    **mcp_metadata.kwargs,
+                )
+            else:
+                self.logger.info(
+                    f"Tool {mcp_metadata.name} is marked as not visible. Skipping tool registration"
+                )
+
+        tools = await self.server.get_tools()
+        self.logger.info(
+            f"Registered {len(tools)} MCP tools from registry: {list(tools.keys())}"
+        )
+
     async def get_http_app(self) -> StarletteWithLifespan:
         """
         Get the HTTP app for the MCP server.

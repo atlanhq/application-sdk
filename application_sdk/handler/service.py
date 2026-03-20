@@ -263,7 +263,31 @@ def create_app_handler_service(
         auth_scopes=auth_scopes,
     )
 
-    app = FastAPI(title=title, description=description, version=version)
+    from application_sdk.constants import ENABLE_MCP
+
+    if ENABLE_MCP and app_name:
+        from contextlib import asynccontextmanager
+
+        from application_sdk.server.mcp import MCPServer
+
+        _mcp_server = MCPServer(application_name=app_name)
+
+        @asynccontextmanager
+        async def _mcp_lifespan(fastapi_app: FastAPI):  # type: ignore[type-arg]
+            await _mcp_server.register_tools_from_registry(app_name)
+            mcp_http = _mcp_server.server.http_app()
+            async with mcp_http.lifespan(mcp_http):
+                fastapi_app.mount("", mcp_http)
+                yield
+
+        app = FastAPI(
+            title=title,
+            description=description,
+            version=version,
+            lifespan=_mcp_lifespan,
+        )
+    else:
+        app = FastAPI(title=title, description=description, version=version)
 
     def _create_context(credentials: list[Credential]) -> HandlerContext:
         from application_sdk.infrastructure.context import get_infrastructure
