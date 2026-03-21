@@ -1,6 +1,8 @@
 """Unit tests for the load_to_lakehouse activity."""
 
-from unittest.mock import patch
+import json
+import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -10,8 +12,14 @@ from application_sdk.activities.common.models import (
     LhLoadStatusResponse,
     LhTableWriteMode,
 )
-from application_sdk.activities.metadata_extraction.lakehouse import submit_and_poll_mdlh_load
+from application_sdk.activities.metadata_extraction.lakehouse import (
+    convert_raw_parquet_to_jsonl,
+    submit_and_poll_mdlh_load,
+)
 from application_sdk.common.error_codes import ActivityError
+from application_sdk.workflows.metadata_extraction.lakehouse import (
+    resolve_iceberg_table,
+)
 
 
 def _make_workflow_args(
@@ -89,19 +97,19 @@ class _MockSessionFactory:
 
 _COMMON_PATCHES = [
     patch(
-        "application_sdk.activities.metadata_extraction.base.LH_LOAD_POLL_INTERVAL_SECONDS",
+        "application_sdk.activities.metadata_extraction.lakehouse.LH_LOAD_POLL_INTERVAL_SECONDS",
         0,
     ),
     patch(
-        "application_sdk.activities.metadata_extraction.base.LH_LOAD_MAX_POLL_ATTEMPTS",
+        "application_sdk.activities.metadata_extraction.lakehouse.LH_LOAD_MAX_POLL_ATTEMPTS",
         5,
     ),
     patch(
-        "application_sdk.activities.metadata_extraction.base.MDLH_BASE_URL",
+        "application_sdk.activities.metadata_extraction.lakehouse.MDLH_BASE_URL",
         "http://test:4541",
     ),
     patch(
-        "application_sdk.activities.metadata_extraction.base.APP_TENANT_ID",
+        "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID",
         "test-tenant",
     ),
 ]
@@ -116,9 +124,9 @@ def _apply_common_patches(func):
 class TestLoadToLakehouse:
     @_apply_common_patches
     @patch(
-        "application_sdk.activities.metadata_extraction.base.get_object_store_prefix"
+        "application_sdk.activities.metadata_extraction.lakehouse.get_object_store_prefix"
     )
-    @patch("application_sdk.activities.metadata_extraction.base.aiohttp")
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.aiohttp")
     async def test_load_success(self, mock_aiohttp, mock_get_prefix):
         """POST 202 + GET COMPLETED → returns ActivityStatistics."""
         mock_get_prefix.return_value = (
@@ -138,9 +146,9 @@ class TestLoadToLakehouse:
 
     @_apply_common_patches
     @patch(
-        "application_sdk.activities.metadata_extraction.base.get_object_store_prefix"
+        "application_sdk.activities.metadata_extraction.lakehouse.get_object_store_prefix"
     )
-    @patch("application_sdk.activities.metadata_extraction.base.aiohttp")
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.aiohttp")
     async def test_load_failed_status(self, mock_aiohttp, mock_get_prefix):
         """POST 202 + GET FAILED → raises ActivityError."""
         mock_get_prefix.return_value = "prefix/raw"
@@ -157,25 +165,25 @@ class TestLoadToLakehouse:
             await submit_and_poll_mdlh_load(_make_workflow_args())
 
     @patch(
-        "application_sdk.activities.metadata_extraction.base.LH_LOAD_POLL_INTERVAL_SECONDS",
+        "application_sdk.activities.metadata_extraction.lakehouse.LH_LOAD_POLL_INTERVAL_SECONDS",
         0,
     )
     @patch(
-        "application_sdk.activities.metadata_extraction.base.LH_LOAD_MAX_POLL_ATTEMPTS",
+        "application_sdk.activities.metadata_extraction.lakehouse.LH_LOAD_MAX_POLL_ATTEMPTS",
         2,
     )
     @patch(
-        "application_sdk.activities.metadata_extraction.base.MDLH_BASE_URL",
+        "application_sdk.activities.metadata_extraction.lakehouse.MDLH_BASE_URL",
         "http://test:4541",
     )
     @patch(
-        "application_sdk.activities.metadata_extraction.base.APP_TENANT_ID",
+        "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID",
         "test-tenant",
     )
     @patch(
-        "application_sdk.activities.metadata_extraction.base.get_object_store_prefix"
+        "application_sdk.activities.metadata_extraction.lakehouse.get_object_store_prefix"
     )
-    @patch("application_sdk.activities.metadata_extraction.base.aiohttp")
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.aiohttp")
     async def test_load_poll_timeout(self, mock_aiohttp, mock_get_prefix):
         """POST 202 + GET always RUNNING → raises timeout error."""
         mock_get_prefix.return_value = "prefix/raw"
@@ -196,17 +204,17 @@ class TestLoadToLakehouse:
             await submit_and_poll_mdlh_load(_make_workflow_args())
 
     @patch(
-        "application_sdk.activities.metadata_extraction.base.MDLH_BASE_URL",
+        "application_sdk.activities.metadata_extraction.lakehouse.MDLH_BASE_URL",
         "http://test:4541",
     )
     @patch(
-        "application_sdk.activities.metadata_extraction.base.APP_TENANT_ID",
+        "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID",
         "test-tenant",
     )
     @patch(
-        "application_sdk.activities.metadata_extraction.base.get_object_store_prefix"
+        "application_sdk.activities.metadata_extraction.lakehouse.get_object_store_prefix"
     )
-    @patch("application_sdk.activities.metadata_extraction.base.aiohttp")
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.aiohttp")
     async def test_load_api_error(self, mock_aiohttp, mock_get_prefix):
         """POST non-202 → raises API error."""
         mock_get_prefix.return_value = "prefix/raw"
@@ -221,9 +229,9 @@ class TestLoadToLakehouse:
 
     @_apply_common_patches
     @patch(
-        "application_sdk.activities.metadata_extraction.base.get_object_store_prefix"
+        "application_sdk.activities.metadata_extraction.lakehouse.get_object_store_prefix"
     )
-    @patch("application_sdk.activities.metadata_extraction.base.aiohttp")
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.aiohttp")
     async def test_load_non_retryable_poll_status(self, mock_aiohttp, mock_get_prefix):
         """Poll returns 404 → fails fast instead of burning all attempts."""
         mock_get_prefix.return_value = "prefix/raw"
@@ -309,3 +317,158 @@ class TestLhLoadResponseModels:
         )
         assert resp.job_id == "j1"
         assert resp.status == "COMPLETED"
+
+
+class TestResolveIcebergTable:
+    def test_standard_typename(self):
+        assert resolve_iceberg_table("database") == "database"
+
+    def test_uppercase_typename(self):
+        assert resolve_iceberg_table("LookerDashboard") == "lookerdashboard"
+
+    def test_extras_procedure_override(self):
+        assert resolve_iceberg_table("extras-procedure") == "procedure"
+
+    def test_unknown_typename(self):
+        assert resolve_iceberg_table("snowflakedynamictable") == "snowflakedynamictable"
+
+
+class TestConvertRawParquetToJsonl:
+    @patch(
+        "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID", "t1"
+    )
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.download_files")
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.SafeFileOps")
+    async def test_empty_typenames_returns_base_dir(self, mock_fileops, mock_download):
+        """Empty typenames list returns base_dir without processing."""
+        args = {"output_path": "/tmp/out", "workflow_id": "w1", "workflow_run_id": "r1"}
+        result = await convert_raw_parquet_to_jsonl(args, [])
+        assert result.endswith("raw_lakehouse")
+        mock_download.assert_not_called()
+
+    @patch(
+        "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID", "t1"
+    )
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.download_files")
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.SafeFileOps")
+    async def test_no_parquet_files_skips(self, mock_fileops, mock_download):
+        """No parquet files for a typename → skips without writing."""
+        mock_download.return_value = []
+        args = {"output_path": "/tmp/out", "workflow_id": "w1", "workflow_run_id": "r1"}
+        result = await convert_raw_parquet_to_jsonl(args, ["database"])
+        assert result.endswith("raw_lakehouse")
+        mock_download.assert_called_once()
+
+    @patch(
+        "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID", "t1"
+    )
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.download_files")
+    async def test_writes_jsonl_with_correct_schema(self, mock_download, tmp_path):
+        """Parquet rows are wrapped with metadata columns in output JSONL."""
+        mock_download.return_value = [str(tmp_path / "fake.parquet")]
+
+        mock_df = MagicMock()
+        mock_df.to_pydict.return_value = {
+            "database_name": ["mydb"],
+            "extra_col": ["val1"],
+        }
+
+        with patch.dict("sys.modules", {"daft": MagicMock()}):
+            import sys
+
+            sys.modules["daft"].read_parquet.return_value = mock_df
+
+            out_base = str(tmp_path / "output")
+            os.makedirs(os.path.join(out_base, "raw", "database"), exist_ok=True)
+
+            args = {
+                "output_path": out_base,
+                "workflow_id": "wf-1",
+                "workflow_run_id": "run-1",
+                "connection": {"connection_qualified_name": "default/pg/123"},
+            }
+
+            result = await convert_raw_parquet_to_jsonl(args, ["database"])
+
+            assert result.endswith("raw_lakehouse")
+
+            out_file = os.path.join(result, "database", "chunk-0.jsonl")
+            assert os.path.exists(out_file)
+
+            with open(out_file, "r") as f:
+                record = json.loads(f.readline())
+
+            assert record["typename"] == "database"
+            assert record["connection_qualified_name"] == "default/pg/123"
+            assert record["workflow_id"] == "wf-1"
+            assert record["workflow_run_id"] == "run-1"
+            assert record["tenant_id"] == "t1"
+            assert record["entity_name"] == "mydb"
+            raw = json.loads(record["raw_record"])
+            assert raw["database_name"] == "mydb"
+            assert raw["extra_col"] == "val1"
+
+    @patch(
+        "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID", "t1"
+    )
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.download_files")
+    async def test_unknown_typename_has_empty_entity_name(
+        self, mock_download, tmp_path
+    ):
+        """Typename not in _RAW_ENTITY_NAME_FIELDS → entity_name is empty."""
+        mock_download.return_value = [str(tmp_path / "fake.parquet")]
+
+        mock_df = MagicMock()
+        mock_df.to_pydict.return_value = {"some_col": ["val"]}
+
+        with patch.dict("sys.modules", {"daft": MagicMock()}):
+            import sys
+
+            sys.modules["daft"].read_parquet.return_value = mock_df
+
+            out_base = str(tmp_path / "output")
+            os.makedirs(os.path.join(out_base, "raw", "custom_type"), exist_ok=True)
+
+            args = {
+                "output_path": out_base,
+                "workflow_id": "wf-1",
+                "workflow_run_id": "run-1",
+                "connection": {"connection_qualified_name": "conn/1"},
+            }
+
+            result = await convert_raw_parquet_to_jsonl(args, ["custom_type"])
+
+            out_file = os.path.join(result, "custom_type", "chunk-0.jsonl")
+            with open(out_file, "r") as f:
+                record = json.loads(f.readline())
+
+            assert record["entity_name"] == ""
+
+    @patch(
+        "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID", "t1"
+    )
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.download_files")
+    async def test_parquet_read_failure_skips_file(self, mock_download, tmp_path):
+        """Failed parquet read is skipped, doesn't crash the whole conversion."""
+        mock_download.return_value = [str(tmp_path / "bad.parquet")]
+
+        with patch.dict("sys.modules", {"daft": MagicMock()}):
+            import sys
+
+            sys.modules["daft"].read_parquet.side_effect = Exception("corrupt file")
+
+            out_base = str(tmp_path / "output")
+            os.makedirs(os.path.join(out_base, "raw", "table"), exist_ok=True)
+
+            args = {
+                "output_path": out_base,
+                "workflow_id": "wf-1",
+                "workflow_run_id": "run-1",
+            }
+
+            result = await convert_raw_parquet_to_jsonl(args, ["table"])
+
+            # No output file should be written
+            out_dir = os.path.join(result, "table")
+            if os.path.exists(out_dir):
+                assert len(os.listdir(out_dir)) == 0
