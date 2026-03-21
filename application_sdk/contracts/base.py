@@ -8,6 +8,12 @@ Apps, tasks, and their callers. Using these base classes ensures:
 3. Serialization - Works seamlessly with Temporal's data converters
 4. Backwards compatibility - Add new fields with defaults, never change signatures
 
+IMPORTANT — Temporal zone: ``Input``, ``Output``, ``HeartbeatDetails``, and
+``Record`` MUST remain plain ``@dataclass``. They serialize natively via
+``dataclasses.asdict()`` / ``value_to_type()``. Do NOT subclass these with
+``pydantic.BaseModel`` — that would require a custom ``pydantic_data_converter``
+and break the existing serialization contract.
+
 Usage:
     from dataclasses import dataclass
     from application_sdk.contracts import Input, Output

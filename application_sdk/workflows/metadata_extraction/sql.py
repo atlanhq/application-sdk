@@ -115,7 +115,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         if raw_statistics is None:
             return
 
-        activity_statistics = ActivityStatistics.model_validate(raw_statistics)
+        activity_statistics = ActivityStatistics(**raw_statistics)
         transform_activities: List[Any] = []
 
         if (
@@ -157,7 +157,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         total_record_count = 0
         chunk_count = 0
         for record_count in record_counts:
-            metadata_model = ActivityStatistics.model_validate(record_count)
+            metadata_model = ActivityStatistics(**record_count)
             total_record_count += metadata_model.total_record_count
             chunk_count += metadata_model.chunk_count
 

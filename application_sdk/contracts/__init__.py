@@ -37,6 +37,7 @@ from application_sdk.contracts.types import (
     FileReference,
     GitReference,
     MaxItems,
+    StorageTier,
 )
 
 __all__ = [
@@ -60,6 +61,7 @@ __all__ = [
     "FileReference",
     "GitReference",
     "MaxItems",
+    "StorageTier",
     "UploadInput",
     "UploadOutput",
     "DownloadInput",

@@ -4,7 +4,7 @@ import sys
 import threading
 import traceback as tb_module
 from time import time_ns
-from typing import Any, ClassVar, Dict, Optional, Tuple
+from typing import Any, ClassVar, Dict, Tuple
 
 from loguru import logger
 from opentelemetry._logs import LogRecord, SeverityNumber
@@ -12,7 +12,6 @@ from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.trace.span import TraceFlags
-from pydantic import BaseModel, Field
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -42,100 +41,69 @@ from application_sdk.observability.utils import (
 )
 from application_sdk.version import __version__ as _SDK_VERSION
 
-
-class LogExtraModel(BaseModel):
-    """Pydantic model for log extra fields.
-
-    This model allows arbitrary extra fields (prefixed with atlan-) to be included
-    for correlation context propagation to OTEL.
-    """
-
-    model_config = {"extra": "allow"}
-
-    client_host: Optional[str] = None
-    duration_ms: Optional[int] = None
-    method: Optional[str] = None
-    path: Optional[str] = None
-    request_id: Optional[str] = None
-    status_code: Optional[int] = None
-    url: Optional[str] = None
-    # Workflow context
-    workflow_id: Optional[str] = None
-    run_id: Optional[str] = None
-    workflow_type: Optional[str] = None
-    namespace: Optional[str] = None
-    task_queue: Optional[str] = None
-    attempt: Optional[str] = None
-    # Activity context
-    activity_id: Optional[str] = None
-    activity_type: Optional[str] = None
-    schedule_to_close_timeout: Optional[str] = None
-    start_to_close_timeout: Optional[str] = None
-    schedule_to_start_timeout: Optional[str] = None
-    heartbeat_timeout: Optional[str] = None
-    # Other fields
-    log_type: Optional[str] = None
-    app_name: Optional[str] = None
-    # Trace context
-    trace_id: Optional[str] = None
-    correlation_id: Optional[str] = None
+_KNOWN_EXTRA_KEYS = frozenset(
+    {
+        "client_host",
+        "duration_ms",
+        "method",
+        "path",
+        "request_id",
+        "status_code",
+        "url",
+        "workflow_id",
+        "run_id",
+        "workflow_type",
+        "namespace",
+        "task_queue",
+        "attempt",
+        "activity_id",
+        "activity_type",
+        "schedule_to_close_timeout",
+        "start_to_close_timeout",
+        "schedule_to_start_timeout",
+        "heartbeat_timeout",
+        "log_type",
+        "app_name",
+        "trace_id",
+        "correlation_id",
+    }
+)
 
 
-class LogRecordModel(BaseModel):
-    """Pydantic model for log records."""
+def _build_extra_dict(
+    record_extra: Dict[str, Any], exception: Any = None
+) -> Dict[str, Any]:
+    """Build a dict of structured log extra fields from a loguru record's extra dict."""
+    extra: Dict[str, Any] = {}
+    for k, v in record_extra.items():
+        if k != "logger_name" and k in _KNOWN_EXTRA_KEYS:
+            extra[k] = _normalize_log_extra_value(k, v)
+        elif (
+            k.startswith("atlan-")
+            or k.startswith("exception.")
+            or k.startswith("temporal.")
+            or k.startswith("tenant.")
+        ) and v is not None:
+            extra[k] = v if isinstance(v, (bool, int, float, str, bytes)) else str(v)
+    for key, value in _extract_exception_attributes(exception).items():
+        extra[key] = value
+    return extra
 
-    timestamp: float
-    level: str
-    logger_name: str
-    message: str
-    file: str
-    line: int
-    function: str
-    extra: LogExtraModel = Field(default_factory=LogExtraModel)
 
-    @classmethod
-    def from_loguru_message(cls, message: Any) -> "LogRecordModel":
-        """Create a LogRecordModel from a loguru message.
-
-        Args:
-            message: Loguru message object
-
-        Returns:
-            LogRecordModel: Parsed log record model
-        """
-        # Create LogExtraModel for structured extra fields
-        extra = LogExtraModel()
-        for k, v in message.record["extra"].items():
-            if k != "logger_name" and hasattr(extra, k):
-                setattr(extra, k, _normalize_log_extra_value(k, v))
-            # Include atlan-, exception., temporal., tenant. prefixed fields as extra attributes
-            elif (
-                k.startswith("atlan-")
-                or k.startswith("exception.")
-                or k.startswith("temporal.")
-                or k.startswith("tenant.")
-            ) and v is not None:
-                if isinstance(v, (bool, int, float, str, bytes)):
-                    setattr(extra, k, v)
-                else:
-                    setattr(extra, k, str(v))
-        for key, value in _extract_exception_attributes(
-            message.record.get("exception")
-        ).items():
-            setattr(extra, key, value)
-
-        return cls(
-            timestamp=message.record["time"].timestamp(),
-            level=message.record["level"].name,
-            logger_name=message.record["extra"].get("logger_name", ""),
-            message=message.record["message"],
-            file=str(message.record["file"].path),
-            line=message.record["line"],
-            function=message.record["function"],
-            extra=extra,
-        )
-
-    model_config = {"arbitrary_types_allowed": True}
+def _make_log_record_dict(message: Any) -> Dict[str, Any]:
+    """Build a log record dict from a loguru message."""
+    return {
+        "timestamp": message.record["time"].timestamp(),
+        "level": message.record["level"].name,
+        "logger_name": message.record["extra"].get("logger_name", ""),
+        "message": message.record["message"],
+        "file": str(message.record["file"].path),
+        "line": message.record["line"],
+        "function": message.record["function"],
+        "extra": _build_extra_dict(
+            message.record["extra"], message.record.get("exception")
+        ),
+    }
 
 
 def _format_exception_stacktrace(exception: Any) -> str:
@@ -254,7 +222,7 @@ SEVERITY_MAPPING = {
 }
 
 
-class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
+class AtlanLoggerAdapter(AtlanObservability[Any]):
     """A custom logger adapter for Atlan that extends AtlanObservability.
 
     This adapter provides enhanced logging capabilities including:
@@ -444,7 +412,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         """Process a log record into a standardized dictionary format.
 
         Args:
-            record (Any): Input log record, can be LogRecordModel, loguru message, or dict.
+            record (Any): Input log record, can be a loguru message or pre-built dict.
 
         Returns:
             Dict[str, Any]: Standardized dictionary representation of the log record.
@@ -452,60 +420,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         Raises:
             ValueError: If the record format is not supported.
         """
-        if isinstance(record, LogRecordModel):
-            return record.model_dump()
-
         # Handle loguru message format
         if hasattr(record, "record"):
-            extra = LogExtraModel()
-            for k, v in record.record["extra"].items():
-                if k != "logger_name" and hasattr(extra, k):
-                    setattr(extra, k, _normalize_log_extra_value(k, v))
-                elif (
-                    k.startswith("atlan-")
-                    or k.startswith("exception.")
-                    or k.startswith("temporal.")
-                    or k.startswith("tenant.")
-                ) and v is not None:
-                    if isinstance(v, (bool, int, float, str, bytes)):
-                        setattr(extra, k, v)
-                    else:
-                        setattr(extra, k, str(v))
-            for key, value in _extract_exception_attributes(
-                record.record.get("exception")
-            ).items():
-                setattr(extra, key, value)
+            return _make_log_record_dict(record)
 
-            return LogRecordModel(
-                timestamp=record.record["time"].timestamp(),
-                level=record.record["level"].name,
-                logger_name=record.record["extra"].get("logger_name", ""),
-                message=record.record["message"],
-                file=str(record.record["file"].path),
-                line=record.record["line"],
-                function=record.record["function"],
-                extra=extra,
-            ).model_dump()
-
-        # Handle raw dictionary format
+        # Handle pre-built log record dict
         if isinstance(record, dict):
-            extra = LogExtraModel()
-            for k, v in record.get("extra", {}).items():
-                if hasattr(extra, k):
-                    setattr(extra, k, _normalize_log_extra_value(k, v))
-                elif (
-                    k.startswith("atlan-")
-                    or k.startswith("exception.")
-                    or k.startswith("temporal.")
-                    or k.startswith("tenant.")
-                ) and v is not None:
-                    setattr(extra, k, str(v))
-            for key, value in _extract_exception_attributes(
-                record.get("exception")
-            ).items():
-                setattr(extra, key, value)
-            record["extra"] = extra
-            return LogRecordModel(**record).model_dump()
+            return record
 
         raise ValueError(f"Unsupported record format: {type(record)}")
 
@@ -516,15 +437,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             record (Any): Log record to export.
 
         This method:
-        - Converts the record to LogRecordModel if needed
         - Sends the record to OpenTelemetry if enabled
         """
-        if not isinstance(record, LogRecordModel):
-            record = LogRecordModel(**self.process_record(record))
-
-        # Send to OpenTelemetry if enabled
         if ENABLE_OTLP_LOGS:
-            self._send_to_otel(record)
+            self._send_to_otel(self.process_record(record))
 
     def _create_log_record(self, record: dict) -> LogRecord:
         """Create an OpenTelemetry LogRecord from a dictionary.
@@ -615,20 +531,20 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         workflow_context = get_workflow_context()
 
         try:
-            if workflow_context and workflow_context.in_workflow == "true":
+            if workflow_context["in_workflow"] == "true":
                 # Only append workflow context if we have workflow info
-                workflow_msg = f" Workflow Context: Workflow ID: {workflow_context.workflow_id} Run ID: {workflow_context.workflow_run_id} Type: {workflow_context.workflow_type}"
+                workflow_msg = f" Workflow Context: Workflow ID: {workflow_context['workflow_id']} Run ID: {workflow_context['workflow_run_id']} Type: {workflow_context['workflow_type']}"
                 msg = f"{msg}{workflow_msg}"
-                kwargs.update(workflow_context.model_dump())
+                kwargs.update(workflow_context)
         except Exception:
             pass
 
         try:
-            if workflow_context and workflow_context.in_activity == "true":
+            if workflow_context["in_activity"] == "true":
                 # Only append activity context if we have activity info
-                activity_msg = f" Activity Context: Activity ID: {workflow_context.activity_id} Workflow ID: {workflow_context.workflow_id} Run ID: {workflow_context.workflow_run_id} Type: {workflow_context.activity_type}"
+                activity_msg = f" Activity Context: Activity ID: {workflow_context['activity_id']} Workflow ID: {workflow_context['workflow_id']} Run ID: {workflow_context['workflow_run_id']} Type: {workflow_context['activity_type']}"
                 msg = f"{msg}{activity_msg}"
-                kwargs.update(workflow_context.model_dump())
+                kwargs.update(workflow_context)
         except Exception:
             pass
 
@@ -816,11 +732,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             logging.error(f"Error in metric logging: {e}")
             self._sync_flush()
 
-    def _send_to_otel(self, record: LogRecordModel):
+    def _send_to_otel(self, record: Dict[str, Any]):
         """Send log record to OpenTelemetry.
 
         Args:
-            record (LogRecordModel): Log record to send
+            record (Dict[str, Any]): Log record dict to send
 
         This method:
         - Creates an OpenTelemetry LogRecord
@@ -828,14 +744,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         - Emits the log record
         """
         try:
-            # Create OpenTelemetry LogRecord
-            otel_record = self._create_log_record(record.model_dump())
-
-            # Get the logger from the provider
-            logger = self.logger_provider.get_logger(SERVICE_NAME)
-
-            # Emit the log record
-            logger.emit(otel_record)
+            otel_record = self._create_log_record(record)
+            otel_logger = self.logger_provider.get_logger(SERVICE_NAME)
+            otel_logger.emit(otel_record)
         except Exception as e:
             logging.error(f"Error sending log to OpenTelemetry: {e}")
 
@@ -886,14 +797,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             message (Any): Log message to process and store
 
         This method:
-        - Creates a LogRecordModel from the message
+        - Builds a log record dict from the message
         - Adds the record to the buffer for parquet storage
         """
         try:
-            # Create LogRecordModel using the class method
-            log_record = LogRecordModel.from_loguru_message(message)
-
-            # Use base class's add_record method which handles buffering and flushing
+            log_record = _make_log_record_dict(message)
             self.add_record(log_record)
         except Exception as e:
             logging.error(f"Error buffering log: {e}")
@@ -905,12 +813,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             message (Any): Log message to process and emit
 
         This method:
-        - Creates a LogRecordModel from the message
+        - Builds a log record dict from the message
         - Sends the record to OpenTelemetry
         """
         try:
-            # Create LogRecordModel using the class method
-            log_record = LogRecordModel.from_loguru_message(message)
+            log_record = _make_log_record_dict(message)
             self._send_to_otel(log_record)
         except Exception as e:
             logging.error(f"Error processing log record: {e}")

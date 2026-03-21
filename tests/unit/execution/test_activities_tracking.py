@@ -83,7 +83,9 @@ class TestTrackFileRefs:
 
     def test_multiple_refs_in_single_call(self) -> None:
         refs = [
-            FileReference(local_path=f"/tmp/f{i}.parquet", storage_path=f"artifacts/{i}")
+            FileReference(
+                local_path=f"/tmp/f{i}.parquet", storage_path=f"artifacts/{i}"
+            )
             for i in range(3)
         ]
         _track_file_refs("wf-multi", *refs)
@@ -111,12 +113,14 @@ class TestActivityTrackingWiring:
         """_track_file_refs is called with refs from both input_data and result."""
         import application_sdk.execution._temporal.activities as act_mod
 
-        in_ref = FileReference(local_path="/tmp/in.parquet", storage_path="artifacts/in")
-        out_ref = FileReference(local_path="/tmp/out.parquet", storage_path="artifacts/out")
+        in_ref = FileReference(
+            local_path="/tmp/in.parquet", storage_path="artifacts/in"
+        )
+        out_ref = FileReference(
+            local_path="/tmp/out.parquet", storage_path="artifacts/out"
+        )
 
         tracked_calls: list[tuple] = []
-
-        orig_track = act_mod._track_file_refs
 
         def capture_track(wf_id: str, *refs: FileReference) -> None:
             tracked_calls.append((wf_id, refs))
@@ -139,7 +143,9 @@ class TestActivityTrackingWiring:
 
     def test_track_file_refs_import_and_exists(self) -> None:
         """_track_file_refs is importable from activities module."""
-        from application_sdk.execution._temporal.activities import _track_file_refs as fn
+        from application_sdk.execution._temporal.activities import (
+            _track_file_refs as fn,
+        )
 
         assert callable(fn)
 

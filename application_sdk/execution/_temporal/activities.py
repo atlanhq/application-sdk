@@ -172,7 +172,15 @@ def create_activity_from_task(
 
             # Persist any ephemeral FileReferences in the output after the task completes.
             if store is not None and has_refs_to_persist(result):
-                result = await persist_file_refs(store, result)
+                from application_sdk.execution._temporal.activity_utils import (
+                    build_output_path,
+                )
+
+                try:
+                    output_path: str | None = build_output_path()
+                except Exception:
+                    output_path = None
+                result = await persist_file_refs(store, result, output_path=output_path)
 
             # Track all FileReference local paths for on_complete() cleanup.
             from application_sdk.storage.file_ref_sync import _find_file_refs

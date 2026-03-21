@@ -117,13 +117,13 @@ async def test_fetch_and_transform():
     mock_fetch = AsyncMock()
     mock_fetch.return_value = ActivityStatistics(
         total_record_count=10, chunk_count=2, typename="test", partitions=[1, 2]
-    ).model_dump()
+    ).__dict__
 
     # Mock transform function
     mock_transform = AsyncMock()
     mock_transform.return_value = ActivityStatistics(
         total_record_count=5, chunk_count=1, typename="test", partitions=[1]
-    ).model_dump()
+    ).__dict__
 
     workflow.activities_cls.transform_data = mock_transform
 
@@ -150,7 +150,7 @@ async def test_fetch_and_transform_error_handling():
     with patch("temporalio.workflow.execute_activity_method") as mock_execute:
         mock_execute.return_value = ActivityStatistics(
             total_record_count=0, chunk_count=0, typename="test", partitions=[]
-        ).model_dump()
+        ).__dict__
         await workflow.fetch_and_transform(
             mock_fetch_none, {}, RetryPolicy(maximum_attempts=1)
         )
@@ -159,7 +159,7 @@ async def test_fetch_and_transform_error_handling():
     mock_fetch_invalid = AsyncMock(
         return_value=ActivityStatistics(
             total_record_count=10, chunk_count=2, typename=None, partitions=[1, 2]
-        ).model_dump()
+        ).__dict__
     )
 
     with patch("temporalio.workflow.execute_activity_method") as mock_execute:

@@ -38,16 +38,8 @@ class FetchMetadataResponse(BaseModel):
 
 
 class PreflightCheckRequest(BaseModel):
-    credentials: Dict[str, Any] = Field(
-        ..., description="Required JSON field containing database credentials"
-    )
-    metadata: Dict[str, Any] = Field(
-        ...,
-        description="Required JSON field containing form data for filtering and configuration",
-    )
-
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "credentials": {
                     "authType": "basic",
@@ -64,16 +56,20 @@ class PreflightCheckRequest(BaseModel):
                 },
             }
         }
+    }
+
+    credentials: Dict[str, Any] = Field(
+        ..., description="Required JSON field containing database credentials"
+    )
+    metadata: Dict[str, Any] = Field(
+        ...,
+        description="Required JSON field containing form data for filtering and configuration",
+    )
 
 
 class PreflightCheckResponse(BaseModel):
-    success: bool = Field(
-        ..., description="Indicates if the overall operation was successful"
-    )
-    data: Dict[str, Any] = Field(..., description="Response data")
-
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "success": True,
                 "data": {
@@ -82,15 +78,17 @@ class PreflightCheckResponse(BaseModel):
                 },
             }
         }
+    }
+
+    success: bool = Field(
+        ..., description="Indicates if the overall operation was successful"
+    )
+    data: Dict[str, Any] = Field(..., description="Response data")
 
 
 class WorkflowRequest(RootModel[Dict[str, Any]]):
-    root: Dict[str, Any] = Field(
-        ..., description="Root JSON object containing workflow configuration"
-    )
-
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "miner_args": {},
                 "credentials": {
@@ -109,6 +107,11 @@ class WorkflowRequest(RootModel[Dict[str, Any]]):
                 },
             }
         }
+    }
+
+    root: Dict[str, Any] = Field(
+        ..., description="Root JSON object containing workflow configuration"
+    )
 
 
 class EventWorkflowRequest(BaseModel):
@@ -130,16 +133,8 @@ class WorkflowData(BaseModel):
 
 
 class WorkflowResponse(BaseModel):
-    success: bool = Field(
-        ..., description="Indicates whether the operation was successful"
-    )
-    message: str = Field(
-        ..., description="Message describing the result of the operation"
-    )
-    data: WorkflowData = Field(..., description="Details about the workflow and run")
-
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "success": True,
                 "message": "Workflow started successfully",
@@ -149,6 +144,15 @@ class WorkflowResponse(BaseModel):
                 },
             }
         }
+    }
+
+    success: bool = Field(
+        ..., description="Indicates whether the operation was successful"
+    )
+    message: str = Field(
+        ..., description="Message describing the result of the operation"
+    )
+    data: WorkflowData = Field(..., description="Details about the workflow and run")
 
 
 class EventWorkflowResponse(WorkflowResponse):
@@ -169,16 +173,8 @@ class WorkflowConfigRequest(RootModel[Dict[str, Any]]):
 
 
 class WorkflowConfigResponse(BaseModel):
-    success: bool = Field(
-        ..., description="Indicates whether the operation was successful"
-    )
-    message: str = Field(
-        ..., description="Message describing the result of the operation"
-    )
-    data: Dict[str, Any] = Field(..., description="Workflow configuration")
-
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "success": True,
                 "message": "Workflow configuration fetched successfully",
@@ -193,19 +189,20 @@ class WorkflowConfigResponse(BaseModel):
                 },
             }
         }
+    }
 
-
-class ConfigMapResponse(BaseModel):
     success: bool = Field(
         ..., description="Indicates whether the operation was successful"
     )
     message: str = Field(
         ..., description="Message describing the result of the operation"
     )
-    data: Dict[str, Any] = Field(..., description="Configuration map object")
+    data: Dict[str, Any] = Field(..., description="Workflow configuration")
 
-    class Config:
-        schema_extra = {
+
+class ConfigMapResponse(BaseModel):
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "success": True,
                 "message": "Configuration map fetched successfully",
@@ -220,6 +217,15 @@ class ConfigMapResponse(BaseModel):
                 },
             }
         }
+    }
+
+    success: bool = Field(
+        ..., description="Indicates whether the operation was successful"
+    )
+    message: str = Field(
+        ..., description="Message describing the result of the operation"
+    )
+    data: Dict[str, Any] = Field(..., description="Configuration map object")
 
 
 class WorkflowTrigger(BaseModel):
@@ -310,27 +316,8 @@ class FileUploadResponse(BaseModel):
     Atlan ``/files`` endpoint contract.
     """
 
-    id: str = Field(..., description="UUID of the file")
-    version: str = Field(..., description="Human-readable version string")
-    isActive: bool = Field(..., description="Whether the file is active")
-    createdAt: int = Field(..., description="Unix timestamp in milliseconds")
-    updatedAt: int = Field(..., description="Unix timestamp in milliseconds")
-    fileName: str = Field(..., description="UUID + extension")
-    rawName: str = Field(..., description="Original filename")
-    key: str = Field(..., description="Object store key (uuid+extension)")
-    extension: str = Field(..., description="File extension (e.g., '.csv')")
-    contentType: str = Field(..., description="Content type of the file")
-    fileSize: int = Field(..., description="File size in bytes")
-    isEncrypted: bool = Field(..., description="Whether the file is encrypted")
-    redirectUrl: str = Field(..., description="Redirect URL (empty for now)")
-    isUploaded: bool = Field(..., description="Whether the file is uploaded")
-    uploadedAt: str = Field(
-        ..., description="ISO timestamp or '0001-01-01T00:00:00Z' default"
-    )
-    isArchived: bool = Field(..., description="Whether the file is archived")
-
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "id": "977f156b-9c78-4bfc-bd74-f603f18c078a",
                 "version": "weathered-firefly-9025",
@@ -350,3 +337,23 @@ class FileUploadResponse(BaseModel):
                 "isArchived": False,
             }
         }
+    }
+
+    id: str = Field(..., description="UUID of the file")
+    version: str = Field(..., description="Human-readable version string")
+    isActive: bool = Field(..., description="Whether the file is active")
+    createdAt: int = Field(..., description="Unix timestamp in milliseconds")
+    updatedAt: int = Field(..., description="Unix timestamp in milliseconds")
+    fileName: str = Field(..., description="UUID + extension")
+    rawName: str = Field(..., description="Original filename")
+    key: str = Field(..., description="Object store key (uuid+extension)")
+    extension: str = Field(..., description="File extension (e.g., '.csv')")
+    contentType: str = Field(..., description="Content type of the file")
+    fileSize: int = Field(..., description="File size in bytes")
+    isEncrypted: bool = Field(..., description="Whether the file is encrypted")
+    redirectUrl: str = Field(..., description="Redirect URL (empty for now)")
+    isUploaded: bool = Field(..., description="Whether the file is uploaded")
+    uploadedAt: str = Field(
+        ..., description="ISO timestamp or '0001-01-01T00:00:00Z' default"
+    )
+    isArchived: bool = Field(..., description="Whether the file is archived")

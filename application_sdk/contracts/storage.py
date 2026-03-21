@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from application_sdk.contracts.base import Input, Output
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts.types import FileReference, StorageTier
 
 
 @dataclass
@@ -19,14 +19,19 @@ class UploadInput(Input):
     Args:
         local_path: Local file or directory path to upload.
         storage_path: Destination key (single file) or prefix (directory)
-            in the store.  Auto-namespaced under
-            ``artifacts/apps/{app}/{run_id}/`` when ``None``.
+            in the store.  Auto-namespaced based on *tier* when ``None``.
+        tier: Storage lifecycle tier.  Controls the destination prefix when
+            *storage_path* is not given and sets ``tier`` on the returned
+            ``FileReference`` so cleanup behaves correctly.
+            Defaults to ``StorageTier.RETAINED`` (stored under the run-scoped
+            ``artifacts/apps/`` prefix, not auto-cleaned).
         skip_if_exists: When ``True``, skip uploading files whose SHA-256
             hash already matches the stored value.  Defaults to ``False``.
     """
 
     local_path: str = ""
     storage_path: str | None = None
+    tier: StorageTier = StorageTier.RETAINED
     skip_if_exists: bool = False
 
 

@@ -9,7 +9,7 @@ from application_sdk.observability.context import (
     get_execution_context,
     set_execution_context,
 )
-from application_sdk.observability.utils import WorkflowContext, get_workflow_context
+from application_sdk.observability.utils import get_workflow_context
 
 # ---------------------------------------------------------------------------
 # ExecutionContext dataclass
@@ -107,17 +107,17 @@ def reset_execution_context():
 def test_get_workflow_context_defaults_outside_temporal():
     """Outside Temporal: in_workflow='false', in_activity='false', fields empty."""
     ctx = get_workflow_context()
-    assert isinstance(ctx, WorkflowContext)
-    assert ctx.in_workflow == "false"
-    assert ctx.in_activity == "false"
-    assert ctx.workflow_id == ""
-    assert ctx.workflow_run_id == ""
-    assert ctx.workflow_type == ""
-    assert ctx.namespace == ""
-    assert ctx.task_queue == ""
-    assert ctx.attempt == "0"
-    assert ctx.activity_id == ""
-    assert ctx.activity_type == ""
+    assert isinstance(ctx, dict)
+    assert ctx["in_workflow"] == "false"
+    assert ctx["in_activity"] == "false"
+    assert ctx["workflow_id"] == ""
+    assert ctx["workflow_run_id"] == ""
+    assert ctx["workflow_type"] == ""
+    assert ctx["namespace"] == ""
+    assert ctx["task_queue"] == ""
+    assert ctx["attempt"] == "0"
+    assert ctx["activity_id"] == ""
+    assert ctx["activity_type"] == ""
 
 
 def test_get_workflow_context_in_workflow():
@@ -134,16 +134,16 @@ def test_get_workflow_context_in_workflow():
         )
     )
     ctx = get_workflow_context()
-    assert ctx.in_workflow == "true"
-    assert ctx.in_activity == "false"
-    assert ctx.workflow_id == "wf-abc"
-    assert ctx.workflow_run_id == "run-123"
-    assert ctx.workflow_type == "MyWorkflow"
-    assert ctx.namespace == "default"
-    assert ctx.task_queue == "my-queue"
-    assert ctx.attempt == "1"
-    assert ctx.activity_id == ""
-    assert ctx.activity_type == ""
+    assert ctx["in_workflow"] == "true"
+    assert ctx["in_activity"] == "false"
+    assert ctx["workflow_id"] == "wf-abc"
+    assert ctx["workflow_run_id"] == "run-123"
+    assert ctx["workflow_type"] == "MyWorkflow"
+    assert ctx["namespace"] == "default"
+    assert ctx["task_queue"] == "my-queue"
+    assert ctx["attempt"] == "1"
+    assert ctx["activity_id"] == ""
+    assert ctx["activity_type"] == ""
 
 
 def test_get_workflow_context_in_activity():
@@ -160,18 +160,18 @@ def test_get_workflow_context_in_activity():
         )
     )
     ctx = get_workflow_context()
-    assert ctx.in_workflow == "false"
-    assert ctx.in_activity == "true"
-    assert ctx.workflow_id == "wf-abc"
-    assert ctx.workflow_run_id == "run-123"
-    assert ctx.activity_id == "act-1"
-    assert ctx.activity_type == "fetch_databases"
-    assert ctx.task_queue == "my-queue"
-    assert ctx.attempt == "2"
+    assert ctx["in_workflow"] == "false"
+    assert ctx["in_activity"] == "true"
+    assert ctx["workflow_id"] == "wf-abc"
+    assert ctx["workflow_run_id"] == "run-123"
+    assert ctx["activity_id"] == "act-1"
+    assert ctx["activity_type"] == "fetch_databases"
+    assert ctx["task_queue"] == "my-queue"
+    assert ctx["attempt"] == "2"
 
 
 def test_get_workflow_context_merges_correlation_context():
-    """atlan- prefixed correlation context fields are merged into WorkflowContext."""
+    """atlan- prefixed correlation context fields are merged into the workflow context dict."""
     from application_sdk.observability.context import correlation_context
 
     token = correlation_context.set(
@@ -189,8 +189,8 @@ def test_get_workflow_context_merges_correlation_context():
             )
         )
         ctx = get_workflow_context()
-        assert ctx.model_extra.get("atlan-workflow-name") == "test-workflow"
-        assert ctx.model_extra.get("atlan-workflow-node") == "node-1"
-        assert "non-atlan-key" not in (ctx.model_extra or {})
+        assert ctx.get("atlan-workflow-name") == "test-workflow"
+        assert ctx.get("atlan-workflow-node") == "node-1"
+        assert "non-atlan-key" not in ctx
     finally:
         correlation_context.reset(token)

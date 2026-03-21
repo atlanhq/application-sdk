@@ -868,13 +868,17 @@ class App(ABC):
                 "No object store configured. "
                 "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
             )
-        app_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
+        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
+        app_prefix = input.tier.upload_prefix(
+            run_prefix=run_prefix, app_name=self._app_name
+        )
         return await _upload(
             input.local_path,
             input.storage_path,
             skip_if_exists=input.skip_if_exists,
             store=store,
             _app_prefix=app_prefix,
+            _tier=input.tier,
         )
 
     @task(timeout_seconds=600, retry_max_attempts=3)
@@ -1007,11 +1011,13 @@ class App(ABC):
 
         Deletes two categories of object-store objects:
 
-        1. **Tracked ``file_refs/`` refs** (always): auto-persisted intermediary
-           files that use random UUIDs (``file_refs/{uuid4_hex}{suffix}``).
+        1. **Tracked ``TRANSIENT``-tier refs** (always): auto-persisted
+           intermediary files (``StorageTier.TRANSIENT``, the default).
            Each key and its ``.sha256`` sidecar are deleted.
+           ``RETAINED`` and ``PERSISTENT`` tier refs are skipped.
         2. **Run-scoped prefix** (opt-in via ``input.include_prefix_cleanup``):
-           all objects under ``artifacts/apps/{app}/workflows/{wf_id}/{run_id}/``.
+           all objects under ``artifacts/apps/{app}/workflows/{wf_id}/{run_id}/``,
+           which includes any ``RETAINED``-tier refs from this run.
 
         Objects under ``persistent-artifacts/`` are never deleted.
 
@@ -1051,7 +1057,9 @@ class App(ABC):
                 except Exception:
                     return False
 
-        # 1. Delete tracked file_refs/ objects.
+        # 1. Delete tracked transient objects.
+        from application_sdk.contracts.types import StorageTier
+
         tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY)
         if tracked_refs:
             for ref in tracked_refs:
@@ -1061,7 +1069,8 @@ class App(ABC):
                 if any(storage_path.startswith(p) for p in PROTECTED_STORAGE_PREFIXES):
                     skipped += 1
                     continue
-                if not storage_path.startswith("file_refs/"):
+                tier = getattr(ref, "tier", StorageTier.TRANSIENT)
+                if tier != StorageTier.TRANSIENT:
                     skipped += 1
                     continue
                 if storage_path.endswith("/"):

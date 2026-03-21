@@ -1,11 +1,11 @@
 """Common models for task execution data structures."""
 
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, TypedDict
 
-from pydantic import BaseModel
 
-
-class TaskStatistics(BaseModel):
+@dataclass
+class TaskStatistics:
     """Statistics produced by a completed task.
 
     Attributes:
@@ -17,8 +17,12 @@ class TaskStatistics(BaseModel):
 
     total_record_count: int = 0
     chunk_count: int = 0
-    partitions: Optional[List[int]] = []
+    partitions: Optional[List[int]] = None
     typename: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.partitions is None:
+            self.partitions = []
 
 
 class TaskResult(TypedDict):

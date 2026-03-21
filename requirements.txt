@@ -180,6 +180,7 @@ httptools==0.7.1
     # via uvicorn
 httpx==0.28.1
     # via
+    #   atlan-application-sdk
     #   fastapi
     #   fastapi-cloud-cli
     #   fastmcp
@@ -243,6 +244,7 @@ keyring==25.7.0
     # via py-key-value-aio
 lazy-loader==0.4
     # via pyatlan
+libcst==1.7.0
 loguru==0.7.3
     # via atlan-application-sdk
 lupa==2.6
@@ -469,6 +471,7 @@ pyyaml==6.0.3
     #   atlan-application-sdk
     #   frictionless
     #   jsonschema-path
+    #   libcst
     #   pandera
     #   poethepoet
     #   pre-commit

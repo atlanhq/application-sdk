@@ -16,7 +16,7 @@ from application_sdk.observability.context import (
 )
 from application_sdk.observability.logger_adaptor import (
     AtlanLoggerAdapter,
-    LogRecordModel,
+    _make_log_record_dict,
     get_logger,
 )
 from application_sdk.test_utils.hypothesis.strategies.common.logger import (
@@ -703,7 +703,7 @@ def test_log_record_model_extracts_exception_attrs_from_loguru_record():
         "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
     }
 
-    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    model = _make_log_record_dict(test_message)
     assert model["message"] == "Completing activity as failed"
     assert "Traceback" not in model["message"]
     assert model["extra"]["exception.type"] == "builtins.ValueError"
@@ -732,7 +732,7 @@ def test_log_record_model_serializes_attempt_without_warning(attempt_value):
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        model = LogRecordModel.from_loguru_message(test_message).model_dump()
+        model = _make_log_record_dict(test_message)
 
     assert model["extra"]["attempt"] == "1"
     assert caught == []
@@ -764,7 +764,7 @@ def test_log_record_model_extracts_nested_exception_type():
         "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
     }
 
-    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    model = _make_log_record_dict(test_message)
     assert model["message"] == "failed"
     assert "Traceback" not in model["message"]
     assert model["extra"]["exception.type"].endswith(".OuterError.InnerError")
@@ -797,7 +797,7 @@ def test_otel_stacktrace_in_attributes_not_body_from_loguru_record(
         "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
     }
 
-    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    model = _make_log_record_dict(test_message)
     otel_record = logger_adapter._create_log_record(model)
 
     assert otel_record.body == "Query failed"
@@ -960,7 +960,7 @@ class TestTemporalAttributePassthrough:
         assert otel_record.attributes["exception.message"] == "Connection refused"
         assert "Traceback" in otel_record.attributes["exception.stacktrace"]
 
-    def test_log_record_model_extracts_temporal_attributes_from_loguru(self):
+    def test_log_record_dict_extracts_temporal_attributes_from_loguru(self):
         """LogRecordModel should extract temporal.* attributes from loguru records."""
         test_message = mock.MagicMock()
         level_mock = mock.MagicMock()
@@ -981,7 +981,7 @@ class TestTemporalAttributePassthrough:
             "exception": None,
         }
 
-        model = LogRecordModel.from_loguru_message(test_message).model_dump()
+        model = _make_log_record_dict(test_message)
 
         assert model["extra"]["temporal.activity.type"] == "fetch_databases"
         assert model["extra"]["temporal.activity.attempt"] == 1  # Preserved as int

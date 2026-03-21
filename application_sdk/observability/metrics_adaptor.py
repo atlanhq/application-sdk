@@ -311,7 +311,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Raises:
             Exception: If recording fails, logs error and continues
         """
-        labels.update(get_workflow_context().model_dump())
+        labels.update(get_workflow_context())
 
         try:
             # Create metric record

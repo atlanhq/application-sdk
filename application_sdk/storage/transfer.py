@@ -23,7 +23,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts.types import FileReference, StorageTier
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -118,6 +118,7 @@ async def upload(
     skip_if_exists: bool = False,
     store: "ObjectStore | None" = None,
     _app_prefix: str = "",
+    _tier: StorageTier = StorageTier.RETAINED,
 ) -> "UploadOutput":
     """Upload a local file or directory to the object store.
 
@@ -158,6 +159,7 @@ async def upload(
             storage_path=key,
             is_durable=True,
             file_count=1,
+            tier=_tier,
         )
         return UploadOutput(ref=ref, synced=transferred, reason=reason)
 
@@ -188,6 +190,7 @@ async def upload(
             storage_path=store_prefix,
             is_durable=True,
             file_count=len(files),
+            tier=_tier,
         )
         return UploadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
 

@@ -127,13 +127,17 @@ def has_refs_to_materialize(data: Any) -> bool:
     return any(_needs_materialize(ref) for ref in _find_file_refs(data))
 
 
-async def _replace_refs(data: Any, store: "ObjectStore", mode: str) -> Any:
+async def _replace_refs(
+    data: Any, store: "ObjectStore", mode: str, output_path: str | None = None
+) -> Any:
     """Recursively replace FileReference instances in a dataclass tree.
 
     Args:
         data: Input dataclass, list, tuple, dict, or scalar.
         store: obstore store used for upload/download.
         mode: ``"persist"`` or ``"materialize"``.
+        output_path: Run-scoped base prefix passed through to
+            ``persist_file_reference`` for ``RETAINED``-tier refs.
 
     Returns:
         A new object tree with replaced FileReference instances (original
@@ -146,7 +150,7 @@ async def _replace_refs(data: Any, store: "ObjectStore", mode: str) -> Any:
 
     if isinstance(data, FileReference):
         if mode == "persist" and data.local_path is not None and not data.is_durable:
-            return await persist_file_reference(store, data)
+            return await persist_file_reference(store, data, output_path=output_path)
         if mode == "materialize" and _needs_materialize(data):
             return await materialize_file_reference(store, data)
         return data
@@ -155,30 +159,46 @@ async def _replace_refs(data: Any, store: "ObjectStore", mode: str) -> Any:
         changes: dict[str, Any] = {}
         for f in dataclasses.fields(data):
             old_val = getattr(data, f.name)
-            new_val = await _replace_refs(old_val, store, mode)
+            new_val = await _replace_refs(old_val, store, mode, output_path=output_path)
             if new_val is not old_val:
                 changes[f.name] = new_val
         return dataclasses.replace(data, **changes) if changes else data
 
     if isinstance(data, list):
-        new_list = [await _replace_refs(item, store, mode) for item in data]
+        new_list = [
+            await _replace_refs(item, store, mode, output_path=output_path)
+            for item in data
+        ]
         return new_list if any(n is not o for n, o in zip(new_list, data)) else data
 
     if isinstance(data, tuple):
-        new_tuple = tuple(await _replace_refs(item, store, mode) for item in data)
+        new_tuple = tuple(
+            await _replace_refs(item, store, mode, output_path=output_path)
+            for item in data
+        )
         return new_tuple if new_tuple != data else data
 
     return data
 
 
-async def persist_file_refs(store: "ObjectStore", data: Any) -> Any:
+async def persist_file_refs(
+    store: "ObjectStore", data: Any, output_path: str | None = None
+) -> Any:
     """Upload all ephemeral FileReferences in *data* to the store.
+
+    Args:
+        store: Destination obstore store.
+        data: Dataclass tree potentially containing ephemeral
+            ``FileReference`` objects.
+        output_path: Run-scoped base prefix (e.g.
+            ``artifacts/apps/{app}/workflows/{wf_id}/{run_id}``).  Required
+            for any ``RETAINED``-tier ``FileReference`` in *data*.
 
     Returns:
         New object tree with all ephemeral FileReferences replaced by
         durable ones (with sha256 sidecars written).
     """
-    return await _replace_refs(data, store, "persist")
+    return await _replace_refs(data, store, "persist", output_path=output_path)
 
 
 async def materialize_file_refs(store: "ObjectStore", data: Any) -> Any:

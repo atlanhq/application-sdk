@@ -42,7 +42,6 @@ import hashlib
 import logging
 import os
 import tempfile
-import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -54,17 +53,32 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _make_storage_path(ref: FileReference) -> str:
-    """Generate a unique storage path for a single-file FileReference."""
-    suffix = ""
-    if ref.local_path:
-        suffix = Path(ref.local_path).suffix
-    return f"file_refs/{uuid.uuid4().hex}{suffix}"
+def _make_storage_path(ref: FileReference, *, output_path: str | None = None) -> str:
+    """Generate a unique storage path for a single-file FileReference.
+
+    Delegates to :meth:`StorageTier._make_file_ref_path`.
+    """
+    from application_sdk.constants import APPLICATION_NAME
+
+    suffix = Path(ref.local_path).suffix if ref.local_path else ""
+    return ref.tier._make_file_ref_path(
+        suffix=suffix,
+        run_prefix=output_path or "",
+        app_name=APPLICATION_NAME,
+    )
 
 
-def _make_storage_prefix(ref: FileReference) -> str:
-    """Generate a unique storage prefix for a directory FileReference."""
-    return f"file_refs/{uuid.uuid4().hex}/"
+def _make_storage_prefix(ref: FileReference, *, output_path: str | None = None) -> str:
+    """Generate a unique storage prefix for a directory FileReference.
+
+    Delegates to :meth:`StorageTier._make_file_ref_prefix`.
+    """
+    from application_sdk.constants import APPLICATION_NAME
+
+    return ref.tier._make_file_ref_prefix(
+        run_prefix=output_path or "",
+        app_name=APPLICATION_NAME,
+    )
 
 
 def _sha256_hex_file(path: Path) -> str:
@@ -103,6 +117,7 @@ async def persist_file_reference(
     ref: FileReference,
     *,
     key: str | None = None,
+    output_path: str | None = None,
 ) -> FileReference:
     """Upload the local file or directory referenced by *ref* to *store*.
 
@@ -119,6 +134,9 @@ async def persist_file_reference(
         store: Destination obstore store.
         ref: An ephemeral ``FileReference`` with ``local_path`` set.
         key: Override the generated storage path (single files only).
+        output_path: Run-scoped base prefix (e.g.
+            ``artifacts/apps/{app}/workflows/{wf_id}/{run_id}``).  Required
+            when ``ref.tier`` is ``StorageTier.RETAINED``; ignored otherwise.
 
     Returns:
         A new durable ``FileReference`` (``is_durable=True``) pointing to
@@ -126,6 +144,8 @@ async def persist_file_reference(
 
     Raises:
         StorageError: If ``ref.local_path`` is ``None`` or the upload fails.
+        ValueError: If ``ref.tier`` is ``RETAINED`` and *output_path* is not
+            provided.
     """
     from application_sdk.storage.errors import StorageError
     from application_sdk.storage.ops import _put, upload_file
@@ -143,7 +163,7 @@ async def persist_file_reference(
 
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
-        prefix = _make_storage_prefix(ref)
+        prefix = _make_storage_prefix(ref, output_path=output_path)
 
         files = [p for p in local.rglob("*") if p.is_file()]
         logger.debug(
@@ -170,11 +190,12 @@ async def persist_file_reference(
             is_durable=True,
             storage_path=prefix,
             file_count=len(files),
+            tier=ref.tier,
         )
 
     else:
         # ── Single file upload ─────────────────────────────────────────────
-        storage_path = key or _make_storage_path(ref)
+        storage_path = key or _make_storage_path(ref, output_path=output_path)
 
         sha256 = await upload_file(storage_path, local, store, normalize=False)
 
@@ -193,6 +214,7 @@ async def persist_file_reference(
             local_path=ref.local_path,
             is_durable=True,
             storage_path=storage_path,
+            tier=ref.tier,
         )
 
 

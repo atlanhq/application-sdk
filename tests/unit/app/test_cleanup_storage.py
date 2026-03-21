@@ -12,7 +12,7 @@ from application_sdk.app.base import App, TaskStateAccessor, _app_state, _app_st
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import StorageCleanupInput, StorageCleanupOutput
-from application_sdk.contracts.types import FileReference
+from application_sdk.contracts.types import FileReference, StorageTier
 
 
 @dataclass
@@ -170,11 +170,11 @@ class TestCleanupStorage:
         assert result.deleted_count == 0
 
     # ------------------------------------------------------------------
-    # Non-file_refs/ paths (e.g. artifacts/) are skipped unless prefix cleanup
+    # RETAINED and PERSISTENT tier refs are skipped by cleanup_storage
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_skips_non_file_refs_paths(self) -> None:
+    async def test_skips_retained_tier_ref(self) -> None:
         from unittest.mock import MagicMock
 
         from application_sdk.app.context import AppContext
@@ -186,7 +186,44 @@ class TestCleanupStorage:
         app._context = ctx
 
         ref = FileReference(
-            storage_path="artifacts/apps/test/workflows/wf1/run1/output.parquet"
+            storage_path="artifacts/apps/test/workflows/wf1/run1/file_refs/abc.parquet",
+            tier=StorageTier.RETAINED,
+        )
+        _seed_tracked_refs([ref])
+
+        async def _mock_delete(key: str, store: Any, normalize: bool = True) -> bool:
+            return True
+
+        with mock.patch(
+            "application_sdk.app.base._get_execution_id_from_task",
+            return_value="wf-test",
+        ):
+            with mock.patch(
+                "application_sdk.storage.ops._resolve_store", return_value=store
+            ):
+                with mock.patch(
+                    "application_sdk.storage.ops.delete", side_effect=_mock_delete
+                ):
+                    result = await app.cleanup_storage(StorageCleanupInput())
+
+        assert result.skipped_count == 1
+        assert result.deleted_count == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_persistent_tier_ref(self) -> None:
+        from unittest.mock import MagicMock
+
+        from application_sdk.app.context import AppContext
+
+        store = MagicMock()
+        app = _make_app()
+        ctx = AppContext(app_name="test", app_version="0.1.0", run_id="r1")
+        ctx._storage = store
+        app._context = ctx
+
+        ref = FileReference(
+            storage_path="persistent-artifacts/apps/test/file_refs/abc.parquet",
+            tier=StorageTier.PERSISTENT,
         )
         _seed_tracked_refs([ref])
 

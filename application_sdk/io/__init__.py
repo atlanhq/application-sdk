@@ -617,7 +617,7 @@ class Writer(ABC):
             if not statistics_dict:
                 raise ValueError("No statistics data available")
 
-            self._statistics = TaskStatistics.model_validate(statistics_dict)
+            self._statistics = TaskStatistics(**statistics_dict)
             if typename:
                 self._statistics.typename = typename
 

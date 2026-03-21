@@ -10,7 +10,6 @@ import pytest
 
 from application_sdk.app.base import App, _app_state, _app_state_lock
 from application_sdk.app.registry import AppRegistry, TaskRegistry
-from application_sdk.constants import TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import CleanupInput, CleanupOutput
 from application_sdk.contracts.types import FileReference
@@ -45,9 +44,7 @@ class TestCleanupFiles:
             _app_state.clear()
 
     @pytest.mark.asyncio
-    async def test_removes_tracked_file_ref_local_paths(
-        self, tmp_path: Any
-    ) -> None:
+    async def test_removes_tracked_file_ref_local_paths(self, tmp_path: Any) -> None:
         f = tmp_path / "output.parquet"
         f.write_text("data")
         sidecar = tmp_path / "output.parquet.sha256"
@@ -106,18 +103,14 @@ class TestCleanupFiles:
         assert result.path_results[str(test_dir)] is True
 
     @pytest.mark.asyncio
-    async def test_nonexistent_path_treated_as_success(
-        self, tmp_path: Any
-    ) -> None:
+    async def test_nonexistent_path_treated_as_success(self, tmp_path: Any) -> None:
         missing = str(tmp_path / "nonexistent")
 
         app = _CleanupApp()
         with mock.patch(
             "application_sdk.app.base.TaskStateAccessor.get", return_value=None
         ):
-            with mock.patch(
-                "application_sdk.constants.CLEANUP_BASE_PATHS", [missing]
-            ):
+            with mock.patch("application_sdk.constants.CLEANUP_BASE_PATHS", [missing]):
                 result = await app.cleanup_files(CleanupInput())
 
         assert result.path_results[missing] is True
@@ -132,9 +125,7 @@ class TestCleanupFiles:
         with mock.patch(
             "application_sdk.app.base.TaskStateAccessor.get", return_value=None
         ):
-            result = await app.cleanup_files(
-                CleanupInput(extra_paths=[str(extra_dir)])
-            )
+            result = await app.cleanup_files(CleanupInput(extra_paths=[str(extra_dir)]))
 
         assert not extra_dir.exists()
         assert result.path_results[str(extra_dir)] is True

@@ -307,7 +307,9 @@ class DaprBinding:
             )
             return BindingResponse(
                 data=result.data if result.data else None,
-                metadata=dict(result.binding_metadata) if result.binding_metadata else {},
+                metadata=dict(result.binding_metadata)
+                if result.binding_metadata
+                else {},
             )
         except Exception as e:
             raise BindingError(
