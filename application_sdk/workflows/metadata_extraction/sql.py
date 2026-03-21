@@ -248,8 +248,9 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 f"typenames: {extracted_typenames}"
             )
 
-            # Load raw data to lakehouse (prepare parquet -> JSONL, then /load)
-            await self.load_raw_to_lakehouse(workflow_args, extracted_typenames)
+            if ENABLE_LAKEHOUSE_LOAD:
+                # Load raw data to lakehouse (prepare parquet -> JSONL, then /load)
+                await self.load_raw_to_lakehouse(workflow_args, extracted_typenames)
 
             # Load transformed data + upload to atlan
             await self.run_exit_activities(workflow_args)

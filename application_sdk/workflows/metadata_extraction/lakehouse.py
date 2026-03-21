@@ -62,7 +62,7 @@ class LakehouseLoadMixin:
         No-op if lakehouse loading is disabled or no typenames were extracted.
         """
         if not (
-            ENABLE_LAKEHOUSE_LOAD
+        ENABLE_LAKEHOUSE_LOAD
             and LH_LOAD_RAW_NAMESPACE
             and LH_LOAD_RAW_TABLE_NAME
             and extracted_typenames
