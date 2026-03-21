@@ -335,7 +335,7 @@ async def prepare_raw_for_lakehouse(
         workflow_id, workflow_run_id, extracted_at, tenant_id,
         entity_name, raw_record (full row as JSON string)
 
-    The table name is the connector name (e.g. ``raw_metadata.redshift``).
+    The table name is the connector name (e.g. ``entity_raw.redshift``).
 
     The output JSONL files are written next to the raw directory under
     ``{raw_output_path}/../raw_lakehouse/{typename}/``.
