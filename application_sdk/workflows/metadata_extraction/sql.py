@@ -67,10 +67,6 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 in order, including preflight check, fetching databases, schemas,
                 tables, columns, and transforming data.
         """
-        from application_sdk.activities.metadata_extraction.base import (
-            prepare_raw_for_lakehouse,
-        )
-
         # Base activities that always run
         base_activities: List[Any] = [
             activities.preflight_check,
@@ -83,7 +79,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             activities.transform_data,
             activities.upload_to_atlan,  # this will only be executed if ENABLE_ATLAN_UPLOAD is True
             activities.load_to_lakehouse,  # only executed if ENABLE_LAKEHOUSE_LOAD is True
-            prepare_raw_for_lakehouse,  # standalone activity for raw→lakehouse prep
+            activities.prepare_raw_for_lakehouse,  # raw parquet → common-schema JSONL
         ]
         return base_activities
 
@@ -268,25 +264,25 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 and LH_LOAD_RAW_TABLE_NAME
                 and extracted_typenames
             ):
-                from application_sdk.activities.metadata_extraction.base import (
-                    prepare_raw_for_lakehouse,
-                )
-
                 output_path = workflow_args.get("output_path", "")
                 connection_qn = workflow_args.get("connection", {}).get(
                     "connection_qualified_name", ""
                 )
-                raw_lh_dir = await workflow.execute_activity(
-                    prepare_raw_for_lakehouse,
-                    args=[
-                        f"{output_path}/raw",
-                        extracted_typenames,
-                        connection_qn,
-                        workflow_args.get("workflow_id", ""),
-                        workflow_args.get("workflow_run_id", ""),
-                        int(time() * 1000),
-                        APP_TENANT_ID,
-                    ],
+                prep_config = {
+                    **workflow_args,
+                    "raw_lakehouse_config": {
+                        "raw_output_path": f"{output_path}/raw",
+                        "typenames": extracted_typenames,
+                        "connection_qualified_name": connection_qn,
+                        "workflow_id": workflow_args.get("workflow_id", ""),
+                        "workflow_run_id": workflow_args.get("workflow_run_id", ""),
+                        "extracted_at": int(time() * 1000),
+                        "tenant_id": APP_TENANT_ID,
+                    },
+                }
+                raw_lh_dir = await workflow.execute_activity_method(
+                    self.activities_cls.prepare_raw_for_lakehouse,
+                    args=[prep_config],
                     retry_policy=retry_policy,
                     start_to_close_timeout=self.default_start_to_close_timeout,
                     heartbeat_timeout=self.default_heartbeat_timeout,

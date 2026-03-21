@@ -197,6 +197,35 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
         """
         return await do_lakehouse_load(workflow_args)
 
+    @activity.defn
+    @auto_heartbeater
+    async def prepare_raw_for_lakehouse(
+        self, workflow_args: Dict[str, Any]
+    ) -> str:
+        """Convert raw parquet files into common-schema JSONL for lakehouse ingestion.
+
+        Expects workflow_args to contain raw_lakehouse_config dict with:
+            - raw_output_path: str
+            - typenames: list[str]
+            - connection_qualified_name: str
+            - workflow_id: str
+            - workflow_run_id: str
+            - extracted_at: int (epoch millis)
+            - tenant_id: str
+
+        Returns the output directory path containing the prepared JSONL files.
+        """
+        config = workflow_args.get("raw_lakehouse_config", {})
+        return await _do_prepare_raw_for_lakehouse(
+            raw_output_path=config.get("raw_output_path", ""),
+            typenames=config.get("typenames", []),
+            connection_qualified_name=config.get("connection_qualified_name", ""),
+            workflow_id=config.get("workflow_id", ""),
+            workflow_run_id=config.get("workflow_run_id", ""),
+            extracted_at=config.get("extracted_at", 0),
+            tenant_id=config.get("tenant_id", ""),
+        )
+
 
 _TERMINAL_FAILURE_STATES = {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}
 
@@ -316,8 +345,7 @@ _RAW_ENTITY_NAME_FIELDS: Dict[str, str] = {
 }
 
 
-@activity.defn
-async def prepare_raw_for_lakehouse(
+async def _do_prepare_raw_for_lakehouse(
     raw_output_path: str,
     typenames: list[str],
     connection_qualified_name: str,
