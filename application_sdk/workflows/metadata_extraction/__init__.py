@@ -26,7 +26,7 @@ _TYPENAME_OVERRIDES: Dict[str, str] = {
     "extras-procedure": "procedure",
 }
 
-_LAKEHOUSE_RETRY_POLICY = RetryPolicy(maximum_attempts=6, backoff_coefficient=2)
+_DEFAULT_RETRY_POLICY = RetryPolicy(maximum_attempts=6, backoff_coefficient=2)
 
 
 def _resolve_iceberg_table(typename: str) -> str:
@@ -94,7 +94,7 @@ class MetadataExtractionWorkflow(WorkflowInterface):
         raw_lh_dir = await workflow.execute_activity_method(
             self.activities_cls.prepare_raw_for_lakehouse,
             args=[prep_config],
-            retry_policy=_LAKEHOUSE_RETRY_POLICY,
+            retry_policy=_DEFAULT_RETRY_POLICY,
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
@@ -158,7 +158,7 @@ class MetadataExtractionWorkflow(WorkflowInterface):
             await workflow.execute_activity_method(
                 self.activities_cls.upload_to_atlan,
                 args=[workflow_args],
-                retry_policy=_LAKEHOUSE_RETRY_POLICY,
+                retry_policy=_DEFAULT_RETRY_POLICY,
                 start_to_close_timeout=self.default_start_to_close_timeout,
                 heartbeat_timeout=self.default_heartbeat_timeout,
             )
@@ -192,7 +192,7 @@ class MetadataExtractionWorkflow(WorkflowInterface):
         await workflow.execute_activity_method(
             self.activities_cls.load_to_lakehouse,
             args=[load_config],
-            retry_policy=_LAKEHOUSE_RETRY_POLICY,
+            retry_policy=_DEFAULT_RETRY_POLICY,
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
