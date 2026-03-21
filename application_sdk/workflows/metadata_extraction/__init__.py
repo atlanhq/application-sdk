@@ -38,3 +38,5 @@ class MetadataExtractionWorkflow(LakehouseLoadMixin, WorkflowInterface):
 
         if ENABLE_LAKEHOUSE_LOAD:
             await self.load_transformed_to_lakehouse(workflow_args)
+        else:
+            logger.info("Lakehouse load skipped for workflow (disabled)")
