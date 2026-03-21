@@ -10,7 +10,7 @@ from application_sdk.activities.common.models import (
     LhLoadStatusResponse,
     LhTableWriteMode,
 )
-from application_sdk.activities.metadata_extraction.base import submit_and_poll_mdlh_load
+from application_sdk.activities.metadata_extraction.lakehouse import submit_and_poll_mdlh_load
 from application_sdk.common.error_codes import ActivityError
 
 

@@ -19,7 +19,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common import sql_utils
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
-from application_sdk.activities.metadata_extraction.base import (
+from application_sdk.activities.metadata_extraction.lakehouse import (
     convert_raw_parquet_to_jsonl,
     submit_and_poll_mdlh_load,
 )
