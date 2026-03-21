@@ -152,6 +152,20 @@ def _normalize_log_extra_value(key: str, value: Any) -> Any:
     return value
 
 
+def _has_remote_otlp_endpoint() -> bool:
+    """True when OTEL_EXPORTER_OTLP_ENDPOINT points to a real remote collector."""
+    try:
+        ep = OTEL_EXPORTER_OTLP_ENDPOINT.strip()
+        if not ep:
+            return False
+        from urllib.parse import urlparse
+
+        host = urlparse(ep).hostname or ""
+        return host not in ("", "localhost", "127.0.0.1", "::1")
+    except Exception:
+        return False
+
+
 # Re-exported from context.py for backward compatibility:
 # - request_context: ContextVar for request-scoped data (e.g., request_id)
 # - correlation_context: ContextVar for atlan- prefixed headers
@@ -359,7 +373,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         try:
             otlp_processors = []
 
-            if ENABLE_OTLP_LOGS:
+            if ENABLE_OTLP_LOGS or _has_remote_otlp_endpoint():
                 otlp_processors.append(
                     BatchLogRecordProcessor(
                         OTLPLogExporter(

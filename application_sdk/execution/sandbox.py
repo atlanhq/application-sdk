@@ -39,6 +39,10 @@ _FRAMEWORK_MODULES: frozenset[str] = frozenset(
         "application_sdk.observability.correlation",
         # OpenTelemetry accesses os.environ at import time, which the sandbox blocks.
         "opentelemetry",
+        # beartype.claw installs a global import hook; passing it through prevents
+        # the sandbox importer from intercepting beartype's own internal imports
+        # and causing infinite recursion when any dependency uses beartype_this_package().
+        "beartype",
         # pyatlan Struct types must use real module objects in the sandbox.
         "pyatlan",
         "pyatlan_v9",

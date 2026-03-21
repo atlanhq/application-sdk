@@ -1,5 +1,9 @@
 """Execution layer for running Apps on Temporal."""
 
+from application_sdk.execution._temporal.auth import (
+    TemporalAuthConfig,
+    TemporalAuthManager,
+)
 from application_sdk.execution._temporal.backend import create_temporal_client
 from application_sdk.execution._temporal.converter import (
     create_data_converter,
@@ -13,4 +17,6 @@ __all__ = [
     "create_temporal_client",
     "create_data_converter",
     "get_msgspec_payload_converter",
+    "TemporalAuthConfig",
+    "TemporalAuthManager",
 ]

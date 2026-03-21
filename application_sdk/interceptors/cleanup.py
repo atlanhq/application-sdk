@@ -1,10 +1,10 @@
-"""Deprecated: use application_sdk.execution._temporal.interceptors.cleanup instead."""
+"""Deprecated: interceptors are auto-registered by create_worker() — remove this import."""
 
 import warnings
 
 warnings.warn(
     "application_sdk.interceptors.cleanup is deprecated and will be removed in v3.1.0. "
-    "Use application_sdk.execution._temporal.interceptors.cleanup instead.",
+    "Interceptors are auto-registered by create_worker() — remove this import.",
     DeprecationWarning,
     stacklevel=2,
 )

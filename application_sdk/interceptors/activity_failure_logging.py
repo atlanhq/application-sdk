@@ -1,10 +1,10 @@
-"""Deprecated: use application_sdk.execution._temporal.interceptors.activity_failure_logging instead."""
+"""Deprecated: interceptors are auto-registered by create_worker() — remove this import."""
 
 import warnings
 
 warnings.warn(
     "application_sdk.interceptors.activity_failure_logging is deprecated and will be removed in v3.1.0. "
-    "Use application_sdk.execution._temporal.interceptors.activity_failure_logging instead.",
+    "Interceptors are auto-registered by create_worker() — remove this import.",
     DeprecationWarning,
     stacklevel=2,
 )

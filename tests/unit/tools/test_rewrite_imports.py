@@ -80,10 +80,10 @@ class TestModulePathChange:
     def test_interceptors_events(self):
         src = "from application_sdk.interceptors.events import EventInterceptor"
         out, changes = rewrite(src)
-        assert (
-            "from application_sdk.execution._temporal.interceptors.events import EventInterceptor"
-            in out
-        )
+        # Interceptors are auto-registered by create_worker(); the rewriter keeps
+        # the module path unchanged and emits a structural TODO to remove the import.
+        assert "from application_sdk.interceptors.events import EventInterceptor" in out
+        assert "# TODO(v3-migration): Remove this import" in out
 
     def test_activity_sql_utils(self):
         src = "from application_sdk.activities.common.sql_utils import some_util"
@@ -94,8 +94,7 @@ class TestModulePathChange:
         src = "from application_sdk.clients.temporal import TemporalWorkflowClient"
         out, changes = rewrite(src)
         assert (
-            "from application_sdk.execution._temporal.worker import TemporalWorkflowClient"
-            in out
+            "from application_sdk.execution import TemporalWorkflowClient" in out
         )
 
     def test_test_utils_scale_data_generator(self):

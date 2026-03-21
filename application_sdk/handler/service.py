@@ -149,14 +149,11 @@ async def _get_temporal_client() -> Client:
     if _temporal_client is not None:
         return _temporal_client
 
-    from application_sdk.execution._temporal.backend import create_temporal_client
+    from application_sdk.execution import create_temporal_client
 
     api_key: str | None = None
     if _workflow_config.auth_enabled:
-        from application_sdk.execution._temporal.auth import (
-            TemporalAuthConfig,
-            TemporalAuthManager,
-        )
+        from application_sdk.execution import TemporalAuthConfig, TemporalAuthManager
 
         auth_config = TemporalAuthConfig(
             client_id=_workflow_config.auth_client_id,
