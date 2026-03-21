@@ -31,8 +31,11 @@ Programmatic API
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import libcst as cst
@@ -70,6 +73,7 @@ class RunResult:
     files_changed: int = 0
     changes_by_file: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    type_errors: list[str] = field(default_factory=list)
 
     @property
     def todos_inserted(self) -> int:
@@ -79,6 +83,60 @@ class RunResult:
             for changes in file_changes.values():
                 count += sum(1 for c in changes if c.startswith("SKIPPED"))
         return count
+
+    def to_dict(self) -> dict:  # type: ignore[return]
+        """Return a JSON-serialisable representation of the result."""
+        d = asdict(self)
+        d["todos_inserted"] = self.todos_inserted
+        d["generated_at"] = datetime.now(tz=timezone.utc).isoformat()
+        return d
+
+    def write_report(self, path: Path) -> None:
+        """Write a ``migration_report.json`` to *path*."""
+        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# E3: Type-check gate
+# ---------------------------------------------------------------------------
+
+
+def _run_pyright(root: Path) -> list[str]:
+    """Run pyright on *root* and return a list of error strings.
+
+    Returns an empty list if pyright is not installed or reports no errors.
+    Errors are returned as ``"<file>:<line>: <message>"`` strings.
+    """
+    try:
+        result = subprocess.run(
+            ["python", "-m", "pyright", "--outputjson", str(root)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except FileNotFoundError:
+        return ["pyright not found — install with: uv add pyright --dev"]
+    except subprocess.TimeoutExpired:
+        return ["pyright timed out after 120 s"]
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        # Pyright may not support --outputjson; fall back to stderr text
+        return [
+            line
+            for line in (result.stdout + result.stderr).splitlines()
+            if "error:" in line.lower()
+        ]
+
+    errors: list[str] = []
+    for diag in data.get("generalDiagnostics", []):
+        if diag.get("severity") == "error":
+            file_path = diag.get("file", "?")
+            line = diag.get("range", {}).get("start", {}).get("line", 0)
+            message = diag.get("message", "?")
+            errors.append(f"{file_path}:{line + 1}: {message}")
+    return errors
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +234,8 @@ def run_codemods(
     connector_type: str | None = None,
     dry_run: bool = False,
     skip: list[str] | None = None,
+    type_check: bool = False,
+    output_json: Path | None = None,
 ) -> RunResult:
     """Run the full codemod pipeline on *root*.
 
@@ -190,6 +250,11 @@ def run_codemods(
         If True, compute and return changes without writing any files.
     skip:
         List of codemod IDs to skip, e.g. ``["A7"]``.
+    type_check:
+        If True (and not dry_run), run pyright on *root* after applying codemods
+        and record any type errors in :attr:`RunResult.type_errors`.
+    output_json:
+        If given, write a machine-readable report to this path after the run.
 
     Returns
     -------
@@ -232,6 +297,14 @@ def run_codemods(
         if not dry_run and new_source is not None:
             path.write_text(new_source, encoding="utf-8")
 
+    # E3: optional type-check gate (only meaningful after files are written)
+    if type_check and not dry_run:
+        result.type_errors = _run_pyright(root if root.is_dir() else root.parent)
+
+    # F1: optional JSON report
+    if output_json is not None:
+        result.write_report(output_json)
+
     return result
 
 
@@ -268,6 +341,17 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable colored output",
     )
+    parser.add_argument(
+        "--type-check",
+        action="store_true",
+        help="Run pyright on the target after applying codemods (requires pyright)",
+    )
+    parser.add_argument(
+        "--output-json",
+        metavar="PATH",
+        default=None,
+        help="Write a machine-readable migration_report.json to this path",
+    )
     return parser
 
 
@@ -289,11 +373,15 @@ def main(argv: list[str] | None = None) -> int:
 
     skip = [s.strip() for s in args.skip.split(",") if s.strip()]
 
+    output_json = Path(args.output_json) if args.output_json else None
+
     result = run_codemods(
         root,
         connector_type=args.connector_type,
         dry_run=args.dry_run,
         skip=skip,
+        type_check=args.type_check,
+        output_json=output_json,
     )
 
     # Header
@@ -321,12 +409,29 @@ def main(argv: list[str] | None = None) -> int:
     for err in result.errors:
         print(f"  {_color('ERROR', '31', no_color=no_color)}: {err}", file=sys.stderr)
 
+    if result.type_errors:
+        print()
+        for te in result.type_errors:
+            print(
+                f"  {_color('TYPE ERROR', '35', no_color=no_color)}: {te}",
+                file=sys.stderr,
+            )
+
+    if output_json is not None:
+        print(f"\nReport written to: {output_json}")
+
     # Summary
     todo_str = (
         f", {result.todos_inserted} TODOs inserted" if result.todos_inserted else ""
     )
     err_str = f", {len(result.errors)} errors" if result.errors else ""
-    print(f"Summary: {result.files_changed} file(s) changed" f"{todo_str}{err_str}")
+    type_err_str = (
+        f", {len(result.type_errors)} type error(s)" if result.type_errors else ""
+    )
+    print(
+        f"Summary: {result.files_changed} file(s) changed"
+        f"{todo_str}{err_str}{type_err_str}"
+    )
 
     return 1 if result.errors else 0
 

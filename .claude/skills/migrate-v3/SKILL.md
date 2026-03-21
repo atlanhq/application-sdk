@@ -83,6 +83,14 @@ uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
 
 Log a short summary of what the codemods changed and what FAILs remain.
 
+**Extract structured context for Phase 2b** — before writing any AI-assisted structural changes, run the context extractor to get a compact summary of what needs to be done. Use this summary when prompting yourself for Phase 2b instead of re-reading raw source files:
+
+```bash
+uv run python -m tools.migrate_v3.extract_context <target-path>
+```
+
+The output lists: connector type and confidence, difficulty estimate, classes with their roles and method inventories, infrastructure usage patterns, and any warnings about complex entry points or dynamic dispatch. Include this summary at the start of your Phase 2b analysis.
+
 ---
 
 ## Phase 2 — Structural migration
