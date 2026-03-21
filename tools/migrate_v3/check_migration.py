@@ -16,6 +16,7 @@ Usage
 
     python -m tools.migrate_v3.check_migration src/my_connector/
     python -m tools.migrate_v3.check_migration --no-color src/
+    python -m tools.migrate_v3.check_migration --classify src/
 """
 
 from __future__ import annotations
@@ -126,6 +127,24 @@ _RE_ENTRY_POINT = re.compile(r"run_dev_combined\s*\(|application[-_]sdk[^\n]*--m
 _RE_FETCH_METADATA_DEF = re.compile(r"async\s+def\s+fetch_metadata\s*\(")
 _RE_PREFLIGHT_CHECK_DEF = re.compile(r"async\s+def\s+preflight_check\s*\(")
 
+# ── E5: new checks ────────────────────────────────────────────────────────────
+
+# BaseApplication(  — v2 entry-point class; must be replaced by run_dev_combined.
+_RE_BASE_APPLICATION = re.compile(r"\bBaseApplication\s*\(")
+
+# DaprClient()  — direct Dapr SDK usage; prod code should use self.context.*.
+# Only fires on non-test files (framework test utilities may legitimately use it).
+_RE_DAPR_CLIENT = re.compile(r"\bDaprClient\s*\(")
+
+# from temporalio import workflow / activity  — direct Temporal imports forbidden
+# in migrated connectors; the SDK wraps all Temporal primitives.
+_RE_TEMPORALIO_DIRECT = re.compile(
+    r"from\s+temporalio\s+import\s+(?:workflow|activity)\b"
+)
+
+# self._state  — direct state access; migrated code uses self.context.state_store.
+_RE_SELF_STATE = re.compile(r"\bself\._state\b")
+
 
 # ---------------------------------------------------------------------------
 # Core checker
@@ -164,7 +183,7 @@ def _find_pattern(
     return results
 
 
-def check_file(path: Path) -> list[CheckResult]:
+def check_file(path: Path, *, is_test: bool = False) -> list[CheckResult]:
     """Run all checks on a single Python file. Returns a list of findings."""
     lines = _iter_lines(path)
     if not lines:
@@ -270,6 +289,59 @@ def check_file(path: Path) -> list[CheckResult]:
             ),
         )
 
+    # ── FAIL: BaseApplication(  ───────────────────────────────────────────
+    results += _find_pattern(
+        lines,
+        _RE_BASE_APPLICATION,
+        path=path,
+        level=FAIL,
+        rule="no-base-application",
+        message_template=(
+            "BaseApplication() instantiation found. "
+            "Replace with run_dev_combined() or the 'application-sdk --mode combined' CLI."
+        ),
+    )
+
+    # ── FAIL: DaprClient() in production code ─────────────────────────────
+    if not is_test:
+        results += _find_pattern(
+            lines,
+            _RE_DAPR_CLIENT,
+            path=path,
+            level=FAIL,
+            rule="no-dapr-client",
+            message_template=(
+                "Direct DaprClient() usage found in production code. "
+                "Use self.context.state_store / self.context.pub_sub instead."
+            ),
+        )
+
+    # ── FAIL: from temporalio import workflow/activity ────────────────────
+    results += _find_pattern(
+        lines,
+        _RE_TEMPORALIO_DIRECT,
+        path=path,
+        level=FAIL,
+        rule="no-temporalio-direct-import",
+        message_template=(
+            "Direct 'from temporalio import workflow/activity' found. "
+            "v3 wraps all Temporal primitives — remove this import."
+        ),
+    )
+
+    # ── WARN: self._state direct access ──────────────────────────────────
+    results += _find_pattern(
+        lines,
+        _RE_SELF_STATE,
+        path=path,
+        level=WARN,
+        rule="use-app-state",
+        message_template=(
+            "self._state direct access found. "
+            "Use self.context.state_store (or self.app_state) instead."
+        ),
+    )
+
     # ── WARN: response format changed in v3 ──────────────────────────────
     # Only fires for Handler subclasses — reminds developer to update
     # frontend consumers and e2e tests that expect the v2 response shape.
@@ -341,11 +413,12 @@ def check_directory(
 
     scan_root = root if root.is_dir() else root.parent
     for path in py_files:
-        all_results += check_file(path)
+        is_test = _is_test_path(path, root=scan_root)
+        all_results += check_file(path, is_test=is_test)
         try:
             content = path.read_text(encoding="utf-8") + "\n"
             combined_text += content
-            if not _is_test_path(path, root=scan_root):
+            if not is_test:
                 prod_text += content
         except OSError:
             pass
@@ -511,12 +584,38 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the 'entry point updated' directory-level check.",
     )
+    parser.add_argument(
+        "--classify",
+        action="store_true",
+        help=(
+            "Auto-detect connector type before running checks "
+            "(requires tools.migrate_v3.fingerprint)."
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     use_color = not args.no_color and sys.stdout.isatty()
+
+    if args.classify:
+        from tools.migrate_v3.fingerprint import fingerprint_connector
+
+        for raw in args.targets:
+            target = Path(raw)
+            if not target.exists():
+                print(f"ERROR: path does not exist: {target}", file=sys.stderr)
+                return 2
+            result = fingerprint_connector(target)
+            migrated_note = " [already migrated]" if result.already_migrated else ""
+            print(
+                f"Connector type: {result.connector_type}{migrated_note} "
+                f"(confidence={result.confidence:.0%})"
+            )
+            for ev in result.evidence:
+                print(f"  Evidence: {ev}")
+        print()
 
     all_results: list[CheckResult] = []
     all_advisories: list[str] = []

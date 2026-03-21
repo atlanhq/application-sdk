@@ -79,7 +79,17 @@ Examine the source files in the target path (exclude test files from this analys
 - Look for any other `WorkflowInterface` / `ActivitiesInterface` subclasses → Custom App (§3)
 - In all cases: identify the handler class (§4) and the entry point (§5)
 
+> **Tip — auto-detect the connector type:**
+> ```bash
+> uv run python -m tools.migrate_v3.check_migration --classify <target-path>
+> ```
+> This runs the F3 fingerprinter before the check pass and prints the detected
+> connector type with confidence score and evidence.
+
 ### 2b — Apply structural changes
+
+> **Incremental validation**: Run `check_migration` after each sub-step below.
+> The checker output shows specific remaining FAILs — use it to guide the next step.
 
 Follow the exact checklists in `tools/migrate_v3/MIGRATION_PROMPT.md` for the connector type(s) identified above.
 
@@ -106,9 +116,36 @@ Follow the exact checklists in `tools/migrate_v3/MIGRATION_PROMPT.md` for the co
 Apply changes in this order:
 
 1. **App class** — merge Workflow + Activities into the appropriate template subclass with `@task` methods. Preserve all SQL query strings and business logic verbatim.
+
+   > After completing this step, run:
+   > ```bash
+   > uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
+   > ```
+   > Review any new/resolved FAILs (especially `no-v2-decorators`, `no-execute-activity-method`) before proceeding.
+
 2. **Handler** — update base class, method signatures (typed contracts, no `**kwargs`), remove `load()`.
+
+   > After completing this step, run:
+   > ```bash
+   > uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
+   > ```
+   > Review any new/resolved FAILs (especially `handler-typed-signatures`) before proceeding.
+
 3. **Entry point** — replace `BaseXxxApplication` instantiation with `run_dev_combined()` or CLI reference.
+
+   > After completing this step, run:
+   > ```bash
+   > uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
+   > ```
+   > Review any new/resolved FAILs (especially `no-base-application`) before proceeding.
+
 4. **Infrastructure calls** — replace `SecretStore`/`StateStore`/`ObjectStore` calls with `self.context.*` per §6 of MIGRATION_PROMPT.md.
+
+   > After completing this step, run:
+   > ```bash
+   > uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
+   > ```
+   > Review any new/resolved FAILs (especially `no-dapr-client`, `use-app-state`) before proceeding.
 
 Work through one section at a time. After completing each section, check your changes are self-consistent before moving on.
 
