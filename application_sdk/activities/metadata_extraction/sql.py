@@ -19,6 +19,10 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common import sql_utils
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
+from application_sdk.activities.metadata_extraction.lakehouse import (
+    convert_raw_parquet_to_jsonl,
+    submit_and_poll_mdlh_load,
+)
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.common.utils import prepare_query, read_sql_files
@@ -744,3 +748,33 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             chunk_count=upload_stats.total_files,
             typename="atlan-upload-completed",
         )
+
+    @activity.defn
+    @auto_heartbeater
+    async def load_to_lakehouse(
+        self, workflow_args: Dict[str, Any]
+    ) -> ActivityStatistics:
+        """Load data files to Iceberg lakehouse via MDLH REST API.
+
+        Expects workflow_args to contain lh_load_config dict with:
+            - output_path: str — local path prefix (will be converted to S3 key)
+            - namespace: str — Iceberg namespace
+            - table_name: str — Iceberg table name
+            - mode: str — "APPEND" or "UPSERT"
+            - file_extension: str — ".parquet" or ".jsonl"
+        """
+        return await submit_and_poll_mdlh_load(workflow_args)
+
+    @activity.defn
+    @auto_heartbeater
+    async def prepare_raw_for_lakehouse(
+        self, workflow_args: Dict[str, Any]
+    ) -> str:
+        """Convert raw parquet files into common-schema JSONL for lakehouse ingestion.
+
+        Reads output_path, workflow_id, workflow_run_id, connection info
+        directly from workflow_args. typenames is passed via
+        workflow_args["_extracted_typenames"].
+        """
+        typenames = workflow_args.get("_extracted_typenames", [])
+        return await convert_raw_parquet_to_jsonl(workflow_args, typenames)

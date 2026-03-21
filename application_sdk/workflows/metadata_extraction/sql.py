@@ -6,7 +6,7 @@ including databases, schemas, tables, and columns.
 
 import asyncio
 from time import time
-from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Sequence, Type
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -16,7 +16,7 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
-from application_sdk.constants import APPLICATION_NAME
+from application_sdk.constants import APPLICATION_NAME, ENABLE_LAKEHOUSE_LOAD
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
@@ -71,6 +71,8 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             activities.fetch_procedures,
             activities.transform_data,
             activities.upload_to_atlan,  # this will only be executed if ENABLE_ATLAN_UPLOAD is True
+            activities.load_to_lakehouse,  # only executed if ENABLE_LAKEHOUSE_LOAD is True
+            activities.prepare_raw_for_lakehouse,  # raw parquet → common-schema JSONL
         ]
         return base_activities
 
@@ -81,7 +83,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         ],
         workflow_args: Dict[str, Any],
         retry_policy: RetryPolicy,
-    ) -> None:
+    ) -> Optional[str]:
         """Fetch and transform metadata using the provided fetch function.
 
         This method executes a fetch operation and transforms the resulting data. It handles
@@ -91,6 +93,9 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             fetch_fn (Callable): The function to fetch metadata.
             workflow_args (Dict[str, Any]): Arguments for the workflow execution.
             retry_policy (RetryPolicy): The retry policy for activity execution.
+
+        Returns:
+            The typename that was fetched and transformed, or None if no data.
 
         Raises:
             ValueError: If chunk_count, raw_total_record_count, or typename is invalid.
@@ -150,6 +155,8 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             metadata_model = ActivityStatistics.model_validate(record_count)
             total_record_count += metadata_model.total_record_count
             chunk_count += metadata_model.chunk_count
+
+        return activity_statistics.typename
 
     def get_transform_batches(
         self, chunk_count: int, typename: str, partitions: List[int]
@@ -232,8 +239,21 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 for fetch_function in fetch_functions
             ]
 
-            await asyncio.gather(*fetch_and_transforms)
-            logger.info(f"Extraction workflow completed for {workflow_id}")
+            typenames = await asyncio.gather(*fetch_and_transforms)
+
+            if ENABLE_LAKEHOUSE_LOAD:
+                # Collect typenames that produced data (filter out None)
+                extracted_typenames = [t for t in typenames if t is not None]
+                workflow_args["_extracted_typenames"] = extracted_typenames
+                # Load raw data to lakehouse (prepare parquet -> JSONL, then /load)
+                await self.load_raw_to_lakehouse(workflow_args, extracted_typenames)
+
+            logger.info(
+                f"Extraction workflow completed for {workflow_id}"
+            )
+            # Load transformed data + upload to atlan
+            await self.run_exit_activities(workflow_args)
+
             workflow_success = True
 
             # Build output paths for AE downstream nodes (e.g. publish app)

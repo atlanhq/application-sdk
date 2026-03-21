@@ -383,6 +383,30 @@ DUCKDB_COMMON_TEMP_FOLDER = "/tmp/incremental_duckdb"
 #: Default memory limit for DuckDB (fixed for K8s pods)
 DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
 
+# Lakehouse Load Configuration
+ENABLE_LAKEHOUSE_LOAD = os.getenv("ENABLE_LAKEHOUSE_LOAD", "false").lower() == "true"
+MDLH_BASE_URL = os.getenv(
+    "MDLH_BASE_URL", "http://lakehouse.atlas.svc.cluster.local:4541"
+)
+LH_LOAD_POLL_INTERVAL_SECONDS = int(os.getenv("LH_LOAD_POLL_INTERVAL_SECONDS", "10"))
+LH_LOAD_MAX_POLL_ATTEMPTS = int(os.getenv("LH_LOAD_MAX_POLL_ATTEMPTS", "360"))
+
+# Raw table config (after extract)
+# Raw data is loaded into a per-connector table in entity_raw namespace
+# (e.g. entity_raw.redshift, entity_raw.snowflake). Table name defaults
+# to APPLICATION_NAME. Each row has common metadata + raw_record as JSON.
+LH_LOAD_RAW_NAMESPACE = os.getenv("LH_LOAD_RAW_NAMESPACE", "entity_raw")
+LH_LOAD_RAW_TABLE_NAME = os.getenv("LH_LOAD_RAW_TABLE_NAME", APPLICATION_NAME)
+LH_LOAD_RAW_MODE = os.getenv("LH_LOAD_RAW_MODE", "APPEND")
+
+# Transformed table config (after transform)
+# Namespace in the Iceberg catalog where per-entity-type tables live.
+# Table name is derived automatically from the typename (e.g. "table" -> "table").
+LH_LOAD_TRANSFORMED_NAMESPACE = os.getenv(
+    "LH_LOAD_TRANSFORMED_NAMESPACE", "entity_metadata"
+)
+LH_LOAD_TRANSFORMED_MODE = os.getenv("LH_LOAD_TRANSFORMED_MODE", "APPEND")
+
 # Daft analytics are disabled via ENV vars in the Dockerfile (DO_NOT_TRACK,
 # SCARF_NO_ANALYTICS, DAFT_ANALYTICS_ENABLED). They must NOT be set here at
 # module level — os.environ assignments call os.putenv(), which Temporal's
