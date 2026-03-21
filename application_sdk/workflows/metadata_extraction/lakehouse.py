@@ -87,7 +87,6 @@ class LakehouseLoadMixin:
             f"Loading raw data into {LH_LOAD_RAW_NAMESPACE}.{LH_LOAD_RAW_TABLE_NAME}"
         )
         await self._submit_lakehouse_load(
-            workflow_args,
             output_path=raw_lh_dir,
             namespace=LH_LOAD_RAW_NAMESPACE,
             table_name=LH_LOAD_RAW_TABLE_NAME,
@@ -124,7 +123,6 @@ class LakehouseLoadMixin:
                 f"into {LH_LOAD_TRANSFORMED_NAMESPACE}.{iceberg_table}"
             )
             await self._submit_lakehouse_load(
-                workflow_args,
                 output_path=f"{output_path}/transformed/{typename}",
                 namespace=LH_LOAD_TRANSFORMED_NAMESPACE,
                 table_name=iceberg_table,
@@ -134,7 +132,6 @@ class LakehouseLoadMixin:
 
     async def _submit_lakehouse_load(
         self,
-        workflow_args: Dict[str, Any],
         output_path: str,
         namespace: str,
         table_name: str,
@@ -143,7 +140,6 @@ class LakehouseLoadMixin:
     ) -> None:
         """Submit a single MDLH /load job and poll until completion."""
         load_config = {
-            **workflow_args,
             "lh_load_config": {
                 "output_path": output_path,
                 "namespace": namespace,
