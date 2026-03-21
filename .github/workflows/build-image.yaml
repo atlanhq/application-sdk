@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - chore/bump-trivy-action-v0.35.0
     paths:
       - 'Dockerfile'
       - 'pyproject.toml'
