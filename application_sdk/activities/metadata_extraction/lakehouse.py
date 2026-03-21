@@ -8,6 +8,7 @@ This module contains the core implementation for:
 import asyncio
 import json
 import os
+from time import time
 from typing import Any, Dict, List
 
 import aiohttp
@@ -168,26 +169,36 @@ async def submit_and_poll_mdlh_load(
 
 
 async def convert_raw_parquet_to_jsonl(
-    raw_output_path: str,
+    workflow_args: Dict[str, Any],
     typenames: List[str],
-    connection_qualified_name: str,
-    workflow_id: str,
-    workflow_run_id: str,
-    extracted_at: int,
-    tenant_id: str,
 ) -> str:
     """Convert raw parquet files into common-schema JSONL for lakehouse ingestion.
 
-    For each typename's parquet files under ``raw_output_path/{typename}/``,
-    every row is wrapped into the per-connector raw table schema::
+    Reads metadata from workflow_args:
+        - output_path → raw parquet location ({output_path}/raw/{typename}/)
+        - workflow_id, workflow_run_id → provenance
+        - connection.connection_qualified_name → join key
+        - tenant_id from APP_TENANT_ID constant
+
+    For each typename's parquet files, every row is wrapped into the
+    per-connector raw table schema::
 
         typename, connection_qualified_name, workflow_id, workflow_run_id,
         extracted_at, tenant_id, entity_name, raw_record (JSON string)
 
-    Output JSONL files are written to ``{raw_output_path}/../raw_lakehouse/{typename}/``.
+    Output JSONL files are written to ``{output_path}/raw_lakehouse/{typename}/``.
 
     Returns the root output directory.
     """
+    output_path = workflow_args.get("output_path", "")
+    raw_output_path = os.path.join(output_path, "raw")
+    workflow_id = workflow_args.get("workflow_id", "")
+    workflow_run_id = workflow_args.get("workflow_run_id", "")
+    connection_qualified_name = workflow_args.get("connection", {}).get(
+        "connection_qualified_name", ""
+    )
+    extracted_at = int(time() * 1000)
+
     base_dir = os.path.normpath(os.path.join(raw_output_path, "..", "raw_lakehouse"))
 
     for typename in typenames:

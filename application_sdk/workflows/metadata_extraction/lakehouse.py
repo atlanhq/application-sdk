@@ -4,14 +4,12 @@ Provides methods that MetadataExtractionWorkflow calls to load data into
 the lakehouse.  All env-var checks and MDLH interaction are encapsulated here.
 """
 
-from time import time
 from typing import Any, Dict, List
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk.constants import (
-    APP_TENANT_ID,
     ENABLE_LAKEHOUSE_LOAD,
     LH_LOAD_RAW_MODE,
     LH_LOAD_RAW_NAMESPACE,
@@ -72,27 +70,13 @@ class LakehouseLoadMixin:
             logger.info("Lakehouse load (raw) skipped")
             return
 
-        output_path = workflow_args.get("output_path", "")
-        connection_qn = workflow_args.get("connection", {}).get(
-            "connection_qualified_name", ""
-        )
-
         # Step 1: Prepare raw parquet -> common-schema JSONL
-        prep_config = {
-            **workflow_args,
-            "raw_lakehouse_config": {
-                "raw_output_path": f"{output_path}/raw",
-                "typenames": extracted_typenames,
-                "connection_qualified_name": connection_qn,
-                "workflow_id": workflow_args.get("workflow_id", ""),
-                "workflow_run_id": workflow_args.get("workflow_run_id", ""),
-                "extracted_at": int(time() * 1000),
-                "tenant_id": APP_TENANT_ID,
-            },
-        }
+        # The activity reads output_path, workflow_id, workflow_run_id,
+        # connection info directly from workflow_args.
+        workflow_args["_extracted_typenames"] = extracted_typenames
         raw_lh_dir = await workflow.execute_activity_method(
             self.activities_cls.prepare_raw_for_lakehouse,
-            args=[prep_config],
+            args=[workflow_args],
             retry_policy=RetryPolicy(maximum_attempts=6, backoff_coefficient=2),
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,

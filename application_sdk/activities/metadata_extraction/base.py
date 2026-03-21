@@ -187,15 +187,9 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
     ) -> str:
         """Convert raw parquet files into common-schema JSONL for lakehouse ingestion.
 
-        Delegates to lakehouse.convert_raw_parquet_to_jsonl.
+        Reads output_path, workflow_id, workflow_run_id, connection info
+        directly from workflow_args. typenames is passed via
+        workflow_args["_extracted_typenames"].
         """
-        config = workflow_args.get("raw_lakehouse_config", {})
-        return await convert_raw_parquet_to_jsonl(
-            raw_output_path=config.get("raw_output_path", ""),
-            typenames=config.get("typenames", []),
-            connection_qualified_name=config.get("connection_qualified_name", ""),
-            workflow_id=config.get("workflow_id", ""),
-            workflow_run_id=config.get("workflow_run_id", ""),
-            extracted_at=config.get("extracted_at", 0),
-            tenant_id=config.get("tenant_id", ""),
-        )
+        typenames = workflow_args.get("_extracted_typenames", [])
+        return await convert_raw_parquet_to_jsonl(workflow_args, typenames)
