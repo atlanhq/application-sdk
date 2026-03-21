@@ -37,6 +37,18 @@ def _is_in_workflow() -> bool:
     return get_execution_context().execution_type == "workflow"
 
 
+def _is_atlan_logger(obj: Any) -> bool:
+    """Check if a logger object is our AtlanLoggerAdapter (supports arbitrary kwargs).
+
+    Uses duck-typing to avoid importing AtlanLoggerAdapter here — which could
+    trigger Temporal sandbox restrictions if called from workflow context.
+
+    Stdlib logging.Logger does NOT have these attributes; arbitrary kwargs passed
+    to it will raise TypeError ('unexpected keyword argument').
+    """
+    return hasattr(obj, "process") and hasattr(obj, "logger_name")
+
+
 class _WorkflowSafeLogger:
     """A logger wrapper that works in both workflow and activity contexts.
 
@@ -75,22 +87,42 @@ class _WorkflowSafeLogger:
         Supports both printf-style positional args and keyword context:
             self.logger.info("Processed %d records", count)
             self.logger.info("Done", records=count)
+
+        Printf-style args are pre-formatted before being passed to loguru, which
+        uses {} formatting natively. This prevents silent data loss when %s-style
+        args are used (common in AI-generated code and stdlib-style logging).
         """
+        # Pre-format printf-style args. Try %-substitution; fall through so {}
+        # style args are still handled by loguru.
+        if args:
+            try:
+                message = message % args
+                args = ()
+            except (TypeError, ValueError):
+                pass  # {} style or mismatch — loguru will handle it
+
         if _is_in_workflow():
             from temporalio import workflow as _workflow
 
-            # In workflow: use workflow.logger (standard logging).
-            # Pass kwargs via extra={"_structlog_attrs": ...} — the single nested
-            # key avoids LogRecord reserved attribute collisions while preserving
-            # structured context for the ProcessorFormatter pipeline.
-            log_method = getattr(_workflow.logger, level)
-            exc_info = kwargs.get("exc_info", False)
-            attrs = {k: v for k, v in kwargs.items() if k != "exc_info"}
-            extra = {"_structlog_attrs": {**self._context, **attrs}}
-            if exc_info:
-                log_method(message, *args, exc_info=exc_info, extra=extra)
+            wf_logger = _workflow.logger
+            log_method = getattr(wf_logger, level)
+
+            if _is_atlan_logger(wf_logger):
+                # AtlanLoggerAdapter: supports arbitrary kwargs natively via
+                # process() → bind(). Pass context + user kwargs as flat fields.
+                merged = {**self._context, **kwargs}
+                log_method(message, *args, **merged)
             else:
-                log_method(message, *args, extra=extra)
+                # Stdlib logger fallback (e.g., Temporal's default workflow.logger
+                # before the events interceptor module has been imported).
+                # Stdlib Logger._log() only accepts exc_info/extra/stack_info/
+                # stacklevel — arbitrary kwargs cause TypeError. Pack them safely.
+                exc_info = kwargs.pop("exc_info", False)
+                extra = {**self._context, **kwargs}
+                if exc_info:
+                    log_method(message, *args, exc_info=exc_info, extra=extra)
+                else:
+                    log_method(message, *args, extra=extra)
         else:
             # In activity or elsewhere: use loguru
             logger = self._get_structlog_logger()

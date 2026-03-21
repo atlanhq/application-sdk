@@ -13,7 +13,11 @@ from uuid import UUID
 
 from temporalio import workflow
 
-from application_sdk.app.context import AppContext, TaskExecutionContext
+from application_sdk.app.context import (
+    AppContext,
+    TaskExecutionContext,
+    _is_atlan_logger,
+)
 from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
@@ -92,15 +96,23 @@ def _safe_log(level: str, message: str, **attrs: Any) -> None:
 
     Always runs in Temporal workflow context.
 
-    Passes structured attrs via extra={"_structlog_attrs": attrs} so the
-    ProcessorFormatter pipeline can merge them into the JSON output and
-    forward them to OTel — no direct OTel import needed here.
+    When workflow.logger is AtlanLoggerAdapter (the normal case after the events
+    interceptor module is imported), attrs are passed directly as flat kwargs and
+    surface as structured fields in loguru / OTEL.
+
+    When workflow.logger is a stdlib Logger (edge case before the interceptor has
+    loaded), attrs are packed into extra= to avoid TypeError from stdlib's
+    reserved-kwarg restriction.
     """
-    log_method = getattr(workflow.logger, level)
-    if attrs:
-        log_method(message, extra={"_structlog_attrs": attrs})
+    wf_logger = workflow.logger
+    log_method = getattr(wf_logger, level)
+    if _is_atlan_logger(wf_logger):
+        log_method(message, **attrs)
     else:
-        log_method(message)
+        if attrs:
+            log_method(message, extra=attrs)
+        else:
+            log_method(message)
 
 
 # =============================================================================

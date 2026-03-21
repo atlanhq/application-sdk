@@ -152,6 +152,24 @@ def _normalize_log_extra_value(key: str, value: Any) -> Any:
     return value
 
 
+def _format_printf_args(msg: str, args: Tuple[Any, ...]) -> Tuple[str, Tuple[Any, ...]]:
+    """Pre-format printf-style args into the message string.
+
+    Loguru uses {} formatting, not %s. This bridges the gap so both styles work
+    without silent data loss.
+
+    Returns (formatted_message, remaining_args). When %s substitution succeeds,
+    args is emptied (loguru receives no positional args). When it fails (e.g.,
+    {} placeholders), the original args are returned for loguru to handle.
+    """
+    if args:
+        try:
+            return msg % args, ()
+        except (TypeError, ValueError):
+            pass  # {} style or mismatch — let loguru handle it
+    return msg, args
+
+
 def _has_remote_otlp_endpoint() -> bool:
     """True when OTEL_EXPORTER_OTLP_ENDPOINT points to a real remote collector."""
     try:
@@ -594,6 +612,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             **kwargs: Additional keyword arguments for context
         """
         try:
+            msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
             bound_logger = self.logger.bind(**kwargs)
@@ -614,6 +633,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             **kwargs: Additional keyword arguments for context
         """
         try:
+            msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
             bound_logger = self.logger.bind(**kwargs)
@@ -634,6 +654,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             **kwargs: Additional keyword arguments for context
         """
         try:
+            msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
             bound_logger = self.logger.bind(**kwargs)
@@ -656,6 +677,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         Note: Forces an immediate flush of logs when called.
         """
         try:
+            msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
             bound_logger = self.logger.bind(**kwargs)
@@ -695,6 +717,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         Note: Forces an immediate flush of logs when called.
         """
         try:
+            msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
             msg, kwargs = self.process(msg, kwargs)
             bound_logger = self.logger.bind(**kwargs)
@@ -719,6 +742,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         This method adds activity-specific context to the log message.
         """
         try:
+            msg, args = _format_printf_args(msg, args)
             local_kwargs = kwargs.copy()
             local_kwargs["log_type"] = "activity"
             processed_msg, processed_kwargs = self.process(msg, local_kwargs)
@@ -738,6 +762,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         This method adds metric-specific context to the log message.
         """
         try:
+            msg, args = _format_printf_args(msg, args)
             local_kwargs = kwargs.copy()
             local_kwargs["log_type"] = "metric"
             processed_msg, processed_kwargs = self.process(msg, local_kwargs)
@@ -799,6 +824,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         This method adds trace-specific context to the log message.
         """
+        msg, args = _format_printf_args(msg, args)
         local_kwargs = kwargs.copy()
         local_kwargs["log_type"] = "trace"
         processed_msg, processed_kwargs = self.process(msg, local_kwargs)
