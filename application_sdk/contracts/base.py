@@ -8,11 +8,28 @@ Apps, tasks, and their callers. Using these base classes ensures:
 3. Serialization - Works seamlessly with Temporal's data converters
 4. Backwards compatibility - Add new fields with defaults, never change signatures
 
-IMPORTANT — Temporal zone: ``Input``, ``Output``, ``HeartbeatDetails``, and
-``Record`` MUST remain plain ``@dataclass``. They serialize natively via
-``dataclasses.asdict()`` / ``value_to_type()``. Do NOT subclass these with
-``pydantic.BaseModel`` — that would require a custom ``pydantic_data_converter``
-and break the existing serialization contract.
+Typing zone rules
+-----------------
+The SDK has two distinct typing zones with different serialization requirements.
+Choosing the wrong base type for a zone is a correctness error, not just style.
+
+**Temporal zone** — ``Input``, ``Output``, ``HeartbeatDetails``, ``Record``:
+    MUST be plain ``@dataclass``. They serialize natively via
+    ``dataclasses.asdict()`` / ``value_to_type()`` through Temporal's data
+    converter. Do NOT subclass with ``pydantic.BaseModel`` — that would
+    require a custom ``pydantic_data_converter`` and break the existing
+    serialization contract.
+
+**HTTP API zone** — handler request/response schemas, manifest contracts,
+    any type that crosses an external HTTP boundary:
+    MUST be ``pydantic.BaseModel``. Pydantic gives boundary validation on
+    ingress (``model_validate`` / ``model_validate_json``), direct JSON
+    serialization on egress (``model_dump_json()`` → ``Response``), and
+    automatic OpenAPI schema generation. Do NOT use plain dataclasses here —
+    the ``dataclasses.asdict`` + ``JSONResponse`` pattern forces an unnecessary
+    intermediate dict and loses all boundary validation.
+
+    See ``application_sdk/handler/manifest.py`` for the canonical example.
 
 Usage:
     from dataclasses import dataclass

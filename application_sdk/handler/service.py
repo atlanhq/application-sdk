@@ -37,9 +37,10 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from loguru import logger
 
+from application_sdk.constants import DEPLOYMENT_NAME
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
@@ -51,6 +52,7 @@ from application_sdk.handler.contracts import (
     PreflightInput,
     SubscriptionConfig,
 )
+from application_sdk.handler.manifest import AppManifest
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -223,6 +225,7 @@ def create_app_handler_service(
     storage: ObjectStore | None = None,
     event_triggers: list[EventTriggerConfig] | None = None,
     subscriptions: list[SubscriptionConfig] | None = None,
+    manifest: AppManifest | None = None,
     title: str = "Handler Service",
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
@@ -1076,6 +1079,28 @@ def create_app_handler_service(
                 message="ConfigMaps listed successfully",
             )
         )
+
+    # ------------------------------------------------------------------
+    # Manifest endpoint
+    # ------------------------------------------------------------------
+
+    @app.get("/workflows/v1/manifest")
+    async def get_manifest() -> Response:
+        if manifest is not None:
+            # Programmatic: Pydantic model → JSON bytes, single hop.
+            return Response(
+                content=manifest.model_dump_json(), media_type="application/json"
+            )
+        manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
+        if manifest_path.exists():
+            # Disk: contract-generated file — serve raw bytes with deployment
+            # name substitution. No parse/reserialize: the file is already
+            # valid JSON, validated at build time by the contract tooling.
+            raw = manifest_path.read_bytes()
+            deployment = (DEPLOYMENT_NAME or "default").encode()
+            raw = raw.replace(b"{deployment_name}", deployment)
+            return Response(content=raw, media_type="application/json")
+        raise HTTPException(status_code=404, detail="No manifest available")
 
     # ------------------------------------------------------------------
     # Health probes

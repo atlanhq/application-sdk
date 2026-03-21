@@ -127,8 +127,7 @@ def test_process_with_workflow_context():
             assert kwargs["namespace"] == "test_namespace"
             assert kwargs["task_queue"] == "test_queue"
             assert kwargs["attempt"] == "1"
-            expected_msg = "Test message Workflow Context: Workflow ID: test_workflow_id Run ID: test_run_id Type: test_workflow_type"
-            assert msg == expected_msg
+            assert msg == "Test message"
     finally:
         set_execution_context(ExecutionContext())
 
@@ -157,8 +156,7 @@ def test_process_with_generated_workflow_context(workflow_info: mock.Mock):
             assert kwargs["namespace"] == (workflow_info.namespace or "")
             assert kwargs["task_queue"] == (workflow_info.task_queue or "")
             assert kwargs["attempt"] == str(workflow_info.attempt or 0)
-            expected_msg = f"Test message Workflow Context: Workflow ID: {workflow_info.workflow_id or ''} Run ID: {workflow_info.run_id or ''} Type: {workflow_info.workflow_type or ''}"
-            assert msg == expected_msg
+            assert msg == "Test message"
     finally:
         set_execution_context(ExecutionContext())
 
@@ -186,9 +184,7 @@ def test_process_with_activity_context():
             assert kwargs["activity_type"] == "test_activity_type"
             assert kwargs["task_queue"] == "test_queue"
             assert kwargs["attempt"] == "1"
-
-            expected_msg = "Test message Activity Context: Activity ID: test_activity_id Workflow ID: test_workflow_id Run ID: test_run_id Type: test_activity_type"
-            assert msg == expected_msg
+            assert msg == "Test message"
     finally:
         set_execution_context(ExecutionContext())
 
@@ -217,9 +213,7 @@ def test_process_with_generated_activity_context(activity_info: mock.Mock):
             assert kwargs["activity_type"] == (activity_info.activity_type or "")
             assert kwargs["task_queue"] == (activity_info.task_queue or "")
             assert kwargs["attempt"] == str(activity_info.attempt or 0)
-
-            expected_msg = f"Test message Activity Context: Activity ID: {activity_info.activity_id or ''} Workflow ID: {activity_info.workflow_id or ''} Run ID: {activity_info.workflow_run_id or ''} Type: {activity_info.activity_type or ''}"
-            assert msg == expected_msg
+            assert msg == "Test message"
     finally:
         set_execution_context(ExecutionContext())
 

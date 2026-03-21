@@ -6,6 +6,16 @@ Provides Input/Output dataclasses for the three core handler operations:
 - Metadata discovery (fetch_metadata)
 
 Plus supporting types for credentials, log streaming, and file uploads.
+
+TODO(v3-refactor): migrate all types in this module from plain dataclasses to
+``pydantic.BaseModel`` (HTTP API zone rule — see ``application_sdk/contracts/base.py``).
+These are HTTP boundary types and should use Pydantic for boundary validation,
+direct JSON serialization via ``model_dump_json()``, and OpenAPI schema
+generation. The corresponding endpoints in ``service.py`` manually unpack
+``request.json()`` and use ``_serialize_output`` / ``dataclasses.asdict``
+precisely because they lack Pydantic validation — that boilerplate goes away
+once these types are Pydantic models.
+Tracked as part of the v3 SDK refactor; defer until after manifest.py is stable.
 """
 
 from __future__ import annotations

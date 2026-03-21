@@ -489,3 +489,170 @@ class TestDynamicSubscriptionRoutes:
         response = client.post("/subscriptions/v1/my-handler")
         assert response.status_code == 200
         assert response.json() == {"status": "SUCCESS"}
+
+
+class TestManifestEndpoint:
+    """Tests for GET /workflows/v1/manifest."""
+
+    def _make_manifest(self):
+        from application_sdk.handler.manifest import (
+            AppManifest,
+            DagNode,
+            DagNodeDependency,
+            ExecuteWorkflowInputs,
+        )
+
+        return AppManifest(
+            execution_mode="dag",
+            dag={
+                "extract": DagNode(
+                    activity_name="execute_workflow",
+                    activity_display_name="Extract",
+                    app_name="my-extractor",
+                    inputs=ExecuteWorkflowInputs(
+                        workflow_type="extraction",
+                        task_queue="my-extractor-queue",
+                        args={"connection": "{{connection}}"},
+                    ),
+                ),
+                "load": DagNode(
+                    activity_name="execute_workflow",
+                    activity_display_name="Load",
+                    app_name="my-loader",
+                    inputs=ExecuteWorkflowInputs(
+                        workflow_type="loading",
+                        task_queue="my-loader-queue",
+                    ),
+                    depends_on=DagNodeDependency(node_id="extract"),
+                ),
+            },
+            init_endpoint="/workflows/v1/init",
+        )
+
+    def test_manifest_returns_programmatic_manifest(self) -> None:
+        manifest = self._make_manifest()
+        app = create_app_handler_service(
+            _TestHandler(), app_name="test-app", manifest=manifest
+        )
+        client = TestClient(app)
+        response = client.get("/workflows/v1/manifest")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["execution_mode"] == "dag"
+        assert "extract" in body["dag"]
+        assert body["dag"]["extract"]["app_name"] == "my-extractor"
+        assert body["dag"]["load"]["depends_on"]["node_id"] == "extract"
+        assert body["init_endpoint"] == "/workflows/v1/init"
+
+    def test_manifest_falls_back_to_disk(self, tmp_path: Path) -> None:
+        from application_sdk.handler import service as svc_module
+
+        manifest_data = {
+            "execution_mode": "dag",
+            "dag": {
+                "extract": {
+                    "activity_name": "execute_workflow",
+                    "activity_display_name": "Extract",
+                    "app_name": "disk-app",
+                    "inputs": {
+                        "workflow_type": "extraction",
+                        "task_queue": "disk-queue",
+                    },
+                }
+            },
+        }
+        (tmp_path / "manifest.json").write_text(__import__("json").dumps(manifest_data))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["execution_mode"] == "dag"
+            assert body["dag"]["extract"]["app_name"] == "disk-app"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_disk_substitutes_deployment_name(self, tmp_path: Path) -> None:
+        from application_sdk.handler import service as svc_module
+
+        manifest_data = {
+            "execution_mode": "dag",
+            "dag": {
+                "extract": {
+                    "activity_name": "execute_workflow",
+                    "activity_display_name": "Extract",
+                    "app_name": "my-app",
+                    "inputs": {
+                        "workflow_type": "extraction",
+                        "task_queue": "{deployment_name}-queue",
+                    },
+                }
+            },
+        }
+        (tmp_path / "manifest.json").write_text(__import__("json").dumps(manifest_data))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        original_dep = svc_module.DEPLOYMENT_NAME
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        svc_module.DEPLOYMENT_NAME = "prod-deploy"
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["dag"]["extract"]["inputs"]["task_queue"] == "prod-deploy-queue"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+            svc_module.DEPLOYMENT_NAME = original_dep
+
+    def test_manifest_programmatic_takes_priority(self, tmp_path: Path) -> None:
+        """When both programmatic and disk manifest exist, programmatic wins."""
+        from application_sdk.handler import service as svc_module
+
+        disk_data = {
+            "execution_mode": "disk-mode",
+            "dag": {
+                "node": {
+                    "activity_name": "execute_workflow",
+                    "activity_display_name": "Node",
+                    "app_name": "disk-app",
+                    "inputs": {"workflow_type": "t", "task_queue": "q"},
+                }
+            },
+        }
+        (tmp_path / "manifest.json").write_text(__import__("json").dumps(disk_data))
+
+        manifest = self._make_manifest()
+        app = create_app_handler_service(
+            _TestHandler(), app_name="test-app", manifest=manifest
+        )
+        client = TestClient(app)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            body = response.json()
+            # Programmatic manifest wins — has "dag" mode, not "disk-mode"
+            assert body["execution_mode"] == "dag"
+            assert "extract" in body["dag"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_404_when_none(self, tmp_path: Path) -> None:
+        """Returns 404 when no manifest param and no manifest.json on disk."""
+        from application_sdk.handler import service as svc_module
+
+        missing = tmp_path / "nonexistent"
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = missing
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original

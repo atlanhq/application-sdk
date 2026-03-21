@@ -465,14 +465,9 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     def export_record(self, record: Any) -> None:
         """Export a log record to external systems.
 
-        Args:
-            record (Any): Log record to export.
-
-        This method:
-        - Sends the record to OpenTelemetry if enabled
+        OTLP export is handled exclusively by the otlp_sink; this path is a no-op.
         """
-        if ENABLE_OTLP_LOGS:
-            self._send_to_otel(self.process_record(record))
+        pass
 
     def _create_log_record(self, record: dict) -> LogRecord:
         """Create an OpenTelemetry LogRecord from a dictionary.
@@ -562,23 +557,11 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         workflow_context = get_workflow_context()
 
-        try:
-            if workflow_context["in_workflow"] == "true":
-                # Only append workflow context if we have workflow info
-                workflow_msg = f" Workflow Context: Workflow ID: {workflow_context['workflow_id']} Run ID: {workflow_context['workflow_run_id']} Type: {workflow_context['workflow_type']}"
-                msg = f"{msg}{workflow_msg}"
-                kwargs.update(workflow_context)
-        except Exception:
-            pass
-
-        try:
-            if workflow_context["in_activity"] == "true":
-                # Only append activity context if we have activity info
-                activity_msg = f" Activity Context: Activity ID: {workflow_context['activity_id']} Workflow ID: {workflow_context['workflow_id']} Run ID: {workflow_context['workflow_run_id']} Type: {workflow_context['activity_type']}"
-                msg = f"{msg}{activity_msg}"
-                kwargs.update(workflow_context)
-        except Exception:
-            pass
+        if (
+            workflow_context.get("in_workflow") == "true"
+            or workflow_context.get("in_activity") == "true"
+        ):
+            kwargs.update(workflow_context)
 
         # Add correlation context (atlan-, temporal., tenant. prefixed keys, trace_id, correlation_id) to kwargs
         corr_ctx = correlation_context.get()

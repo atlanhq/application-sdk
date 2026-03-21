@@ -110,6 +110,39 @@ jobs:
           fail-under: "50"
           python-version: ${{ matrix.python-version }}
 
+  integration:
+    name: Integration Tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: "./.github/actions/setup-deps"
+
+      - name: Install Temporal CLI
+        run: |
+          curl -sSf https://temporal.download/cli.sh | sh
+          echo "$HOME/.temporalio/bin" >> $GITHUB_PATH
+
+      - name: Start Temporal dev server
+        run: temporal server start-dev --db-filename /tmp/temporal-integ.db &
+
+      - name: Wait for Temporal to be ready
+        run: |
+          for i in $(seq 1 20); do
+            if temporal workflow list --namespace default 2>/dev/null; then
+              echo "Temporal is ready"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Run integration tests
+        env:
+          TEMPORAL_HOST: "localhost:7233"
+        run: uv run pytest tests/integration/ -m integration -v --timeout=120
+
   matrix-builder:
     name: Build Test Matrix
     runs-on: ubuntu-latest
