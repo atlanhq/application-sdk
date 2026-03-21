@@ -16,14 +16,7 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
-from application_sdk.constants import (
-    APP_TENANT_ID,
-    APPLICATION_NAME,
-    ENABLE_LAKEHOUSE_LOAD,
-    LH_LOAD_RAW_MODE,
-    LH_LOAD_RAW_NAMESPACE,
-    LH_LOAD_RAW_TABLE_NAME,
-)
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
@@ -255,46 +248,8 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 f"typenames: {extracted_typenames}"
             )
 
-            # Load raw data to lakehouse (once, after all fetches complete)
-            # Raw parquet is first converted to the common connector_extractions
-            # schema (JSONL with metadata columns + raw_record), then loaded via MDLH.
-            if (
-                ENABLE_LAKEHOUSE_LOAD
-                and LH_LOAD_RAW_NAMESPACE
-                and LH_LOAD_RAW_TABLE_NAME
-                and extracted_typenames
-            ):
-                output_path = workflow_args.get("output_path", "")
-                connection_qn = workflow_args.get("connection", {}).get(
-                    "connection_qualified_name", ""
-                )
-                prep_config = {
-                    **workflow_args,
-                    "raw_lakehouse_config": {
-                        "raw_output_path": f"{output_path}/raw",
-                        "typenames": extracted_typenames,
-                        "connection_qualified_name": connection_qn,
-                        "workflow_id": workflow_args.get("workflow_id", ""),
-                        "workflow_run_id": workflow_args.get("workflow_run_id", ""),
-                        "extracted_at": int(time() * 1000),
-                        "tenant_id": APP_TENANT_ID,
-                    },
-                }
-                raw_lh_dir = await workflow.execute_activity_method(
-                    self.activities_cls.prepare_raw_for_lakehouse,
-                    args=[prep_config],
-                    retry_policy=retry_policy,
-                    start_to_close_timeout=self.default_start_to_close_timeout,
-                    heartbeat_timeout=self.default_heartbeat_timeout,
-                )
-                await self._execute_lakehouse_load(
-                    workflow_args,
-                    output_path=raw_lh_dir,
-                    namespace=LH_LOAD_RAW_NAMESPACE,
-                    table_name=LH_LOAD_RAW_TABLE_NAME,
-                    mode=LH_LOAD_RAW_MODE,
-                    file_extension=".jsonl",
-                )
+            # Load raw data to lakehouse (prepare parquet -> JSONL, then /load)
+            await self.load_raw_to_lakehouse(workflow_args, extracted_typenames)
 
             # Load transformed data + upload to atlan
             await self.run_exit_activities(workflow_args)
