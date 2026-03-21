@@ -2,12 +2,11 @@ FROM cgr.dev/atlan.com/app-framework-golden:3.13
 
 # Dapr version arguments
 ARG DAPR_CLI_VERSION=1.17.0
-ARG DAPR_RUNTIME_PACKAGE=dapr-daprd-1.17.2
+ARG DAPR_RUNTIME_PACKAGE=dapr-daprd-1.17.0
 
 # Switch to root for installation
 USER root
 
-# test commit
 # Install Dapr CLI (latest version for apps to use)
 RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s ${DAPR_CLI_VERSION}
 
