@@ -157,22 +157,23 @@ class TestRunExitActivities:
     )
     @patch("application_sdk.workflows.metadata_extraction.ENABLE_ATLAN_UPLOAD", False)
     @patch("temporalio.workflow.execute_activity_method")
-    async def test_run_exit_activities_lakehouse_skips_unknown_typename(
+    async def test_run_exit_activities_lakehouse_loads_any_typename(
         self,
         mock_execute_activity,
         workflow,
         workflow_args,
     ):
-        """Test unknown typenames are skipped with a warning."""
+        """Test any typename is accepted — table name = typename.lower()."""
         mock_execute_activity.return_value = {"status": "success"}
-        workflow_args["_extracted_typenames"] = ["table", "unknown-type"]
+        workflow_args["_extracted_typenames"] = ["table", "LookerDashboard"]
 
         await workflow.run_exit_activities(workflow_args)
 
-        # Only "table" should be loaded, "unknown-type" skipped
-        assert mock_execute_activity.call_count == 1
-        lh_config = mock_execute_activity.call_args[1]["args"][0]["lh_load_config"]
-        assert lh_config["table_name"] == "table"
+        assert mock_execute_activity.call_count == 2
+        lh_config_0 = mock_execute_activity.call_args_list[0][1]["args"][0]["lh_load_config"]
+        assert lh_config_0["table_name"] == "table"
+        lh_config_1 = mock_execute_activity.call_args_list[1][1]["args"][0]["lh_load_config"]
+        assert lh_config_1["table_name"] == "lookerdashboard"
 
     @patch("application_sdk.workflows.metadata_extraction.ENABLE_LAKEHOUSE_LOAD", True)
     @patch(

@@ -14,16 +14,23 @@ from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
 
-# Maps SDK typename (used by fetch activities / JsonFileWriter subdirs) to the
-# Iceberg table name in entity_metadata.  The Iceberg tables are created by
-# MDLH's ensureTypeDefsSchema and follow the convention: lowercase(AtlasTypeDef).
-TYPENAME_TO_ICEBERG_TABLE: Dict[str, str] = {
-    "database": "database",
-    "schema": "schema",
-    "table": "table",
-    "column": "column",
+# SDK typenames that don't match the MDLH Iceberg table name directly.
+# Default behaviour: table_name = typename.lower()
+# Override here only when the SDK typename differs from the Atlas typedef.
+_TYPENAME_OVERRIDES: Dict[str, str] = {
     "extras-procedure": "procedure",
 }
+
+
+def _resolve_iceberg_table(typename: str) -> str:
+    """Resolve SDK typename to Iceberg table name in entity_metadata.
+
+    MDLH tables follow the convention: lowercase(AtlasTypeDef).
+    Most SDK typenames already match (e.g. "database", "table", "column",
+    "lookerdashboard", "snowflakedynamictable").  Overrides exist only for
+    SDK-specific naming quirks like "extras-procedure" → "procedure".
+    """
+    return _TYPENAME_OVERRIDES.get(typename, typename.lower())
 
 
 class MetadataExtractionWorkflow(WorkflowInterface):
@@ -64,10 +71,10 @@ class MetadataExtractionWorkflow(WorkflowInterface):
     ) -> None:
         """Load transformed data to lakehouse, one MDLH job per entity type.
 
-        Each typename produced during extraction (e.g. "database", "table") is
-        loaded into its own Iceberg table inside the entity_metadata namespace.
-        The mapping from SDK typename to Iceberg table name is defined in
-        TYPENAME_TO_ICEBERG_TABLE.
+        Each typename produced during extraction is loaded into its own
+        Iceberg table inside entity_metadata.  The table name is derived
+        from the typename via _resolve_iceberg_table (defaults to
+        typename.lower(), matching MDLH's naming convention).
         """
         typenames: List[str] = workflow_args.get("_extracted_typenames", [])
         if not typenames:
@@ -77,12 +84,7 @@ class MetadataExtractionWorkflow(WorkflowInterface):
         output_path = workflow_args.get("output_path", "")
 
         for typename in typenames:
-            iceberg_table = TYPENAME_TO_ICEBERG_TABLE.get(typename)
-            if not iceberg_table:
-                logger.warning(
-                    f"No Iceberg table mapping for typename '{typename}', skipping"
-                )
-                continue
+            iceberg_table = _resolve_iceberg_table(typename)
 
             logger.info(
                 f"Loading transformed data for typename={typename} "
