@@ -94,10 +94,12 @@ spec:
                 fieldRef:
                   fieldPath: status.hostIP
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "$(K8S_NODE_IP):4317"
+              value: "http://$(K8S_NODE_IP):4317"
             - name: OTEL_SERVICE_NAME
               value: "{{ include "atlan-app.appName" . }}-handler"
             {{- if .Values.otel.exporter.enabled }}
+            - name: ENABLE_OTLP_LOGS
+              value: "true"
             - name: K8S_POD_NAME
               valueFrom:
                 fieldRef:
