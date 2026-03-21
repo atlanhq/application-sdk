@@ -385,7 +385,9 @@ DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
 
 # Lakehouse Load Configuration
 ENABLE_LAKEHOUSE_LOAD = os.getenv("ENABLE_LAKEHOUSE_LOAD", "false").lower() == "true"
-MDLH_BASE_URL = os.getenv("MDLH_BASE_URL", "http://mdlh:4541")
+MDLH_BASE_URL = os.getenv(
+    "MDLH_BASE_URL", "http://lakehouse.atlas.svc.cluster.local:4541"
+)
 LH_LOAD_POLL_INTERVAL_SECONDS = int(os.getenv("LH_LOAD_POLL_INTERVAL_SECONDS", "10"))
 LH_LOAD_MAX_POLL_ATTEMPTS = int(os.getenv("LH_LOAD_MAX_POLL_ATTEMPTS", "360"))
 
