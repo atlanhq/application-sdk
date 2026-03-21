@@ -65,6 +65,26 @@ Log every file that was changed. After the rewriter completes, tell the user whi
 
 ---
 
+## Phase 1b — Automated structural codemods
+
+Before any AI-assisted structural work, run the codemod pipeline. This eliminates the mechanical transforms (decorator removal, signature rewrites, activity call rewrites, activities plumbing cleanup, entry point rewrite) deterministically, so the AI only needs to handle what remains.
+
+```bash
+uv run python -m tools.migrate_v3.run_codemods <target-path>
+```
+
+Review the output: files changed, any `SKIPPED` entries (dynamic dispatch or complex entry points that need manual attention), and errors.
+
+Then re-run the checker to see what FAILs remain — those are the AI's work scope for Phase 2b:
+
+```bash
+uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
+```
+
+Log a short summary of what the codemods changed and what FAILs remain.
+
+---
+
 ## Phase 2 — Structural migration
 
 Read the checker output from Phase 0 and the structure of the connector code to determine what structural work is needed.
@@ -170,6 +190,25 @@ After completing the structural migration in 2b, consolidate the v2 directory la
 7. Re-run the checker to confirm the `no-v2-directory-structure` advisory is gone.
 
 If the connector does not have an `activities/` or `workflows/` directory, skip this step.
+
+---
+
+## Phase 2d — Post-processing cleanup
+
+After completing the structural changes in 2b and directory consolidation in 2c, run these cleanup steps to normalize imports and formatting before the validation loop:
+
+```bash
+# Remove unused imports and sort import order
+uv run ruff check --fix --select I,F401 <target-path>
+
+# Normalize formatting
+uv run ruff format <target-path>
+
+# Check migration status
+uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
+```
+
+All FAIL checks should pass at this point. If any remain, address them before moving to Phase 3.
 
 ---
 
