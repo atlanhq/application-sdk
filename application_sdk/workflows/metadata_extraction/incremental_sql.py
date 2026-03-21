@@ -25,13 +25,13 @@ import asyncio
 from typing import Any, Callable, Dict, List, Sequence, Type
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
 
 from application_sdk.activities.metadata_extraction.incremental import (
     IncrementalSQLMetadataExtractionActivities,
 )
 from application_sdk.common.incremental.models import IncrementalWorkflowArgs
 from application_sdk.constants import MAX_CONCURRENT_COLUMN_BATCHES
+from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
@@ -105,7 +105,7 @@ class IncrementalSQLMetadataExtractionWorkflow(BaseSQLMetadataExtractionWorkflow
         workflow_args: Dict[str, Any],
         workflow_id: str,
         workflow_run_id: str,
-        retry_policy: RetryPolicy,
+        retry_policy: Any,
     ) -> None:
         """Extract columns for changed/backfill tables in parallel, then transform.
 
@@ -212,7 +212,9 @@ class IncrementalSQLMetadataExtractionWorkflow(BaseSQLMetadataExtractionWorkflow
         """
         workflow_id = workflow_config["workflow_id"]
         workflow_run_id = workflow.info().run_id
-        retry_policy = RetryPolicy(maximum_attempts=3, backoff_coefficient=2)
+        retry_policy = _to_temporal_retry_policy(
+            RetryPolicy(max_attempts=3, backoff_coefficient=2)
+        )
 
         # ── PHASE 1: Setup - Fetch args and incremental prerequisites ──────────
         workflow_args = await workflow.execute_activity_method(

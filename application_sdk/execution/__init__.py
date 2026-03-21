@@ -1,5 +1,7 @@
 """Execution layer for running Apps on Temporal."""
 
+from temporalio.exceptions import ApplicationError
+
 from application_sdk.execution._temporal.auth import (
     TemporalAuthConfig,
     TemporalAuthManager,
@@ -12,6 +14,7 @@ from application_sdk.execution._temporal.converter import (
 from application_sdk.execution._temporal.worker import AppWorker, create_worker
 
 __all__ = [
+    "ApplicationError",
     "AppWorker",
     "create_worker",
     "create_temporal_client",

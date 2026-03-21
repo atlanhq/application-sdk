@@ -1,7 +1,13 @@
 """Retry policies for App execution."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from temporalio.common import RetryPolicy as _TemporalRetryPolicy
 
 
 @dataclass(frozen=True)
@@ -74,3 +80,21 @@ AGGRESSIVE_RETRY = RetryPolicy(
     backoff_coefficient=1.5,
 )
 """Aggressive retry policy for transient failures."""
+
+
+def _to_temporal_retry_policy(policy: RetryPolicy) -> _TemporalRetryPolicy:
+    """Convert a framework :class:`RetryPolicy` to ``temporalio.common.RetryPolicy``.
+
+    Internal helper for the execution layer.  Not part of the public API.
+    """
+    from temporalio.common import RetryPolicy as _TR
+
+    return _TR(
+        maximum_attempts=policy.max_attempts,
+        initial_interval=policy.initial_interval,
+        maximum_interval=policy.max_interval,
+        backoff_coefficient=policy.backoff_coefficient,
+        non_retryable_error_types=list(policy.non_retryable_errors)
+        if policy.non_retryable_errors
+        else None,
+    )

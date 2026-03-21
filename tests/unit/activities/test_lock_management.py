@@ -3,7 +3,6 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from temporalio.exceptions import ApplicationError
 
 from application_sdk.activities.lock_management import (
     acquire_distributed_lock,
@@ -11,6 +10,7 @@ from application_sdk.activities.lock_management import (
 )
 from application_sdk.clients.redis import LockReleaseResult
 from application_sdk.common.error_codes import ActivityError
+from application_sdk.execution import ApplicationError
 
 
 class TestAcquireDistributedLock:

@@ -11,11 +11,11 @@ from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
 
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.constants import APPLICATION_NAME
+from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.workflows.query_extraction import QueryExtractionWorkflow
 
@@ -96,15 +96,16 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
             self.activities_cls.get_workflow_args,
             workflow_config,  # Pass the whole config containing workflow_id
-            retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
+            retry_policy=_to_temporal_retry_policy(
+                RetryPolicy(max_attempts=3, backoff_coefficient=2)
+            ),
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
 
         logger.info(f"Starting miner workflow for {workflow_id}")
-        retry_policy = RetryPolicy(
-            maximum_attempts=6,
-            backoff_coefficient=2,
+        retry_policy = _to_temporal_retry_policy(
+            RetryPolicy(max_attempts=6, backoff_coefficient=2)
         )
 
         results: List[Dict[str, Any]] = await workflow.execute_activity_method(

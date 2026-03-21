@@ -11,7 +11,6 @@ from time import time
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
 from typing_extensions import Tuple
 
 from application_sdk.activities.common.models import ActivityStatistics
@@ -19,6 +18,7 @@ from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
 from application_sdk.constants import APPLICATION_NAME
+from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
@@ -105,10 +105,11 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         Raises:
             ValueError: If chunk_count, raw_total_record_count, or typename is invalid.
         """
+        temporal_rp = _to_temporal_retry_policy(retry_policy)
         raw_statistics = await workflow.execute_activity_method(
             fetch_fn,
             args=[workflow_args],
-            retry_policy=retry_policy,
+            retry_policy=temporal_rp,
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
@@ -145,7 +146,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                         "chunk_start": chunk_starts[i],
                         **workflow_args,
                     },
-                    retry_policy=retry_policy,
+                    retry_policy=temporal_rp,
                     start_to_close_timeout=self.default_start_to_close_timeout,
                     heartbeat_timeout=self.default_heartbeat_timeout,
                 )
@@ -224,16 +225,15 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
                 self.activities_cls.get_workflow_args,
                 workflow_config,
-                retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
+                retry_policy=_to_temporal_retry_policy(
+                    RetryPolicy(max_attempts=3, backoff_coefficient=2)
+                ),
                 start_to_close_timeout=self.default_start_to_close_timeout,
                 heartbeat_timeout=self.default_heartbeat_timeout,
             )
 
             logger.info(f"Starting extraction workflow for {workflow_id}")
-            retry_policy = RetryPolicy(
-                maximum_attempts=6,
-                backoff_coefficient=2,
-            )
+            retry_policy = RetryPolicy(max_attempts=6, backoff_coefficient=2)
 
             fetch_functions = self.get_fetch_functions()
 

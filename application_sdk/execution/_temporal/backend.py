@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from temporalio.client import Client
-from temporalio.common import RetryPolicy as TemporalRetryPolicy
+from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 
 if TYPE_CHECKING:
     from datetime import timedelta
@@ -18,20 +18,6 @@ if TYPE_CHECKING:
 
     from application_sdk.app.base import App
     from application_sdk.app.context import AppContext
-    from application_sdk.execution.retry import RetryPolicy
-
-
-def _to_temporal_retry_policy(policy: RetryPolicy) -> TemporalRetryPolicy:
-    """Convert framework RetryPolicy to Temporal RetryPolicy."""
-    return TemporalRetryPolicy(
-        maximum_attempts=policy.max_attempts,
-        initial_interval=policy.initial_interval,
-        maximum_interval=policy.max_interval,
-        backoff_coefficient=policy.backoff_coefficient,
-        non_retryable_error_types=list(policy.non_retryable_errors)
-        if policy.non_retryable_errors
-        else None,
-    )
 
 
 class TemporalExecutorBackend:

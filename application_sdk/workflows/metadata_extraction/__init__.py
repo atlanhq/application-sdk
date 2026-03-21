@@ -11,7 +11,7 @@ warnings.warn(
 from typing import Any, Dict
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
+from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 
 from application_sdk.constants import ENABLE_ATLAN_UPLOAD
 from application_sdk.observability.logger_adaptor import get_logger
@@ -25,9 +25,8 @@ class MetadataExtractionWorkflow(WorkflowInterface):
 
     async def run_exit_activities(self, workflow_args: Dict[str, Any]) -> None:
         """Run the exit activity for the workflow."""
-        retry_policy = RetryPolicy(
-            maximum_attempts=6,
-            backoff_coefficient=2,
+        retry_policy = _to_temporal_retry_policy(
+            RetryPolicy(max_attempts=6, backoff_coefficient=2)
         )
         if ENABLE_ATLAN_UPLOAD:
             workflow_args["typename"] = "atlan-upload"

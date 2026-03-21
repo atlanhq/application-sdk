@@ -1474,24 +1474,21 @@ def _create_task_activity_wrapper(
     """
     from datetime import timedelta
 
-    from temporalio.common import RetryPolicy
+    from application_sdk.execution.retry import RetryPolicy as _RP
+    from application_sdk.execution.retry import _to_temporal_retry_policy
 
     with workflow.unsafe.imports_passed_through():
         from application_sdk.execution._temporal.activities import TaskContext
 
     # Build the Temporal RetryPolicy once (not per invocation)
     if retry_policy is not None:
-        temporal_retry_policy = RetryPolicy(
-            maximum_attempts=retry_policy.max_attempts,
-            initial_interval=retry_policy.initial_interval,
-            maximum_interval=retry_policy.max_interval,
-            backoff_coefficient=retry_policy.backoff_coefficient,
-            non_retryable_error_types=list(retry_policy.non_retryable_errors),
-        )
+        temporal_retry_policy = _to_temporal_retry_policy(retry_policy)
     else:
-        temporal_retry_policy = RetryPolicy(
-            maximum_attempts=retry_max_attempts,
-            maximum_interval=timedelta(seconds=retry_max_interval_seconds),
+        temporal_retry_policy = _to_temporal_retry_policy(
+            _RP(
+                max_attempts=retry_max_attempts,
+                max_interval=timedelta(seconds=retry_max_interval_seconds),
+            )
         )
 
     async def wrapper(input_data: Input) -> Output:

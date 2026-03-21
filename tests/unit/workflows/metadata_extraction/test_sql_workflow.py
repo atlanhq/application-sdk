@@ -3,12 +3,12 @@ from typing import Any, Dict, List
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from temporalio.common import RetryPolicy
 
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
+from application_sdk.app import RetryPolicy
 from application_sdk.common.utils import prepare_query
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
@@ -128,7 +128,7 @@ async def test_fetch_and_transform():
     workflow.activities_cls.transform_data = mock_transform
 
     workflow_args = {"test": "args"}
-    retry_policy = RetryPolicy(maximum_attempts=1)
+    retry_policy = RetryPolicy(max_attempts=1)
 
     with patch("temporalio.workflow.execute_activity_method") as mock_execute:
         mock_execute.side_effect = [mock_fetch.return_value] + [
@@ -152,7 +152,7 @@ async def test_fetch_and_transform_error_handling():
             total_record_count=0, chunk_count=0, typename="test", partitions=[]
         ).__dict__
         await workflow.fetch_and_transform(
-            mock_fetch_none, {}, RetryPolicy(maximum_attempts=1)
+            mock_fetch_none, {}, RetryPolicy(max_attempts=1)
         )
 
     # Test with invalid typename
@@ -166,7 +166,7 @@ async def test_fetch_and_transform_error_handling():
         mock_execute.return_value = mock_fetch_invalid.return_value
         with pytest.raises(ValueError, match="Invalid typename"):
             await workflow.fetch_and_transform(
-                mock_fetch_invalid, {}, RetryPolicy(maximum_attempts=1)
+                mock_fetch_invalid, {}, RetryPolicy(max_attempts=1)
             )
 
 
