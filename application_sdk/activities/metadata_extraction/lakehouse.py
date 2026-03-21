@@ -242,7 +242,7 @@ async def convert_raw_parquet_to_jsonl(
                         "workflow_id": workflow_id,
                         "workflow_run_id": workflow_run_id,
                         "extracted_at": extracted_at,
-                        "tenant_id": tenant_id,
+                        "tenant_id": APP_TENANT_ID,
                         "entity_name": entity_name,
                         "raw_record": json.dumps(raw_row, default=str),
                     }
