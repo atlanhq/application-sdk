@@ -10,7 +10,7 @@ from application_sdk.activities.common.models import (
     LhLoadStatusResponse,
     LhTableWriteMode,
 )
-from application_sdk.activities.metadata_extraction.base import do_lakehouse_load
+from application_sdk.activities.metadata_extraction.base import submit_and_poll_mdlh_load
 from application_sdk.common.error_codes import ActivityError
 
 
@@ -133,7 +133,7 @@ class TestLoadToLakehouse:
         mock_aiohttp.ClientError = Exception
         mock_aiohttp.ClientTimeout = lambda total: None
 
-        result = await do_lakehouse_load(_make_workflow_args())
+        result = await submit_and_poll_mdlh_load(_make_workflow_args())
         assert result.typename == "lakehouse-load-completed"
 
     @_apply_common_patches
@@ -154,7 +154,7 @@ class TestLoadToLakehouse:
         mock_aiohttp.ClientTimeout = lambda total: None
 
         with pytest.raises(ActivityError, match="LAKEHOUSE_LOAD_ERROR|FAILED"):
-            await do_lakehouse_load(_make_workflow_args())
+            await submit_and_poll_mdlh_load(_make_workflow_args())
 
     @patch(
         "application_sdk.activities.metadata_extraction.base.LH_LOAD_POLL_INTERVAL_SECONDS",
@@ -193,7 +193,7 @@ class TestLoadToLakehouse:
         with pytest.raises(
             ActivityError, match="LAKEHOUSE_LOAD_TIMEOUT|did not complete"
         ):
-            await do_lakehouse_load(_make_workflow_args())
+            await submit_and_poll_mdlh_load(_make_workflow_args())
 
     @patch(
         "application_sdk.activities.metadata_extraction.base.MDLH_BASE_URL",
@@ -217,7 +217,7 @@ class TestLoadToLakehouse:
         mock_aiohttp.ClientTimeout = lambda total: None
 
         with pytest.raises(ActivityError, match="LAKEHOUSE_LOAD_API_ERROR|400"):
-            await do_lakehouse_load(_make_workflow_args())
+            await submit_and_poll_mdlh_load(_make_workflow_args())
 
     @_apply_common_patches
     @patch(
@@ -237,17 +237,17 @@ class TestLoadToLakehouse:
         mock_aiohttp.ClientTimeout = lambda total: None
 
         with pytest.raises(ActivityError, match="non-retryable.*404"):
-            await do_lakehouse_load(_make_workflow_args())
+            await submit_and_poll_mdlh_load(_make_workflow_args())
 
     async def test_load_missing_config(self):
         """No lh_load_config → raises ActivityError."""
         with pytest.raises(ActivityError, match="Missing lh_load_config"):
-            await do_lakehouse_load({})
+            await submit_and_poll_mdlh_load({})
 
     async def test_load_missing_fields(self):
         """Missing required fields → raises ActivityError."""
         with pytest.raises(ActivityError, match="Missing required fields"):
-            await do_lakehouse_load(
+            await submit_and_poll_mdlh_load(
                 {"lh_load_config": {"output_path": "/tmp/test", "namespace": "ns"}}
             )
 

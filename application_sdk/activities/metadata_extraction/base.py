@@ -195,7 +195,7 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
             - mode: str — "APPEND" or "UPSERT"
             - file_extension: str — ".parquet" or ".jsonl"
         """
-        return await do_lakehouse_load(workflow_args)
+        return await submit_and_poll_mdlh_load(workflow_args)
 
     @activity.defn
     @auto_heartbeater
@@ -216,7 +216,7 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
         Returns the output directory path containing the prepared JSONL files.
         """
         config = workflow_args.get("raw_lakehouse_config", {})
-        return await _do_prepare_raw_for_lakehouse(
+        return await convert_raw_parquet_to_jsonl(
             raw_output_path=config.get("raw_output_path", ""),
             typenames=config.get("typenames", []),
             connection_qualified_name=config.get("connection_qualified_name", ""),
@@ -230,7 +230,7 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
 _TERMINAL_FAILURE_STATES = {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}
 
 
-async def do_lakehouse_load(workflow_args: Dict[str, Any]) -> ActivityStatistics:
+async def submit_and_poll_mdlh_load(workflow_args: Dict[str, Any]) -> ActivityStatistics:
     """Shared implementation for lakehouse load activity.
 
     Called from both BaseMetadataExtractionActivities and
@@ -345,7 +345,7 @@ _RAW_ENTITY_NAME_FIELDS: Dict[str, str] = {
 }
 
 
-async def _do_prepare_raw_for_lakehouse(
+async def convert_raw_parquet_to_jsonl(
     raw_output_path: str,
     typenames: list[str],
     connection_qualified_name: str,
