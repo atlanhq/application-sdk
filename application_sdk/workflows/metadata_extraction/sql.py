@@ -108,7 +108,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
         if raw_statistics is None:
-            return None
+            return
 
         activity_statistics = ActivityStatistics.model_validate(raw_statistics)
         transform_activities: List[Any] = []
@@ -119,7 +119,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             or not activity_statistics.partitions
         ):
             # to handle the case where the fetch_fn returns None or no chunks
-            return None
+            return
 
         if activity_statistics.typename is None:
             raise ValueError("Invalid typename")
