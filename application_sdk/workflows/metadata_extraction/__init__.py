@@ -3,7 +3,7 @@ from typing import Any, Dict
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from application_sdk.constants import ENABLE_ATLAN_UPLOAD
+from application_sdk.constants import ENABLE_ATLAN_UPLOAD, ENABLE_LAKEHOUSE_LOAD
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.workflows import WorkflowInterface
 from application_sdk.workflows.metadata_extraction.lakehouse import LakehouseLoadMixin
@@ -36,4 +36,5 @@ class MetadataExtractionWorkflow(LakehouseLoadMixin, WorkflowInterface):
         else:
             logger.info("Atlan upload skipped for workflow (disabled)")
 
-        await self.load_transformed_to_lakehouse(workflow_args)
+        if ENABLE_LAKEHOUSE_LOAD:
+            await self.load_transformed_to_lakehouse(workflow_args)
