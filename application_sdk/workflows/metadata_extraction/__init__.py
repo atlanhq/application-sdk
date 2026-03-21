@@ -20,12 +20,16 @@ class MetadataExtractionWorkflow(LakehouseLoadMixin, WorkflowInterface):
 
     async def run_exit_activities(self, workflow_args: Dict[str, Any]) -> None:
         """Run post-extraction activities: upload to Atlan + lakehouse load."""
+        retry_policy = RetryPolicy(
+            maximum_attempts=6,
+            backoff_coefficient=2,
+        )
         if ENABLE_ATLAN_UPLOAD:
             workflow_args["typename"] = "atlan-upload"
             await workflow.execute_activity_method(
                 self.activities_cls.upload_to_atlan,
                 args=[workflow_args],
-                retry_policy=RetryPolicy(maximum_attempts=6, backoff_coefficient=2),
+                retry_policy=retry_policy,
                 start_to_close_timeout=self.default_start_to_close_timeout,
                 heartbeat_timeout=self.default_heartbeat_timeout,
             )
