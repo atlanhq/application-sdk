@@ -1,41 +1,37 @@
 """Typed contracts for Handler operations.
 
-Provides Input/Output dataclasses for the three core handler operations:
+Provides Pydantic models for the three core handler operations:
 - Authentication (test_auth)
 - Preflight checks (preflight_check)
 - Metadata discovery (fetch_metadata)
 
 Plus supporting types for credentials, log streaming, and file uploads.
 
-TODO(v3-refactor): migrate all types in this module from plain dataclasses to
-``pydantic.BaseModel`` (HTTP API zone rule — see ``application_sdk/contracts/base.py``).
-These are HTTP boundary types and should use Pydantic for boundary validation,
-direct JSON serialization via ``model_dump_json()``, and OpenAPI schema
-generation. The corresponding endpoints in ``service.py`` manually unpack
-``request.json()`` and use ``_serialize_output`` / ``dataclasses.asdict``
-precisely because they lack Pydantic validation — that boilerplate goes away
-once these types are Pydantic models.
-Tracked as part of the v3 SDK refactor; defer until after manifest.py is stable.
+These are HTTP boundary types — Pydantic BaseModel gives boundary validation
+on ingress (``model_validate``), direct JSON serialization on egress
+(``model_dump``), and automatic OpenAPI schema generation.
 """
 
 from __future__ import annotations
 
-import dataclasses
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Any
+from typing import Any
 
-from application_sdk.contracts.base import Input, Output, SerializableEnum
-from application_sdk.contracts.types import MaxItems
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
+
+from application_sdk.contracts.base import SerializableEnum
 
 
-@dataclasses.dataclass(frozen=True)
-class HandlerCredential:
+class HandlerCredential(BaseModel):
     """A single credential key-value pair for HTTP handler inputs.
 
     Credentials are always transmitted as opaque key/value strings.
     Interpretation (e.g., as OAuth token, API key, password) is the
     handler's responsibility.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     key: str
     """Credential key (e.g., 'api_key', 'username')."""
@@ -57,13 +53,10 @@ class AuthStatus(SerializableEnum):
     INVALID_CREDENTIALS = "invalid_credentials"
 
 
-@dataclasses.dataclass
-class AuthInput(Input):
+class AuthInput(BaseModel):
     """Input for the test_auth handler operation."""
 
-    credentials: Annotated[list[HandlerCredential], MaxItems(50)] = dataclasses.field(
-        default_factory=list
-    )
+    credentials: list[HandlerCredential] = []
     """Credentials to authenticate with."""
 
     connection_id: str = ""
@@ -73,8 +66,7 @@ class AuthInput(Input):
     """Maximum seconds to wait for auth response."""
 
 
-@dataclasses.dataclass
-class AuthOutput(Output):
+class AuthOutput(BaseModel):
     """Output from the test_auth handler operation."""
 
     status: AuthStatus
@@ -83,14 +75,10 @@ class AuthOutput(Output):
     message: str = ""
     """Human-readable status message."""
 
-    identities: Annotated[list[str], MaxItems(20)] = dataclasses.field(
-        default_factory=list
-    )
+    identities: list[str] = []
     """Verified identities (e.g., usernames, roles)."""
 
-    scopes: Annotated[list[str], MaxItems(100)] = dataclasses.field(
-        default_factory=list
-    )
+    scopes: list[str] = []
     """Authorized scopes or permissions."""
 
     expires_at: str = ""
@@ -105,8 +93,7 @@ class PreflightStatus(SerializableEnum):
     PARTIAL = "partial"
 
 
-@dataclasses.dataclass
-class PreflightCheck:
+class PreflightCheck(BaseModel):
     """Result of a single preflight check."""
 
     name: str
@@ -122,37 +109,29 @@ class PreflightCheck:
     """How long the check took in milliseconds."""
 
 
-@dataclasses.dataclass
-class PreflightInput(Input, allow_unbounded_fields=True):
+class PreflightInput(BaseModel):
     """Input for the preflight_check handler operation."""
 
-    credentials: Annotated[list[HandlerCredential], MaxItems(50)] = dataclasses.field(
-        default_factory=list
-    )
+    credentials: list[HandlerCredential] = []
     """Credentials to use during preflight."""
 
-    connection_config: dict[str, Any] = dataclasses.field(default_factory=dict)
+    connection_config: dict[str, Any] = {}
     """Connection configuration (host, port, database, etc.)."""
 
-    checks_to_run: Annotated[list[str], MaxItems(50)] = dataclasses.field(
-        default_factory=list
-    )
+    checks_to_run: list[str] = []
     """Specific checks to run (empty = run all)."""
 
     timeout_seconds: int = 60
     """Maximum seconds to wait for all checks."""
 
 
-@dataclasses.dataclass
-class PreflightOutput(Output):
+class PreflightOutput(BaseModel):
     """Output from the preflight_check handler operation."""
 
     status: PreflightStatus
     """Overall preflight result."""
 
-    checks: Annotated[list[PreflightCheck], MaxItems(100)] = dataclasses.field(
-        default_factory=list
-    )
+    checks: list[PreflightCheck] = []
     """Individual check results."""
 
     message: str = ""
@@ -162,8 +141,7 @@ class PreflightOutput(Output):
     """Total time for all checks in milliseconds."""
 
 
-@dataclasses.dataclass
-class MetadataField:
+class MetadataField(BaseModel):
     """A field/column within a metadata object."""
 
     name: str
@@ -179,8 +157,7 @@ class MetadataField:
     """Optional field description."""
 
 
-@dataclasses.dataclass
-class MetadataObject:
+class MetadataObject(BaseModel):
     """A discoverable object (table, view, schema, etc.)."""
 
     name: str
@@ -189,7 +166,7 @@ class MetadataObject:
     object_type: str = ""
     """Object type (e.g., 'TABLE', 'VIEW', 'SCHEMA')."""
 
-    schema: str = ""
+    schema: str = ""  # pyright: ignore[reportIncompatibleMethodOverride]
     """Parent schema name."""
 
     database: str = ""
@@ -198,22 +175,17 @@ class MetadataObject:
     description: str = ""
     """Optional description."""
 
-    fields: Annotated[list[MetadataField], MaxItems(10000)] = dataclasses.field(
-        default_factory=list
-    )
+    fields: list[MetadataField] = []
     """Fields/columns within this object."""
 
 
-@dataclasses.dataclass
-class MetadataInput(Input, allow_unbounded_fields=True):
+class MetadataInput(BaseModel):
     """Input for the fetch_metadata handler operation."""
 
-    credentials: Annotated[list[HandlerCredential], MaxItems(50)] = dataclasses.field(
-        default_factory=list
-    )
+    credentials: list[HandlerCredential] = []
     """Credentials to use for metadata discovery."""
 
-    connection_config: dict[str, Any] = dataclasses.field(default_factory=dict)
+    connection_config: dict[str, Any] = {}
     """Connection configuration."""
 
     object_filter: str = ""
@@ -229,13 +201,10 @@ class MetadataInput(Input, allow_unbounded_fields=True):
     """Maximum seconds to wait for metadata fetch."""
 
 
-@dataclasses.dataclass
-class MetadataOutput(Output):
+class MetadataOutput(BaseModel):
     """Output from the fetch_metadata handler operation."""
 
-    objects: Annotated[list[MetadataObject], MaxItems(10000)] = dataclasses.field(
-        default_factory=list
-    )
+    objects: list[MetadataObject] = []
     """Discovered metadata objects."""
 
     total_count: int = 0
@@ -248,9 +217,10 @@ class MetadataOutput(Output):
     """Total fetch time in milliseconds."""
 
 
-@dataclasses.dataclass(frozen=True)
-class EventFilterRule:
+class EventFilterRule(BaseModel):
     """A single filter rule for matching incoming Dapr cloud events."""
+
+    model_config = ConfigDict(frozen=True)
 
     path: str
     """CEL path to evaluate (e.g., 'event.data.type')."""
@@ -262,9 +232,10 @@ class EventFilterRule:
     """Expected value (e.g., 'metadata_extraction')."""
 
 
-@dataclasses.dataclass(frozen=True)
-class EventTriggerConfig:
+class EventTriggerConfig(BaseModel):
     """Configuration for an event-triggered workflow."""
+
+    model_config = ConfigDict(frozen=True)
 
     event_id: str
     """Unique identifier used as the route segment (e.g., 'my-trigger')."""
@@ -275,13 +246,14 @@ class EventTriggerConfig:
     event_name: str
     """Logical event name used in subscription filter rules."""
 
-    event_filters: list[EventFilterRule] = dataclasses.field(default_factory=list)
+    event_filters: list[EventFilterRule] = []
     """Additional CEL filter rules applied to the event."""
 
 
-@dataclasses.dataclass(frozen=True)
-class SubscriptionConfig:
+class SubscriptionConfig(BaseModel):
     """Configuration for a Dapr pub/sub subscription with a custom handler."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     component_name: str
     """Dapr pubsub component name."""
@@ -308,8 +280,7 @@ class SubscriptionConfig:
     """Optional dead-letter topic for failed messages."""
 
 
-@dataclasses.dataclass
-class CloudEventEnvelope:
+class CloudEventEnvelope(BaseModel):
     """Minimal representation of a Dapr CloudEvent envelope."""
 
     id: str
@@ -322,9 +293,10 @@ class CloudEventEnvelope:
     datacontenttype: str = "application/json"
 
 
-@dataclasses.dataclass
-class FileUploadResponse:
+class FileUploadResponse(BaseModel):
     """Response from a file upload operation."""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
     id: str = ""
     version: str = "1"
@@ -339,21 +311,3 @@ class FileUploadResponse:
     file_size: int = 0
     is_uploaded: bool = False
     uploaded_at: str = ""
-
-    def to_wire_dict(self) -> dict[str, Any]:
-        """Convert to camelCase wire format."""
-        return {
-            "id": self.id,
-            "version": self.version,
-            "isActive": self.is_active,
-            "createdAt": self.created_at,
-            "updatedAt": self.updated_at,
-            "fileName": self.file_name,
-            "rawName": self.raw_name,
-            "key": self.key,
-            "extension": self.extension,
-            "contentType": self.content_type,
-            "fileSize": self.file_size,
-            "isUploaded": self.is_uploaded,
-            "uploadedAt": self.uploaded_at,
-        }

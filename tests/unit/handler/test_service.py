@@ -22,12 +22,7 @@ from application_sdk.handler.contracts import (
     PreflightStatus,
     SubscriptionConfig,
 )
-from application_sdk.handler.service import (
-    _convert_enums_recursive,
-    _serialize_output,
-    _wrap_response,
-    create_app_handler_service,
-)
+from application_sdk.handler.service import _wrap_response, create_app_handler_service
 
 # ---------------------------------------------------------------------------
 # Test Handler implementation
@@ -232,60 +227,6 @@ class TestStartWorkflowEndpoint:
         finally:
             AppRegistry.reset()
             TaskRegistry.reset()
-
-
-class TestSerializeOutput:
-    """Tests for _serialize_output helper."""
-
-    def test_serializes_dataclass_output(self) -> None:
-        output = AuthOutput(status=AuthStatus.SUCCESS, message="ok")
-        result = _serialize_output(output)
-        assert isinstance(result, dict)
-        assert result["status"] == "success"
-        assert result["message"] == "ok"
-
-    def test_enum_converted_to_string(self) -> None:
-        output = AuthOutput(status=AuthStatus.FAILED)
-        result = _serialize_output(output)
-        assert result["status"] == "failed"
-
-    def test_serializes_dict_directly(self) -> None:
-        from enum import Enum
-
-        class MyEnum(Enum):
-            FOO = "foo"
-
-        d = {"key": MyEnum.FOO, "value": "bar"}
-        result = _serialize_output(d)
-        assert result["key"] == "foo"
-
-
-class TestConvertEnumsRecursive:
-    """Tests for _convert_enums_recursive helper."""
-
-    def test_enum_converted_to_value(self) -> None:
-        result = _convert_enums_recursive(AuthStatus.SUCCESS)
-        assert result == "success"
-
-    def test_non_enum_returned_unchanged(self) -> None:
-        assert _convert_enums_recursive("hello") == "hello"
-        assert _convert_enums_recursive(42) == 42
-        assert _convert_enums_recursive(None) is None
-
-    def test_dict_with_enum_values(self) -> None:
-        result = _convert_enums_recursive({"status": AuthStatus.FAILED, "code": 500})
-        assert result == {"status": "failed", "code": 500}
-
-    def test_list_with_enum_values(self) -> None:
-        result = _convert_enums_recursive([AuthStatus.SUCCESS, AuthStatus.FAILED])
-        assert result == ["success", "failed"]
-
-    def test_nested_structure(self) -> None:
-        result = _convert_enums_recursive(
-            {"outer": {"inner": AuthStatus.EXPIRED}, "list": [PreflightStatus.READY]}
-        )
-        assert result["outer"]["inner"] == "expired"
-        assert result["list"] == ["ready"]
 
 
 class TestWrapResponse:

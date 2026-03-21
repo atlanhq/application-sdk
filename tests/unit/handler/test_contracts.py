@@ -1,6 +1,7 @@
 """Unit tests for handler contracts."""
 
 import pytest
+from pydantic import ValidationError
 
 from application_sdk.handler.contracts import (
     AuthInput,
@@ -19,7 +20,7 @@ from application_sdk.handler.contracts import (
 class TestCredential:
     def test_frozen(self):
         cred = Credential(key="api_key", value="secret")
-        with pytest.raises((AttributeError, TypeError)):
+        with pytest.raises((AttributeError, TypeError, ValidationError)):
             cred.key = "other"  # type: ignore[misc]
 
     def test_fields(self):

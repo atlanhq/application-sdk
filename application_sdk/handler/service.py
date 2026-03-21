@@ -29,9 +29,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import mimetypes
-from dataclasses import asdict
 from datetime import UTC, datetime
-from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
@@ -67,35 +65,13 @@ if TYPE_CHECKING:
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Type alias for JSON-serializable values after dataclass conversion
-JsonSerializable = str | int | float | bool | None | dict[str, Any] | list[Any]
-
-
-def _convert_enums_recursive(obj: Any) -> JsonSerializable:
-    """Recursively convert Enum values to their string values."""
-    if isinstance(obj, dict):
-        return {k: _convert_enums_recursive(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [_convert_enums_recursive(item) for item in obj]
-    elif isinstance(obj, Enum):
-        return cast(str, obj.value)
-    return obj
-
-
-def _serialize_output(output: Any) -> dict[str, JsonSerializable]:
-    """Serialize an Output dataclass or dict to a JSON-compatible dict."""
-    if isinstance(output, dict):
-        return cast("dict[str, JsonSerializable]", _convert_enums_recursive(output))
-    result = asdict(output)
-    return cast("dict[str, JsonSerializable]", _convert_enums_recursive(result))
-
 
 def _wrap_response(
-    data: dict[str, JsonSerializable],
+    data: dict[str, Any],
     *,
     message: str = "",
     success: bool = True,
-) -> dict[str, JsonSerializable]:
+) -> dict[str, Any]:
     """Wrap response data in the standard envelope: {success, message, data}."""
     return {"success": success, "message": message, "data": data}
 
@@ -322,20 +298,15 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
-        body: dict[str, Any] = await request.json()
+        body = await request.json()
+        auth_input = AuthInput.model_validate(body)
         credentials = [
-            Credential(key=c["key"], value=c["value"])
-            for c in body.get("credentials", [])
+            Credential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
         context = _create_context(credentials)
         handler._context = context
 
         try:
-            auth_input = AuthInput(
-                credentials=credentials,
-                connection_id=body.get("connection_id", ""),
-                timeout_seconds=body.get("timeout_seconds", 30),
-            )
             logger.info(
                 "Auth test started",
                 app_name=app_name,
@@ -350,7 +321,7 @@ def create_app_handler_service(
             )
             return JSONResponse(
                 content=_wrap_response(
-                    _serialize_output(result),
+                    result.model_dump(),
                     message=result.message or f"Authentication {result.status.value}",
                 )
             )
@@ -383,20 +354,14 @@ def create_app_handler_service(
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
         body = await request.json()
+        preflight_input = PreflightInput.model_validate(body)
         credentials = [
-            Credential(key=c["key"], value=c["value"])
-            for c in body.get("credentials", [])
+            Credential(key=c.key, value=c.value) for c in preflight_input.credentials
         ]
         context = _create_context(credentials)
         handler._context = context
 
         try:
-            preflight_input = PreflightInput(
-                credentials=credentials,
-                connection_config=body.get("connection_config", {}),
-                checks_to_run=body.get("checks_to_run", []),
-                timeout_seconds=body.get("timeout_seconds", 60),
-            )
             logger.info(
                 "Preflight check started",
                 app_name=app_name,
@@ -412,7 +377,7 @@ def create_app_handler_service(
             )
             return JSONResponse(
                 content=_wrap_response(
-                    _serialize_output(result),
+                    result.model_dump(),
                     message=result.message or f"Preflight check {result.status.value}",
                 )
             )
@@ -445,22 +410,14 @@ def create_app_handler_service(
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
         body = await request.json()
+        metadata_input = MetadataInput.model_validate(body)
         credentials = [
-            Credential(key=c["key"], value=c["value"])
-            for c in body.get("credentials", [])
+            Credential(key=c.key, value=c.value) for c in metadata_input.credentials
         ]
         context = _create_context(credentials)
         handler._context = context
 
         try:
-            metadata_input = MetadataInput(
-                credentials=credentials,
-                connection_config=body.get("connection_config", {}),
-                object_filter=body.get("object_filter", ""),
-                include_fields=body.get("include_fields", True),
-                max_objects=body.get("max_objects", 1000),
-                timeout_seconds=body.get("timeout_seconds", 120),
-            )
             logger.info(
                 "Metadata fetch started",
                 app_name=app_name,
@@ -476,7 +433,7 @@ def create_app_handler_service(
             )
             return JSONResponse(
                 content=_wrap_response(
-                    _serialize_output(result),
+                    result.model_dump(),
                     message=f"Fetched {result.total_count} objects",
                 )
             )
@@ -656,12 +613,20 @@ def create_app_handler_service(
             if wait:
                 try:
                     result = await handle.result()
+                    result_data = (
+                        dataclasses.asdict(result)
+                        if (
+                            dataclasses.is_dataclass(result)
+                            and not isinstance(result, type)
+                        )
+                        else {}
+                    )
                     return JSONResponse(
                         content=_wrap_response(
                             {
                                 "status": "completed",
                                 "workflow_id": workflow_id,
-                                "result": _serialize_output(result),
+                                "result": result_data,
                             },
                             message="Workflow completed",
                         )
@@ -695,12 +660,20 @@ def create_app_handler_service(
             elif status == "COMPLETED":
                 try:
                     result = await handle.result()
+                    result_data = (
+                        dataclasses.asdict(result)
+                        if (
+                            dataclasses.is_dataclass(result)
+                            and not isinstance(result, type)
+                        )
+                        else {}
+                    )
                     return JSONResponse(
                         content=_wrap_response(
                             {
                                 "status": "completed",
                                 "workflow_id": workflow_id,
-                                "result": _serialize_output(result),
+                                "result": result_data,
                             },
                             message="Workflow completed",
                         )
@@ -819,7 +792,7 @@ def create_app_handler_service(
             )
         return JSONResponse(
             content=_wrap_response(
-                cast("dict[str, JsonSerializable]", config),
+                cast("dict[str, Any]", config),
                 message="Workflow configuration fetched successfully",
             )
         )
@@ -832,7 +805,7 @@ def create_app_handler_service(
         await _state_store.save(f"workflows/{config_id}", body)
         return JSONResponse(
             content=_wrap_response(
-                cast("dict[str, JsonSerializable]", body),
+                cast("dict[str, Any]", body),
                 message="Workflow configuration updated successfully",
             )
         )
@@ -910,7 +883,7 @@ def create_app_handler_service(
         )
         return JSONResponse(
             content=_wrap_response(
-                cast("dict[str, JsonSerializable]", response_obj.to_wire_dict()),
+                response_obj.model_dump(by_alias=True),
                 message="File uploaded successfully",
             )
         )
@@ -1060,7 +1033,7 @@ def create_app_handler_service(
                     }
                     return JSONResponse(
                         content=_wrap_response(
-                            cast("dict[str, JsonSerializable]", configmap),
+                            cast("dict[str, Any]", configmap),
                             message="ConfigMap fetched successfully",
                         )
                     )
@@ -1075,7 +1048,7 @@ def create_app_handler_service(
                     configmap_ids.append(json_file.stem)
         return JSONResponse(
             content=_wrap_response(
-                cast("dict[str, JsonSerializable]", {"configmaps": configmap_ids}),
+                cast("dict[str, Any]", {"configmaps": configmap_ids}),
                 message="ConfigMaps listed successfully",
             )
         )
