@@ -14,7 +14,7 @@ alongside a standard SQL extraction app.
 
 Required environment variables for lakehouse load:
   ENABLE_LAKEHOUSE_LOAD=true
-  MDLH_BASE_URL=http://mdlh:4541          (default)
+  MDLH_BASE_URL=http://lakehouse.atlas.svc.cluster.local:4541  (default)
 
   # Raw table (loaded after extraction)
   LH_LOAD_RAW_NAMESPACE=entity_raw

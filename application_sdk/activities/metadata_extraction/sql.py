@@ -19,7 +19,10 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common import sql_utils
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
-from application_sdk.activities.metadata_extraction.base import do_lakehouse_load
+from application_sdk.activities.metadata_extraction.base import (
+    _do_prepare_raw_for_lakehouse,
+    do_lakehouse_load,
+)
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.common.utils import prepare_query, read_sql_files
@@ -761,3 +764,24 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             - file_extension: str — ".parquet" or ".jsonl"
         """
         return await do_lakehouse_load(workflow_args)
+
+    @activity.defn
+    @auto_heartbeater
+    async def prepare_raw_for_lakehouse(
+        self, workflow_args: Dict[str, Any]
+    ) -> str:
+        """Convert raw parquet files into common-schema JSONL for lakehouse ingestion.
+
+        Expects workflow_args to contain raw_lakehouse_config dict.
+        Returns the output directory path containing the prepared JSONL files.
+        """
+        config = workflow_args.get("raw_lakehouse_config", {})
+        return await _do_prepare_raw_for_lakehouse(
+            raw_output_path=config.get("raw_output_path", ""),
+            typenames=config.get("typenames", []),
+            connection_qualified_name=config.get("connection_qualified_name", ""),
+            workflow_id=config.get("workflow_id", ""),
+            workflow_run_id=config.get("workflow_run_id", ""),
+            extracted_at=config.get("extracted_at", 0),
+            tenant_id=config.get("tenant_id", ""),
+        )
