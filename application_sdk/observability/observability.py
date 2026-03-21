@@ -2,8 +2,6 @@ import asyncio
 import gzip
 import logging
 import os
-import signal
-import sys
 import threading
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
@@ -22,7 +20,7 @@ from application_sdk.constants import (
     DEPLOYMENT_NAME,
     DEPLOYMENT_OBJECT_STORE_NAME,
     ENABLE_ATLAN_UPLOAD,
-    ENABLE_OBSERVABILITY_DAPR_SINK,
+    ENABLE_OBSERVABILITY_STORE_SINK,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
     TRACES_FILE_NAME,
@@ -121,101 +119,6 @@ class AtlanObservability(Generic[T], ABC):
 
         # Register this instance
         AtlanObservability._instances.append(self)
-
-        # Set up signal handlers and exception hook if not already set
-        if not hasattr(AtlanObservability, "_handlers_setup"):
-            self._setup_error_handlers()
-            AtlanObservability._handlers_setup = True
-
-    def _setup_error_handlers(self):
-        """Set up signal handlers and exception hook.
-
-        This method configures:
-        - Signal handlers for SIGTERM and SIGINT
-        - Global exception hook for unhandled exceptions
-        Both handlers ensure data is flushed before termination.
-        """
-        # Set up signal handlers
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(sig, self._signal_handler)
-
-        # Set up exception hook
-        sys.excepthook = self._exception_hook
-
-    def _signal_handler(self, signum, frame):
-        """Handle system signals by flushing logs.
-
-        Args:
-            signum: Signal number
-            frame: Current stack frame
-
-        This method:
-        - Logs the received signal
-        - Attempts to flush all instances
-        - Exits the process
-        """
-        logging.warning(f"Received signal {signum}, flushing logs...")
-        try:
-            # Try to get the current event loop
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If we're in an async context, create a task
-                    asyncio.create_task(self.flush_all())
-                else:
-                    # If we have a loop but it's not running, run the flush
-                    loop.run_until_complete(self.flush_all())
-            except RuntimeError:
-                # If no event loop exists, create a new one
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(self.flush_all())
-                finally:
-                    loop.close()
-        except Exception as e:
-            logging.error(f"Error during signal handler flush: {e}")
-        sys.exit(0)
-
-    def _exception_hook(self, exc_type, exc_value, exc_traceback):
-        """Handle unhandled exceptions by flushing logs.
-
-        Args:
-            exc_type: Type of the exception
-            exc_value: Exception value
-            exc_traceback: Exception traceback
-
-        This method:
-        - Logs the unhandled exception
-        - Attempts to flush all instances
-        - Calls the original exception hook
-        """
-        logging.error(
-            "Unhandled exception occurred, flushing logs...",
-            exc_info=(exc_type, exc_value, exc_traceback),
-        )
-        try:
-            # Try to get the current event loop
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If we're in an async context, create a task
-                    asyncio.create_task(self.flush_all())
-                else:
-                    # If we have a loop but it's not running, run the flush
-                    loop.run_until_complete(self.flush_all())
-            except RuntimeError:
-                # If no event loop exists, create a new one
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(self.flush_all())
-                finally:
-                    loop.close()
-        except Exception as e:
-            logging.error(f"Error during exception hook flush: {e}")
-        # Call the original exception hook
-        sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
     @classmethod
     async def flush_all(cls) -> None:
@@ -368,7 +271,7 @@ class AtlanObservability(Generic[T], ABC):
         - Uploads to customer bucket (DEPLOYMENT_OBJECT_STORE) always
         - Uploads to Atlan bucket (UPSTREAM_OBJECT_STORE) when ENABLE_ATLAN_UPLOAD=true
         """
-        if not ENABLE_OBSERVABILITY_DAPR_SINK or not records:
+        if not ENABLE_OBSERVABILITY_STORE_SINK or not records:
             return
         try:
             from time import time_ns

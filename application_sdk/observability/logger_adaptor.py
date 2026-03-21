@@ -15,7 +15,7 @@ from opentelemetry.trace.span import TraceFlags
 
 from application_sdk.constants import (
     APPLICATION_NAME,
-    ENABLE_OBSERVABILITY_DAPR_SINK,
+    ENABLE_OBSERVABILITY_STORE_SINK,
     ENABLE_OTLP_LOGS,
     ENABLE_OTLP_WORKFLOW_LOGS,
     LOG_BATCH_SIZE,
@@ -366,8 +366,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             colorize=colorize,
         )
 
-        # Add sink for parquet logging only if Dapr sink is enabled
-        if ENABLE_OBSERVABILITY_DAPR_SINK:
+        # Add sink for store logging only if store sink is enabled
+        if ENABLE_OBSERVABILITY_STORE_SINK:
             self.logger.add(self.parquet_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
             # Start flush task only if Dapr sink is enabled
             if not AtlanLoggerAdapter._flush_task_started:

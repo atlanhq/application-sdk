@@ -317,9 +317,18 @@ TRACES_CLEANUP_ENABLED = (
 )
 TRACES_FILE_NAME = "traces.parquet"
 
-# Dapr Sink Configuration
+# Deprecated — use ATLAN_ENABLE_OBSERVABILITY_STORE_SINK instead.
 ENABLE_OBSERVABILITY_DAPR_SINK = (
     os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true").lower() == "true"
+)
+
+# Store Sink Configuration (falls back to legacy env var, defaults to enabled)
+ENABLE_OBSERVABILITY_STORE_SINK: bool = (
+    os.getenv(
+        "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK",
+        os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true"),
+    ).lower()
+    == "true"
 )
 
 # atlan_client configuration (non ATLAN_ prefix are rooted in pyatlan SDK, to be revisited)

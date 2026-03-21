@@ -285,6 +285,61 @@ def _derive_service_name(app_module: str) -> str:
     return "application-sdk"
 
 
+async def _flush_observability() -> None:
+    """Flush all observability buffers before exit."""
+    from application_sdk.observability.observability import AtlanObservability
+
+    try:
+        await AtlanObservability.flush_all()
+    except Exception:
+        logger.warning(
+            "Failed to flush observability buffers on shutdown", exc_info=True
+        )
+
+
+def _loop_exception_handler(
+    loop: asyncio.AbstractEventLoop, context: dict[str, Any]
+) -> None:
+    """Log unhandled asyncio task exceptions and schedule a flush.
+
+    Registered via ``loop.set_exception_handler()`` in each async run mode.
+    The loop is still alive when this fires, so ``create_task`` is safe.
+    """
+    exc = context.get("exception")
+    msg = context.get("message", "Unhandled asyncio exception")
+    if exc is not None:
+        logger.error("Unhandled asyncio task exception", message=msg, exc_info=exc)
+    else:
+        logger.error("Asyncio exception (no exception object)", message=msg)
+    # Schedule a flush — non-blocking so the loop can continue
+    loop.create_task(_flush_observability())
+    # Preserve the default stderr output
+    loop.default_exception_handler(context)
+
+
+def _install_excepthook() -> None:
+    """Install sys.excepthook to log + flush on uncaught main-thread exceptions.
+
+    Covers crashes that escape main()'s try/except: module-level startup errors,
+    BaseException subclasses not caught elsewhere, etc.  Called once at the top
+    of main() so it is active for the full process lifetime.
+    """
+    _orig = sys.excepthook
+
+    def _hook(exc_type, exc_value, exc_traceback):  # type: ignore[no-untyped-def]
+        logger.error(
+            "Unhandled exception — flushing observability before exit",
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+        try:
+            asyncio.run(_flush_observability())
+        except Exception:
+            pass  # best-effort; never mask the original crash
+        _orig(exc_type, exc_value, exc_traceback)
+
+    sys.excepthook = _hook
+
+
 async def run_worker_mode(config: AppConfig) -> None:
     """Run in worker mode (Temporal workflow execution).
 
@@ -384,6 +439,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         shutdown_event.set()
 
     loop = asyncio.get_running_loop()
+    loop.set_exception_handler(_loop_exception_handler)
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _signal_handler)
 
@@ -397,6 +453,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         async with worker:
             await shutdown_event.wait()
 
+    await _flush_observability()
     if auth_manager is not None:
         await auth_manager.shutdown()
         logger.info("Auth manager stopped")
@@ -471,6 +528,7 @@ def run_handler_mode(config: AppConfig) -> None:
         state_store=infra.state_store,
         storage=infra.storage,
     )
+    asyncio.run(_flush_observability())
 
 
 async def run_combined_mode(config: AppConfig) -> None:
@@ -630,6 +688,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         uvicorn_server.should_exit = True
 
     loop = asyncio.get_running_loop()
+    loop.set_exception_handler(_loop_exception_handler)
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _signal_handler)
 
@@ -651,6 +710,7 @@ async def run_combined_mode(config: AppConfig) -> None:
                 shutdown_event.wait(),
             )
 
+    await _flush_observability()
     if auth_manager is not None:
         await auth_manager.shutdown()
         logger.info("Auth manager stopped")
@@ -821,6 +881,8 @@ Examples:
 
 def main() -> NoReturn:
     """CLI entry point."""
+    _install_excepthook()
+
     args = parse_args()
 
     try:
@@ -845,6 +907,10 @@ def main() -> NoReturn:
         logger.info("Interrupted by user")
     except Exception as e:
         logger.exception("Fatal error", error=str(e))
+        try:
+            asyncio.run(_flush_observability())
+        except Exception:
+            pass
         sys.exit(1)
 
     sys.exit(0)
