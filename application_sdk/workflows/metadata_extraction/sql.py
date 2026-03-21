@@ -240,18 +240,17 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             ]
 
             typenames = await asyncio.gather(*fetch_and_transforms)
-            # Collect typenames that produced data (filter out None)
-            extracted_typenames = [t for t in typenames if t is not None]
-            workflow_args["_extracted_typenames"] = extracted_typenames
-            logger.info(
-                f"Extraction workflow completed for {workflow_id}, "
-                f"typenames: {extracted_typenames}"
-            )
 
             if ENABLE_LAKEHOUSE_LOAD:
+                # Collect typenames that produced data (filter out None)
+                extracted_typenames = [t for t in typenames if t is not None]
+                workflow_args["_extracted_typenames"] = extracted_typenames
                 # Load raw data to lakehouse (prepare parquet -> JSONL, then /load)
                 await self.load_raw_to_lakehouse(workflow_args, extracted_typenames)
 
+            logger.info(
+                f"Extraction workflow completed for {workflow_id}"
+            )
             # Load transformed data + upload to atlan
             await self.run_exit_activities(workflow_args)
 
