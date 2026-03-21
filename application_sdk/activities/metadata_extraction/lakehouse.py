@@ -199,6 +199,10 @@ async def convert_raw_parquet_to_jsonl(
     )
     extracted_at = int(time() * 1000)
 
+    if not typenames:
+        logger.info("No typenames to process, skipping raw lakehouse preparation")
+        return os.path.normpath(os.path.join(raw_output_path, "..", "raw_lakehouse"))
+
     base_dir = os.path.normpath(os.path.join(raw_output_path, "..", "raw_lakehouse"))
 
     for typename in typenames:
