@@ -134,11 +134,9 @@ class TestNoUnboundedEscapeHatch:
 
     def test_no_escape_hatch_passes(self, tmp_path: Path) -> None:
         source = (
-            "from dataclasses import dataclass\n"
             "from application_sdk.contracts.base import Input\n"
             "from typing import Annotated\n"
             "from application_sdk.contracts.types import MaxItems\n\n"
-            "@dataclass\n"
             "class MyInput(Input):\n"
             "    items: Annotated[list[str], MaxItems(1000)]\n"
         )

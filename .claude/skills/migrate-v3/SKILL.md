@@ -328,5 +328,5 @@ methods that return a different response shape than v2, which may break frontend
 Remind the user:
 - Run `uv run pre-commit run --all-files` in the connector repo before committing.
 - Review all `# TODO(v3-migration)` comments — each one marks a location that needs human verification.
-- The typed `Input`/`Output` dataclasses for custom `@task` methods should be defined (see §7 of MIGRATION_PROMPT.md) — these were not auto-generated.
+- The typed `Input`/`Output` models for custom `@task` methods should be defined (see §7 of MIGRATION_PROMPT.md) — these were not auto-generated.
 - If an e2e test was generated in Phase 4b, validate that it is logically equivalent to the original before deleting the old file.

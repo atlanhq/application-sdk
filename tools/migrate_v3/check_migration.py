@@ -284,7 +284,7 @@ def check_file(path: Path, *, is_test: bool = False) -> list[CheckResult]:
             level=WARN,
             rule="typed-task-signatures",
             message_template=(
-                "Dict[str, Any] found near @task — use typed Input/Output dataclasses. "
+                "Dict[str, Any] found near @task — use typed Input/Output models. "
                 "See migration guide Step 7."
             ),
         )

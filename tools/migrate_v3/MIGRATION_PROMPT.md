@@ -219,16 +219,13 @@ For connectors that do not fit the SQL templates, subclass `App` directly.
 ```python
 from application_sdk.app import App, task
 from application_sdk.contracts.base import Input, Output
-from dataclasses import dataclass
 from typing import Annotated
 from application_sdk.contracts.types import MaxItems
 
-@dataclass
 class MyInput(Input):
     connection_id: str
     items: Annotated[list[str], MaxItems(1000)]
 
-@dataclass
 class MyOutput(Output):
     processed: int
 
@@ -246,7 +243,7 @@ class MyConnector(App):
 ### Checklist
 
 - [ ] For each `@activity.defn` method in the old activities class:
-  - Define a typed `Input` / `Output` dataclass pair (see §7 of the migration guide).
+  - Define a typed `Input` / `Output` model pair (see §7 of the migration guide).
   - Move the method body into a `@task` method on the new `App` subclass.
   - Rename `workflow_args: Dict[str, Any]` → `input: MyInput`.
 - [ ] For the old `@workflow.run` method, implement `run()` on the `App` subclass.
@@ -371,19 +368,16 @@ CMD ["application-sdk", "--mode", "combined", "--app", "my_package.apps:MyExtrac
 ## 7. Typed Contracts — quick reference
 
 ```python
-from dataclasses import dataclass
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import MaxItems, FileReference
 from typing import Annotated
 
-@dataclass
 class MyInput(Input):
     workflow_id: str
     connection: str
     # Unbounded list → must be bounded or use FileReference
     items: Annotated[list[str], MaxItems(1000)]
 
-@dataclass
 class MyOutput(Output):
     processed: int
     result_ref: FileReference  # for large data (> ~2 MB)

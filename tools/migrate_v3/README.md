@@ -1,12 +1,14 @@
 # migrate_v3 — v2 → v3 migration tooling
 
-Three tools that together automate most of the work of migrating a connector
-from application-sdk v2 to v3.
+A toolkit that automates most of the work of migrating a connector from application-sdk v2 to v3.
 
 | Tool | What it does |
 |------|-------------|
 | `rewrite_imports.py` | Deterministic import-path rewriter (libcst) |
+| `run_codemods.py` | Composable codemod pipeline CLI — runs structural codemods A1–A7 in order |
 | `check_migration.py` | Static checker — definition of "done" |
+| `fingerprint.py` | Connector type classifier (sql_metadata / sql_query / incremental_sql / custom) |
+| `extract_context.py` | Structured context extraction & difficulty scoring for AI-assisted migration |
 | `MIGRATION_PROMPT.md` | AI agent instructions for structural refactoring |
 
 ---
@@ -15,6 +17,9 @@ from application-sdk v2 to v3.
 
 ```
 1. rewrite_imports          →  handles ~40 import path changes deterministically
+1b. run_codemods            →  automated structural codemods (A1–A7): remove decorators,
+                                rewrite signatures/returns/handlers, rewrite activity calls,
+                                remove activities_cls, rewrite entry point
 2. check_migration          →  shows remaining structural work
 3. AI / human               →  follows MIGRATION_PROMPT.md to merge classes
 3b. directory consolidation →  move app/activities/<name>.py → app/<name>.py, delete v2 dirs
@@ -115,6 +120,9 @@ Exit codes:
 | `no-sync-get-client` | Sync `get_client(` call |
 | `handler-typed-signatures` | Handler methods still using `*args`/`**kwargs` instead of typed contracts |
 | `no-unbounded-escape-hatch` | `allow_unbounded_fields=True` in connector contracts (SDK-internal only) |
+| `no-base-application` | `BaseApplication(` — v2 entry-point class |
+| `no-dapr-client` | `DaprClient()` — direct Dapr SDK usage in non-test files |
+| `no-temporalio-direct-import` | `from temporalio import workflow/activity` — direct Temporal imports |
 
 ### WARN checks (advisory)
 
@@ -125,6 +133,8 @@ Exit codes:
 | `handler-base` | Handler class not using v3 `Handler` base |
 | `entry-point` | No `run_dev_combined` or CLI reference found |
 | `no-v2-directory-structure` | `app/activities/` or `app/workflows/` directories still present |
+| `response-format-change` | `fetch_metadata` / `preflight_check` definitions (response shape changed in v3) |
+| `use-app-state` | `self._state` direct access — use `self.context.state_store` instead |
 
 ---
 
@@ -162,10 +172,15 @@ uv run pytest tests/
 tools/migrate_v3/
   __init__.py           package marker
   import_mapping.py     single source of truth for all v2→v3 mappings
-  rewrite_imports.py    libcst codemod (Category A — deterministic)
+  contract_mapping.py   method → typed Input/Output model lookup table
+  rewrite_imports.py    libcst import rewriter (deterministic)
+  run_codemods.py       composable codemod pipeline CLI (runs A1–A7 in order)
   check_migration.py    grep-based validation script (stdlib only)
-  MIGRATION_PROMPT.md   AI agent instructions (Categories B+C)
+  fingerprint.py        connector type classifier (sql_metadata / sql_query / etc.)
+  extract_context.py    structured context extraction & difficulty scoring
+  MIGRATION_PROMPT.md   AI agent instructions for structural refactoring
   README.md             this file
+  codemods/             libcst-based structural codemods (A1–A7)
 ```
 
 ---

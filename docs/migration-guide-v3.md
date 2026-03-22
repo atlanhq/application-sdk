@@ -2,7 +2,7 @@
 
 Application SDK v3.0 introduces three major improvements:
 
-1. **Schema-driven contracts** — typed `Input`/`Output` dataclasses replace `Dict[str, Any]`
+1. **Schema-driven contracts** — typed `Input`/`Output` Pydantic models replace `Dict[str, Any]`
 2. **Infrastructure abstraction** — Protocol-based interfaces decouple services from Dapr
 3. **Temporal abstraction** — `App` + `@task` replace `@workflow.defn` + `@activity.defn`
 
@@ -68,7 +68,7 @@ class MyMetadataExtractor(SqlMetadataExtractor):
 
 Key changes:
 - Single class instead of workflow + activities split
-- Typed `Input`/`Output` dataclasses instead of `Dict[str, Any]`
+- Typed `Input`/`Output` Pydantic models instead of `Dict[str, Any]`
 - `@task` decorator instead of `@activity.defn` + manual `execute_activity_method`
 - Override `run()` to customize orchestration (default: parallel fetch of all metadata types)
 
@@ -291,21 +291,18 @@ class MyConnector(App, passthrough_modules=["my_connector", "third_party_lib"]):
 
 ## Step 7: Define Typed Contracts
 
-v3 uses `Input`/`Output` dataclasses for all task boundaries. The SDK validates these at import time.
+v3 uses `Input`/`Output` Pydantic models for all task boundaries. The SDK validates these at import time.
 
 ```python
-from dataclasses import dataclass
 from application_sdk.contracts import Input, Output
 from application_sdk.contracts.types import MaxItems
 from typing import Annotated
 
-@dataclass
 class MyTaskInput(Input):
     workflow_id: str
     connection: str
     items: Annotated[list[str], MaxItems(1000)]  # bounded list required
 
-@dataclass
 class MyTaskOutput(Output):
     items_processed: int
     success: bool
@@ -329,7 +326,7 @@ The v2 activity return types are renamed in v3:
 | `ActivityStatistics` | `TaskStatistics` |
 | `ActivityResult` | `TaskResult` |
 
-In v3 templates these are returned inside typed `Output` dataclasses, so you generally won't
+In v3 templates these are returned inside typed `Output` models, so you generally won't
 import them directly unless you are building a custom `App` from scratch.
 
 ### FileReference: passing large data between tasks
@@ -338,15 +335,12 @@ Temporal has a payload size limit (~2 MB). Use `FileReference` to store large da
 storage and pass only a lightweight reference through the workflow:
 
 ```python
-from dataclasses import dataclass
 from application_sdk.contracts import Input, Output
 from application_sdk.contracts.types import FileReference
 
-@dataclass
 class FetchOutput(Output):
     results: FileReference  # stored in object store, safe to pass between tasks
 
-@dataclass
 class ProcessInput(Input):
     results: FileReference
 
@@ -452,10 +446,8 @@ v3 introduces a typed credential system that replaces bare `credential_guid: str
 ### Before (credential_guid pattern)
 
 ```python
-from dataclasses import dataclass
 from application_sdk.contracts.base import Input
 
-@dataclass
 class ExtractionInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
 
@@ -469,11 +461,9 @@ await client.load(credentials)  # dict[str, Any]
 ### After (CredentialRef pattern)
 
 ```python
-from dataclasses import dataclass
 from application_sdk.contracts.base import Input
 from application_sdk.credentials import CredentialRef, api_key_ref, ApiKeyCredential
 
-@dataclass
 class ExtractionInput(Input, allow_unbounded_fields=True):
     credential_ref: CredentialRef | None = None
 
@@ -521,10 +511,9 @@ await client.load(raw)  # dict[str, Any] — same as before
 
 ```python
 from application_sdk.credentials import register_credential_type
-import dataclasses
+from pydantic import BaseModel
 
-@dataclasses.dataclass(frozen=True)
-class MyCredential:
+class MyCredential(BaseModel, frozen=True):
     api_token: str
 
     @property
@@ -638,10 +627,8 @@ Send a heartbeat with progress details so the task can resume from where it left
 if Temporal restarts it:
 
 ```python
-from dataclasses import dataclass
 from application_sdk.contracts import HeartbeatDetails
 
-@dataclass
 class MyProgress(HeartbeatDetails):
     last_processed_id: str
     records_done: int
