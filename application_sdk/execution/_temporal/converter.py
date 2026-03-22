@@ -1,93 +1,35 @@
 """Temporal data converter configuration.
 
-Standard chain order (first match wins):
-1. App-specific converters (optional)
-2. Binary converters (null, plain, proto)
-3. Msgspec-aware JSON converter (always-on default)
+Uses the official ``pydantic_data_converter`` from ``temporalio.contrib.pydantic``,
+which handles Pydantic ``BaseModel`` and dataclasses natively via
+``pydantic_core.to_json()`` / ``TypeAdapter.validate_json()``.
 
-msgspec.Struct serialization is built-in — no per-app opt-in required.
+This replaces the previous custom msgspec-based converter chain. All contracts
+are now Pydantic ``BaseModel`` subclasses, so no custom encoder or type converter
+is required.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from temporalio.converter import (
-    BinaryNullPayloadConverter,
-    BinaryPlainPayloadConverter,
-    BinaryProtoPayloadConverter,
-    CompositePayloadConverter,
-    DataConverter,
-    EncodingPayloadConverter,
-    JSONPlainPayloadConverter,
-    JSONProtoPayloadConverter,
-)
-
-from application_sdk.execution._temporal.msgspec_converter import (
-    MsgspecJSONEncoder,
-    MsgspecTypeConverter,
-)
+from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.converter import DataConverter, EncodingPayloadConverter
 
 if TYPE_CHECKING:
     from application_sdk.app.base import App
 
 
-def get_msgspec_payload_converter() -> EncodingPayloadConverter:
-    """Get the msgspec-aware JSON payload converter.
-
-    Returns:
-        Msgspec-aware JSON payload converter.
-    """
-    return JSONPlainPayloadConverter(
-        encoder=MsgspecJSONEncoder,
-        custom_type_converters=[MsgspecTypeConverter()],
-    )
-
-
-def create_composite_payload_converter(
-    additional_converters: list[EncodingPayloadConverter] | None = None,
-) -> CompositePayloadConverter:
-    """Create a composite payload converter with the standard chain.
-
-    Args:
-        additional_converters: Optional app-specific converters to check first.
-
-    Returns:
-        Configured CompositePayloadConverter.
-    """
-    converters: list[EncodingPayloadConverter] = []
-    has_json_plain = False
-
-    if additional_converters:
-        converters.extend(additional_converters)
-        for conv in additional_converters:
-            if isinstance(conv, JSONPlainPayloadConverter):
-                has_json_plain = True
-                break
-
-    converters.append(BinaryNullPayloadConverter())
-    converters.append(BinaryPlainPayloadConverter())
-    converters.append(JSONProtoPayloadConverter())
-    converters.append(BinaryProtoPayloadConverter())
-
-    if not has_json_plain:
-        converters.append(
-            JSONPlainPayloadConverter(
-                encoder=MsgspecJSONEncoder,
-                custom_type_converters=[MsgspecTypeConverter()],
-            )
-        )
-
-    return CompositePayloadConverter(*converters)
-
-
 def create_data_converter(
     additional_converters: list[EncodingPayloadConverter] | None = None,
 ) -> DataConverter:
-    """Create a data converter with the standard chain.
+    """Create a data converter with Pydantic support.
 
-    msgspec.Struct serialization is built-in. No additional_converters needed
-    for pyatlan types (Connection, Table, AtlanGroup, etc.).
+    When no additional converters are provided, returns the official
+    ``pydantic_data_converter`` directly.
+
+    When app-specific converters are provided, they are prepended to the
+    standard Pydantic converter chain.
 
     Args:
         additional_converters: Optional app-specific converters to check first.
@@ -99,7 +41,36 @@ def create_data_converter(
         converter = create_data_converter()
         client = await Client.connect("localhost:7233", data_converter=converter)
     """
-    payload_converter = create_composite_payload_converter(additional_converters)
+    if not additional_converters:
+        return pydantic_data_converter
+
+    from temporalio.converter import (
+        BinaryNullPayloadConverter,
+        BinaryPlainPayloadConverter,
+        BinaryProtoPayloadConverter,
+        CompositePayloadConverter,
+        JSONProtoPayloadConverter,
+    )
+
+    # Build a chain that puts app converters first, then the standard pydantic chain
+    converters: list[EncodingPayloadConverter] = list(additional_converters)
+    converters.extend(
+        [
+            BinaryNullPayloadConverter(),
+            BinaryPlainPayloadConverter(),
+            JSONProtoPayloadConverter(),
+            BinaryProtoPayloadConverter(),
+        ]
+    )
+    # Append the pydantic JSON converter from the official chain
+    for conv in pydantic_data_converter.payload_converter.converters:
+        from temporalio.converter import JSONPlainPayloadConverter
+
+        if isinstance(conv, JSONPlainPayloadConverter):
+            converters.append(conv)
+            break
+
+    payload_converter = CompositePayloadConverter(*converters)
     return DataConverter(
         payload_converter_class=lambda: payload_converter,  # type: ignore[arg-type]
     )

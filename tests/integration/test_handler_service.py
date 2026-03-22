@@ -8,7 +8,6 @@ Requires a running Temporal dev server (see conftest.py).
 """
 
 import asyncio
-from dataclasses import dataclass
 from uuid import UUID
 
 import httpx
@@ -309,12 +308,10 @@ async def test_file_upload_end_to_end(tmp_path):
 # _reregister_app() to restore the entries before spinning up a worker.
 
 
-@dataclass
 class TrivialInput(Input):
     name: str = "world"
 
 
-@dataclass
 class TrivialOutput(Output):
     greeting: str = ""
 
@@ -324,12 +321,10 @@ class TrivialApp(App):
         return TrivialOutput(greeting=f"Hello, {input.name}!")
 
 
-@dataclass
 class LongInput(Input):
     pass
 
 
-@dataclass
 class LongOutput(Output):
     done: bool = False
 

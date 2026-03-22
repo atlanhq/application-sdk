@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Any
+
+from pydantic import ConfigDict
 
 from application_sdk.credentials.types import (
     BearerTokenCredential,
@@ -11,14 +12,15 @@ from application_sdk.credentials.types import (
 )
 
 
-@dataclasses.dataclass(frozen=True)
-class GitSshCredential(CertificateCredential):
+class GitSshCredential(CertificateCredential, frozen=True):
     """SSH key credential for Git operations.
 
     Inherits ``key_data`` (SSH private key) and ``passphrase`` from
     ``CertificateCredential``. The ``cert_data`` and ``ca_data`` fields
     are unused but present for protocol compatibility.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     @property
     def credential_type(self) -> str:
@@ -34,12 +36,13 @@ class GitSshCredential(CertificateCredential):
             )
 
 
-@dataclasses.dataclass(frozen=True)
-class GitTokenCredential(BearerTokenCredential):
+class GitTokenCredential(BearerTokenCredential, frozen=True):
     """HTTPS PAT / deploy-token credential for Git operations.
 
     Inherits ``token`` from ``BearerTokenCredential``.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     @property
     def credential_type(self) -> str:

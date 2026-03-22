@@ -5,16 +5,20 @@ Provides types and utilities for contracts that stay within Temporal's 2MB paylo
 Key types:
 - FileReference: Reference to externally-stored data
 - GitReference: Reference to a Git repository
+- ConnectionRef: Typed replacement for connection: dict[str, Any]
 - MaxItems: Constraint marker for bounded collections
 - BoundedList/BoundedDict: Type aliases with size bounds
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import dataclasses
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, TypeVar
+from typing import Annotated, Any, TypeVar
+
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from application_sdk.credentials.ref import CredentialRef
 
@@ -141,13 +145,12 @@ class StorageTier(StrEnum):
         )
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class MaxItems:
     """Constraint marker indicating maximum collection size.
 
     Use with Annotated to declare bounded collections in contracts:
 
-        @dataclass
         class MyInput(Input):
             settings: Annotated[dict[str, str], MaxItems(100)]
             items: Annotated[list[Record], MaxItems(1000)]
@@ -164,8 +167,7 @@ BoundedDict = Annotated[dict[K, V], MaxItems]
 """Bounded dict type. Use: Annotated[dict[K, V], MaxItems(N)]"""
 
 
-@dataclass(frozen=True)
-class FileReference:
+class FileReference(BaseModel, frozen=True):
     """Reference to externally-stored data (for large payloads).
 
     Use this instead of embedding large data directly in Input/Output.
@@ -218,8 +220,7 @@ class FileReference:
         )
 
 
-@dataclass(frozen=True)
-class GitReference:
+class GitReference(BaseModel, frozen=True):
     """Reference to a Git repository for workflow inputs.
 
     Temporal-safe data carrier for specifying a git repo to clone.
@@ -232,3 +233,107 @@ class GitReference:
     tag: str = ""
     commit: str = ""
     credential: "CredentialRef | None" = None
+
+
+class ConnectionAttributes(BaseModel, frozen=True):
+    """Minimal normalized attributes from an AE Connection object.
+
+    Python-side uses snake_case (qualified_name, admin_users, etc.).
+    Pydantic auto-converts to/from camelCase (qualifiedName, adminUsers) on
+    serialization/deserialization via alias_generator + populate_by_name.
+
+    ``extra="allow"`` ensures unknown AE fields (connector-specific attributes)
+    survive round-trips without requiring SDK changes.
+    """
+
+    qualified_name: str = ""
+    name: str = ""
+    admin_users: list[str] = Field(default_factory=list)
+    admin_roles: list[str] = Field(default_factory=list)
+    admin_groups: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="allow",
+        alias_generator=to_camel,
+        populate_by_name=True,
+    )
+
+
+class ConnectionRef(BaseModel, frozen=True):
+    """Typed replacement for ``connection: dict[str, Any]`` in Temporal contracts.
+
+    Mirrors the AE wire shape:
+        ``{"typeName": "Connection", "attributes": {"qualifiedName": ..., "name": ...}}``
+
+    Python-side uses snake_case (``type_name``, ``attributes.qualified_name``).
+    Pydantic auto-serializes to camelCase (``typeName``, ``qualifiedName``) via
+    ``alias_generator=to_camel`` + ``serialize_by_alias=True``.
+
+    ``extra="allow"`` on both layers ensures unknown AE fields survive
+    round-trips without requiring SDK changes.
+
+    Example::
+
+        # From AE wire payload (camelCase):
+        ref = ConnectionRef.model_validate({
+            "typeName": "Connection",
+            "attributes": {
+                "qualifiedName": "default/snowflake/1234567890",
+                "name": "My Snowflake",
+                "adminUsers": ["user-1"],
+            },
+        })
+
+        # Python-side access (snake_case):
+        print(ref.type_name)                    # "Connection"
+        print(ref.attributes.qualified_name)    # "default/snowflake/1234567890"
+        print(ref.attributes.admin_users)       # ["user-1"]
+
+        # Temporal payload (camelCase, via serialize_by_alias):
+        ref.model_dump(by_alias=True)
+        # {"typeName": "Connection", "attributes": {"qualifiedName": ..., ...}}
+    """
+
+    type_name: str = Field(default="Connection")
+    attributes: ConnectionAttributes = Field(default_factory=ConnectionAttributes)
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="allow",
+        alias_generator=to_camel,
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
+
+    @staticmethod
+    def from_connection(conn: Any) -> "ConnectionRef":
+        """Convert a pyatlan_v9 Connection (msgspec.Struct) to ConnectionRef.
+
+        Accepts the AE wire shape with camelCase keys (qualifiedName → qualified_name)
+        via Pydantic alias support.
+
+        Args:
+            conn: A pyatlan_v9 Connection msgspec.Struct instance.
+
+        Returns:
+            A ConnectionRef with normalized snake_case fields.
+        """
+        import msgspec
+
+        raw = msgspec.to_builtins(conn)
+        return ConnectionRef.model_validate(raw)
+
+    def to_connection(self) -> Any:
+        """Convert back to a pyatlan_v9 Connection (msgspec.Struct).
+
+        Emits camelCase keys (qualified_name → qualifiedName) via serialize_by_alias.
+
+        Returns:
+            A pyatlan_v9 Connection msgspec.Struct instance.
+        """
+        import msgspec
+        from pyatlan_v9.model.transform import get_type  # type: ignore[import]
+
+        cls = get_type(self.type_name)
+        return msgspec.convert(self.model_dump(by_alias=True), cls, strict=False)

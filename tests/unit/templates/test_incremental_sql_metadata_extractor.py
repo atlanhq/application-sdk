@@ -237,8 +237,7 @@ class TestIncrementalExtractionInput:
         assert inp.workflow_id == "wf-123"
 
     def test_no_workflow_args_field(self) -> None:
-        field_names = {f.name for f in dataclasses.fields(IncrementalExtractionInput)}
-        assert "workflow_args" not in field_names
+        assert "workflow_args" not in IncrementalExtractionInput.model_fields
 
     def test_is_subclass_of_extraction_input(self) -> None:
         assert issubclass(IncrementalExtractionInput, ExtractionInput)
@@ -270,13 +269,17 @@ class TestContractTypes:
         IncrementalExtractionOutput,
     ]
 
-    def test_all_input_types_are_dataclasses(self) -> None:
-        for cls in self._input_types:
-            assert dataclasses.is_dataclass(cls), f"{cls.__name__} is not a dataclass"
+    def test_all_input_types_are_pydantic_models(self) -> None:
+        from pydantic import BaseModel
 
-    def test_all_output_types_are_dataclasses(self) -> None:
+        for cls in self._input_types:
+            assert issubclass(cls, BaseModel), f"{cls.__name__} is not a BaseModel"
+
+    def test_all_output_types_are_pydantic_models(self) -> None:
+        from pydantic import BaseModel
+
         for cls in self._output_types:
-            assert dataclasses.is_dataclass(cls), f"{cls.__name__} is not a dataclass"
+            assert issubclass(cls, BaseModel), f"{cls.__name__} is not a BaseModel"
 
     def test_all_input_types_extend_input(self) -> None:
         for cls in self._input_types:
@@ -312,9 +315,8 @@ class TestContractTypes:
 
     def test_no_workflow_args_in_task_inputs(self) -> None:
         for cls in self._input_types:
-            field_names = {f.name for f in dataclasses.fields(cls)}
             assert (
-                "workflow_args" not in field_names
+                "workflow_args" not in cls.model_fields
             ), f"{cls.__name__} still has workflow_args field"
 
 

@@ -1,12 +1,11 @@
-"""CredentialRef — secret-free frozen dataclass for identifying credentials."""
+"""CredentialRef — secret-free frozen Pydantic model for identifying credentials."""
 
 from __future__ import annotations
 
-import dataclasses
+from pydantic import BaseModel, ConfigDict
 
 
-@dataclasses.dataclass(frozen=True)
-class CredentialRef:
+class CredentialRef(BaseModel, frozen=True):
     """A reference to a credential in the secret store.
 
     This is a secret-free identifier — it contains no sensitive data itself.
@@ -16,6 +15,8 @@ class CredentialRef:
     that still use the legacy v2 ``SecretStore.get_credentials(guid)`` path.
     When non-empty, the resolver uses the legacy resolution path.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     """Secret store key or human-readable name for this credential."""

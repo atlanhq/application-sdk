@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import dataclasses
 import os
 from typing import Any
+
+from pydantic import ConfigDict
 
 from application_sdk.credentials.types import (
     BearerTokenCredential,
@@ -12,12 +13,13 @@ from application_sdk.credentials.types import (
 )
 
 
-@dataclasses.dataclass(frozen=True)
-class AtlanApiToken(BearerTokenCredential):
+class AtlanApiToken(BearerTokenCredential, frozen=True):
     """Atlan API token credential.
 
     Extends ``BearerTokenCredential`` with the Atlan instance base URL.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     base_url: str = ""
     """URL of the Atlan instance (e.g. 'https://tenant.atlan.com')."""
@@ -53,13 +55,14 @@ class AtlanApiToken(BearerTokenCredential):
             ) from exc
 
 
-@dataclasses.dataclass(frozen=True)
-class AtlanOAuthClient(OAuthClientCredential):
+class AtlanOAuthClient(OAuthClientCredential, frozen=True):
     """Atlan OAuth 2.0 client credential.
 
     Extends ``OAuthClientCredential`` with the Atlan instance base URL.
     ``token_url`` is optional — when empty it is derived from ``base_url``.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     base_url: str = ""
     """URL of the Atlan instance (e.g. 'https://tenant.atlan.com')."""
@@ -120,11 +123,12 @@ class AtlanOAuthClient(OAuthClientCredential):
         refresh_token: str = "",
     ) -> "AtlanOAuthClient":
         """Return a new instance with updated token fields, preserving AtlanOAuthClient type."""
-        return dataclasses.replace(
-            self,
-            access_token=access_token,
-            expires_at=expires_at,
-            refresh_token=refresh_token or self.refresh_token,
+        return self.model_copy(
+            update={
+                "access_token": access_token,
+                "expires_at": expires_at,
+                "refresh_token": refresh_token or self.refresh_token,
+            }
         )
 
     async def validate(self) -> None:

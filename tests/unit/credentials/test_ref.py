@@ -1,8 +1,7 @@
 """Unit tests for CredentialRef and factory functions."""
 
-import dataclasses
-
 import pytest
+from pydantic import ValidationError
 
 from application_sdk.credentials.ref import (
     CredentialRef,
@@ -39,7 +38,7 @@ class TestCredentialRefConstruction:
 
     def test_frozen(self):
         ref = CredentialRef(name="x", credential_type="api_key")
-        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
+        with pytest.raises((ValidationError, AttributeError, TypeError)):
             ref.name = "y"  # type: ignore[misc]
 
     def test_repr_is_safe(self):
@@ -114,7 +113,7 @@ class TestTemporalSerialization:
             credential_guid="",
         )
         # Simulate Temporal's JSON serialization
-        serialized = json.dumps(dataclasses.asdict(ref))
+        serialized = json.dumps(ref.model_dump())
         data = json.loads(serialized)
         restored = CredentialRef(**data)
         assert restored == ref
@@ -123,7 +122,7 @@ class TestTemporalSerialization:
         import json
 
         ref = legacy_credential_ref("abc-123", "basic")
-        serialized = json.dumps(dataclasses.asdict(ref))
+        serialized = json.dumps(ref.model_dump())
         data = json.loads(serialized)
         restored = CredentialRef(**data)
         assert restored == ref

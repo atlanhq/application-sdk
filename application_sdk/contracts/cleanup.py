@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
 
 
-@dataclass
 class CleanupInput(Input, allow_unbounded_fields=True):
     """Input for ``App.cleanup_files``.
 
@@ -19,10 +18,9 @@ class CleanupInput(Input, allow_unbounded_fields=True):
             always cleaned up regardless of this field.
     """
 
-    extra_paths: list[str] = field(default_factory=list)
+    extra_paths: list[str] = Field(default_factory=list)
 
 
-@dataclass
 class CleanupOutput(Output, allow_unbounded_fields=True):
     """Output from ``App.cleanup_files``.
 
@@ -31,10 +29,9 @@ class CleanupOutput(Output, allow_unbounded_fields=True):
             already absent, ``False`` = error during deletion).
     """
 
-    path_results: dict[str, bool] = field(default_factory=dict)
+    path_results: dict[str, bool] = Field(default_factory=dict)
 
 
-@dataclass
 class StorageCleanupInput(Input, allow_unbounded_fields=True):
     """Input for ``App.cleanup_storage``.
 
@@ -49,7 +46,6 @@ class StorageCleanupInput(Input, allow_unbounded_fields=True):
     include_prefix_cleanup: bool = False
 
 
-@dataclass
 class StorageCleanupOutput(Output, allow_unbounded_fields=True):
     """Output from ``App.cleanup_storage``.
 

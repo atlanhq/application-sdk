@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from temporalio.converter import DataConverter
 
 from application_sdk.contracts.base import Input, Output
@@ -13,13 +11,11 @@ from application_sdk.execution._temporal.converter import (
 )
 
 
-@dataclass
 class _ConverterInput(Input):
     name: str = "test"
     count: int = 0
 
 
-@dataclass
 class _ConverterOutput(Output):
     result: str = ""
     success: bool = True

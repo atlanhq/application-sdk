@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from application_sdk.contracts.types import FileReference, MaxItems
 
@@ -51,7 +52,7 @@ class TestFileReference:
 
     def test_is_frozen(self) -> None:
         ref = FileReference(local_path="/tmp/file.txt")
-        with pytest.raises((AttributeError, TypeError)):
+        with pytest.raises((ValidationError, AttributeError, TypeError)):
             ref.local_path = "/other/path"  # type: ignore[misc]
 
     def test_explicit_construction(self) -> None:

@@ -115,45 +115,27 @@ class TestFetchProceduresTask:
             asyncio.run(extractor.fetch_procedures(FetchProceduresInput()))
 
     def test_fetch_procedures_input_has_no_workflow_args(self) -> None:
-        import dataclasses
-
-        field_names = {f.name for f in dataclasses.fields(FetchProceduresInput)}
-        assert "workflow_args" not in field_names
+        assert "workflow_args" not in FetchProceduresInput.model_fields
 
     def test_fetch_procedures_output_has_counts(self) -> None:
-        import dataclasses
-
-        field_names = {f.name for f in dataclasses.fields(FetchProceduresOutput)}
-        assert "chunk_count" in field_names
-        assert "total_record_count" in field_names
+        assert "chunk_count" in FetchProceduresOutput.model_fields
+        assert "total_record_count" in FetchProceduresOutput.model_fields
 
 
 class TestTypedTaskInputs:
     """Tests that per-task inputs use typed fields, not workflow_args dicts."""
 
     def test_fetch_databases_input_no_workflow_args(self) -> None:
-        import dataclasses
-
-        field_names = {f.name for f in dataclasses.fields(FetchDatabasesInput)}
-        assert "workflow_args" not in field_names
+        assert "workflow_args" not in FetchDatabasesInput.model_fields
 
     def test_fetch_schemas_input_no_workflow_args(self) -> None:
-        import dataclasses
-
-        field_names = {f.name for f in dataclasses.fields(FetchSchemasInput)}
-        assert "workflow_args" not in field_names
+        assert "workflow_args" not in FetchSchemasInput.model_fields
 
     def test_fetch_tables_input_no_workflow_args(self) -> None:
-        import dataclasses
-
-        field_names = {f.name for f in dataclasses.fields(FetchTablesInput)}
-        assert "workflow_args" not in field_names
+        assert "workflow_args" not in FetchTablesInput.model_fields
 
     def test_fetch_columns_input_no_workflow_args(self) -> None:
-        import dataclasses
-
-        field_names = {f.name for f in dataclasses.fields(FetchColumnsInput)}
-        assert "workflow_args" not in field_names
+        assert "workflow_args" not in FetchColumnsInput.model_fields
 
     def test_task_inputs_inherit_extraction_task_input(self) -> None:
         assert issubclass(FetchDatabasesInput, ExtractionTaskInput)
@@ -163,9 +145,7 @@ class TestTypedTaskInputs:
         assert issubclass(FetchProceduresInput, ExtractionTaskInput)
 
     def test_extraction_task_input_has_typed_fields(self) -> None:
-        import dataclasses
-
-        field_names = {f.name for f in dataclasses.fields(ExtractionTaskInput)}
+        field_names = set(ExtractionTaskInput.model_fields)
         assert "workflow_id" in field_names
         assert "connection" in field_names
         assert "credential_guid" in field_names

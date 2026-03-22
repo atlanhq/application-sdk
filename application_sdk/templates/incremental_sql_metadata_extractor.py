@@ -702,7 +702,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         )
 
         run_id = input.workflow_run_id or input.workflow_id or "unknown"
-        conn_qn = input.connection.get("connection_qualified_name", "")
+        conn_qn = input.connection.attributes.qualified_name
         app_name = input.application_name
 
         logger.info(
@@ -802,7 +802,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
 
         workflow_id = input.workflow_id
         run_id = workflow.info().run_id
-        conn_qn = input.connection.get("connection_qualified_name", "")
+        conn_qn = input.connection.attributes.qualified_name
         application_name = os.getenv("ATLAN_APPLICATION_NAME", "")
 
         cred_ref = input.credential_ref
@@ -817,7 +817,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             output_prefix=input.output_prefix,
             output_path=input.output_path,
             connection_qualified_name=conn_qn,
-            connection_name=input.connection.get("connection_name", ""),
+            connection_name=input.connection.attributes.name,
             application_name=application_name,
             incremental_extraction=input.incremental_extraction,
             column_batch_size=input.column_batch_size,

@@ -494,8 +494,6 @@ class TaskExecutionContext:
             last = self.task_context.get_heartbeat_details(LoadTypeHeartbeat)
             start_chunk = last.chunk_idx if last else 0
         """
-        from dataclasses import fields as dc_fields
-
         raw = self.heartbeat_controller.get_last_heartbeat_details()
         if not raw:
             return None
@@ -506,7 +504,7 @@ class TaskExecutionContext:
         if isinstance(detail, dict):
             # Temporal deserializes heartbeat payloads to plain dicts on retry.
             # Filter to known fields for forward/backward compatibility.
-            known = {f.name for f in dc_fields(cls)}
+            known = set(cls.model_fields)
             return cls(**{k: v for k, v in detail.items() if k in known})
         return None
 

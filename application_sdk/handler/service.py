@@ -37,6 +37,7 @@ from uuid import uuid4
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from loguru import logger
+from pydantic import BaseModel as PydanticBaseModel
 
 from application_sdk.constants import DEPLOYMENT_NAME
 from application_sdk.handler.base import Handler, HandlerError
@@ -108,8 +109,8 @@ async def _get_workflow_result(
         )
         result = await client.get_workflow_handle(workflow_id).result()
 
-    if dataclasses.is_dataclass(result) and not isinstance(result, type):
-        return dataclasses.asdict(result)
+    if isinstance(result, PydanticBaseModel):
+        return result.model_dump()
     if isinstance(result, dict):
         return result
     return {}

@@ -6,7 +6,6 @@ retried correctly, and custom RetryPolicy settings are honoured.
 Requires a running Temporal dev server (see conftest.py).
 """
 
-from dataclasses import dataclass
 from datetime import timedelta
 from uuid import uuid4
 
@@ -27,12 +26,10 @@ _attempt_counters: dict[str, int] = {}
 # ---------------------------------------------------------------------------
 
 
-@dataclass
 class NRInput(Input):
     pass
 
 
-@dataclass
 class NROutput(Output):
     pass
 
@@ -46,12 +43,10 @@ class NonRetryableApp(App):
         return await self.do_work(input)
 
 
-@dataclass
 class RetryInput(Input):
     test_id: str = ""
 
 
-@dataclass
 class RetryOutput(Output):
     attempts: int = 0
 
@@ -68,12 +63,10 @@ class RetryApp(App):
         return await self.do_work(input)
 
 
-@dataclass
 class CustomRetryInput(Input):
     test_id: str = ""
 
 
-@dataclass
 class CustomRetryOutput(Output):
     attempts: int = 0
 

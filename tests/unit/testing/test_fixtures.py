@@ -98,14 +98,12 @@ def test_clean_app_registry_fixture(clean_app_registry: AppRegistry) -> None:
 
 def test_clean_app_registry_resets_after(clean_app_registry: AppRegistry) -> None:
     # Register something — the fixture should clean up after
-    from dataclasses import dataclass
+    from application_sdk.contracts.base import Input, Output
 
-    @dataclass
-    class _Input:
+    class _Input(Input):
         x: int = 0
 
-    @dataclass
-    class _Output:
+    class _Output(Output):
         y: int = 0
 
     class _FakeApp:

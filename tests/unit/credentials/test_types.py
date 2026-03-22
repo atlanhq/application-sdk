@@ -45,10 +45,10 @@ class TestBasicCredential:
             await cred.validate()
 
     def test_frozen(self):
-        import dataclasses
+        from pydantic import ValidationError
 
         cred = BasicCredential(username="u", password="p")
-        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
+        with pytest.raises((ValidationError, AttributeError, TypeError)):
             cred.username = "x"  # type: ignore[misc]
 
 

@@ -6,30 +6,28 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
-import dataclasses
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated
+
+from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
-from application_sdk.contracts.types import MaxItems
-
-if TYPE_CHECKING:
-    from application_sdk.credentials import CredentialRef
+from application_sdk.contracts.types import ConnectionRef, MaxItems
+from application_sdk.credentials.ref import CredentialRef
 
 
-@dataclasses.dataclass
 class ExtractionInput(Input, allow_unbounded_fields=True):
     """Top-level input for a SQL metadata extraction run."""
 
     workflow_id: str = ""
     """Temporal workflow ID for this run."""
 
-    connection: dict[str, Any] = dataclasses.field(default_factory=dict)
-    """Connection metadata (qualified name, name, etc.)."""
+    connection: ConnectionRef = Field(default_factory=ConnectionRef)
+    """Typed connection reference (qualified name, name, admin users, etc.)."""
 
     credential_guid: str = ""
     """GUID of credentials stored in the secret store."""
 
-    credential_ref: "CredentialRef | None" = None
+    credential_ref: CredentialRef | None = None
     """Typed credential reference — preferred over credential_guid for new apps."""
 
     output_prefix: str = ""
@@ -51,7 +49,6 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     """Tag prefix for source-level metadata."""
 
 
-@dataclasses.dataclass
 class ExtractionOutput(Output):
     """Top-level output from a SQL metadata extraction run."""
 
@@ -65,7 +62,6 @@ class ExtractionOutput(Output):
     error: str = ""
 
 
-@dataclasses.dataclass
 class ExtractionTaskInput(Input, allow_unbounded_fields=True):
     """Fields shared by all per-task inputs derived from ExtractionInput.
 
@@ -75,9 +71,9 @@ class ExtractionTaskInput(Input, allow_unbounded_fields=True):
     """
 
     workflow_id: str = ""
-    connection: dict[str, Any] = dataclasses.field(default_factory=dict)
+    connection: ConnectionRef = Field(default_factory=ConnectionRef)
     credential_guid: str = ""
-    credential_ref: "CredentialRef | None" = None
+    credential_ref: CredentialRef | None = None
     output_prefix: str = ""
     output_path: str = ""
     exclude_filter: str = ""
@@ -86,60 +82,46 @@ class ExtractionTaskInput(Input, allow_unbounded_fields=True):
     source_tag_prefix: str = ""
 
 
-@dataclasses.dataclass
 class FetchDatabasesInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Input for fetching databases from the source."""
 
 
-@dataclasses.dataclass
 class FetchDatabasesOutput(Output):
     """Output from fetching databases."""
 
-    databases: Annotated[list[str], MaxItems(10000)] = dataclasses.field(
-        default_factory=list
-    )
+    databases: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
     chunk_count: int = 0
     total_record_count: int = 0
 
 
-@dataclasses.dataclass
 class FetchSchemasInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Input for fetching schemas from the source."""
 
 
-@dataclasses.dataclass
 class FetchSchemasOutput(Output):
     """Output from fetching schemas."""
 
-    schemas: Annotated[list[str], MaxItems(10000)] = dataclasses.field(
-        default_factory=list
-    )
+    schemas: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
     chunk_count: int = 0
     total_record_count: int = 0
 
 
-@dataclasses.dataclass
 class FetchTablesInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Input for fetching tables from the source."""
 
 
-@dataclasses.dataclass
 class FetchTablesOutput(Output):
     """Output from fetching tables."""
 
-    tables: Annotated[list[str], MaxItems(100000)] = dataclasses.field(
-        default_factory=list
-    )
+    tables: Annotated[list[str], MaxItems(100000)] = Field(default_factory=list)
     chunk_count: int = 0
     total_record_count: int = 0
 
 
-@dataclasses.dataclass
 class FetchColumnsInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Input for fetching columns from the source."""
 
 
-@dataclasses.dataclass
 class FetchColumnsOutput(Output):
     """Output from fetching columns."""
 
@@ -147,12 +129,10 @@ class FetchColumnsOutput(Output):
     total_record_count: int = 0
 
 
-@dataclasses.dataclass
 class FetchProceduresInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Input for fetching stored procedures from the source."""
 
 
-@dataclasses.dataclass
 class FetchProceduresOutput(Output):
     """Output from fetching stored procedures."""
 
@@ -160,18 +140,14 @@ class FetchProceduresOutput(Output):
     total_record_count: int = 0
 
 
-@dataclasses.dataclass
 class TransformInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Input for the transform_data task."""
 
     typename: str = ""
-    file_names: Annotated[list[str], MaxItems(10000)] = dataclasses.field(
-        default_factory=list
-    )
+    file_names: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
     chunk_start: int = 0
 
 
-@dataclasses.dataclass
 class TransformOutput(Output):
     """Output from the transform_data task."""
 

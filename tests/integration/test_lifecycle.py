@@ -6,8 +6,6 @@ and that AppContext properties are populated correctly during execution.
 Requires a running Temporal dev server (see conftest.py).
 """
 
-from dataclasses import dataclass
-
 import pytest
 
 from application_sdk.app.base import App
@@ -24,12 +22,10 @@ _on_complete_log: list[str] = []
 # ---------------------------------------------------------------------------
 
 
-@dataclass
 class SuccessInput(Input):
     pass
 
 
-@dataclass
 class SuccessOutput(Output):
     pass
 
@@ -46,12 +42,10 @@ class SuccessLifecycleApp(App):
         return await self.do_work(input)
 
 
-@dataclass
 class FailInput(Input):
     pass
 
 
-@dataclass
 class FailOutput(Output):
     pass
 
@@ -68,12 +62,10 @@ class FailLifecycleApp(App):
         return await self.do_work(input)
 
 
-@dataclass
 class CtxInput(Input):
     pass
 
 
-@dataclass
 class CtxOutput(Output):
     app_name: str = ""
     run_id: str = ""

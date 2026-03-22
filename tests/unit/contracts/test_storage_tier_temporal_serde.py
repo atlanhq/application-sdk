@@ -21,11 +21,11 @@ This test catches any regression in that flow.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import pytest
+from pydantic import Field
 from temporalio import workflow
 from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
@@ -39,18 +39,16 @@ from application_sdk.execution.sandbox import SandboxConfig
 # ---------------------------------------------------------------------------
 
 
-@dataclass
 class _EchoInput(Input, allow_unbounded_fields=True):
     """Workflow input carrying a single FileReference."""
 
-    ref: FileReference = FileReference()
+    ref: FileReference = Field(default_factory=FileReference)
 
 
-@dataclass
 class _EchoOutput(Output, allow_unbounded_fields=True):
     """Workflow output echoing the same FileReference."""
 
-    ref: FileReference = FileReference()
+    ref: FileReference = Field(default_factory=FileReference)
 
 
 @workflow.defn(name="StorageTierEchoWorkflow")
@@ -118,7 +116,9 @@ async def test_storage_tier_survives_temporal_round_trip(
         tier=tier,
     )
 
-    async with await WorkflowEnvironment.start_local() as env:
+    async with await WorkflowEnvironment.start_local(
+        data_converter=pydantic_data_converter
+    ) as env:
         async with Worker(
             env.client,
             task_queue="serde-test-queue",
@@ -141,7 +141,9 @@ async def test_default_tier_is_transient_after_round_trip() -> None:
     original = FileReference(storage_path="file_refs/default.parquet", is_durable=True)
     assert original.tier == StorageTier.TRANSIENT  # sanity check
 
-    async with await WorkflowEnvironment.start_local() as env:
+    async with await WorkflowEnvironment.start_local(
+        data_converter=pydantic_data_converter
+    ) as env:
         async with Worker(
             env.client,
             task_queue="serde-test-queue",

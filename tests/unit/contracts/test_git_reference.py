@@ -1,8 +1,7 @@
 """Unit tests for GitReference."""
 
-import dataclasses
-
 import pytest
+from pydantic import ValidationError
 
 from application_sdk.contracts.types import GitReference
 from application_sdk.credentials.ref import CredentialRef
@@ -37,7 +36,7 @@ class TestGitReferenceDefaults:
 class TestGitReferenceImmutability:
     def test_frozen(self) -> None:
         ref = GitReference(repo_url="https://github.com/org/repo")
-        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
+        with pytest.raises((ValidationError, AttributeError, TypeError)):
             ref.repo_url = "https://github.com/other/repo"  # type: ignore[misc]
 
     def test_hashable(self) -> None:
@@ -110,7 +109,7 @@ class TestGitReferenceAsdict:
             commit="deadbeef",
             credential=cred,
         )
-        d = dataclasses.asdict(ref)
+        d = ref.model_dump()
         assert d["repo_url"] == "https://github.com/org/repo"
         assert d["branch"] == "release"
         assert d["path"] == "subdir"
@@ -121,5 +120,5 @@ class TestGitReferenceAsdict:
 
     def test_asdict_no_credential(self) -> None:
         ref = GitReference(repo_url="https://github.com/org/repo")
-        d = dataclasses.asdict(ref)
+        d = ref.model_dump()
         assert d["credential"] is None

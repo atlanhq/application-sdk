@@ -3,52 +3,43 @@
 This module provides base classes for defining typed contracts between
 Apps, tasks, and their callers. Using these base classes ensures:
 
-1. Type safety - All inputs/outputs are typed dataclasses
+1. Type safety - All inputs/outputs are typed Pydantic models
 2. Payload safety - Validated against Temporal's 2MB payload limit
-3. Serialization - Works seamlessly with Temporal's data converters
+3. Serialization - Works seamlessly with Temporal's pydantic_data_converter
 4. Backwards compatibility - Add new fields with defaults, never change signatures
 
-Typing zone rules
------------------
-The SDK has two distinct typing zones with different serialization requirements.
-Choosing the wrong base type for a zone is a correctness error, not just style.
+All contracts use ``pydantic.BaseModel``. Temporal serialization is handled
+by ``temporalio.contrib.pydantic.pydantic_data_converter``, which uses
+``pydantic_core.to_json()`` / ``TypeAdapter.validate_json()`` natively.
 
-**Temporal zone** — ``Input``, ``Output``, ``HeartbeatDetails``, ``Record``:
-    MUST be plain ``@dataclass``. They serialize natively via
-    ``dataclasses.asdict()`` / ``value_to_type()`` through Temporal's data
-    converter. Do NOT subclass with ``pydantic.BaseModel`` — that would
-    require a custom ``pydantic_data_converter`` and break the existing
-    serialization contract.
+**Temporal contracts** — ``Input``, ``Output``, ``HeartbeatDetails``, ``Record``:
+    Subclass these to define typed payloads for App ``run()`` methods and
+    ``@task``-decorated methods. They serialise through Temporal via
+    ``pydantic_data_converter``.
 
-**External boundary zone** — handler request/response schemas, manifest
-    contracts, pub/sub event payloads, and any type whose shape is owned by
-    external consumers (HTTP clients, pub/sub subscribers, external config):
-    MUST be ``pydantic.BaseModel``. Pydantic gives boundary validation on
-    ingress (``model_validate`` / ``model_validate_json``), direct JSON
-    serialization on egress (``model_dump_json()``), and automatic OpenAPI
-    schema generation. Do NOT use plain dataclasses here — the
-    ``dataclasses.asdict`` + ``JSONResponse`` pattern loses all boundary
-    validation.
+**External boundary types** — handler request/response schemas, pub/sub event
+    payloads, and any type whose shape is owned by external consumers (HTTP
+    clients, pub/sub subscribers, external config): also ``pydantic.BaseModel``.
+    Pydantic gives boundary validation on ingress (``model_validate`` /
+    ``model_validate_json``), direct JSON serialization on egress
+    (``model_dump_json()``), and automatic OpenAPI schema generation.
 
-    Event types (``contracts/events.py``) belong in this zone even though they
-    may transit Temporal. The contract is defined by external pub/sub consumers,
+    Event types (``contracts/events.py``) belong here even though they may
+    transit Temporal. The contract is defined by external pub/sub consumers,
     not the Temporal execution engine, so Pydantic is correct. Call
     ``event.model_dump()`` before passing to Temporal — the resulting dict
-    serialises cleanly through Temporal's JSON data converter.
+    serialises cleanly through the JSON data converter.
 
     See ``application_sdk/handler/manifest.py`` and
     ``application_sdk/contracts/events.py`` for canonical examples.
 
 Usage:
-    from dataclasses import dataclass
     from application_sdk.contracts import Input, Output
 
-    @dataclass
     class MyAppInput(Input):
         source_path: str
         batch_size: int = 100  # Optional with default
 
-    @dataclass
     class MyAppOutput(Output):
         records_processed: int
         status: str
@@ -56,7 +47,6 @@ Usage:
 Evolution:
     To add new fields, always provide defaults:
 
-    @dataclass
     class MyAppInput(Input):
         source_path: str
         batch_size: int = 100
@@ -66,7 +56,6 @@ Evolution:
     Never remove fields or change their types - this breaks running workflows.
 """
 
-from dataclasses import MISSING, dataclass, fields, is_dataclass
 from enum import StrEnum
 from typing import (
     Annotated,
@@ -79,6 +68,9 @@ from typing import (
     get_type_hints,
     runtime_checkable,
 )
+
+from pydantic import BaseModel, ConfigDict
+from pydantic_core import PydanticUndefined
 
 from application_sdk.contracts.types import MaxItems  # noqa: TC001
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
@@ -105,7 +97,6 @@ class SerializableEnum(StrEnum):
             COMPLETED = "completed"
             FAILED = "failed"
 
-        @dataclass
         class MyOutput(Output):
             status: MyStatus  # Works with Temporal serialization
 
@@ -136,19 +127,17 @@ T = TypeVar("T")
 # =============================================================================
 
 
-@dataclass
-class Input:
+class Input(BaseModel):
     """Base class for all input contracts (Apps and tasks).
 
     All App run() methods and task methods must accept exactly one
     parameter that extends this class. This ensures:
 
     1. Clear contracts between callers and callees
-    2. Backwards-compatible evolution via dataclass fields with defaults
+    2. Backwards-compatible evolution via Pydantic fields with defaults
     3. Proper serialization through Temporal
 
     Example:
-        @dataclass
         class ExtractInput(Input):
             source_url: str
             max_records: int = 1000
@@ -159,6 +148,8 @@ class Input:
         (e.g., for checkpoint storage keys). Override _config_hash_exclude in
         subclasses to exclude volatile/per-run fields.
     """
+
+    model_config = ConfigDict()
 
     _config_hash_exclude: ClassVar[set[str]] = set()
     """Fields to exclude from config_hash(). Override in subclasses to list
@@ -189,19 +180,19 @@ class Input:
                 return v
             if isinstance(v, dict):
                 return f"{{{len(v)} keys}}"
-            if is_dataclass(v) and not isinstance(v, type):
+            if isinstance(v, BaseModel):
                 if hasattr(v, "_log_summary"):
                     return v._log_summary()
                 return f"{{{type(v).__name__}}}"
             return v
 
         result: dict[str, Any] = {}
-        for f in fields(self):
-            if f.name.startswith("_"):
+        for name in type(self).model_fields:
+            if name.startswith("_"):
                 continue
-            if is_sensitive(f.name):
+            if is_sensitive(name):
                 continue
-            result[f.name] = safe_value(getattr(self, f.name))
+            result[name] = safe_value(getattr(self, name))
         return result
 
     def summary(self) -> str | None:
@@ -233,27 +224,32 @@ class Input:
         """
         import hashlib
         import json
-        from dataclasses import asdict as dc_asdict
 
         exclude = set(self.__class__._config_hash_exclude)
         if extra_exclude:
             exclude |= extra_exclude
 
         data: dict[str, Any] = {}
-        for f in fields(self):
-            if f.name in exclude or f.name.startswith("_"):
+        for name, field_info in type(self).model_fields.items():
+            if name in exclude or name.startswith("_"):
                 continue
-            value = getattr(self, f.name)
+            value = getattr(self, name)
             # Skip fields at their default value (evolution-stable)
-            if f.default is not MISSING and value == f.default:
+            if (
+                field_info.default is not PydanticUndefined
+                and value == field_info.default
+            ):
                 continue
-            if f.default_factory is not MISSING and value == f.default_factory():  # type: ignore[misc]
+            if (
+                field_info.default_factory is not None
+                and value == field_info.default_factory()  # type: ignore[call-arg]
+            ):
                 continue
-            data[f.name] = value
+            data[name] = value
 
         def default_serializer(obj: Any) -> Any:
-            if is_dataclass(obj) and not isinstance(obj, type):
-                return dc_asdict(obj)
+            if isinstance(obj, BaseModel):
+                return obj.model_dump()
             return str(obj)
 
         content = json.dumps(data, sort_keys=True, default=default_serializer)
@@ -284,24 +280,24 @@ class Input:
         validate_payload_safety(cls, skip_fields=set())
 
 
-@dataclass
-class Output:
+class Output(BaseModel):
     """Base class for all output contracts (Apps and tasks).
 
     All App run() methods and task methods must return exactly one
     instance of a class that extends this class. This ensures:
 
     1. Clear contracts between callers and callees
-    2. Backwards-compatible evolution via dataclass fields with defaults
+    2. Backwards-compatible evolution via Pydantic fields with defaults
     3. Proper serialization through Temporal
 
     Example:
-        @dataclass
         class ExtractOutput(Output):
             records_extracted: int
             checkpoint_path: str
             status: str = "completed"
     """
+
+    model_config = ConfigDict()
 
     def __init_subclass__(
         cls, allow_unbounded_fields: bool = False, **kwargs: Any
@@ -327,8 +323,7 @@ class Output:
         validate_payload_safety(cls)
 
 
-@dataclass
-class HeartbeatDetails:
+class HeartbeatDetails(BaseModel):
     """Base class for heartbeat progress contracts.
 
     Defines the progress state that a long-running task persists
@@ -340,7 +335,7 @@ class HeartbeatDetails:
 
     Serialization: Temporal serializes these to JSON. On retry, Temporal
     returns them as plain dicts — use self.get_heartbeat_details(cls) to
-    reconstruct the typed dataclass automatically.
+    reconstruct the typed model automatically.
 
     Evolution Rules (same as Input/Output):
         ADD new fields with default values
@@ -348,17 +343,15 @@ class HeartbeatDetails:
         NEVER change field types or names
 
     Example:
-        @dataclass
         class LoadTypeHeartbeat(HeartbeatDetails):
             chunk_idx: int         # Resume position (required, no default)
             loaded_count: int = 0  # Progress tracking
     """
 
-    pass
+    model_config = ConfigDict()
 
 
-@dataclass
-class Record:
+class Record(BaseModel):
     """Base class for domain records passed between Apps.
 
     Records represent domain data (e.g., products, users, events) that flow
@@ -368,13 +361,14 @@ class Record:
     All records must have an 'id' field for identification and tracking.
 
     Example:
-        @dataclass
         class ProductRecord(Record):
             name: str
             price: float
             category: str
             in_stock: bool = True
     """
+
+    model_config = ConfigDict()
 
     id: str
     """Unique identifier for this record."""
@@ -580,11 +574,11 @@ def _is_forbidden_type(field_type: type) -> tuple[bool, str]:
 def validate_payload_safety(cls: type, *, skip_fields: set[str] | None = None) -> None:
     """Validate that all fields in a contract use payload-safe types.
 
-    This function checks each field in a dataclass for types that could
-    potentially exceed Temporal's 2MB payload limit.
+    This function checks each field in a Pydantic model (or dataclass) for types
+    that could potentially exceed Temporal's 2MB payload limit.
 
     Args:
-        cls: The dataclass to validate.
+        cls: The contract class to validate.
         skip_fields: Field names to skip (for internal framework fields).
 
     Raises:
@@ -606,8 +600,12 @@ def validate_payload_safety(cls: type, *, skip_fields: set[str] | None = None) -
         return
 
     for field_name, field_type in hints.items():
-        # Skip internal fields and explicitly skipped fields
-        if field_name in skip or field_name.startswith("_"):
+        # Skip internal fields, explicitly skipped fields, and Pydantic internals
+        if (
+            field_name in skip
+            or field_name.startswith("_")
+            or field_name.startswith("model_")
+        ):
             continue
 
         is_forbidden, reason = _is_forbidden_type(field_type)
@@ -619,7 +617,7 @@ def validate_payload_safety(cls: type, *, skip_fields: set[str] | None = None) -
 class InputContract(Protocol):
     """Protocol marker for App input contracts.
 
-    All App inputs should be dataclasses. This protocol ensures
+    All App inputs should be BaseModel subclasses. This protocol ensures
     they can be validated and serialized.
     """
 
@@ -630,65 +628,70 @@ class InputContract(Protocol):
 class OutputContract(Protocol):
     """Protocol marker for App output contracts.
 
-    All App outputs should be dataclasses. This protocol ensures
+    All App outputs should be BaseModel subclasses. This protocol ensures
     they can be validated and serialized.
     """
 
     pass
 
 
-def validate_is_dataclass(cls: type, context: str = "contract") -> None:
-    """Validate that a class is a dataclass.
+def validate_is_contract(cls: type, context: str = "contract") -> None:
+    """Validate that a class is an Input, Output, HeartbeatDetails, or Record subclass.
 
     Args:
         cls: The class to validate.
         context: Description for error messages.
 
     Raises:
-        ContractValidationError: If cls is not a dataclass.
+        ContractValidationError: If cls is not a contract base class subclass.
     """
-    if not is_dataclass(cls):
+    if not (
+        isinstance(cls, type)
+        and issubclass(cls, (Input, Output, HeartbeatDetails, Record))
+    ):
         raise ContractValidationError(
-            f"{context} must be a dataclass, got {cls.__name__}",
+            f"{context} must be a contract class (Input/Output/HeartbeatDetails/Record), "
+            f"got {cls.__name__}",
             contract_type=context,
         )
 
 
+# Backward-compatible alias
+validate_is_dataclass = validate_is_contract
+
+
 def get_contract_fields(cls: type) -> dict[str, type]:
-    """Get the fields and their types from a dataclass contract.
+    """Get the fields and their types from a contract class.
 
     Args:
-        cls: A dataclass type.
+        cls: A contract type (Input/Output/HeartbeatDetails/Record subclass).
 
     Returns:
         Dictionary mapping field names to their types.
 
     Raises:
-        ContractValidationError: If cls is not a dataclass.
+        ContractValidationError: If cls is not a contract class.
     """
-    validate_is_dataclass(cls)
+    validate_is_contract(cls)
     hints = get_type_hints(cls)
-    return {f.name: hints.get(f.name, Any) for f in fields(cls)}
+    return {name: hints.get(name, Any) for name in cls.model_fields}
 
 
 def has_default(cls: type, field_name: str) -> bool:
-    """Check if a dataclass field has a default value.
+    """Check if a contract field has a default value.
 
     Args:
-        cls: A dataclass type.
+        cls: A contract type.
         field_name: Name of the field to check.
 
     Returns:
         True if the field has a default value.
     """
-    validate_is_dataclass(cls)
-    from dataclasses import MISSING
-    from dataclasses import fields as dc_fields
-
-    for f in dc_fields(cls):
-        if f.name == field_name:
-            return f.default is not MISSING or f.default_factory is not MISSING  # type: ignore[misc]
-    return False
+    validate_is_contract(cls)
+    field_info = cls.model_fields.get(field_name)
+    if field_info is None:
+        return False
+    return not field_info.is_required()
 
 
 def is_backwards_compatible(old_cls: type, new_cls: type) -> tuple[bool, list[str]]:
@@ -705,8 +708,8 @@ def is_backwards_compatible(old_cls: type, new_cls: type) -> tuple[bool, list[st
     Returns:
         Tuple of (is_compatible, list of incompatibility reasons).
     """
-    validate_is_dataclass(old_cls, "old contract")
-    validate_is_dataclass(new_cls, "new contract")
+    validate_is_contract(old_cls, "old contract")
+    validate_is_contract(new_cls, "new contract")
 
     old_fields = get_contract_fields(old_cls)
     new_fields = get_contract_fields(new_cls)
@@ -729,14 +732,15 @@ def is_backwards_compatible(old_cls: type, new_cls: type) -> tuple[bool, list[st
     return len(issues) == 0, issues
 
 
-@dataclass(frozen=True)
-class ContractMetadata:
+class ContractMetadata(BaseModel, frozen=True):
     """Metadata about a contract for registration and discovery."""
 
     name: str
     version: str
     cls: type
     is_input: bool
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     # Reserved for future schema evolution tracking
     schema_hash: str | None = None

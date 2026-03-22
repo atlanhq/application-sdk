@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
+
+from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
@@ -32,15 +33,13 @@ def _make_local_file(content: bytes = b"hello") -> str:
     return path
 
 
-@dataclass
 class _TaskOutput(Output, allow_unbounded_fields=True):
     name: str = ""
-    ref: FileReference = FileReference()
+    ref: FileReference = Field(default_factory=FileReference)
 
 
-@dataclass
 class _TaskInput(Input, allow_unbounded_fields=True):
-    ref: FileReference = FileReference()
+    ref: FileReference = Field(default_factory=FileReference)
 
 
 # ---------------------------------------------------------------------------

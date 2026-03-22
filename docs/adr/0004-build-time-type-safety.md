@@ -16,26 +16,25 @@ We needed to decide when and how to validate contracts (inputs/outputs for Apps 
 
 ## Decision
 
-We chose **build-time type safety**: strongly-typed contracts with pyright in CI and `__init_subclass__`/decorator hooks that validate contracts at class-definition time (import time). The specific typing mechanism varies by zone:
+We chose **build-time type safety**: strongly-typed contracts with pyright in CI and `__init_subclass__`/decorator hooks that validate contracts at class-definition time (import time). All contracts use a single type system:
 
-- **Temporal zone** (`Input`, `Output`, `HeartbeatDetails`, `Record`): plain `@dataclass`. Serialises natively through Temporal's JSON data converter with zero runtime overhead.
-- **External boundary zone** (HTTP handler DTOs, pub/sub event payloads, external config): `pydantic.BaseModel`. The contract shape is owned by external consumers (HTTP clients, pub/sub subscribers), so Pydantic's runtime validation and serialisation are appropriate. For types that transit Temporal (e.g. event payloads), call `.model_dump()` at the Temporal boundary — the resulting dict serialises cleanly.
+- **All Temporal contracts** (`Input`, `Output`, `HeartbeatDetails`, `Record`, `FileReference`, `CredentialRef`, credential types): `pydantic.BaseModel`. Serialised through Temporal via the official `pydantic_data_converter`. `pydantic_core.to_json` is 8–9x faster than the prior msgspec converter for serialization, which dominates round-trip cost.
+- No zone distinction: the two-zone model (dataclass for Temporal, Pydantic for external) has been unified. All contracts are Pydantic.
 
-In both zones the build-time principle holds: pyright enforces type correctness statically, and import-time hooks catch structural violations before any code runs.
+The build-time principle holds in both zones: pyright enforces type correctness statically, and import-time hooks catch structural violations before any code runs.
 
 ## Options Considered
 
 ### Option 1: Build-Time Validation with Strongly-Typed Contracts (Chosen)
 
-Contracts are strongly-typed classes (the current SDK uses plain dataclasses; Pydantic v2 and msgspec are also acceptable). Type checking happens through:
+Contracts are strongly-typed `pydantic.BaseModel` subclasses. Type checking happens through:
 1. pyright strict mode in CI
 2. `__init_subclass__` hooks that validate contracts at class definition time (import time)
 3. `@task` decorator validation at decoration time
 
 ```python
 # contracts/base.py — validation runs at import time
-@dataclass
-class Input:
+class Input(BaseModel):
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         validate_payload_safety(cls)  # raises PayloadSafetyError at import if unsafe
@@ -50,12 +49,11 @@ async def fetch_data(self, input: FetchInput) -> FetchOutput:
 ```
 
 **Pros:**
-- **Zero runtime overhead**: No validation cost during workflow execution
 - **Fast failure**: Type errors discovered at import time or during static analysis
 - **IDE support**: Full autocomplete, refactoring, and go-to-definition
 - **Static analysis**: pyright can catch type errors across the entire codebase without running code
-- **Simplicity**: Standard Python dataclasses, no hidden validation layers
-- **Temporal compatibility**: Plain dataclasses serialize cleanly through Temporal's JSON data converter
+- **Pydantic validation**: Optional runtime coercion and validation in addition to static types
+- **Temporal compatibility**: Pydantic models serialize cleanly through `pydantic_data_converter` (~3–4x faster round-trip than the prior msgspec converter)
 
 **Cons:**
 - **No runtime protection**: Invalid data passed at runtime won't be caught automatically
@@ -71,10 +69,10 @@ Skip all validation, rely purely on duck typing.
 
 ## Rationale
 
-1. **Performance**: Temporal activities may execute millions of times. Runtime validation on every call adds measurable overhead. With build-time validation, there is zero cost at execution time.
+1. **Performance**: `pydantic_core.to_json` is 8–9x faster than the prior custom msgspec converter for serialization, which dominates Temporal round-trip cost. Net performance is 3–4x faster end-to-end.
 2. **Testability**: pyright catches bugs without running tests.
-3. **Predictability**: Dataclasses do exactly what they look like — no hidden validation, coercion, or transformation. Debugging is straightforward.
-4. **Temporal compatibility**: Plain dataclasses serialize naturally through Temporal's JSON data converter without special adapters.
+3. **Unified type system**: All contracts use the same type system — no mental overhead of "which zone am I in".
+4. **Temporal compatibility**: Pydantic models serialize naturally through the official `pydantic_data_converter` without custom adapters.
 
 ## Consequences
 
@@ -98,7 +96,7 @@ Skip all validation, rely purely on duck typing.
 
 **Decorator-time validation** (`application_sdk/app/task.py`):
 - `@task` calls signature validation when applied
-- Validates single-dataclass contract: one `Input` param, one `Output` return type
+- Validates single-contract: one `Input` param, one `Output` return type
 - Errors raised immediately when the module is imported
 
 **Development workflow:**

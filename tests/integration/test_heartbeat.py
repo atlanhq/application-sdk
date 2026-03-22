@@ -7,7 +7,6 @@ Requires a running Temporal dev server (see conftest.py).
 """
 
 import asyncio
-from dataclasses import dataclass
 
 import pytest
 
@@ -22,12 +21,10 @@ from application_sdk.execution.retry import NO_RETRY
 # ---------------------------------------------------------------------------
 
 
-@dataclass
 class HbInput(Input):
     pass
 
 
-@dataclass
 class HbOutput(Output):
     done: bool = False
 
@@ -44,12 +41,10 @@ class AutoHeartbeatApp(App):
         return await self.long_task(input)
 
 
-@dataclass
 class ManualHbInput(Input):
     pass
 
 
-@dataclass
 class ManualHbOutput(Output):
     done: bool = False
 

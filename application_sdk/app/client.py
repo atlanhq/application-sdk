@@ -170,13 +170,10 @@ class WorkflowAppClient:
 
             # If output_type provided and result is a dict, deserialize
             if output_type is not None and isinstance(result, dict):
-                from dataclasses import fields as dc_fields
-
-                expected_fields = {f.name for f in dc_fields(output_type)}
-                filtered_result = {
-                    k: v for k, v in result.items() if k in expected_fields
-                }
-                return output_type(**filtered_result)
+                known = set(output_type.model_fields)
+                return output_type.model_validate(
+                    {k: v for k, v in result.items() if k in known}
+                )
 
             # Return result as-is (typically the output dataclass)
             return result

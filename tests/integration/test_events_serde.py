@@ -33,7 +33,6 @@ Setup notes
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from unittest import mock
 
 import pytest
@@ -54,12 +53,10 @@ from application_sdk.execution.retry import NO_RETRY
 # ---------------------------------------------------------------------------
 
 
-@dataclass
 class _NullInput(Input):
     pass
 
 
-@dataclass
 class _NullOutput(Output):
     pass
 

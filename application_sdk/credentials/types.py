@@ -1,9 +1,10 @@
-"""Credential Protocol and built-in typed credential dataclasses."""
+"""Credential Protocol and built-in typed credential Pydantic models."""
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Any, Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict
 
 # TODO(credentials): Add AwsCredential and migrate SQL client IAM auth to typed
 # credentials to eliminate the v2 fallback entirely.
@@ -23,7 +24,7 @@ class Credential(Protocol):
         """Type identifier matching the registry key (e.g. 'api_key')."""
         ...
 
-    async def validate(self) -> None:
+    async def validate(self) -> None:  # type: ignore[override]
         """Validate this credential.
 
         Raises:
@@ -37,9 +38,10 @@ class Credential(Protocol):
 # ---------------------------------------------------------------------------
 
 
-@dataclasses.dataclass(frozen=True)
-class BasicCredential:
+class BasicCredential(BaseModel, frozen=True):
     """Username + password credential."""
+
+    model_config = ConfigDict(frozen=True)
 
     username: str
     password: str
@@ -55,7 +57,7 @@ class BasicCredential:
         token = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
         return f"Basic {token}"
 
-    async def validate(self) -> None:
+    async def validate(self) -> None:  # type: ignore[override]
         from application_sdk.credentials.errors import CredentialValidationError
 
         if not self.username:
@@ -70,9 +72,10 @@ class BasicCredential:
             )
 
 
-@dataclasses.dataclass(frozen=True)
-class ApiKeyCredential:
+class ApiKeyCredential(BaseModel, frozen=True):
     """API key credential."""
+
+    model_config = ConfigDict(frozen=True)
 
     api_key: str
     header_name: str = "X-API-Key"
@@ -87,7 +90,7 @@ class ApiKeyCredential:
         value = f"{self.prefix}{self.api_key}" if self.prefix else self.api_key
         return {self.header_name: value}
 
-    async def validate(self) -> None:
+    async def validate(self) -> None:  # type: ignore[override]
         from application_sdk.credentials.errors import CredentialValidationError
 
         if not self.api_key:
@@ -97,9 +100,10 @@ class ApiKeyCredential:
             )
 
 
-@dataclasses.dataclass(frozen=True)
-class BearerTokenCredential:
+class BearerTokenCredential(BaseModel, frozen=True):
     """Bearer token credential."""
+
+    model_config = ConfigDict(frozen=True)
 
     token: str
     expires_at: str = ""
@@ -129,7 +133,7 @@ class BearerTokenCredential:
         except ValueError:
             return False
 
-    async def validate(self) -> None:
+    async def validate(self) -> None:  # type: ignore[override]
         from application_sdk.credentials.errors import CredentialValidationError
 
         if not self.token:
@@ -139,14 +143,15 @@ class BearerTokenCredential:
             )
 
 
-@dataclasses.dataclass(frozen=True)
-class OAuthClientCredential:
+class OAuthClientCredential(BaseModel, frozen=True):
     """OAuth 2.0 client credential."""
+
+    model_config = ConfigDict(frozen=True)
 
     client_id: str
     client_secret: str
     token_url: str
-    scopes: tuple[str, ...] = dataclasses.field(default_factory=tuple)
+    scopes: tuple[str, ...] = ()
     access_token: str = ""
     refresh_token: str = ""
     expires_at: str = ""
@@ -178,18 +183,19 @@ class OAuthClientCredential:
         refresh_token: str = "",
     ) -> "OAuthClientCredential":
         """Return a new instance with updated token fields."""
-        return dataclasses.replace(
-            self,
-            access_token=access_token,
-            expires_at=expires_at,
-            refresh_token=refresh_token or self.refresh_token,
+        return self.model_copy(
+            update={
+                "access_token": access_token,
+                "expires_at": expires_at,
+                "refresh_token": refresh_token or self.refresh_token,
+            }
         )
 
     def to_headers(self) -> dict[str, str]:
         """Return HTTP headers dict using the current access token."""
         return {"Authorization": f"Bearer {self.access_token}"}
 
-    async def validate(self) -> None:
+    async def validate(self) -> None:  # type: ignore[override]
         from application_sdk.credentials.errors import CredentialValidationError
 
         if not self.client_id:
@@ -209,9 +215,10 @@ class OAuthClientCredential:
             )
 
 
-@dataclasses.dataclass(frozen=True)
-class CertificateCredential:
+class CertificateCredential(BaseModel, frozen=True):
     """Certificate-based credential (mTLS / client cert)."""
+
+    model_config = ConfigDict(frozen=True)
 
     cert_data: str = ""
     """PEM-encoded certificate data."""
@@ -229,7 +236,7 @@ class CertificateCredential:
     def credential_type(self) -> str:
         return "certificate"
 
-    async def validate(self) -> None:
+    async def validate(self) -> None:  # type: ignore[override]
         from application_sdk.credentials.errors import CredentialValidationError
 
         if not self.cert_data and not self.key_data:
@@ -239,13 +246,14 @@ class CertificateCredential:
             )
 
 
-@dataclasses.dataclass(frozen=True)
-class RawCredential:
+class RawCredential(BaseModel, frozen=True):
     """Wrapper for raw dict credentials (legacy / unknown types).
 
     Used when the resolver encounters a credential_guid with
     credential_type="unknown" and no registered parser is available.
     """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     data: dict[str, Any]
 
@@ -253,7 +261,7 @@ class RawCredential:
     def credential_type(self) -> str:
         return "raw"
 
-    async def validate(self) -> None:
+    async def validate(self) -> None:  # type: ignore[override]
         pass
 
     def get(self, key: str, default: Any = None) -> Any:

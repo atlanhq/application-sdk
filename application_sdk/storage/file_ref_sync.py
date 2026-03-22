@@ -32,10 +32,11 @@ This ensures that:
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel
 
 from application_sdk.contracts.types import FileReference
 
@@ -44,13 +45,13 @@ if TYPE_CHECKING:
 
 
 def _find_file_refs(data: Any) -> list[FileReference]:
-    """Recursively find all FileReference instances in a dataclass tree."""
+    """Recursively find all FileReference instances in a BaseModel/dataclass tree."""
     if isinstance(data, FileReference):
         return [data]
     refs: list[FileReference] = []
-    if dataclasses.is_dataclass(data) and not isinstance(data, type):
-        for f in dataclasses.fields(data):
-            refs.extend(_find_file_refs(getattr(data, f.name)))
+    if isinstance(data, BaseModel):
+        for name in type(data).model_fields:
+            refs.extend(_find_file_refs(getattr(data, name)))
     elif isinstance(data, (list, tuple)):
         for item in data:
             refs.extend(_find_file_refs(item))
@@ -155,14 +156,14 @@ async def _replace_refs(
             return await materialize_file_reference(store, data)
         return data
 
-    if dataclasses.is_dataclass(data) and not isinstance(data, type):
+    if isinstance(data, BaseModel):
         changes: dict[str, Any] = {}
-        for f in dataclasses.fields(data):
-            old_val = getattr(data, f.name)
+        for name in type(data).model_fields:
+            old_val = getattr(data, name)
             new_val = await _replace_refs(old_val, store, mode, output_path=output_path)
             if new_val is not old_val:
-                changes[f.name] = new_val
-        return dataclasses.replace(data, **changes) if changes else data
+                changes[name] = new_val
+        return data.model_copy(update=changes) if changes else data
 
     if isinstance(data, list):
         new_list = [

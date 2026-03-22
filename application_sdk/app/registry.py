@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from application_sdk.app.task import TaskMetadata
 
-from application_sdk.contracts.base import validate_is_dataclass
+from application_sdk.contracts.base import validate_is_contract
 from application_sdk.errors import (
     APP_ALREADY_REGISTERED,
     APP_NOT_FOUND,
@@ -136,8 +136,8 @@ class AppRegistry:
             AppAlreadyRegisteredError: If App already registered and not overriding.
             ContractValidationError: If input/output types are not dataclasses.
         """
-        validate_is_dataclass(input_type, f"Input type for App '{name}'")
-        validate_is_dataclass(output_type, f"Output type for App '{name}'")
+        validate_is_contract(input_type, f"Input type for App '{name}'")
+        validate_is_contract(output_type, f"Output type for App '{name}'")
 
         if name not in self._apps:
             self._apps[name] = {}

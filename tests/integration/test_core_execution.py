@@ -6,9 +6,8 @@ with typed Input/Output flowing correctly through serialization.
 Requires a running Temporal dev server (see conftest.py).
 """
 
-from dataclasses import dataclass
-
 import pytest
+from pydantic import Field
 
 from application_sdk.app.base import App
 from application_sdk.app.context import AppContext
@@ -25,12 +24,10 @@ from application_sdk.execution.retry import NO_RETRY
 # ---------------------------------------------------------------------------
 
 
-@dataclass
 class AddInput(Input):
     value: int = 0
 
 
-@dataclass
 class AddOutput(Output):
     result: int = 0
 
@@ -44,22 +41,18 @@ class AddOneApp(App):
         return await self.add_one(input)
 
 
-@dataclass
 class PipeInput(Input):
     text: str = ""
 
 
-@dataclass
 class PipeUpperOutput(Output):
     result: str = ""
 
 
-@dataclass
 class ExclaimInput(Input):
     text: str = ""
 
 
-@dataclass
 class PipeOutput(Output):
     result: str = ""
 
@@ -78,24 +71,17 @@ class PipeApp(App):
         return await self.exclaim(ExclaimInput(text=upper_out.result))
 
 
-@dataclass
 class Inner(Input):
     x: int = 0
     y: int = 0
 
 
-@dataclass
 class ComplexInput(Input):
-    inner: Inner = None  # type: ignore[assignment]
+    inner: Inner = Field(default_factory=Inner)
     label: str = ""
     optional_flag: bool | None = None
 
-    def __post_init__(self) -> None:
-        if self.inner is None:
-            self.inner = Inner()
 
-
-@dataclass
 class ComplexOutput(Output):
     sum: int = 0
     label: str = ""
@@ -115,16 +101,10 @@ class ComplexApp(App):
         return await self.compute(input)
 
 
-@dataclass
 class FileInput(Input):
-    ref: FileReference = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        if self.ref is None:
-            self.ref = FileReference()
+    ref: FileReference = Field(default_factory=FileReference)
 
 
-@dataclass
 class FileOutput(Output):
     local_path: str = ""
     is_durable: bool = False
@@ -173,7 +153,7 @@ async def test_multi_task_workflow_data_flows(run_worker, executor, reregister_a
 
 @pytest.mark.integration
 async def test_complex_contract_types(run_worker, executor, reregister_app):
-    """P1.3: Complex contract types — nested dataclasses and optional fields."""
+    """P1.3: Complex contract types — nested models and optional fields."""
     reregister_app(ComplexApp)
     async with run_worker():
         context = AppContext(app_name=ComplexApp._app_name, app_version="1.0.0")

@@ -6,25 +6,25 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
-import dataclasses
 from typing import TYPE_CHECKING, Annotated, Any
 
+from pydantic import Field
+
 from application_sdk.contracts.base import Input, Output
-from application_sdk.contracts.types import MaxItems
+from application_sdk.contracts.types import ConnectionRef, MaxItems
 
 if TYPE_CHECKING:
     from application_sdk.credentials import CredentialRef
 
 
-@dataclasses.dataclass
 class QueryExtractionInput(Input, allow_unbounded_fields=True):
     """Top-level input for a SQL query extraction run."""
 
     workflow_id: str = ""
     """Temporal workflow ID for this run."""
 
-    connection: dict[str, Any] = dataclasses.field(default_factory=dict)
-    """Connection metadata (qualified name, name, etc.)."""
+    connection: ConnectionRef = Field(default_factory=ConnectionRef)
+    """Typed connection reference (qualified name, name, admin users, etc.)."""
 
     credential_guid: str = ""
     """GUID of credentials stored in the secret store."""
@@ -44,13 +44,10 @@ class QueryExtractionInput(Input, allow_unbounded_fields=True):
     batch_size: int = 100000
     """Number of queries per batch."""
 
-    exclude_users: Annotated[list[str], MaxItems(1000)] = dataclasses.field(
-        default_factory=list
-    )
+    exclude_users: Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)
     """Users whose queries should be excluded."""
 
 
-@dataclasses.dataclass
 class QueryExtractionOutput(Output):
     """Top-level output from a SQL query extraction run."""
 
@@ -62,14 +59,12 @@ class QueryExtractionOutput(Output):
     error: str = ""
 
 
-@dataclasses.dataclass
 class QueryBatchInput(Input, allow_unbounded_fields=True):
     """Input for the get_query_batches task."""
 
-    workflow_args: dict[str, Any] = dataclasses.field(default_factory=dict)
+    workflow_args: dict[str, Any] = Field(default_factory=dict)
 
 
-@dataclasses.dataclass
 class QueryBatchOutput(Output):
     """Output from the get_query_batches task."""
 
@@ -78,16 +73,14 @@ class QueryBatchOutput(Output):
     total_count: int = 0
 
 
-@dataclasses.dataclass
 class QueryFetchInput(Input, allow_unbounded_fields=True):
     """Input for the fetch_queries task."""
 
-    workflow_args: dict[str, Any] = dataclasses.field(default_factory=dict)
+    workflow_args: dict[str, Any] = Field(default_factory=dict)
     batch_number: int = 0
     batch_size: int = 100000
 
 
-@dataclasses.dataclass
 class QueryFetchOutput(Output):
     """Output from the fetch_queries task."""
 

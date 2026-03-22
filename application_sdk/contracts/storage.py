@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, StorageTier
 
 
-@dataclass
 class UploadInput(Input):
     """Input for ``App.upload``.
 
@@ -35,7 +34,6 @@ class UploadInput(Input):
     skip_if_exists: bool = False
 
 
-@dataclass
 class UploadOutput(Output):
     """Output from ``App.upload``.
 
@@ -48,12 +46,11 @@ class UploadOutput(Output):
             (e.g. ``"uploaded"``, ``"skipped:hash_match"``).
     """
 
-    ref: FileReference = field(default_factory=FileReference)
+    ref: FileReference = Field(default_factory=FileReference)
     synced: bool = False
     reason: str = ""
 
 
-@dataclass
 class DownloadInput(Input):
     """Input for ``App.download``.
 
@@ -79,7 +76,6 @@ class DownloadInput(Input):
     skip_if_exists: bool = False
 
 
-@dataclass
 class DownloadOutput(Output):
     """Output from ``App.download``.
 
@@ -91,6 +87,6 @@ class DownloadOutput(Output):
         reason: Human-readable transfer outcome.
     """
 
-    ref: FileReference = field(default_factory=FileReference)
+    ref: FileReference = Field(default_factory=FileReference)
     synced: bool = False
     reason: str = ""

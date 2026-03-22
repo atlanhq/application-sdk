@@ -6,12 +6,9 @@ Subclasses define their own app-level Input/Output for run().
 
 from __future__ import annotations
 
-import dataclasses
-
 from application_sdk.contracts.base import Input, Output
 
 
-@dataclasses.dataclass
 class UploadInput(Input):
     """Input for the upload_to_atlan task."""
 
@@ -19,7 +16,6 @@ class UploadInput(Input):
     """Object store prefix to migrate from the deployment store to the upstream store."""
 
 
-@dataclasses.dataclass
 class UploadOutput(Output):
     """Output from the upload_to_atlan task."""
 

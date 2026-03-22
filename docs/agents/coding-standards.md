@@ -19,16 +19,16 @@ Use the right type system for each zone:
 
 | Zone | Type System | When to Use | Example |
 |------|-------------|-------------|---------|
-| **Temporal contracts** | Plain `@dataclass` | Anything serialized through Temporal wire (workflow/activity I/O) | `Input`, `Output`, `FileReference`, `CredentialRef` |
-| **External boundaries** | `pydantic.BaseModel` | Any type whose shape is owned by external consumers: HTTP payloads, pub/sub event payloads, external config parsing | Handler HTTP DTOs, `contracts/events.py`, Azure cred parsing |
+| **Temporal contracts** | `pydantic.BaseModel` | Anything serialized through Temporal wire (workflow/activity I/O) | `Input`, `Output`, `FileReference`, `CredentialRef` |
 | **High-volume / low-level** | `msgspec.Struct` or plain dicts | Performance-critical paths: pyatlan asset types, logging internals | pyatlan_v9 types, log record construction |
 
 **Rules:**
-- `Input`/`Output`/`HeartbeatDetails`/`Record` in `contracts/base.py` **MUST** remain plain `@dataclass`. Pydantic would require a custom `pydantic_data_converter` for Temporal — unwanted overhead and brittleness.
-- Pydantic is appropriate at external boundaries where the contract is owned by external consumers: HTTP clients (handlers), pub/sub subscribers (events), or external config sources. Use it where aliases (`eventId`, `incremental-extraction`), `extra="allow"`, `RootModel`, or FastAPI integration are genuine requirements.
-- **Events** (`contracts/events.py`) use Pydantic even though they may transit Temporal. The pub/sub payload shape is owned by external subscribers, not the Temporal engine. Use `event.model_dump()` as the adapter when passing event data to Temporal — the resulting dict serialises cleanly through Temporal's JSON data converter.
-- Avoid Pydantic on high-volume paths (e.g., every log line). Use plain dicts or dataclasses instead — Pydantic validation overhead accumulates significantly.
-- Always use Pydantic v2 `model_config = {...}` style. Do not use the v1 inner `class Config:` pattern.
+- All contracts (`Input`, `Output`, `HeartbeatDetails`, `Record`, `FileReference`, `CredentialRef`, credential types) **MUST** extend the appropriate base class from `contracts/base.py` or `contracts/types.py`. They are `pydantic.BaseModel` subclasses serialized through Temporal via `pydantic_data_converter`.
+- Define contracts as plain class bodies — no `@dataclass` decorator. Pydantic handles `__init__`, validation, and serialization automatically.
+- For frozen (immutable) contracts (e.g., `FileReference`, `CredentialRef`): use `class Foo(BaseModel, frozen=True)` or `model_config = ConfigDict(frozen=True)`.
+- Use `Field(default_factory=...)` for mutable defaults (lists, dicts, nested models). Do **not** use `__post_init__` — that is a dataclass pattern.
+- Avoid Pydantic on high-volume paths (e.g., every log line). Use plain dicts instead — Pydantic validation overhead accumulates significantly.
+- Always use Pydantic v2 `model_config = ConfigDict(...)` style. Do not use the v1 inner `class Config:` pattern.
 
 ## Before Every Commit
 

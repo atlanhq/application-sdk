@@ -87,7 +87,6 @@ class IncrementalRunContext:
 # =============================================================================
 
 
-@dataclasses.dataclass
 class IncrementalExtractionInput(ExtractionInput, allow_unbounded_fields=True):
     """Top-level input for an incremental SQL metadata extraction run.
 
@@ -113,7 +112,6 @@ class IncrementalExtractionInput(ExtractionInput, allow_unbounded_fields=True):
     """Hours to subtract from the marker when preponing is enabled."""
 
 
-@dataclasses.dataclass
 class IncrementalExtractionOutput(ExtractionOutput):
     """Top-level output from an incremental SQL metadata extraction run.
 
@@ -144,7 +142,6 @@ class IncrementalExtractionOutput(ExtractionOutput):
 # =============================================================================
 
 
-@dataclasses.dataclass
 class IncrementalTaskInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Base task input with incremental runtime state.
 
@@ -170,7 +167,6 @@ class IncrementalTaskInput(ExtractionTaskInput, allow_unbounded_fields=True):
 # =============================================================================
 
 
-@dataclasses.dataclass
 class FetchTablesIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=True):
     """Input for the incremental fetch_tables task.
 
@@ -181,7 +177,6 @@ class FetchTablesIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=T
     """
 
 
-@dataclasses.dataclass
 class FetchColumnsIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=True):
     """Input for the incremental fetch_columns task.
 
@@ -196,7 +191,6 @@ class FetchColumnsIncrementalInput(IncrementalTaskInput, allow_unbounded_fields=
 # =============================================================================
 
 
-@dataclasses.dataclass
 class FetchIncrementalMarkerInput(Input, allow_unbounded_fields=True):
     """Input for the fetch_incremental_marker task."""
 
@@ -216,7 +210,6 @@ class FetchIncrementalMarkerInput(Input, allow_unbounded_fields=True):
     """Hours to subtract from the marker when preponing is enabled."""
 
 
-@dataclasses.dataclass
 class FetchIncrementalMarkerOutput(Output):
     """Output from the fetch_incremental_marker task."""
 
@@ -232,7 +225,6 @@ class FetchIncrementalMarkerOutput(Output):
 # =============================================================================
 
 
-@dataclasses.dataclass
 class ReadCurrentStateInput(Input, allow_unbounded_fields=True):
     """Input for the read_current_state task."""
 
@@ -240,7 +232,6 @@ class ReadCurrentStateInput(Input, allow_unbounded_fields=True):
     application_name: str = ""
 
 
-@dataclasses.dataclass
 class ReadCurrentStateOutput(Output):
     """Output from the read_current_state task."""
 
@@ -262,7 +253,6 @@ class ReadCurrentStateOutput(Output):
 # =============================================================================
 
 
-@dataclasses.dataclass
 class PrepareColumnQueriesInput(IncrementalTaskInput, allow_unbounded_fields=True):
     """Input for the prepare_column_extraction_queries task."""
 
@@ -278,7 +268,6 @@ class PrepareColumnQueriesInput(IncrementalTaskInput, allow_unbounded_fields=Tru
     application_name: str = ""
 
 
-@dataclasses.dataclass
 class PrepareColumnQueriesOutput(Output):
     """Output from the prepare_column_extraction_queries task."""
 
@@ -295,7 +284,6 @@ class PrepareColumnQueriesOutput(Output):
 # =============================================================================
 
 
-@dataclasses.dataclass
 class ExecuteColumnBatchInput(IncrementalTaskInput, allow_unbounded_fields=True):
     """Input for executing a single incremental column batch."""
 
@@ -311,7 +299,6 @@ class ExecuteColumnBatchInput(IncrementalTaskInput, allow_unbounded_fields=True)
     application_name: str = ""
 
 
-@dataclasses.dataclass
 class ExecuteColumnBatchOutput(Output):
     """Output from executing a single incremental column batch."""
 
@@ -325,7 +312,6 @@ class ExecuteColumnBatchOutput(Output):
 # =============================================================================
 
 
-@dataclasses.dataclass
 class WriteCurrentStateInput(IncrementalTaskInput, allow_unbounded_fields=True):
     """Input for the write_current_state task."""
 
@@ -341,7 +327,6 @@ class WriteCurrentStateInput(IncrementalTaskInput, allow_unbounded_fields=True):
     application_name: str = ""
 
 
-@dataclasses.dataclass
 class WriteCurrentStateOutput(Output):
     """Output from the write_current_state task."""
 
@@ -358,7 +343,6 @@ class WriteCurrentStateOutput(Output):
 # =============================================================================
 
 
-@dataclasses.dataclass
 class UpdateMarkerInput(Input, allow_unbounded_fields=True):
     """Input for the update_incremental_marker task."""
 
@@ -367,7 +351,6 @@ class UpdateMarkerInput(Input, allow_unbounded_fields=True):
     application_name: str = ""
 
 
-@dataclasses.dataclass
 class UpdateMarkerOutput(Output):
     """Output from the update_incremental_marker task."""
 

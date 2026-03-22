@@ -7,7 +7,6 @@ Requires a running Temporal dev server (see conftest.py).
 """
 
 import asyncio
-from dataclasses import dataclass
 
 import pytest
 
@@ -22,12 +21,10 @@ from application_sdk.execution.retry import NO_RETRY
 # ---------------------------------------------------------------------------
 
 
-@dataclass
 class SlowInput(Input):
     pass
 
 
-@dataclass
 class SlowOutput(Output):
     done: bool = False
 
