@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
 
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 
@@ -238,9 +239,10 @@ async def create_temporal_client(
         "target_host": host,
         "namespace": namespace,
         "tls": tls_config,
+        "data_converter": data_converter
+        if data_converter is not None
+        else pydantic_data_converter,
     }
-    if data_converter is not None:
-        kwargs["data_converter"] = data_converter
     if api_key:
         kwargs["api_key"] = api_key
 
