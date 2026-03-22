@@ -179,6 +179,10 @@ def create_activity_from_task(
                 try:
                     output_path: str | None = build_output_path()
                 except Exception:
+                    logger.warning(
+                        "build_output_path() failed, proceeding without output path",
+                        exc_info=True,
+                    )
                     output_path = None
                 result = await persist_file_refs(store, result, output_path=output_path)
 

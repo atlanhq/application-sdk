@@ -307,5 +307,5 @@ def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bo
         if isinstance(dataframe, daft.DataFrame):
             return dataframe.count_rows() == 0
     except Exception:
-        logger.warning("Module daft not found")
+        logger.warning("Module daft not found", exc_info=True)
     return True

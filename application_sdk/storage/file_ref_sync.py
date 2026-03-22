@@ -39,9 +39,12 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from application_sdk.contracts.types import FileReference
+from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
+
+logger = get_logger(__name__)
 
 
 def _find_file_refs(data: Any) -> list[FileReference]:
@@ -85,6 +88,7 @@ def _local_sidecar_ok(local_path: str) -> bool:
         actual = h.hexdigest()
         return stored == actual
     except Exception:
+        logger.warning("sha256 verification failed for local sidecar", exc_info=True)
         return False
 
 

@@ -989,6 +989,11 @@ class App(ABC):
                                 os.remove(p)
                             path_results[p] = True
                         except Exception:
+                            _safe_log(
+                                "warning",
+                                "Failed to delete local path during cleanup",
+                                exc_info=True,
+                            )
                             path_results[p] = False
 
         # 2. Delete convention-based temp directories.
@@ -1008,6 +1013,11 @@ class App(ABC):
                         os.remove(base_path)
                 path_results[base_path] = True
             except Exception:
+                _safe_log(
+                    "warning",
+                    "Failed to delete temp directory during cleanup",
+                    exc_info=True,
+                )
                 path_results[base_path] = False
 
         return CleanupOutput(path_results=path_results)
@@ -1067,6 +1077,11 @@ class App(ABC):
                     await delete(key, store, normalize=False)
                     return True
                 except Exception:
+                    _safe_log(
+                        "warning",
+                        "Object store delete failed during cleanup",
+                        exc_info=True,
+                    )
                     return False
 
         # 1. Delete tracked transient objects.
@@ -1271,6 +1286,11 @@ def _apply_app_registration(
             _corr_ctx = get_correlation_context()
             correlation_id = _corr_ctx.correlation_id if _corr_ctx else run_id
         except Exception:
+            _safe_log(
+                "warning",
+                "Failed to read correlation context, falling back to run_id",
+                exc_info=True,
+            )
             correlation_id = run_id
 
         context = AppContext(

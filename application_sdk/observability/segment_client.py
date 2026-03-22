@@ -185,7 +185,9 @@ class SegmentClient:
             try:
                 loop.run_until_complete(self._worker_task)
             except Exception:
-                pass
+                logging.warning(
+                    "Segment worker thread loop exited with exception", exc_info=True
+                )
 
         self._worker_thread = threading.Thread(target=run_worker, daemon=True)
         self._worker_thread.start()

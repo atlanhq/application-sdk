@@ -130,7 +130,10 @@ class LogCollector:
         )
 
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            _results = await asyncio.gather(*tasks, return_exceptions=True)
+            for _r in _results:
+                if isinstance(_r, Exception):
+                    logger.warning("Log collection task failed", exc_info=_r)
 
     async def collect_events(self) -> None:
         """Write namespace events sorted by timestamp to ``events.txt``."""

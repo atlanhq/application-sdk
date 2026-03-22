@@ -181,6 +181,7 @@ def _has_remote_otlp_endpoint() -> bool:
         host = urlparse(ep).hostname or ""
         return host not in ("", "localhost", "127.0.0.1", "::1")
     except Exception:
+        logging.debug("OTEL endpoint check failed, treating as local", exc_info=True)
         return False
 
 

@@ -118,7 +118,7 @@ def _enrich_event_metadata(event: Event) -> Event:
             event.metadata.workflow_id = workflow_info.workflow_id
             event.metadata.workflow_run_id = workflow_info.run_id
     except Exception:
-        pass
+        logger.debug("Not in workflow context, cannot enrich event metadata")
 
     try:
         activity_info = activity.info()
@@ -131,7 +131,7 @@ def _enrich_event_metadata(event: Event) -> Event:
             event.metadata.workflow_run_id = activity_info.workflow_run_id
             event.metadata.workflow_state = WorkflowStates.RUNNING.value
     except Exception:
-        pass
+        logger.debug("Not in activity context, cannot enrich event metadata")
 
     return event
 

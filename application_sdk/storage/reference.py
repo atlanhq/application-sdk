@@ -101,6 +101,7 @@ async def _get_stored_sidecar(storage_path: str, store: "ObjectStore") -> str | 
         raw = await _get_bytes(storage_path + ".sha256", store)
         return raw.decode().strip() if raw else None
     except Exception:
+        logger.warning("Failed to fetch sha256 sidecar from store", exc_info=True)
         return None
 
 

@@ -95,6 +95,9 @@ class _CorrelationWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             memo = dict(workflow.memo())
             ctx = CorrelationContext.from_temporal_memo(memo)
         except Exception:
+            logger.warning(
+                "Failed to restore correlation context from memo", exc_info=True
+            )
             ctx = None
 
         # Priority 2: inherit from parent via headers (child workflow call path)
