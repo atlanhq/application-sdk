@@ -347,7 +347,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 {
                     "metadata": EventMetadata(
                         workflow_state=WorkflowStates.RUNNING.value
-                    ),
+                    ).model_dump(),
                     "event_type": EventTypes.APPLICATION_EVENT.value,
                     "event_name": ApplicationEventNames.WORKFLOW_START.value,
                     "data": {},
@@ -379,7 +379,9 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 await workflow.execute_activity(
                     publish_event,
                     {
-                        "metadata": EventMetadata(workflow_state=workflow_state),
+                        "metadata": EventMetadata(
+                            workflow_state=workflow_state
+                        ).model_dump(),
                         "event_type": EventTypes.APPLICATION_EVENT.value,
                         "event_name": ApplicationEventNames.WORKFLOW_END.value,
                         "data": {"duration_ms": round(duration_ms, 2)},
