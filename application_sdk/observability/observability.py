@@ -9,7 +9,6 @@ from pathlib import Path
 from time import time
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Generic, List, TypeVar
 
-import duckdb
 import orjson
 
 if TYPE_CHECKING:
@@ -533,6 +532,8 @@ class DuckDBUI:
     def start_ui(self):
         """Start DuckDB UI and create views for Hive partitioned json.gz files."""
         if not self._is_duckdb_ui_running():
+            import duckdb
+
             os.makedirs(self.observability_dir, exist_ok=True)
             con = duckdb.connect(self.db_path)
 
