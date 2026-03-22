@@ -344,33 +344,13 @@ class LongRunningApp(App):
         return await self.long_sleep(input)
 
 
-def _reregister_app(app_cls: type) -> None:
-    """Re-add an App class to AppRegistry and TaskRegistry.
-
-    clean_registries (autouse) resets both registries before each test.
-    Call this in fixtures that need the app registered for the worker.
-    """
-    from application_sdk.app.base import _register_tasks
-    from application_sdk.app.registry import AppRegistry
-
-    AppRegistry.get_instance().register(
-        name=app_cls._app_name,
-        version=app_cls.version,
-        app_cls=app_cls,
-        input_type=app_cls._input_type,
-        output_type=app_cls._output_type,
-        allow_override=True,
-    )
-    _register_tasks(app_cls, app_cls._app_name)
-
-
 @pytest.fixture
-async def trivial_workflow_app(temporal_client, task_queue):
+async def trivial_workflow_app(temporal_client, task_queue, reregister_app):
     """Handler service configured with TrivialApp for workflow lifecycle tests."""
     from application_sdk.handler import service as svc
     from application_sdk.handler.service import create_app_handler_service
 
-    _reregister_app(TrivialApp)
+    reregister_app(TrivialApp)
 
     handler = DefaultHandler()
     app = create_app_handler_service(
@@ -396,12 +376,12 @@ async def trivial_wf_client(trivial_workflow_app):
 
 
 @pytest.fixture
-async def long_running_workflow_app(temporal_client, task_queue):
+async def long_running_workflow_app(temporal_client, task_queue, reregister_app):
     """Handler service configured with LongRunningApp for the stop test."""
     from application_sdk.handler import service as svc
     from application_sdk.handler.service import create_app_handler_service
 
-    _reregister_app(LongRunningApp)
+    reregister_app(LongRunningApp)
 
     handler = DefaultHandler()
     app = create_app_handler_service(

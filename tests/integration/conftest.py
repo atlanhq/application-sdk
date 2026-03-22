@@ -48,6 +48,32 @@ def clean_registries():
 
 
 @pytest.fixture
+def reregister_app():
+    """Return a helper that re-adds an App class to AppRegistry and TaskRegistry.
+
+    clean_registries (autouse) resets both registries before each test.
+    Call reregister_app(AppClass) before spinning up a worker for any
+    module-level App class.
+    """
+
+    def _reregister(app_cls: type) -> None:
+        from application_sdk.app.base import _register_tasks
+        from application_sdk.app.registry import AppRegistry
+
+        AppRegistry.get_instance().register(
+            name=app_cls._app_name,
+            version=app_cls.version,
+            app_cls=app_cls,
+            input_type=app_cls._input_type,
+            output_type=app_cls._output_type,
+            allow_override=True,
+        )
+        _register_tasks(app_cls, app_cls._app_name)
+
+    return _reregister
+
+
+@pytest.fixture
 def run_worker(temporal_client, task_queue):
     """Return a factory for async worker context managers.
 

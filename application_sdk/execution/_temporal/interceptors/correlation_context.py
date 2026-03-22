@@ -1,8 +1,16 @@
-"""Correlation context interceptor for Temporal workflows.
+"""Legacy correlation context interceptor for Temporal workflows (v2 backward compat).
 
-Propagates atlan-* correlation context fields, trace_id, and correlation_id from
-workflow arguments to activities via Temporal headers, ensuring all activity logs
-include correlation identifiers for end-to-end observability.
+.. deprecated::
+    This module is preserved solely to support the v2 deprecation shim at
+    ``application_sdk.interceptors.correlation_context``.  It propagates
+    ``atlan-*`` prefixed headers and is **not** registered by ``create_worker()``.
+
+    The v3 replacement is
+    ``application_sdk.execution._temporal.interceptors.correlation_interceptor``,
+    which uses the ``x-correlation-id`` header and is auto-registered by
+    ``create_worker()``.
+
+    Scheduled for removal in **v3.1.0** together with the rest of the v2 shims.
 """
 
 from dataclasses import replace

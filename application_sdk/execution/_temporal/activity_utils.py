@@ -9,6 +9,7 @@ import contextvars
 import inspect
 import os
 import threading
+import warnings
 from datetime import timedelta
 from functools import wraps
 from typing import Any, Callable, TypeVar, cast
@@ -181,6 +182,13 @@ def auto_heartbeater(fn: F) -> F:
         >>> def my_sync_activity():
         ...     cpu_intensive_work()
     """
+
+    warnings.warn(
+        "@auto_heartbeater is deprecated and will be removed in v3.1.0. "
+        "Use @task(auto_heartbeat_seconds=N) instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
     if inspect.iscoroutinefunction(fn):
 

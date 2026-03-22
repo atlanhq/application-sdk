@@ -139,13 +139,28 @@ def _validate_task_signature(
             f"Wrap multiple values in a single Input dataclass."
         )
 
-    # Get type hints
+    # Get type hints.
+    # get_type_hints() resolves string annotations (from 'from __future__ import
+    # annotations' or explicit string literals) using the function's module globals.
+    # Fall back to fn.__annotations__ directly when that resolution fails — this
+    # handles the common case where Input/Output types are locally-scoped (e.g. inside
+    # a test function) and were never string-ified because 'from __future__' was NOT
+    # used; in that case __annotations__ already holds the real type objects.
+    # If the annotations are strings that cannot be resolved, raise a clear error.
     try:
         hints = get_type_hints(fn)
-    except Exception as e:
-        raise TaskContractError(
-            f"Task '{fn_name}' must have type annotations. Could not get type hints: {e}"
-        ) from e
+    except Exception:
+        raw: dict[str, Any] = getattr(fn, "__annotations__", {})
+        unresolvable = [k for k, v in raw.items() if isinstance(v, str)]
+        if unresolvable:
+            raise TaskContractError(
+                f"Task '{fn_name}' has unresolvable annotations for {unresolvable}. "
+                "This usually happens when 'from __future__ import annotations' is "
+                "used alongside Input/Output types that are not defined at module "
+                "level. Move the type definitions to module scope (before the App "
+                "class) or remove 'from __future__ import annotations'."
+            ) from None
+        hints = raw
 
     # Validate input type
     param = params[0]

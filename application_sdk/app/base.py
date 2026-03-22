@@ -1331,7 +1331,7 @@ def _apply_app_registration(
             )
 
             if isinstance(e, NonRetryableError):
-                from temporalio.exceptions import ApplicationError
+                from application_sdk.execution.errors import ApplicationError
 
                 raise ApplicationError(
                     str(e),

@@ -9,10 +9,10 @@ import random
 from typing import Any, Dict
 
 from temporalio import activity
-from temporalio.exceptions import ApplicationError
 
 from application_sdk.clients.redis import RedisClientAsync
 from application_sdk.common.error_codes import ActivityError
+from application_sdk.execution.errors import ApplicationError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)

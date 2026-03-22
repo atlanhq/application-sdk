@@ -195,7 +195,7 @@ def create_activity_from_task(
             from application_sdk.app.base import NonRetryableError
 
             if isinstance(e, NonRetryableError):
-                from temporalio.exceptions import ApplicationError
+                from application_sdk.execution.errors import ApplicationError
 
                 raise ApplicationError(
                     str(e),
