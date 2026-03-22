@@ -179,9 +179,12 @@ class TestPersistMarkerToStorage:
         ) as mock_store:
             mock_store.upload_file = AsyncMock(side_effect=Exception("S3 unavailable"))
 
-            with pytest.raises(Exception, match="S3 unavailable"):
+            with pytest.raises(
+                Exception, match="Failed to upload marker to S3"
+            ) as exc_info:
                 await persist_marker_to_storage(
                     connection_qualified_name="t/c/123",
                     marker_value="2025-01-15T10:00:00Z",
                     application_name="oracle",
                 )
+            assert "S3 unavailable" in str(exc_info.value.__cause__)

@@ -16,9 +16,9 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
         try:
             response: Response = await call_next(request)
-        except Exception as exc:
+        except Exception:
             response = Response(status_code=500)
-            raise exc
+            raise
         finally:
             process_time = time() - start_time
             path = request.url.path

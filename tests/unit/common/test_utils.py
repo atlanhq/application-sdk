@@ -76,7 +76,9 @@ class TestPrepareQuery:
         with patch("application_sdk.common.utils.logger") as mock_logger:
             result = prepare_query(query, workflow_args)
             mock_logger.error.assert_called_once_with(
-                "Error preparing query [SELECT * FROM {normalized_include_regex}]:  Expecting value: line 1 column 1 (char 0)",
+                "Error preparing query",
+                query=query,
+                error_message="Expecting value: line 1 column 1 (char 0)",
                 error_code=CommonError.QUERY_PREPARATION_ERROR.code,
             )
             assert result is None
@@ -442,7 +444,9 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         )
 
         # Should log warning for invalid database name
-        mock_logger.warning.assert_called_with("Invalid database name format: 123db")
+        mock_logger.warning.assert_called_with(
+            "Invalid database name format", db_name="123db"
+        )
         assert result == "'^(valid_db)$'"
 
     @patch("application_sdk.common.utils.logger")
@@ -461,7 +465,7 @@ class TestExtractDatabaseNamesFromIncludeRegex:
 
         # Should log warning for invalid database name format
         mock_logger.warning.assert_called_with(
-            "Invalid database name format: invalid^pattern"
+            "Invalid database name format", db_name="invalid^pattern"
         )
         assert result == "'^(db1|db2)$'"
 
@@ -762,7 +766,9 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         )
 
         # Should log warning for invalid database name
-        mock_logger.warning.assert_called_with("Invalid database name format: 123db")
+        mock_logger.warning.assert_called_with(
+            "Invalid database name format", db_name="123db"
+        )
         assert result == "'^(valid_db)$'"
 
     @patch("application_sdk.common.utils.logger")
@@ -778,8 +784,9 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         )
 
         # Should log warning for invalid database name format
+        # Exclude regex uses pattern= kwarg when pattern has no schema part
         mock_logger.warning.assert_called_with(
-            "Invalid database name format: invalid-pattern"
+            "Invalid database name format", pattern="invalid-pattern"
         )
         assert result == "'^(db1|db2)$'"
 
@@ -816,9 +823,11 @@ def test_read_sql_files_with_multiple_files(tmp_path: Path):
         "VIEWS": "SELECT * FROM views;",
     }
 
-    with patch("glob.glob") as mock_glob, patch(
-        "builtins.open", new_callable=mock_open
-    ) as mock_file_open, patch("os.path.dirname", return_value="/mock/path"):
+    with (
+        patch("glob.glob") as mock_glob,
+        patch("builtins.open", new_callable=mock_open) as mock_file_open,
+        patch("os.path.dirname", return_value="/mock/path"),
+    ):
         # Configure glob to return our mock files
         mock_glob.return_value = [
             os.path.join("/mock/path", file_path) for file_path in mock_files.keys()
@@ -844,8 +853,9 @@ def test_read_sql_files_with_multiple_files(tmp_path: Path):
 
 def test_read_sql_files_with_empty_directory():
     """Test read_sql_files when no SQL files are found."""
-    with patch("glob.glob", return_value=[]), patch(
-        "os.path.dirname", return_value="/mock/path"
+    with (
+        patch("glob.glob", return_value=[]),
+        patch("os.path.dirname", return_value="/mock/path"),
     ):
         result = read_sql_files("/mock/path")
         assert result == {}
@@ -861,9 +871,11 @@ def test_read_sql_files_with_whitespace():
 
     expected_content = "SELECT *\n    FROM tables\n    WHERE id > 0;"
 
-    with patch("glob.glob") as mock_glob, patch(
-        "builtins.open", mock_open(read_data=sql_content)
-    ), patch("os.path.dirname", return_value="/mock/path"):
+    with (
+        patch("glob.glob") as mock_glob,
+        patch("builtins.open", mock_open(read_data=sql_content)),
+        patch("os.path.dirname", return_value="/mock/path"),
+    ):
         mock_glob.return_value = ["/mock/path/queries/test.sql"]
 
         result = read_sql_files("/mock/path")
@@ -884,9 +896,11 @@ def test_read_sql_files_case_sensitivity():
         "MIXED": "mixed case",
     }
 
-    with patch("glob.glob") as mock_glob, patch(
-        "builtins.open", new_callable=mock_open
-    ) as mock_file_open, patch("os.path.dirname", return_value="/mock/path"):
+    with (
+        patch("glob.glob") as mock_glob,
+        patch("builtins.open", new_callable=mock_open) as mock_file_open,
+        patch("os.path.dirname", return_value="/mock/path"),
+    ):
         mock_glob.return_value = [
             os.path.join("/mock/path", file_path) for file_path in mock_files.keys()
         ]

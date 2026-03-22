@@ -65,8 +65,10 @@ class TestStateStore:
         # Return invalid JSON
         mock_get_content.return_value = b"invalid json content"
 
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(Exception) as exc_info:
             await StateStore.get_state("test-id", StateType.WORKFLOWS)
+        # json.JSONDecodeError requires 3-arg constructor; rewrap falls back to RuntimeError
+        assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
 
     @pytest.mark.asyncio
     @patch(
@@ -79,8 +81,9 @@ class TestStateStore:
         """Test get_state propagates object store errors."""
         mock_get_content.side_effect = Exception("Object store connection failed")
 
-        with pytest.raises(Exception, match="Object store connection failed"):
+        with pytest.raises(Exception, match="Failed to extract state") as exc_info:
             await StateStore.get_state("test-id", StateType.WORKFLOWS)
+        assert "Object store connection failed" in str(exc_info.value.__cause__)
 
     @pytest.mark.asyncio
     @patch(
@@ -174,8 +177,9 @@ class TestStateStore:
         """Test save_state propagates get_state failures."""
         mock_get_state.side_effect = Exception("Failed to retrieve existing state")
 
-        with pytest.raises(Exception, match="Failed to retrieve existing state"):
+        with pytest.raises(Exception, match="Failed to store state") as exc_info:
             await StateStore.save_state("key", "value", "test-id", StateType.WORKFLOWS)
+        assert "Failed to retrieve existing state" in str(exc_info.value.__cause__)
 
     @pytest.mark.asyncio
     @patch(
@@ -198,10 +202,11 @@ class TestStateStore:
         mock_upload_file.side_effect = Exception("Upload failed")
 
         with patch("builtins.open", mock_open()):
-            with pytest.raises(Exception, match="Upload failed"):
+            with pytest.raises(Exception, match="Failed to store state") as exc_info:
                 await StateStore.save_state(
                     "key", "value", "test-id", StateType.WORKFLOWS
                 )
+            assert "Upload failed" in str(exc_info.value.__cause__)
 
     def test_build_state_store_path_workflows(self) -> None:
         """Test build_state_store_path for workflows."""

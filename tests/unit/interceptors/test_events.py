@@ -164,5 +164,6 @@ class TestPublishEventActivity:
             new_callable=mock.AsyncMock,
             side_effect=Exception("store down"),
         ):
-            with pytest.raises(Exception, match="store down"):
+            with pytest.raises(Exception, match="Failed to publish event") as exc_info:
                 await publish_event(event_data)
+            assert "store down" in str(exc_info.value.__cause__)

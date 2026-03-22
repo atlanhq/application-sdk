@@ -96,19 +96,14 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
 
         logger.info("Starting workflow execution")
 
-        try:
-            retry_policy = _to_temporal_retry_policy(
-                RetryPolicy(max_attempts=2, backoff_coefficient=2)
-            )
+        retry_policy = _to_temporal_retry_policy(
+            RetryPolicy(max_attempts=2, backoff_coefficient=2)
+        )
 
-            await workflow.execute_activity_method(
-                self.activities_cls.preflight_check,
-                args=[workflow_args],
-                retry_policy=retry_policy,
-                start_to_close_timeout=self.default_start_to_close_timeout,
-                heartbeat_timeout=self.default_heartbeat_timeout,
-            )
-
-        except Exception as e:
-            logger.error(f"Workflow execution failed: {str(e)}", exc_info=True)
-            raise
+        await workflow.execute_activity_method(
+            self.activities_cls.preflight_check,
+            args=[workflow_args],
+            retry_policy=retry_policy,
+            start_to_close_timeout=self.default_start_to_close_timeout,
+            heartbeat_timeout=self.default_heartbeat_timeout,
+        )

@@ -11,13 +11,14 @@ Redis data model:
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
+
+from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # Lua script: Atomic acquire
@@ -163,24 +164,20 @@ class RedisCapacityPool:
         if granted > 0:
             logger.info(
                 "Acquired capacity permits",
-                extra={
-                    "pool": pool_name,
-                    "holder": holder_id,
-                    "requested": requested,
-                    "granted": granted,
-                    "max_permits": self._max_permits,
-                },
+                pool=pool_name,
+                holder=holder_id,
+                requested=requested,
+                granted=granted,
+                max_permits=self._max_permits,
             )
         else:
             logger.warning(
                 "No capacity permits available",
-                extra={
-                    "pool": pool_name,
-                    "holder": holder_id,
-                    "requested": requested,
-                    "min_useful": min_useful,
-                    "max_permits": self._max_permits,
-                },
+                pool=pool_name,
+                holder=holder_id,
+                requested=requested,
+                min_useful=min_useful,
+                max_permits=self._max_permits,
             )
 
         return granted
@@ -200,7 +197,8 @@ class RedisCapacityPool:
 
         logger.info(
             "Released capacity permits",
-            extra={"pool": pool_name, "holder": holder_id},
+            pool=pool_name,
+            holder=holder_id,
         )
 
     async def renew(
@@ -223,7 +221,8 @@ class RedisCapacityPool:
         if not renewed:
             logger.warning(
                 "Failed to renew capacity permits (holder not found)",
-                extra={"pool": pool_name, "holder": holder_id},
+                pool=pool_name,
+                holder=holder_id,
             )
 
         return renewed

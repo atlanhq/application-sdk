@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 from temporalio import activity
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -107,8 +108,9 @@ def build_state_store_path(id: str, state_type: StateType) -> str:
 
     if not resolved_path.startswith(base_path + os.sep) and resolved_path != base_path:
         logger.warning(
-            f"Path traversal attempt detected in state id: {id!r}",
-            extra={"security_event": "path_traversal_blocked"},
+            "Path traversal attempt detected in state id",
+            state_id=id,
+            security_event="path_traversal_blocked",
         )
         raise PathTraversalError("Invalid state id: path traversal detected")
 
@@ -153,17 +155,18 @@ class StateStore:
             )
             if not object_store_content:
                 logger.warning(
-                    f"No state found for {type.value} with id '{id}', returning empty dict"
+                    "No state found, returning empty dict",
+                    state_type=type.value,
+                    state_id=id,
                 )
                 return {}
 
             state = json.loads(object_store_content)
-            logger.info(f"State object retrieved for {id} with type {type}")
+            logger.info("State object retrieved", state_id=id, state_type=str(type))
 
             return state
         except Exception as e:
-            logger.error(f"Failed to extract state: {str(e)}")
-            raise
+            raise rewrap(e, "Failed to extract state") from e
 
     @classmethod
     async def save_state(cls, key: str, value: Any, id: str, type: StateType) -> None:
@@ -220,9 +223,10 @@ class StateStore:
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
+        except PathTraversalError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to store state: {str(e)}")
-            raise e
+            raise rewrap(e, "Failed to store state") from e
 
     @classmethod
     async def save_state_object(
@@ -274,7 +278,9 @@ class StateStore:
         """
         try:
             logger.info(
-                f"Saving state object in object store for {id} with type {type}"
+                "Saving state object in object store",
+                state_id=id,
+                state_type=str(type),
             )
             # get the current state from object store
             current_state = await cls.get_state(id, type)
@@ -296,9 +302,12 @@ class StateStore:
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
             logger.info(
-                f"State object created in object store for {id} with type {type}"
+                "State object created in object store",
+                state_id=id,
+                state_type=str(type),
             )
             return current_state
+        except PathTraversalError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to store state: {str(e)}")
-            raise e
+            raise rewrap(e, "Failed to store state") from e

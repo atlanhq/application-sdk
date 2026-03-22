@@ -27,6 +27,7 @@ from loguru import logger
 
 from application_sdk.app.base import App
 from application_sdk.app.task import task
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.templates.contracts.sql_query import (
     QueryBatchInput,
     QueryBatchOutput,
@@ -129,7 +130,6 @@ class SqlQueryExtractor(App):
             )
 
         except Exception as e:
-            logger.error(
-                "SQL query extraction failed", workflow_id=workflow_id, error=str(e)
-            )
-            raise
+            raise rewrap(
+                e, f"SQL query extraction failed (workflow_id={workflow_id})"
+            ) from e

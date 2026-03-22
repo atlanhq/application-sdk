@@ -17,7 +17,7 @@ from datetime import timedelta
 from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
-from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
+from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.common import VersioningBehavior
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.types import CallableType, ClassType
@@ -221,8 +221,8 @@ class TemporalWorkflowClient(WorkflowClient):
             )
             await EventStore.publish_event(event)
             logger.info("Published token refresh event")
-        except Exception as e:
-            logger.warning(f"Failed to publish token refresh event: {e}")
+        except Exception:
+            logger.warning("Failed to publish token refresh event", exc_info=True)
 
     async def _token_refresh_loop(self) -> None:
         """Background loop that refreshes the authentication token dynamically."""
@@ -249,8 +249,8 @@ class TemporalWorkflowClient(WorkflowClient):
             except asyncio.CancelledError:
                 logger.info("Token refresh loop cancelled")
                 break
-            except Exception as e:
-                logger.error(f"Error in token refresh loop: {e}")
+            except Exception:
+                logger.error("Error in token refresh loop", exc_info=True)
                 # Continue the loop even if there's an error, but wait a bit
                 await asyncio.sleep(60)  # Wait 1 minute before retrying
 
@@ -283,7 +283,8 @@ class TemporalWorkflowClient(WorkflowClient):
         # Configure Temporal runtime with Prometheus metrics (process-level singleton)
         connection_options["runtime"] = self._get_prometheus_runtime()
         logger.info(
-            f"Temporal Prometheus metrics enabled on {TEMPORAL_PROMETHEUS_BIND_ADDRESS}"
+            "Temporal Prometheus metrics enabled",
+            bind_address=TEMPORAL_PROMETHEUS_BIND_ADDRESS,
         )
 
         # Create the client
@@ -297,7 +298,8 @@ class TemporalWorkflowClient(WorkflowClient):
             )
             self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
             logger.info(
-                f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"
+                "Started token refresh loop",
+                initial_interval_s=self._token_refresh_interval,
             )
 
     async def close(self) -> None:
@@ -351,35 +353,33 @@ class TemporalWorkflowClient(WorkflowClient):
             await StateStore.save_state_object(
                 id=workflow_id, value=workflow_args, type=StateType.WORKFLOWS
             )
-            logger.info(f"Created workflow config with ID: {workflow_id}")
-        try:
-            # Pass the full workflow_args to the workflow
-            if not self.client:
-                raise ValueError("Client is not loaded")
+            logger.info("Created workflow config", workflow_id=workflow_id)
+        # Pass the full workflow_args to the workflow
+        if not self.client:
+            raise ValueError("Client is not loaded")
 
-            correlation_fields = {
-                k: v
-                for k, v in workflow_args.items()
-                if k in ("correlation_id", "trace_id") or k.startswith("atlan-")
-            }
-            handle = await self.client.start_workflow(
-                workflow_class,  # type: ignore
-                args=[{"workflow_id": workflow_id, **correlation_fields}],
-                id=workflow_id,
-                task_queue=self.worker_task_queue,
-                cron_schedule=workflow_args.get("cron_schedule", ""),
-                execution_timeout=WORKFLOW_MAX_TIMEOUT_HOURS,
-            )
+        correlation_fields = {
+            k: v
+            for k, v in workflow_args.items()
+            if k in ("correlation_id", "trace_id") or k.startswith("atlan-")
+        }
+        handle = await self.client.start_workflow(
+            workflow_class,  # type: ignore
+            args=[{"workflow_id": workflow_id, **correlation_fields}],
+            id=workflow_id,
+            task_queue=self.worker_task_queue,
+            cron_schedule=workflow_args.get("cron_schedule", ""),
+            execution_timeout=WORKFLOW_MAX_TIMEOUT_HOURS,
+        )
 
-            logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
-            return {
-                "workflow_id": handle.id,
-                "run_id": handle.result_run_id,
-                "handle": handle,  # Return the handle so it can be used to get the result
-            }
-        except WorkflowFailureError as e:
-            logger.error(f"Workflow failure: {e}")
-            raise e
+        logger.info(
+            "Workflow started", workflow_id=handle.id, run_id=handle.result_run_id
+        )
+        return {
+            "workflow_id": handle.id,
+            "run_id": handle.result_run_id,
+            "handle": handle,  # Return the handle so it can be used to get the result
+        }
 
     async def stop_workflow(self, workflow_id: str, run_id: str) -> None:
         """Stop a workflow execution.
@@ -400,7 +400,12 @@ class TemporalWorkflowClient(WorkflowClient):
             )
             await workflow_handle.terminate()
         except Exception as e:
-            logger.error(f"Error terminating workflow {workflow_id} {run_id}: {e}")
+            logger.error(
+                "Error terminating workflow",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                exc_info=True,
+            )
             raise Exception(f"Error terminating workflow {workflow_id} {run_id}: {e}")
 
     def create_worker(
@@ -449,7 +454,8 @@ class TemporalWorkflowClient(WorkflowClient):
             )
             self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
             logger.info(
-                f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"
+                "Started token refresh loop",
+                initial_interval_s=self._token_refresh_interval,
             )
 
         # Start with provided activities and add system activities
@@ -486,8 +492,9 @@ class TemporalWorkflowClient(WorkflowClient):
                 default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
             )
             logger.info(
-                f"Worker Deployment versioning enabled: "
-                f"deployment={TEMPORAL_DEPLOYMENT_NAME}, build_id={TEMPORAL_BUILD_ID}"
+                "Worker Deployment versioning enabled",
+                deployment=TEMPORAL_DEPLOYMENT_NAME,
+                build_id=TEMPORAL_BUILD_ID,
             )
         elif TEMPORAL_BUILD_ID:
             deployment_config = WorkerDeploymentConfig(
@@ -498,7 +505,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 use_worker_versioning=True,
                 default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
             )
-            logger.info(f"Worker versioning enabled with build_id={TEMPORAL_BUILD_ID}")
+            logger.info("Worker versioning enabled", build_id=TEMPORAL_BUILD_ID)
 
         # Build interceptors list
         interceptors = [
@@ -518,9 +525,9 @@ class TemporalWorkflowClient(WorkflowClient):
 
                 interceptors.append(ActivityFailureLoggingInterceptor())
                 logger.info("Activity failure logging interceptor enabled")
-            except ImportError as e:
+            except ImportError:
                 logger.warning(
-                    f"Failed to load activity failure logging interceptor: {e}"
+                    "Failed to load activity failure logging interceptor", exc_info=True
                 )
 
         return Worker(
@@ -596,7 +603,7 @@ class TemporalWorkflowClient(WorkflowClient):
                     "status": "NOT_FOUND",
                     "execution_duration_seconds": 0,
                 }
-            logger.error(f"Error getting workflow status: {e}")
+            logger.error("Error getting workflow status", exc_info=True)
             raise Exception(
                 f"Error getting workflow status for {workflow_id} {run_id}: {e}"
             )

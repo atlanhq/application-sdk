@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     import daft
     import pandas as pd
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.io import Reader, Writer
 
 logger = get_logger(__name__)
@@ -155,7 +156,7 @@ class JsonFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(json_files)
-            logger.info(f"Reading {len(json_files)} JSON files in batches")
+            logger.info("Reading JSON files in batches", file_count=len(json_files))
 
             for json_file in json_files:
                 json_reader_obj = pd.read_json(
@@ -166,8 +167,7 @@ class JsonFileReader(Reader):
                 for chunk in json_reader_obj:
                     yield chunk
         except Exception as e:
-            logger.error(f"Error reading batched data from JSON: {str(e)}")
-            raise
+            raise rewrap(e, "Error reading batched data from JSON") from e
 
     async def _get_dataframe(self) -> "pd.DataFrame":
         """Read the data from the JSON files and return as a single pandas dataframe."""
@@ -180,7 +180,9 @@ class JsonFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(json_files)
-            logger.info(f"Reading {len(json_files)} JSON files as pandas dataframe")
+            logger.info(
+                "Reading JSON files as pandas dataframe", file_count=len(json_files)
+            )
 
             return pd.concat(
                 (pd.read_json(json_file, lines=True) for json_file in json_files),
@@ -188,8 +190,7 @@ class JsonFileReader(Reader):
             )
 
         except Exception as e:
-            logger.error(f"Error reading data from JSON: {str(e)}")
-            raise
+            raise rewrap(e, "Error reading data from JSON") from e
 
     async def _get_batched_daft_dataframe(
         self,
@@ -204,14 +205,15 @@ class JsonFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(json_files)
-            logger.info(f"Reading {len(json_files)} JSON files as daft batches")
+            logger.info(
+                "Reading JSON files as daft batches", file_count=len(json_files)
+            )
 
             # Yield each discovered file as separate batch with chunking
             for json_file in json_files:
                 yield daft.read_json(json_file, _chunk_size=self.chunk_size)
         except Exception as e:
-            logger.error(f"Error reading batched data from JSON using daft: {str(e)}")
-            raise
+            raise rewrap(e, "Error reading batched data from JSON using daft") from e
 
     async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Read the data from the JSON files and return as a single daft dataframe."""
@@ -224,13 +226,12 @@ class JsonFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(json_files)
-            logger.info(f"Reading {len(json_files)} JSON files with daft")
+            logger.info("Reading JSON files with daft", file_count=len(json_files))
 
             # Use the discovered/downloaded files directly
             return daft.read_json(json_files)
         except Exception as e:
-            logger.error(f"Error reading data from JSON using daft: {str(e)}")
-            raise
+            raise rewrap(e, "Error reading data from JSON using daft") from e
 
 
 class JsonFileWriter(Writer):
@@ -431,7 +432,7 @@ class JsonFileWriter(Writer):
                 labels={"type": "daft", "error": str(e)},
                 description="Number of errors while writing to JSON files",
             )
-            logger.error(f"Error writing daft dataframe to json: {str(e)}")
+            logger.error("Error writing daft dataframe to json", exc_info=True)
             raise
 
     async def _flush_daft_buffer(self, buffer: List[str], chunk_part: int):

@@ -39,7 +39,6 @@ entirely.
 from __future__ import annotations
 
 import hashlib
-import logging
 import os
 import tempfile
 from pathlib import Path
@@ -50,7 +49,9 @@ from application_sdk.contracts.types import FileReference
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 def _make_storage_path(ref: FileReference, *, output_path: str | None = None) -> str:
@@ -110,7 +111,9 @@ def _write_local_sidecar(local_path: str, sha256: str) -> None:
     try:
         Path(local_path + ".sha256").write_text(sha256)
     except Exception:
-        pass  # sidecar is best-effort; don't fail the main operation
+        logger.warning(
+            "Sidecar write failed (best-effort, continuing without)", exc_info=True
+        )
 
 
 async def persist_file_reference(
@@ -184,7 +187,10 @@ async def persist_file_reference(
                     file_key + ".sha256", sha256.encode(), store, normalize=False
                 )
             except Exception:
-                pass  # sidecar is best-effort
+                logger.warning(
+                    "Sidecar write failed (best-effort, continuing without)",
+                    exc_info=True,
+                )
 
         return FileReference(
             local_path=ref.local_path,
@@ -206,7 +212,9 @@ async def persist_file_reference(
                 storage_path + ".sha256", sha256.encode(), store, normalize=False
             )
         except Exception:
-            pass  # sidecar is best-effort; don't fail the persist
+            logger.warning(
+                "Sidecar write failed (best-effort, continuing without)", exc_info=True
+            )
 
         # Write local sidecar so this worker can skip re-downloads immediately.
         _write_local_sidecar(ref.local_path, sha256)

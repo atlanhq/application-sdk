@@ -63,8 +63,9 @@ def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
 
     if not connection_id.isdigit():
         logger.warning(
-            f"Connection ID '{connection_id}' from '{connection_qualified_name}' "
-            f"is not purely numeric. Using it anyway."
+            "Connection ID is not purely numeric, using it anyway",
+            connection_id=connection_id,
+            connection_qualified_name=connection_qualified_name,
         )
 
     return connection_id
@@ -104,7 +105,9 @@ def get_persistent_s3_prefix(
     )
 
     logger.debug(
-        f"S3 prefix for connection '{connection_qualified_name}' -> '{s3_prefix}'"
+        "S3 prefix for connection",
+        connection_qualified_name=connection_qualified_name,
+        s3_prefix=s3_prefix,
     )
     return s3_prefix
 
@@ -136,7 +139,7 @@ def normalize_marker_timestamp(marker: str) -> str:
     """Remove nanoseconds from marker timestamp (e.g., .123456789Z -> Z)."""
     normalized = re.sub(r"\.\d{1,9}(?=Z$)", "", marker)
     if normalized != marker:
-        logger.info(f"Normalized marker: '{marker}' → '{normalized}'")
+        logger.info("Normalized marker", original=marker, normalized=normalized)
     return normalized
 
 
@@ -169,7 +172,7 @@ def prepone_marker_timestamp(marker: str, hours: float) -> str:
     # Format back to string
     adjusted_str = adjusted.strftime(MARKER_TIMESTAMP_FORMAT)
 
-    logger.info(f"Preponed marker by {hours}h: '{marker}' → '{adjusted_str}'")
+    logger.info("Preponed marker", hours=hours, original=marker, adjusted=adjusted_str)
     return adjusted_str
 
 
@@ -193,7 +196,7 @@ async def download_marker_from_s3(
     )
     local_marker_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Downloading marker from S3: {marker_s3_key}")
+    logger.info("Downloading marker from S3", marker_s3_key=marker_s3_key)
     try:
         await ObjectStore.download_file(
             source=marker_s3_key,
@@ -202,13 +205,13 @@ async def download_marker_from_s3(
         )
         if local_marker_path.exists() and local_marker_path.stat().st_size > 0:
             marker = local_marker_path.read_text(encoding="utf-8").strip()
-            logger.info(f"Marker downloaded: {marker}")
+            logger.info("Marker downloaded", marker=marker)
             return marker
         logger.info("Marker file downloaded but empty")
     except FileNotFoundError:
         logger.info("Marker file not found in S3 (first incremental run)")
-    except Exception as e:
-        logger.warning(f"Failed to download marker from S3: {e}")
+    except Exception:
+        logger.warning("Failed to download marker from S3", exc_info=True)
     return None
 
 

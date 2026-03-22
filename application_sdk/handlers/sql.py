@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from packaging import version
 
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.utils import (
     parse_filter_input,
     prepare_query,
@@ -97,9 +98,8 @@ class BaseSQLHandler(HandlerInterface):
                         self.schema_result_key: row[self.schema_alias_key],
                     }
                 )
-        except Exception as exc:
-            logger.error(f"Failed to fetch metadata: {str(exc)}")
-            raise exc
+        except Exception as e:
+            raise rewrap(e, "Failed to fetch metadata") from e
         return result
 
     async def test_auth(self) -> bool:
@@ -113,11 +113,8 @@ class BaseSQLHandler(HandlerInterface):
             df = await self.sql_client.get_results(self.test_authentication_sql)
             df.to_dict(orient="records")
             return True
-        except Exception as exc:
-            logger.error(
-                f"Failed to authenticate with the given credentials: {str(exc)}"
-            )
-            raise exc
+        except Exception as e:
+            raise rewrap(e, "Failed to authenticate with the given credentials") from e
 
     async def fetch_metadata(
         self,
@@ -150,8 +147,7 @@ class BaseSQLHandler(HandlerInterface):
             else:
                 raise ValueError(f"Invalid metadata type: {metadata_type}")
         except Exception as e:
-            logger.error(f"Failed to fetch metadata: {str(e)}")
-            raise
+            raise rewrap(e, "Failed to fetch metadata") from e
 
     async def fetch_databases(self) -> List[Dict[str, str]]:
         """Fetch only database information using metadata_sql."""
@@ -215,8 +211,8 @@ class BaseSQLHandler(HandlerInterface):
                 )
 
             logger.info("Preflight check completed successfully")
-        except Exception as exc:
-            logger.error(f"Error during preflight check {exc}", exc_info=True)
+        except Exception:
+            logger.error("Error during preflight check", exc_info=True)
         return results
 
     async def check_schemas_and_databases(
@@ -395,7 +391,8 @@ class BaseSQLHandler(HandlerInterface):
                         # Handle tuple version info (like (15, 4))
                         client_version = ".".join(str(x) for x in version_info)
                         logger.info(
-                            f"Detected client version from dialect: {client_version}"
+                            "Detected client version from dialect",
+                            client_version=client_version,
                         )
 
             # If dialect version not available and client_version_sql is defined, use SQL query
@@ -408,11 +405,13 @@ class BaseSQLHandler(HandlerInterface):
                 if version_match:
                     client_version = version_match.group(1)
                     logger.info(
-                        f"Detected client version from SQL query: {client_version}"
+                        "Detected client version from SQL query",
+                        client_version=client_version,
                     )
                 else:
                     logger.warning(
-                        f"Could not extract version number from: {version_string}"
+                        "Could not extract version number from string",
+                        version_string=version_string,
                     )
 
             # If no client version could be determined
@@ -427,7 +426,7 @@ class BaseSQLHandler(HandlerInterface):
             # If no minimum version requirement is set, just report the client version
             if not min_version:
                 logger.info(
-                    f"No minimum version requirement set. Client version: {client_version}"
+                    "No minimum version requirement set", client_version=client_version
                 )
                 return {
                     "success": True,
@@ -448,7 +447,7 @@ class BaseSQLHandler(HandlerInterface):
                 else "",
             }
         except Exception as exc:
-            logger.error(f"Error during client version check: {exc}", exc_info=True)
+            logger.error("Error during client version check", exc_info=True)
             return {
                 "success": False,
                 "successMessage": "",

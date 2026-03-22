@@ -50,8 +50,8 @@ class _TaskFailureLoggingActivityInboundInterceptor(ActivityInboundInterceptor):
         try:
             log_attrs = self._collect_temporal_context()
             logger.error("Temporal activity failed", exc_info=True, **log_attrs)
-        except Exception as log_error:
-            logger.warning(f"Failed to log activity failure context: {log_error}")
+        except Exception:
+            logger.warning("Failed to log activity failure context", exc_info=True)
 
     def _collect_temporal_context(self) -> dict[str, Any]:
         """Collect Temporal activity context for structured logging.
@@ -83,8 +83,8 @@ class _TaskFailureLoggingActivityInboundInterceptor(ActivityInboundInterceptor):
                 attrs["temporal.activity.heartbeat_timeout"] = str(
                     info.heartbeat_timeout
                 )
-        except Exception as info_error:
-            logger.warning(f"Failed to extract activity info: {info_error}")
+        except Exception:
+            logger.warning("Failed to extract activity info", exc_info=True)
 
         try:
             corr_ctx = correlation_context.get()
@@ -92,8 +92,8 @@ class _TaskFailureLoggingActivityInboundInterceptor(ActivityInboundInterceptor):
                 tenant_id = corr_ctx.get("atlan-tenant-id", "")
                 if tenant_id:
                     attrs["tenant.id"] = tenant_id
-        except Exception as ctx_error:
-            logger.warning(f"Failed to extract correlation context: {ctx_error}")
+        except Exception:
+            logger.warning("Failed to extract correlation context", exc_info=True)
 
         return attrs
 

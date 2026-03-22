@@ -66,13 +66,16 @@ class MCPServer:
             mcp_metadata: Optional[MCPMetadata] = getattr(f, MCP_METADATA_KEY, None)
             if not mcp_metadata:
                 self.logger.info(
-                    f"No MCP metadata found on activity method {f.__name__}. Skipping tool registration"
+                    "No MCP metadata found on activity method, skipping tool registration",
+                    method=f.__name__,
                 )
                 continue
 
             if mcp_metadata.visible:
                 self.logger.info(
-                    f"Registering tool {mcp_metadata.name} with description: {mcp_metadata.description}"
+                    "Registering MCP tool",
+                    tool_name=mcp_metadata.name,
+                    description=mcp_metadata.description,
                 )
                 self.server.tool(
                     f,
@@ -83,11 +86,12 @@ class MCPServer:
                 )
             else:
                 self.logger.info(
-                    f"Tool {mcp_metadata.name} is marked as not visible. Skipping tool registration"
+                    "Tool is marked as not visible, skipping registration",
+                    tool_name=mcp_metadata.name,
                 )
 
         tools = await self.server.get_tools()
-        self.logger.info(f"Registered {len(tools)} tools: {list(tools.keys())}")
+        self.logger.info("Registered tools", count=len(tools), tools=list(tools.keys()))
 
     async def register_tools_from_registry(self, app_name: str) -> None:
         """Discover @mcp_tool-decorated tasks via the v3 TaskRegistry.
@@ -110,13 +114,16 @@ class MCPServer:
             )
             if not mcp_metadata:
                 self.logger.info(
-                    f"No MCP metadata found on task {task_meta.name}. Skipping tool registration"
+                    "No MCP metadata found on task, skipping tool registration",
+                    task_name=task_meta.name,
                 )
                 continue
 
             if mcp_metadata.visible:
                 self.logger.info(
-                    f"Registering tool {mcp_metadata.name} with description: {mcp_metadata.description}"
+                    "Registering MCP tool",
+                    tool_name=mcp_metadata.name,
+                    description=mcp_metadata.description,
                 )
                 self.server.tool(
                     task_meta.func,
@@ -127,12 +134,15 @@ class MCPServer:
                 )
             else:
                 self.logger.info(
-                    f"Tool {mcp_metadata.name} is marked as not visible. Skipping tool registration"
+                    "Tool is marked as not visible, skipping registration",
+                    tool_name=mcp_metadata.name,
                 )
 
         tools = await self.server.get_tools()
         self.logger.info(
-            f"Registered {len(tools)} MCP tools from registry: {list(tools.keys())}"
+            "Registered MCP tools from registry",
+            count=len(tools),
+            tools=list(tools.keys()),
         )
 
     async def get_http_app(self) -> StarletteWithLifespan:

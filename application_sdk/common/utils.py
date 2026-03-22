@@ -71,7 +71,7 @@ def extract_database_names_from_regex_common(
                 if require_wildcard_schema:
                     # For exclude regex, we need at least 2 parts and schema must be wildcard
                     if len(parts) < 2:
-                        logger.warning(f"Invalid database name format: {pattern}")
+                        logger.warning("Invalid database name format", pattern=pattern)
                         continue
                     db_name = parts[0].strip()
                     schema_part = parts[1].strip()
@@ -92,18 +92,22 @@ def extract_database_names_from_regex_common(
                 if re.match(r"^[a-zA-Z_][a-zA-Z0-9_$-]*$", db_name):
                     database_names.add(db_name)
                 else:
-                    logger.warning(f"Invalid database name format: {db_name}")
-            except Exception as e:
-                logger.warning(f"Error processing pattern '{pattern}': {str(e)}")
+                    logger.warning("Invalid database name format", db_name=db_name)
+            except Exception:
+                logger.warning(
+                    "Error processing pattern", pattern=pattern, exc_info=True
+                )
                 continue
 
         if not database_names:
             return empty_default
         return f"'^({'|'.join(sorted(database_names))})$'"
 
-    except Exception as e:
+    except Exception:
         logger.error(
-            f"Error extracting database names from regex '{normalized_regex}': {str(e)}"
+            "Error extracting database names from regex",
+            normalized_regex=normalized_regex,
+            exc_info=True,
         )
         # Return appropriate default based on regex type
         return empty_default
@@ -243,7 +247,9 @@ def prepare_query(
         # Extract the original error message from the CommonError
         error_message = str(e).split(": ", 1)[-1] if ": " in str(e) else str(e)
         logger.error(
-            f"Error preparing query [{query}]:  {error_message}",
+            "Error preparing query",
+            query=query,
+            error_message=error_message,
             error_code=CommonError.QUERY_PREPARATION_ERROR.code,
         )
         return None
@@ -312,8 +318,7 @@ def parse_filter_input(
         try:
             return json.loads(filter_input)
         except json.JSONDecodeError as e:
-            logger.warning(f"Invalid filter JSON: '{filter_input}', error: {str(e)}")
-            raise CommonError(f"Invalid filter JSON: {str(e)}")
+            raise CommonError(f"Invalid filter JSON: {str(e)}") from e
 
 
 def prepare_filters(

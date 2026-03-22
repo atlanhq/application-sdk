@@ -20,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterator, Optional, Set
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.incremental.models import EntityType, TableScope
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnection,
@@ -191,9 +192,8 @@ def get_current_table_scope(
             )
 
     except Exception as e:
-        logger.error("Failed to load table scope: %s", e)
         close_scope(scope)
-        raise
+        raise rewrap(e, "Failed to load table scope") from e
 
     return scope
 

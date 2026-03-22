@@ -126,9 +126,10 @@ async def test_preflight_check_success(
     valid_mapping = {first_entry["TABLE_CATALOG"]: [first_entry["TABLE_SCHEMA"]]}
     payload = {"metadata": {"include-filter": json.dumps(valid_mapping)}}
 
-    with patch.object(handler, "tables_check") as mock_tables_check, patch.object(
-        handler, "check_client_version"
-    ) as mock_client_version:
+    with (
+        patch.object(handler, "tables_check") as mock_tables_check,
+        patch.object(handler, "check_client_version") as mock_client_version,
+    ):
         mock_tables_check.return_value = {
             "success": True,
             "successMessage": "Tables check successful",
@@ -290,9 +291,10 @@ async def test_preflight_check_version_failure(
     payload = {"metadata": {"include-filter": json.dumps(valid_mapping)}}
 
     # Tables check succeeds but version check fails
-    with patch.object(handler, "tables_check") as mock_tables_check, patch.object(
-        handler, "check_client_version"
-    ) as mock_client_version:
+    with (
+        patch.object(handler, "tables_check") as mock_tables_check,
+        patch.object(handler, "check_client_version") as mock_client_version,
+    ):
         mock_tables_check.return_value = {
             "success": True,
             "successMessage": "Tables check successful",

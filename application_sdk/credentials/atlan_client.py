@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
+
+from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
     from application_sdk.credentials.ref import CredentialRef
     from application_sdk.credentials.types import Credential
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Well-known state key for handing off a validated AsyncAtlanClient from
 # validate() to the first get_or_create_async_atlan_client() call.
@@ -35,10 +36,8 @@ def create_async_atlan_client(cred: "Credential") -> "object":
 
     logger.debug(
         "creating AsyncAtlanClient",
-        extra={
-            "credential_type": type(cred).__name__,
-            "base_url": getattr(cred, "base_url", None),
-        },
+        credential_type=type(cred).__name__,
+        base_url=getattr(cred, "base_url", None),
     )
     if isinstance(cred, AtlanApiToken):
         return AsyncAtlanClient(base_url=cred.base_url, api_key=cred.token)
@@ -96,7 +95,7 @@ class AtlanClientMixin:
         if cached is not None:
             logger.debug(
                 "reusing cached Atlan async client",
-                extra={"credential_name": credential.name},
+                credential_name=credential.name,
             )
             return cached
 
@@ -107,7 +106,7 @@ class AtlanClientMixin:
             self.app_state.set(cache_key, validated)  # type: ignore[attr-defined]
             logger.debug(
                 "reusing validated Atlan async client",
-                extra={"credential_name": credential.name},
+                credential_name=credential.name,
             )
             return validated
 
@@ -117,9 +116,7 @@ class AtlanClientMixin:
         self.app_state.set(cache_key, client)  # type: ignore[attr-defined]
         logger.debug(
             "Atlan async client created and cached",
-            extra={
-                "credential_name": credential.name,
-                "credential_type": type(cred).__name__,
-            },
+            credential_name=credential.name,
+            credential_type=type(cred).__name__,
         )
         return client

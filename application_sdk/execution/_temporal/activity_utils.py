@@ -16,6 +16,7 @@ from typing import Any, Callable, TypeVar, cast
 
 from temporalio import activity
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import (
     APPLICATION_NAME,
     TEMPORARY_PATH,
@@ -49,8 +50,7 @@ def get_workflow_id() -> str:
     try:
         return activity.info().workflow_id
     except Exception as e:
-        logger.error("Failed to get workflow id", exc_info=e)
-        raise Exception("Failed to get workflow id")
+        raise rewrap(e, "Failed to get workflow id") from e
 
 
 def get_workflow_run_id() -> str:
@@ -58,8 +58,7 @@ def get_workflow_run_id() -> str:
     try:
         return activity.info().workflow_run_id
     except Exception as e:
-        logger.error("Failed to get workflow run id", exc_info=e)
-        raise Exception("Failed to get workflow run id")
+        raise rewrap(e, "Failed to get workflow run id") from e
 
 
 def build_output_path() -> str:
@@ -200,9 +199,6 @@ def auto_heartbeater(fn: F) -> F:
             )
             try:
                 return await fn(*args, **kwargs)
-            except Exception as e:
-                logger.error("Error in activity: %s", e, exc_info=e)
-                raise
             finally:
                 heartbeat_task.cancel()
                 await asyncio.wait([heartbeat_task])
@@ -229,9 +225,6 @@ def auto_heartbeater(fn: F) -> F:
             heartbeat_thread.start()
             try:
                 return fn(*args, **kwargs)
-            except Exception as e:
-                logger.error("Error in activity: %s", e, exc_info=e)
-                raise
             finally:
                 stop_event.set()
                 heartbeat_thread.join(timeout=5)

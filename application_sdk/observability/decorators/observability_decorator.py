@@ -32,7 +32,10 @@ def _record_success_observability(
 
     # Debug logging before recording trace
     logger.debug(
-        f"Recording success trace for {func_name} with trace_id={trace_id}, span_id={span_id}"
+        "Recording success trace",
+        func_name=func_name,
+        trace_id=trace_id,
+        span_id=span_id,
     )
 
     try:
@@ -51,12 +54,12 @@ def _record_success_observability(
             events=[{"name": f"{func_name}_success", "timestamp": time.time()}],
             duration_ms=duration_ms,
         )
-        logger.debug(f"Successfully recorded trace for {func_name}")
-    except Exception as trace_error:
-        logger.error(f"Failed to record trace for {func_name}: {str(trace_error)}")
+        logger.debug("Successfully recorded trace", func_name=func_name)
+    except Exception:
+        logger.error("Failed to record trace", exc_info=True, func_name=func_name)
 
     # Debug logging before recording metric
-    logger.debug(f"Recording success metric for {func_name}")
+    logger.debug("Recording success metric", func_name=func_name)
 
     try:
         # Record success metric
@@ -68,12 +71,14 @@ def _record_success_observability(
             description=f"Successful {func_name}",
             unit="count",
         )
-        logger.debug(f"Successfully recorded metric for {func_name}")
-    except Exception as metric_error:
-        logger.error(f"Failed to record metric for {func_name}: {str(metric_error)}")
+        logger.debug("Successfully recorded metric", func_name=func_name)
+    except Exception:
+        logger.error("Failed to record metric", exc_info=True, func_name=func_name)
 
     # Log completion
-    logger.debug(f"Completed function {func_name} in {duration_ms:.2f}ms")
+    logger.debug(
+        "Completed function", func_name=func_name, duration_ms=round(duration_ms, 2)
+    )
 
 
 def _record_error_observability(
@@ -92,7 +97,7 @@ def _record_error_observability(
     duration_ms = (time.time() - start_time) * 1000
 
     # Debug logging for error case
-    logger.error(f"Error in function {func_name}: {str(error)}", exc_info=error)
+    logger.error("Error in function", exc_info=error, func_name=func_name)
 
     try:
         # Record failure trace
@@ -116,11 +121,9 @@ def _record_error_observability(
             ],
             duration_ms=duration_ms,
         )
-        logger.debug(f"Successfully recorded error trace for {func_name}")
-    except Exception as trace_error:
-        logger.error(
-            f"Failed to record error trace for {func_name}: {str(trace_error)}"
-        )
+        logger.debug("Successfully recorded error trace", func_name=func_name)
+    except Exception:
+        logger.error("Failed to record error trace", exc_info=True, func_name=func_name)
 
     try:
         # Record failure metric
@@ -132,14 +135,14 @@ def _record_error_observability(
             description=f"Failed {func_name}",
             unit="count",
         )
-        logger.debug(f"Successfully recorded error metric for {func_name}")
-    except Exception as metric_error:
+        logger.debug("Successfully recorded error metric", func_name=func_name)
+    except Exception:
         logger.error(
-            f"Failed to record error metric for {func_name}: {str(metric_error)}"
+            "Failed to record error metric", exc_info=True, func_name=func_name
         )
 
     # Log error
-    logger.error(f"Error in {func_name}: {str(error)}", exc_info=error)
+    logger.error("Error in function", exc_info=error, func_name=func_name)
 
 
 def observability(
@@ -189,7 +192,9 @@ def observability(
         is_async = inspect.iscoroutinefunction(func)
 
         # Debug logging for function decoration
-        actual_logger.debug(f"Decorating function {func_name} (async={is_async})")
+        actual_logger.debug(
+            "Decorating function", func_name=func_name, is_async=is_async
+        )
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> T:
@@ -200,7 +205,7 @@ def observability(
 
             try:
                 # Log start of operation
-                actual_logger.debug(f"Starting async function {func_name}")
+                actual_logger.debug("Starting async function", func_name=func_name)
 
                 # Execute the function
                 result = await func(*args, **kwargs)
@@ -245,7 +250,7 @@ def observability(
 
             try:
                 # Log start of operation
-                actual_logger.debug(f"Starting sync function {func_name}")
+                actual_logger.debug("Starting sync function", func_name=func_name)
 
                 # Execute the function
                 result = func(*args, **kwargs)

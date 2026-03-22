@@ -15,6 +15,7 @@ from typing import Any, Dict
 from dapr.clients import DaprClient
 
 from application_sdk.common.error_codes import CommonError
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import (
     DEPLOYMENT_NAME,
     DEPLOYMENT_SECRET_PATH,
@@ -116,11 +117,13 @@ class SecretStore:
                     else credential_guid
                 )
                 try:
-                    logger.debug(f"Fetching multi-key secret from '{key_to_fetch}'")
+                    logger.debug("Fetching multi-key secret", key=key_to_fetch)
                     secret_data = cls.get_secret(secret_key=key_to_fetch)
-                except Exception as e:
+                except Exception:
                     logger.warning(
-                        f"Failed to fetch secret bundle '{key_to_fetch}': {e}"
+                        "Failed to fetch secret bundle",
+                        key=key_to_fetch,
+                        exc_info=True,
                     )
 
             # Single-key mode → per-field secret lookup
@@ -138,7 +141,11 @@ class SecretStore:
             # Run async operations directly
             return await _get_credentials_async(credential_guid)
         except Exception as e:
-            logger.error(f"Error resolving credentials for {credential_guid}: {str(e)}")
+            logger.error(
+                "Error resolving credentials",
+                credential_guid=credential_guid,
+                exc_info=True,
+            )
             raise CommonError(
                 CommonError.CREDENTIALS_RESOLUTION_ERROR,
                 f"Failed to resolve credentials: {str(e)}",
@@ -172,8 +179,8 @@ class SecretStore:
                             if v is None or v == "":
                                 continue
                             collected[k] = v
-                except Exception as e:
-                    logger.debug(f"Skipping '{field}' → '{value}' ({e})")
+                except Exception:
+                    logger.debug("Skipping single-key field", field=field)
             elif field == "extra" and isinstance(value, dict):
                 # Recursively process string values in the extra dictionary
                 for extra_key, extra_value in value.items():
@@ -185,9 +192,10 @@ class SecretStore:
                                     if v is None or v == "":
                                         continue
                                     collected[k] = v
-                        except Exception as e:
+                        except Exception:
                             logger.debug(
-                                f"Skipping 'extra.{extra_key}' → '{extra_value}' ({e})"
+                                "Skipping single-key extra field",
+                                extra_key=extra_key,
                             )
         return collected
 
@@ -264,7 +272,8 @@ class SecretStore:
         """
         if not is_component_registered(DEPLOYMENT_SECRET_STORE_NAME):
             logger.warning(
-                f"Deployment secret store component '{DEPLOYMENT_SECRET_STORE_NAME}' not registered."
+                "Deployment secret store component not registered",
+                component=DEPLOYMENT_SECRET_STORE_NAME,
             )
             return None
 
@@ -275,7 +284,7 @@ class SecretStore:
             if isinstance(secret_data, dict) and key in secret_data:
                 return secret_data[key]
 
-            logger.debug(f"Multi-key not found, checking single-key secret for '{key}'")
+            logger.debug("Multi-key not found, checking single-key secret", key=key)
             single_secret_data = cls.get_secret(key, DEPLOYMENT_SECRET_STORE_NAME)
             if isinstance(single_secret_data, dict):
                 # Handle both {key:value} and {"value": "..."} cases
@@ -287,8 +296,10 @@ class SecretStore:
 
             return None
 
-        except Exception as e:
-            logger.error(f"Failed to fetch deployment config key '{key}': {e}")
+        except Exception:
+            logger.error(
+                "Failed to fetch deployment config key", key=key, exc_info=True
+            )
             return None
 
     @classmethod
@@ -335,10 +346,9 @@ class SecretStore:
                 )
                 return cls._process_secret_data(dapr_secret_object.secret)
         except Exception as e:
-            logger.error(
-                f"Failed to fetch secret using component '{component_name}': {str(e)}"
-            )
-            raise
+            raise rewrap(
+                e, f"Failed to fetch secret (component={component_name})"
+            ) from e
 
     @classmethod
     def _process_secret_data(cls, secret_data: Any) -> Dict[str, Any]:

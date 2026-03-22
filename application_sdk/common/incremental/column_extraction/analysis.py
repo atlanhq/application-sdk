@@ -14,6 +14,7 @@ import daft
 from daft import DataFrame
 from daft.functions import format as daft_format
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.incremental.models import EntityType
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -51,7 +52,7 @@ def get_transformed_dir(workflow_args: Dict[str, Any]) -> Path:
             f"Ensure files are downloaded from S3 first."
         )
 
-    logger.info(f"Found transformed directory: {transformed_dir}")
+    logger.info("Found transformed directory", transformed_dir=str(transformed_dir))
     return transformed_dir
 
 
@@ -123,9 +124,12 @@ def get_tables_needing_column_extraction(
         total_count = sum(state_map.values())
 
         logger.info(
-            f"Analyzed {total_count} table records from {len(json_files)} files. "
-            f"States: CREATED={created_count}, UPDATED={updated_count}, "
-            f"NO CHANGE={no_change_count}"
+            "Analyzed table records",
+            total_count=total_count,
+            file_count=len(json_files),
+            created=created_count,
+            updated=updated_count,
+            no_change=no_change_count,
         )
 
         # Mark changed/backfill rows in Daft
@@ -165,8 +169,10 @@ def get_tables_needing_column_extraction(
         backfill_count = int(counts_row["backfill_count"] or 0)
 
         logger.info(
-            f"Tables needing column extraction: {changed_count + backfill_count} "
-            f"({changed_count} changed, {backfill_count} backfill)"
+            "Tables needing column extraction",
+            total=changed_count + backfill_count,
+            changed=changed_count,
+            backfill=backfill_count,
         )
 
         # Return only the columns needed for query generation
@@ -175,5 +181,4 @@ def get_tables_needing_column_extraction(
         return filtered_df, changed_count, backfill_count, no_change_count
 
     except Exception as e:
-        logger.error(f"Daft table analysis failed: {e}")
-        raise
+        raise rewrap(e, "Daft table analysis failed") from e

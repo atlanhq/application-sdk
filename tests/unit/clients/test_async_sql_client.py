@@ -319,6 +319,7 @@ async def test_run_query_with_error(
     async_sql_client.use_server_side_cursor = True
 
     results: list[dict[str, str]] = []
-    with pytest.raises(Exception, match="Simulated query failure"):
+    with pytest.raises(Exception, match="Error executing query") as exc_info:
         async for batch in async_sql_client.run_query(query):
             results.extend(batch)
+    assert "Simulated query failure" in str(exc_info.value.__cause__)

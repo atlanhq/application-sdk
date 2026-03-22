@@ -8,7 +8,16 @@ import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast, get_type_hints, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Never,
+    TypeVar,
+    cast,
+    get_type_hints,
+    overload,
+)
 from uuid import UUID
 
 from temporalio import workflow
@@ -830,6 +839,40 @@ class App(ABC):
             task_queue=task_queue,
         )
 
+    def continue_with(self, input: Input) -> Never:
+        """Restart this App with new input, preserving correlation context.
+
+        Truncates the current workflow history and restarts execution from the
+        beginning with the provided input. Useful for long-running Apps that
+        process data incrementally to avoid Temporal history size limits.
+
+        This method does not return — it signals the framework to restart
+        execution as a new workflow run with a clean history.
+
+        Args:
+            input: The new input to restart with (must extend Input).
+
+        Raises:
+            AppContextError: If called outside of run() execution.
+        """
+        if self._context is None:
+            raise AppContextError(
+                "continue_with() is only available during run() execution."
+            )
+
+        _safe_log(
+            "info",
+            f"App continuing with new input | app={self._app_name} run_id={self.run_id} correlation_id={self.correlation_id}",
+            app_name=self._app_name,
+            run_id=self.run_id,
+            correlation_id=self.correlation_id,
+        )
+
+        workflow.continue_as_new(
+            args=[input],
+            memo={"correlation_id": self.correlation_id},
+        )
+
     # =========================================================================
     # Framework-provided storage tasks
     # =========================================================================
@@ -1333,7 +1376,7 @@ def _apply_app_registration(
                         input=input_summary,
                     )
         except Exception:
-            pass  # Never fail on logging
+            _safe_log("warning", "Failed to log input summary")
 
         try:
             result = await self._original_run(input_data)

@@ -58,7 +58,7 @@ async def acquire_distributed_lock(
                 resource_id, owner_id, ttl_seconds
             )
             if acquired:
-                logger.info(f"Lock acquired for slot {slot}, resource: {resource_id}")
+                logger.info("Lock acquired", slot=slot, resource_id=resource_id)
                 return {
                     "status": True,
                     "slot_id": slot,
@@ -71,14 +71,13 @@ async def acquire_distributed_lock(
             )
     except Exception as e:
         # Redis connection or operation failed - propagate as activity error
-        if isinstance(e, (ActivityError)):
-            raise e
-        logger.error(f"Redis error during lock acquisition: {e}")
+        if isinstance(e, ActivityError):
+            raise
         raise ApplicationError(
-            f"Redis error during lock acquisition for {resource_id}, error: {e}",
+            f"Redis error during lock acquisition for {resource_id}",
             non_retryable=True,
             type=type(e).__name__,
-        )
+        ) from e
 
 
 @activity.defn
@@ -99,12 +98,16 @@ async def release_distributed_lock(
             released, result = await redis_client._release_lock(resource_id, owner_id)
             if released:
                 logger.info(
-                    f"Lock released successfully: {resource_id}, result: {result.value}"
+                    "Lock released successfully",
+                    resource_id=resource_id,
+                    result=result.value,
                 )
             return released
 
-    except Exception as e:
-        logger.error(f"Redis error during lock release for {resource_id}: {e}")
+    except Exception:
+        logger.error(
+            "Redis error during lock release", exc_info=True, resource_id=resource_id
+        )
         # Don't raise exception for lock release failures - log and return False
         # Lock release is best-effort and shouldn't fail the workflow
         return False

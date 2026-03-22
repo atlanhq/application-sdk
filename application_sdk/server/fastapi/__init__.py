@@ -298,8 +298,8 @@ class APIServer(ServerInterface):
                         run_id=workflow_data.get("run_id") or "",
                     ),
                 )
-            except Exception as e:
-                logger.error(f"Error starting workflow: {e}")
+            except Exception:
+                logger.error("Error starting workflow", exc_info=True)
                 return WorkflowResponse(
                     success=False,
                     message="Workflow failed to start",
@@ -331,8 +331,8 @@ class APIServer(ServerInterface):
                     ),
                     status=EventWorkflowResponse.Status.SUCCESS,
                 )
-            except Exception as e:
-                logger.error(f"Error starting workflow: {e}")
+            except Exception:
+                logger.error("Error starting workflow", exc_info=True)
                 return EventWorkflowResponse(
                     success=False,
                     message="Workflow failed to start",
@@ -478,10 +478,9 @@ class APIServer(ServerInterface):
         static_dir = Path(self.frontend_assets_path)
         if not static_dir.is_dir():
             logger.warning(
-                f"Static UI assets not found at '{static_dir}'. "
-                f"Skipping static mount. Run "
-                f"'npx @atlanhq/app-playground install-to "
-                f"{self.frontend_assets_path}' to enable the packaged UI."
+                "Static UI assets not found, skipping static mount",
+                static_dir=str(static_dir),
+                frontend_assets_path=self.frontend_assets_path,
             )
             return
 
@@ -581,7 +580,7 @@ class APIServer(ServerInterface):
             )
 
             return TestAuthResponse(success=True, message="Authentication successful")
-        except Exception as e:
+        except Exception:
             # Record failed auth
             metrics.record_metric(
                 name="auth_requests_total",
@@ -590,7 +589,7 @@ class APIServer(ServerInterface):
                 labels={"status": "error"},
                 description="Total number of authentication requests",
             )
-            raise e
+            raise
 
     async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:
         """Fetch metadata based on request parameters."""
@@ -633,7 +632,7 @@ class APIServer(ServerInterface):
             )
 
             return FetchMetadataResponse(success=True, data=metadata)
-        except Exception as e:
+        except Exception:
             # Record failed metadata fetch
             metrics.record_metric(
                 name="metadata_requests_total",
@@ -646,7 +645,7 @@ class APIServer(ServerInterface):
                 },
                 description="Total number of metadata fetch requests",
             )
-            raise e
+            raise
 
     async def preflight_check(
         self, body: PreflightCheckRequest
@@ -696,7 +695,7 @@ class APIServer(ServerInterface):
             return PreflightCheckResponse(
                 success=all_checks_passed, data=preflight_check
             )
-        except Exception as e:
+        except Exception:
             # Record failed preflight check
             metrics.record_metric(
                 name="preflight_checks_total",
@@ -705,7 +704,7 @@ class APIServer(ServerInterface):
                 labels={"status": "error"},
                 description="Total number of preflight checks",
             )
-            raise e
+            raise
 
     async def upload_file(
         self,
@@ -761,7 +760,7 @@ class APIServer(ServerInterface):
                 labels={"status": "error"},
                 description="Total number of file upload requests",
             )
-            logger.error(f"File upload failed: {e}")
+            logger.error("File upload failed", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"File upload failed: {str(e)}",
@@ -804,10 +803,10 @@ class APIServer(ServerInterface):
                 data=config_map_data,
             )
         except Exception as e:
-            logger.error(f"Error fetching configuration map: {e}")
+            logger.error("Error fetching configuration map", exc_info=True)
             return ConfigMapResponse(
                 success=False,
-                message=f"Failed to fetch configuration map: {str(e)}",
+                message=f"Failed to fetch configuration map: {e!s}",
                 data={},
             )
 
@@ -877,7 +876,7 @@ class APIServer(ServerInterface):
                     "data": workflow_status,
                 },
             )
-        except Exception as e:
+        except Exception:
             # Record failed status check
             metrics.record_metric(
                 name="workflow_status_checks_total",
@@ -886,7 +885,7 @@ class APIServer(ServerInterface):
                 labels={"status": "error"},
                 description="Total number of workflow status checks",
             )
-            raise e
+            raise
 
     async def update_workflow_config(
         self, config_id: str, body: WorkflowConfigRequest, type: str = "workflows"
@@ -945,7 +944,7 @@ class APIServer(ServerInterface):
             return JSONResponse(
                 status_code=status.HTTP_200_OK, content={"success": True}
             )
-        except Exception as e:
+        except Exception:
             # Record failed workflow stop
             metrics.record_metric(
                 name="workflow_stops_total",
@@ -954,7 +953,7 @@ class APIServer(ServerInterface):
                 labels={"status": "error"},
                 description="Total number of workflow stop requests",
             )
-            raise e
+            raise
 
     async def start(
         self,
@@ -973,7 +972,7 @@ class APIServer(ServerInterface):
         if self.ui_enabled:
             self.register_ui_routes()
 
-        logger.info(f"Starting application on {host}:{port}")
+        logger.info("Starting application", host=host, port=port)
         server = Server(
             Config(
                 app=self.app,

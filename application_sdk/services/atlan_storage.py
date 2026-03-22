@@ -16,6 +16,7 @@ from typing import Dict, List
 from pydantic import BaseModel
 from temporalio import activity
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import (
     DEPLOYMENT_OBJECT_STORE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
@@ -125,12 +126,11 @@ class AtlanStorage:
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
 
-            logger.debug(f"Successfully migrated: {file_path}")
+            logger.debug("Successfully migrated file", path=file_path)
             return file_path, True, ""
         except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Failed to migrate file {file_path}: {error_msg}")
-            return file_path, False, error_msg
+            logger.error("Failed to migrate file", path=file_path, exc_info=True)
+            return file_path, False, str(e)
 
     @classmethod
     async def migrate_from_objectstore_to_atlan(
@@ -177,7 +177,8 @@ class AtlanStorage:
         """
         try:
             logger.info(
-                f"Starting migration from objectstore to Atlan storage with prefix: '{prefix}'"
+                "Starting migration from objectstore to Atlan storage",
+                prefix=prefix,
             )
 
             # Get list of all files to migrate from objectstore
@@ -186,7 +187,7 @@ class AtlanStorage:
             )
 
             total_files = len(files_to_migrate)
-            logger.info(f"Found {total_files} files to migrate")
+            logger.info("Found files to migrate", count=total_files)
 
             if total_files == 0:
                 logger.info("No files found to migrate")
@@ -202,7 +203,7 @@ class AtlanStorage:
             ]
 
             # Execute all migrations in parallel
-            logger.info(f"Starting parallel migration of {total_files} files")
+            logger.info("Starting parallel migration", count=total_files)
             results = await asyncio.gather(*migration_tasks, return_exceptions=True)
 
             # Process results
@@ -212,7 +213,7 @@ class AtlanStorage:
             for result in results:
                 if isinstance(result, Exception):
                     # Handle unexpected exceptions
-                    logger.error(f"Unexpected error during migration: {str(result)}")
+                    logger.error("Unexpected error during migration", exc_info=result)
                     failed_migrations.append({"file": "unknown", "error": str(result)})
                 else:
                     file_path, success, error_msg = result
@@ -232,9 +233,13 @@ class AtlanStorage:
                 destination=UPSTREAM_OBJECT_STORE_NAME,
             )
 
-            logger.info(f"Migration completed: {migration_summary}")
+            logger.info(
+                "Migration completed",
+                total=migration_summary.total_files,
+                migrated=migration_summary.migrated_files,
+                failed=migration_summary.failed_migrations,
+            )
             return migration_summary
 
         except Exception as e:
-            logger.error(f"Migration failed for prefix '{prefix}': {str(e)}")
-            raise e
+            raise rewrap(e, f"Migration failed (prefix={prefix})") from e

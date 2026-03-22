@@ -252,7 +252,7 @@ def create_worker(
             use_worker_versioning=True,
             default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
         )
-        logger.info(f"Worker versioning enabled with build_id={APP_BUILD_ID}")
+        logger.info("Worker versioning enabled", build_id=APP_BUILD_ID)
 
     worker_kwargs: dict = dict(
         task_queue=task_queue,

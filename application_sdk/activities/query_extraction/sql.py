@@ -10,6 +10,7 @@ from temporalio import activity
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.handlers import HandlerInterface
@@ -225,16 +226,12 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             )
             await raw_output.write(sql_results)
             logger.info(
-                f"Query fetch completed, {raw_output.total_record_count} records processed",
+                "Query fetch completed",
+                records=raw_output.total_record_count,
             )
 
         except Exception as e:
-            logger.error(
-                "Query fetch failed %s",
-                e,
-                exc_info=True,
-            )
-            raise
+            raise rewrap(e, "Query fetch failed") from e
 
     async def parallelize_query(
         self,
@@ -274,7 +271,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         marked_sql = query.replace(ranged_sql_start_key, current_marker)
         rewritten_query = f"WITH T AS ({marked_sql}) SELECT {timestamp_column} FROM T ORDER BY {timestamp_column} ASC"
-        logger.info(f"Executing query: {rewritten_query}")
+        logger.info("Executing query", query=rewritten_query)
 
         chunk_start_marker = None
         chunk_end_marker = None
@@ -326,7 +323,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 ranged_sql_end_key=ranged_sql_end_key,
             )
 
-        logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
+        logger.info("Parallelized queries", chunk_count=len(parallel_markers))
 
         return parallel_markers
 
@@ -372,10 +369,13 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         )
 
         logger.info(
-            f"Processed {record_count} records in chunk {len(parallel_markers)}, "
-            f"with start marker {start_marker} and end marker {end_marker}"
+            "Processed records in chunk",
+            record_count=record_count,
+            chunk=len(parallel_markers),
+            start_marker=start_marker,
+            end_marker=end_marker,
         )
-        logger.info(f"Chunked SQL: {chunked_sql}")
+        logger.info("Chunked SQL", sql=chunked_sql)
 
         parallel_markers.append(
             {
@@ -409,7 +409,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             Exception: If marker file writing or object store upload fails
         """
         output_path = workflow_args["output_path"].rsplit("/", 1)[0]
-        logger.info(f"Writing marker file to {output_path}")
+        logger.info("Writing marker file", output_path=output_path)
         marker_file_path = os.path.join(output_path, "markerfile")
 
         if not parallel_markers:
@@ -421,13 +421,13 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         with SafeFileOps.open(marker_file_path, "w") as f:
             f.write(last_marker)
 
-        logger.info(f"Last marker: {last_marker}")
+        logger.info("Last marker", marker=last_marker)
         await ObjectStore.upload_file(
             source=marker_file_path,
             destination=marker_file_path,
             store_name=UPSTREAM_OBJECT_STORE_NAME,
         )
-        logger.info(f"Marker file written to {marker_file_path}")
+        logger.info("Marker file written", path=marker_file_path)
 
     async def read_marker(self, workflow_args: Dict[str, Any]) -> Optional[int]:
         """Read the marker from the output path.
@@ -450,7 +450,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         try:
             output_path = workflow_args["output_path"].rsplit("/", 1)[0]
             marker_file_path = os.path.join(output_path, "markerfile")
-            logger.info(f"Downloading marker file from {marker_file_path}")
+            logger.info("Downloading marker file", path=marker_file_path)
 
             await ObjectStore.download_file(
                 source=marker_file_path,
@@ -458,16 +458,16 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
-            logger.info(f"Marker file downloaded to {marker_file_path}")
+            logger.info("Marker file downloaded", path=marker_file_path)
             if not SafeFileOps.exists(marker_file_path):
-                logger.warning(f"Marker file does not exist at {marker_file_path}")
+                logger.warning("Marker file does not exist", path=marker_file_path)
                 return None
             with SafeFileOps.open(marker_file_path, "r") as f:
                 current_marker = f.read()
-            logger.info(f"Current marker: {current_marker}")
+            logger.info("Current marker", marker=current_marker)
             return int(current_marker)
-        except Exception as e:
-            logger.warning(f"Failed to read marker: {e}")
+        except Exception:
+            logger.warning("Failed to read marker", exc_info=True)
             return None
 
     @activity.defn
@@ -517,10 +517,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 sql_client=sql_client,
             )
         except Exception as e:
-            logger.error(f"Failed to parallelize queries: {e}")
-            raise e
+            raise rewrap(e, "Failed to parallelize queries") from e
 
-        logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
+        logger.info("Parallelized queries", chunk_count=len(parallel_markers))
 
         # Write the results to a metadata file
         output_path = os.path.join(workflow_args["output_path"], "raw", "query")
@@ -537,7 +536,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         try:
             await self.write_marker(parallel_markers, workflow_args)
-        except Exception as e:
-            logger.warning(f"Failed to write marker file: {e}")
+        except Exception:
+            logger.warning("Failed to write marker file", exc_info=True)
 
         return parallel_markers

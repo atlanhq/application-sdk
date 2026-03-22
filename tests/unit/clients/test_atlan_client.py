@@ -80,20 +80,26 @@ from application_sdk.common.error_codes import ClientError
 )
 def test_get_client_bad_params(params, constants, msg):
     # Arrange
-    with patch(
-        "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
-        constants["ATLAN_API_TOKEN_GUID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_BASE_URL",
-        constants["ATLAN_BASE_URL"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_API_KEY", constants["ATLAN_API_KEY"]
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
-        constants["ATLAN_CLIENT_ID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
-        constants["ATLAN_CLIENT_SECRET"],
+    with (
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
+            constants["ATLAN_API_TOKEN_GUID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_BASE_URL",
+            constants["ATLAN_BASE_URL"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_KEY", constants["ATLAN_API_KEY"]
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
+            constants["ATLAN_CLIENT_ID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
+            constants["ATLAN_CLIENT_SECRET"],
+        ),
     ):
         # Act / Assert
         with pytest.raises(ClientError) as excinfo:
@@ -166,27 +172,32 @@ def test_get_client_with_token_guid(
 ):
     # Arrange
 
-    with patch(
-        "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
-        constants["ATLAN_API_TOKEN_GUID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_BASE_URL",
-        constants["ATLAN_BASE_URL"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_API_KEY", constants["ATLAN_API_KEY"]
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
-        constants["ATLAN_CLIENT_ID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
-        constants["ATLAN_CLIENT_SECRET"],
-    ), patch(
-        "application_sdk.clients.atlan._get_client_from_token"
-    ) as mock_get_client_from_token, patch(
-        "application_sdk.clients.atlan.AtlanClient"
-    ) as mock_atlan_client, patch(
-        "application_sdk.clients.atlan.logger"
-    ) as mock_logger:
+    with (
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
+            constants["ATLAN_API_TOKEN_GUID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_BASE_URL",
+            constants["ATLAN_BASE_URL"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_KEY", constants["ATLAN_API_KEY"]
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
+            constants["ATLAN_CLIENT_ID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
+            constants["ATLAN_CLIENT_SECRET"],
+        ),
+        patch(
+            "application_sdk.clients.atlan._get_client_from_token"
+        ) as mock_get_client_from_token,
+        patch("application_sdk.clients.atlan.AtlanClient") as mock_atlan_client,
+        patch("application_sdk.clients.atlan.logger") as mock_logger,
+    ):
         mock_client_instance = MagicMock()
         mock_get_client_from_token.return_value = mock_client_instance
         mock_atlan_client.return_value = mock_client_instance
@@ -268,27 +279,32 @@ def test_get_client_with_api_key(
     params, constants, expected_call, expected_args, expected_log, raises
 ):
     # Arrange
-    with patch(
-        "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
-        constants["ATLAN_API_TOKEN_GUID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_BASE_URL",
-        constants["ATLAN_BASE_URL"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_API_KEY", constants["ATLAN_API_KEY"]
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
-        constants["ATLAN_CLIENT_ID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
-        constants["ATLAN_CLIENT_SECRET"],
-    ), patch(
-        "application_sdk.clients.atlan._get_client_from_token"
-    ) as mock_get_client_from_token, patch(
-        "application_sdk.clients.atlan.AtlanClient"
-    ) as mock_atlan_client, patch(
-        "application_sdk.clients.atlan.logger"
-    ) as mock_logger:
+    with (
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
+            constants["ATLAN_API_TOKEN_GUID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_BASE_URL",
+            constants["ATLAN_BASE_URL"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_KEY", constants["ATLAN_API_KEY"]
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
+            constants["ATLAN_CLIENT_ID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
+            constants["ATLAN_CLIENT_SECRET"],
+        ),
+        patch(
+            "application_sdk.clients.atlan._get_client_from_token"
+        ) as mock_get_client_from_token,
+        patch("application_sdk.clients.atlan.AtlanClient") as mock_atlan_client,
+        patch("application_sdk.clients.atlan.logger") as mock_logger,
+    ):
         mock_client_instance = MagicMock()
         mock_get_client_from_token.return_value = mock_client_instance
         mock_atlan_client.return_value = mock_client_instance
@@ -378,21 +394,27 @@ def test_get_client_with_api_key(
 )
 async def test_get_async_client_bad_params(params, constants, msg):
     # Arrange
-    with patch(
-        "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
-        constants["ATLAN_API_TOKEN_GUID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_BASE_URL",
-        constants["ATLAN_BASE_URL"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_API_KEY",
-        constants["ATLAN_API_KEY"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
-        constants["ATLAN_CLIENT_ID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
-        constants["ATLAN_CLIENT_SECRET"],
+    with (
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
+            constants["ATLAN_API_TOKEN_GUID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_BASE_URL",
+            constants["ATLAN_BASE_URL"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_KEY",
+            constants["ATLAN_API_KEY"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
+            constants["ATLAN_CLIENT_ID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
+            constants["ATLAN_CLIENT_SECRET"],
+        ),
     ):
         # Act / Assert
         with pytest.raises(ClientError) as excinfo:
@@ -466,28 +488,33 @@ async def test_get_async_client_with_token_guid(
 ):
     # Arrange
 
-    with patch(
-        "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
-        constants["ATLAN_API_TOKEN_GUID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_BASE_URL",
-        constants["ATLAN_BASE_URL"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_API_KEY",
-        constants["ATLAN_API_KEY"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
-        constants["ATLAN_CLIENT_ID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
-        constants["ATLAN_CLIENT_SECRET"],
-    ), patch(
-        "application_sdk.clients.atlan._get_async_client_from_token"
-    ) as mock_get_client_from_token, patch(
-        "application_sdk.clients.atlan.AsyncAtlanClient"
-    ) as mock_atlan_client, patch(
-        "application_sdk.clients.atlan.logger"
-    ) as mock_logger:
+    with (
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
+            constants["ATLAN_API_TOKEN_GUID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_BASE_URL",
+            constants["ATLAN_BASE_URL"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_KEY",
+            constants["ATLAN_API_KEY"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
+            constants["ATLAN_CLIENT_ID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
+            constants["ATLAN_CLIENT_SECRET"],
+        ),
+        patch(
+            "application_sdk.clients.atlan._get_async_client_from_token"
+        ) as mock_get_client_from_token,
+        patch("application_sdk.clients.atlan.AsyncAtlanClient") as mock_atlan_client,
+        patch("application_sdk.clients.atlan.logger") as mock_logger,
+    ):
         mock_client_instance = MagicMock()
         mock_get_client_from_token.return_value = mock_client_instance
         mock_atlan_client.return_value = mock_client_instance
@@ -570,28 +597,33 @@ async def test_get_async_client_with_api_key(
     params, constants, expected_call, expected_args, expected_log, raises
 ):
     # Arrange
-    with patch(
-        "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
-        constants["ATLAN_API_TOKEN_GUID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_BASE_URL",
-        constants["ATLAN_BASE_URL"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_API_KEY",
-        constants["ATLAN_API_KEY"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
-        constants["ATLAN_CLIENT_ID"],
-    ), patch(
-        "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
-        constants["ATLAN_CLIENT_SECRET"],
-    ), patch(
-        "application_sdk.clients.atlan._get_async_client_from_token"
-    ) as mock_get_client_from_token, patch(
-        "application_sdk.clients.atlan.AsyncAtlanClient"
-    ) as mock_atlan_client, patch(
-        "application_sdk.clients.atlan.logger"
-    ) as mock_logger:
+    with (
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_TOKEN_GUID",
+            constants["ATLAN_API_TOKEN_GUID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_BASE_URL",
+            constants["ATLAN_BASE_URL"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_API_KEY",
+            constants["ATLAN_API_KEY"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_ID",
+            constants["ATLAN_CLIENT_ID"],
+        ),
+        patch(
+            "application_sdk.clients.atlan.ATLAN_CLIENT_SECRET",
+            constants["ATLAN_CLIENT_SECRET"],
+        ),
+        patch(
+            "application_sdk.clients.atlan._get_async_client_from_token"
+        ) as mock_get_client_from_token,
+        patch("application_sdk.clients.atlan.AsyncAtlanClient") as mock_atlan_client,
+        patch("application_sdk.clients.atlan.logger") as mock_logger,
+    ):
         mock_client_instance = MagicMock()
         mock_get_client_from_token.return_value = mock_client_instance
         mock_atlan_client.return_value = mock_client_instance

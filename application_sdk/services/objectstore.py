@@ -9,6 +9,7 @@ import orjson
 from dapr.clients import DaprClient
 from temporalio import activity
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
     DAPR_MAX_GRPC_MESSAGE_LENGTH,
@@ -165,7 +166,7 @@ class ObjectStore:
                     elif isinstance(item, dict) and isinstance(item.get("Name"), str):
                         paths.append(item["Name"])
                     else:
-                        logger.warning(f"Skipping invalid path entry: {item}")
+                        logger.warning("Skipping invalid path entry", entry=item)
             elif isinstance(file_list, dict) and "Contents" in file_list:
                 paths = [item["Key"] for item in file_list["Contents"] if "Key" in item]
             elif isinstance(file_list, dict):
@@ -176,7 +177,7 @@ class ObjectStore:
             valid_list = []
             for path in paths:
                 if not isinstance(path, str):
-                    logger.warning(f"Skipping non-string path: {path}")
+                    logger.warning("Skipping non-string path", path=path)
                     continue
 
                 # Normalize path separators for cross-platform compatibility
@@ -192,11 +193,13 @@ class ObjectStore:
 
             return valid_list
 
-        except Exception as e:
+        except Exception:
             logger.error(
-                f"Error listing files with prefix {normalized_prefix or prefix}: {str(e)}"
+                "Error listing files",
+                prefix=normalized_prefix or prefix,
+                exc_info=True,
             )
-            raise e
+            raise
 
     @classmethod
     async def get_content(
@@ -232,14 +235,13 @@ class ObjectStore:
                     return None
                 raise Exception(f"No data received for file: {normalized_key}")
 
-            logger.debug(f"Successfully retrieved file content: {normalized_key}")
+            logger.debug("Successfully retrieved file content", key=normalized_key)
             return response_data
 
         except Exception as e:
             if suppress_error:
                 return None
-            logger.error(f"Error getting file content for {normalized_key}: {str(e)}")
-            raise
+            raise rewrap(e, f"Error getting file content (key={normalized_key})") from e
 
     @classmethod
     async def exists(
@@ -258,6 +260,12 @@ class ObjectStore:
             await cls.get_content(key, store_name)
             return True
         except Exception:
+            logger.warning(
+                "file_exists check failed for key=%s store=%s",
+                key,
+                store_name,
+                exc_info=True,
+            )
             return False
 
     @classmethod
@@ -274,19 +282,15 @@ class ObjectStore:
             Exception: If there's an error deleting the file from the object store.
         """
         normalized_key = cls.as_store_key(key)
-        try:
-            data = json.dumps({"key": normalized_key}).encode("utf-8")
+        data = json.dumps({"key": normalized_key}).encode("utf-8")
 
-            await cls._invoke_dapr_binding(
-                operation=cls.OBJECT_DELETE_OPERATION,
-                metadata=cls._create_file_metadata(normalized_key),
-                data=data,
-                store_name=store_name,
-            )
-            logger.debug(f"Successfully deleted file: {normalized_key}")
-        except Exception as e:
-            logger.error(f"Error deleting file {normalized_key}: {str(e)}")
-            raise
+        await cls._invoke_dapr_binding(
+            operation=cls.OBJECT_DELETE_OPERATION,
+            metadata=cls._create_file_metadata(normalized_key),
+            data=data,
+            store_name=store_name,
+        )
+        logger.debug("Successfully deleted file", key=normalized_key)
 
     @classmethod
     async def delete_prefix(
@@ -308,39 +312,48 @@ class ObjectStore:
                 files_to_delete = await cls.list_files(
                     prefix=normalized_prefix, store_name=store_name
                 )
-            except Exception as e:
+            except Exception:
                 # If we can't list files for any reason, we can't delete them either
                 # Raise FileNotFoundError to give developers clear feedback
                 logger.info(
-                    f"Cannot list files under prefix {normalized_prefix}: {str(e)}"
+                    "Cannot list files under prefix",
+                    prefix=normalized_prefix,
+                    exc_info=True,
                 )
                 raise FileNotFoundError(
                     f"No files found under prefix: {normalized_prefix}"
                 )
 
             if not files_to_delete:
-                logger.info(f"No files found under prefix: {normalized_prefix}")
+                logger.info("No files found under prefix", prefix=normalized_prefix)
                 return
 
             logger.info(
-                f"Deleting {len(files_to_delete)} files under prefix: {normalized_prefix}"
+                "Deleting files under prefix",
+                count=len(files_to_delete),
+                prefix=normalized_prefix,
             )
 
             # Delete each file individually
             for file_path in files_to_delete:
                 try:
                     await cls.delete_file(key=file_path, store_name=store_name)
-                except Exception as e:
-                    logger.warning(f"Failed to delete file {file_path}: {str(e)}")
+                except Exception:
+                    logger.warning(
+                        "Failed to delete file", path=file_path, exc_info=True
+                    )
                     # Continue with other files even if one fails
 
             logger.info(
-                f"Successfully deleted all files under prefix: {normalized_prefix}"
+                "Successfully deleted all files under prefix",
+                prefix=normalized_prefix,
             )
 
-        except Exception as e:
+        except Exception:
             logger.error(
-                f"Error deleting files under prefix {normalized_prefix}: {str(e)}"
+                "Error deleting files under prefix",
+                prefix=normalized_prefix,
+                exc_info=True,
             )
             raise
 
@@ -371,12 +384,8 @@ class ObjectStore:
             ... )
         """
         normalized_destination = cls.as_store_key(destination)
-        try:
-            with SafeFileOps.open(source, "rb") as f:
-                file_content = f.read()
-        except IOError as e:
-            logger.error(f"Error reading file {source}: {str(e)}")
-            raise e
+        with SafeFileOps.open(source, "rb") as f:
+            file_content = f.read()
 
         try:
             await cls._invoke_dapr_binding(
@@ -385,12 +394,14 @@ class ObjectStore:
                 metadata=cls._create_file_metadata(normalized_destination),
                 store_name=store_name,
             )
-            logger.debug(f"Successfully uploaded file: {normalized_destination}")
-        except Exception as e:
+            logger.debug("Successfully uploaded file", key=normalized_destination)
+        except Exception:
             logger.error(
-                f"Error uploading file {normalized_destination} to object store: {str(e)}"
+                "Error uploading file to object store",
+                key=normalized_destination,
+                exc_info=True,
             )
-            raise e
+            raise
 
         # Clean up local file after successful upload
         if not retain_local_copy:
@@ -426,12 +437,14 @@ class ObjectStore:
                 metadata=cls._create_file_metadata(destination),
                 store_name=store_name,
             )
-            logger.debug(f"Successfully uploaded file from bytes: {destination}")
-        except Exception as e:
+            logger.debug("Successfully uploaded file from bytes", key=destination)
+        except Exception:
             logger.error(
-                f"Error uploading file from bytes {destination} to object store: {str(e)}"
+                "Error uploading file from bytes to object store",
+                key=destination,
+                exc_info=True,
             )
-            raise e
+            raise
 
     @classmethod
     async def upload_prefix(
@@ -493,12 +506,14 @@ class ObjectStore:
                         file_path, store_key, store_name, retain_local_copy
                     )
 
-            logger.info(f"Completed uploading directory {source} to object store")
-        except Exception as e:
+            logger.info("Completed uploading directory to object store", source=source)
+        except Exception:
             logger.error(
-                f"An unexpected error occurred while uploading directory: {str(e)}"
+                "Unexpected error uploading directory",
+                source=source,
+                exc_info=True,
             )
-            raise e
+            raise
 
     @classmethod
     async def download_file(
@@ -533,18 +548,12 @@ class ObjectStore:
         if not SafeFileOps.exists(os.path.dirname(destination)):
             SafeFileOps.makedirs(os.path.dirname(destination), exist_ok=True)
 
-        try:
-            response_data = await cls.get_content(normalized_source, store_name)
+        response_data = await cls.get_content(normalized_source, store_name)
 
-            with SafeFileOps.open(destination, "wb") as f:
-                f.write(response_data)
+        with SafeFileOps.open(destination, "wb") as f:
+            f.write(response_data)
 
-            logger.info(f"Successfully downloaded file: {normalized_source}")
-        except Exception as e:
-            logger.warning(
-                f"Failed to download file {normalized_source} from object store: {str(e)}"
-            )
-            raise e
+        logger.info("Successfully downloaded file", key=normalized_source)
 
     @classmethod
     async def download_prefix(
@@ -561,34 +570,32 @@ class ObjectStore:
             store_name: Name of the Dapr object store binding to use.
         """
         normalized_source = cls.as_store_key(source)
-        try:
-            # List all files under the prefix
-            file_list = await cls.list_files(normalized_source, store_name)
+        # List all files under the prefix
+        file_list = await cls.list_files(normalized_source, store_name)
 
-            logger.info(
-                f"Found {len(file_list)} files to download from: {normalized_source}"
-            )
+        logger.info(
+            "Found files to download",
+            count=len(file_list),
+            prefix=normalized_source,
+        )
 
-            # Normalize source prefix to use forward slashes for comparison
-            # Download each file
-            for file_path in file_list:
-                normalized_file_path = file_path.replace("\\", "/").replace(os.sep, "/")
-                if normalized_file_path.startswith(normalized_source):
-                    # Extract relative path after the prefix
-                    relative_path = normalized_file_path[
-                        len(normalized_source) :
-                    ].lstrip("/")
-                else:
-                    # Fallback to just the filename
-                    relative_path = os.path.basename(normalized_file_path)
+        # Normalize source prefix to use forward slashes for comparison
+        # Download each file
+        for file_path in file_list:
+            normalized_file_path = file_path.replace("\\", "/").replace(os.sep, "/")
+            if normalized_file_path.startswith(normalized_source):
+                # Extract relative path after the prefix
+                relative_path = normalized_file_path[len(normalized_source) :].lstrip(
+                    "/"
+                )
+            else:
+                # Fallback to just the filename
+                relative_path = os.path.basename(normalized_file_path)
 
-                local_file_path = os.path.join(destination, relative_path)
-                await cls.download_file(file_path, local_file_path, store_name)
+            local_file_path = os.path.join(destination, relative_path)
+            await cls.download_file(file_path, local_file_path, store_name)
 
-            logger.info(f"Successfully downloaded all files from: {normalized_source}")
-        except Exception as e:
-            logger.warning(f"Failed to download files from object store: {str(e)}")
-            raise
+        logger.info("Successfully downloaded all files", prefix=normalized_source)
 
     @classmethod
     async def _invoke_dapr_binding(
@@ -612,45 +619,41 @@ class ObjectStore:
         Raises:
             Exception: If there's an error with the Dapr binding operation.
         """
-        try:
-            # Calculate data size (handle both bytes and str)
-            if isinstance(data, bytes):
-                data_size = len(data)
-            elif isinstance(data, str):
-                data_size = len(data.encode("utf-8"))
-            else:
-                data_size = 0
+        # Calculate data size (handle both bytes and str)
+        if isinstance(data, bytes):
+            data_size = len(data)
+        elif isinstance(data, str):
+            data_size = len(data.encode("utf-8"))
+        else:
+            data_size = 0
 
-            # Check if data size exceeds DAPR limit and log warning
-            if data_size > DAPR_MAX_GRPC_MESSAGE_LENGTH:
-                # gRPC adds overhead (headers, metadata, etc.) to messages
-                # Add a buffer of 5% or at least 1KB to account for this overhead
-                grpc_overhead_buffer = max(int(data_size * 0.05), 1024)
-                required_max_length = data_size + grpc_overhead_buffer
-                logger.warning(
-                    f"Data size ({data_size:,} bytes / {data_size / (1024 * 1024):.2f}MB) "
-                    f"exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH ({DAPR_MAX_GRPC_MESSAGE_LENGTH:,} bytes / "
-                    f"{DAPR_MAX_GRPC_MESSAGE_LENGTH / (1024 * 1024):.2f}MB). "
-                    f"Increasing max_grpc_message_length to {required_max_length:,} bytes "
-                    f"(data size + {grpc_overhead_buffer:,} bytes overhead buffer). "
-                    f"This may cause issues with Dapr gRPC communication."
-                )
-                # Set max_grpc_message_length to accommodate the data size plus gRPC overhead
-                max_message_length = required_max_length
-            else:
-                # Data is within limit, use default DAPR limit
-                max_message_length = DAPR_MAX_GRPC_MESSAGE_LENGTH
+        # Check if data size exceeds DAPR limit and log warning
+        if data_size > DAPR_MAX_GRPC_MESSAGE_LENGTH:
+            # gRPC adds overhead (headers, metadata, etc.) to messages
+            # Add a buffer of 5% or at least 1KB to account for this overhead
+            grpc_overhead_buffer = max(int(data_size * 0.05), 1024)
+            required_max_length = data_size + grpc_overhead_buffer
+            logger.warning(
+                "Data size exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH",
+                data_size_bytes=data_size,
+                max_grpc_bytes=DAPR_MAX_GRPC_MESSAGE_LENGTH,
+                required_max_length=required_max_length,
+                overhead_buffer=grpc_overhead_buffer,
+            )
+            # Set max_grpc_message_length to accommodate the data size plus gRPC overhead
+            max_message_length = required_max_length
+        else:
+            # Data is within limit, use default DAPR limit
+            max_message_length = DAPR_MAX_GRPC_MESSAGE_LENGTH
 
-            with DaprClient(max_grpc_message_length=max_message_length) as client:
-                response = client.invoke_binding(
-                    binding_name=store_name,
-                    operation=operation,
-                    data=data,
-                    binding_metadata=metadata,
-                )
-                return response.data
-        except Exception:
-            raise
+        with DaprClient(max_grpc_message_length=max_message_length) as client:
+            response = client.invoke_binding(
+                binding_name=store_name,
+                operation=operation,
+                data=data,
+                binding_metadata=metadata,
+            )
+            return response.data
 
     @classmethod
     def _cleanup_local_path(cls, path: str) -> None:
@@ -666,5 +669,5 @@ class ObjectStore:
                 SafeFileOps.rmtree(path)
         except FileNotFoundError:
             pass  # ignore if the file or directory doesn't exist
-        except Exception as e:
-            logger.warning(f"Error cleaning up {path}: {str(e)}")
+        except Exception:
+            logger.warning("Error cleaning up path", path=path, exc_info=True)

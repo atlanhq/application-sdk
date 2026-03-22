@@ -40,6 +40,7 @@ from loguru import logger
 
 from application_sdk.app.base import App
 from application_sdk.app.task import task
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -244,7 +245,6 @@ class SqlMetadataExtractor(App):
             )
 
         except Exception as e:
-            logger.error(
-                "SQL metadata extraction failed", workflow_id=workflow_id, error=str(e)
-            )
-            raise
+            raise rewrap(
+                e, f"SQL metadata extraction failed (workflow_id={workflow_id})"
+            ) from e

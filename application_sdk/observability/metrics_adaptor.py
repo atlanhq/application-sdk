@@ -108,8 +108,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                         target=self._start_asyncio_flush, daemon=True
                     ).start()
                 AtlanMetricsAdapter._flush_task_started = True
-            except Exception as e:
-                logging.error(f"Failed to start metrics flush task: {e}")
+            except Exception:
+                logging.error("Failed to start metrics flush task", exc_info=True)
 
     def _setup_otel_metrics(self):
         """Set up OpenTelemetry metrics exporter and configuration.
@@ -152,8 +152,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             # Create meter
             self.meter = self.meter_provider.get_meter(SERVICE_NAME)
 
-        except Exception as e:
-            logging.error(f"Failed to setup OTLP metrics: {e}")
+        except Exception:
+            logging.error("Failed to setup OTLP metrics", exc_info=True)
 
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic metric flushing.
@@ -250,8 +250,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                     unit=metric_record.unit,
                 )
                 histogram.record(metric_record.value, metric_record.labels)
-        except Exception as e:
-            logging.error(f"Error sending metric to OpenTelemetry: {e}")
+        except Exception:
+            logging.error("Error sending metric to OpenTelemetry", exc_info=True)
 
     def _log_to_console(self, metric_record: MetricRecord):
         """Log metric to console using the logger.
@@ -281,8 +281,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 log_message += f" Unit: {metric_record.unit}"
             logger = get_logger()
             logger.metric(log_message)
-        except Exception as e:
-            logging.error(f"Error logging metric to console: {e}")
+        except Exception:
+            logging.error("Error logging metric to console", exc_info=True)
 
     def record_metric(
         self,
@@ -328,8 +328,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             # Add record using base class method
             self.add_record(metric_record)
 
-        except Exception as e:
-            logging.error(f"Error recording metric: {e}")
+        except Exception:
+            logging.error("Error recording metric", exc_info=True)
 
 
 # Create a singleton instance of the metrics adapter

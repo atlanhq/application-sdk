@@ -8,6 +8,7 @@ import redis.asyncio as async_redis
 from redis.exceptions import ConnectionError, RedisError, TimeoutError
 
 from application_sdk.common.error_codes import ClientError
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import (
     IS_LOCKING_DISABLED,
     REDIS_HOST,
@@ -97,10 +98,9 @@ class BaseRedisClient:
                 for host, port in [host_port.strip().rsplit(":", 1)]
             ]
         except ValueError as e:
-            logger.error(
-                f"Invalid Sentinel host format in REDIS_SENTINEL_HOSTS '{REDIS_SENTINEL_HOSTS}': {e}"
-            )
-            raise
+            raise rewrap(
+                e, "Invalid Sentinel host format in REDIS_SENTINEL_HOSTS"
+            ) from e
 
         if not sentinel_hosts:
             logger.error("No Sentinel hosts configured")
@@ -127,7 +127,10 @@ class BaseRedisClient:
         """
         if not isinstance(result, int):
             logger.error(
-                f"Unexpected eval result type for {resource_id}: {type(result)}, value: {result}"
+                "Unexpected eval result type",
+                resource_id=resource_id,
+                result_type=str(type(result)),
+                result_value=result,
             )
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
@@ -143,7 +146,9 @@ class BaseRedisClient:
         elif result == -2:
             return False, LockReleaseResult.WRONG_OWNER
         else:
-            logger.error(f"Unknown Redis eval result for {resource_id}: {result}")
+            logger.error(
+                "Unknown Redis eval result", resource_id=resource_id, result=result
+            )
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
             )
@@ -184,8 +189,10 @@ class RedisClient(BaseRedisClient):
     def _connect_via_sentinel(self) -> None:
         """Connect to Redis via Sentinel using sync client."""
         sentinel_hosts = self._parse_sentinel_hosts()
-        logger.info(f"Connecting to Redis via sync Sentinel: {sentinel_hosts}")
-        logger.info(f"Service name: {REDIS_SENTINEL_SERVICE_NAME}")
+        logger.info(
+            "Connecting to Redis via sync Sentinel", sentinel_hosts=sentinel_hosts
+        )
+        logger.info("Sentinel service name", service_name=REDIS_SENTINEL_SERVICE_NAME)
 
         try:
             # Create Sentinel with password
@@ -203,7 +210,9 @@ class RedisClient(BaseRedisClient):
 
     def _connect_standalone(self) -> None:
         """Connect to standalone Redis instance using sync client."""
-        logger.debug(f"Connecting to standalone sync Redis: {REDIS_HOST}:{REDIS_PORT}")
+        logger.debug(
+            "Connecting to standalone sync Redis", host=REDIS_HOST, port=REDIS_PORT
+        )
 
         try:
             self.redis_client = redis.Redis(
@@ -219,8 +228,8 @@ class RedisClient(BaseRedisClient):
             try:
                 self.redis_client.close()
                 logger.info("Sync Redis connection closed")
-            except Exception as e:
-                logger.error(f"Error closing sync Redis connection: {e}")
+            except Exception:
+                logger.error("Error closing sync Redis connection", exc_info=True)
             finally:
                 self.redis_client = None
 
@@ -331,8 +340,10 @@ class RedisClientAsync(BaseRedisClient):
     async def _connect_via_sentinel(self) -> None:
         """Connect to Redis via Sentinel using async client."""
         sentinel_hosts = self._parse_sentinel_hosts()
-        logger.info(f"Connecting to Redis via async Sentinel: {sentinel_hosts}")
-        logger.info(f"Service name: {REDIS_SENTINEL_SERVICE_NAME}")
+        logger.info(
+            "Connecting to Redis via async Sentinel", sentinel_hosts=sentinel_hosts
+        )
+        logger.info("Sentinel service name", service_name=REDIS_SENTINEL_SERVICE_NAME)
 
         try:
             # Create Sentinel with password
@@ -350,7 +361,9 @@ class RedisClientAsync(BaseRedisClient):
 
     async def _connect_standalone(self) -> None:
         """Connect to standalone Redis instance using async client."""
-        logger.debug(f"Connecting to standalone async Redis: {REDIS_HOST}:{REDIS_PORT}")
+        logger.debug(
+            "Connecting to standalone async Redis", host=REDIS_HOST, port=REDIS_PORT
+        )
 
         try:
             self.redis_client = async_redis.Redis(
@@ -366,8 +379,8 @@ class RedisClientAsync(BaseRedisClient):
             try:
                 await self.redis_client.aclose()
                 logger.info("Async Redis connection closed")
-            except Exception as e:
-                logger.error(f"Error closing async Redis connection: {e}")
+            except Exception:
+                logger.error("Error closing async Redis connection", exc_info=True)
             finally:
                 self.redis_client = None
 

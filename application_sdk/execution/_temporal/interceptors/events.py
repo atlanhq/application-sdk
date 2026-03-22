@@ -20,6 +20,7 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.contracts.events import (
     ApplicationEventNames,
     Event,
@@ -217,8 +218,8 @@ def _send_lifecycle_event_to_segment(event: Event) -> None:
         )
 
         metrics.segment_client.send_metric(metric_record)
-    except Exception as e:
-        logger.debug(f"Failed to send lifecycle event to Segment: {e}")
+    except Exception:
+        logger.debug("Failed to send lifecycle event to Segment", exc_info=True)
 
 
 async def _publish_event_via_binding(event: Event) -> None:
@@ -244,14 +245,17 @@ async def _publish_event_via_binding(event: Event) -> None:
         if token_service is not None:
             binding_metadata.update(await token_service.get_headers())
     except Exception:
-        pass  # Degrade gracefully without auth headers
+        logger.warning(
+            "Failed to get auth headers for event binding, proceeding without authentication",
+            exc_info=True,
+        )
 
     await infra.event_binding.invoke(
         operation="create",
         data=payload,
         metadata=binding_metadata,
     )
-    logger.info(f"Published event via binding on topic: {event.get_topic_name()}")
+    logger.info("Published event via binding", topic=event.get_topic_name())
 
 
 # Activity for publishing events (runs outside sandbox)
@@ -266,10 +270,9 @@ async def publish_event(event_data: dict) -> None:
     try:
         event = Event(**event_data)
         await _publish_event_via_binding(event)
-        logger.info(f"Published event: {event_data.get('event_name', '')}")
+        logger.info("Published event", event_name=event_data.get("event_name", ""))
     except Exception as e:
-        logger.error(f"Failed to publish event: {e}")
-        raise
+        raise rewrap(e, "Failed to publish event") from e
 
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
@@ -355,8 +358,8 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 schedule_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
-        except Exception as e:
-            logger.warning(f"Failed to publish workflow start event: {e}")
+        except Exception:
+            logger.warning("Failed to publish workflow start event", exc_info=True)
             # Don't fail the workflow if event publishing fails
 
         output = None
@@ -389,8 +392,8 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     schedule_to_close_timeout=timedelta(seconds=30),
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
-            except Exception as publish_error:
-                logger.warning(f"Failed to publish workflow end event: {publish_error}")
+            except Exception:
+                logger.warning("Failed to publish workflow end event", exc_info=True)
 
         return output
 

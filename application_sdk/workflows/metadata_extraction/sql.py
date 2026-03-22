@@ -17,6 +17,7 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
@@ -232,7 +233,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 heartbeat_timeout=self.default_heartbeat_timeout,
             )
 
-            logger.info(f"Starting extraction workflow for {workflow_id}")
+            logger.info("Starting extraction workflow", workflow_id=workflow_id)
             retry_policy = RetryPolicy(max_attempts=6, backoff_coefficient=2)
 
             fetch_functions = self.get_fetch_functions()
@@ -243,7 +244,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             ]
 
             await asyncio.gather(*fetch_and_transforms)
-            logger.info(f"Extraction workflow completed for {workflow_id}")
+            logger.info("Extraction workflow completed", workflow_id=workflow_id)
             workflow_success = True
 
             # Build output paths for AE downstream nodes (e.g. publish app)
@@ -266,9 +267,8 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 "current_state_prefix": f"argo-artifacts/{connection_qn}/current-state",
             }
         except Exception as e:
-            logger.error(f"Workflow failed for {workflow_id}: {str(e)}")
             workflow_success = False
-            raise
+            raise rewrap(e, f"Workflow failed (workflow_id={workflow_id})") from e
         finally:
             # Record workflow execution time metric
             execution_time = time() - start_time

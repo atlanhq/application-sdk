@@ -26,6 +26,7 @@ from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import (
     DEPLOYMENT_NAME,
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
@@ -135,13 +136,16 @@ class Worker:
             if multiple signals are received in quick succession.
             """
             if self._shutdown_initiated:
-                logger.debug(f"Received {sig_name}, but shutdown already in progress")
+                logger.debug(
+                    "Received signal, but shutdown already in progress", signal=sig_name
+                )
                 return
 
             self._shutdown_initiated = True
             logger.info(
-                f"Received {sig_name}, initiating graceful shutdown "
-                f"(timeout: {GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS}s)"
+                "Received signal, initiating graceful shutdown",
+                signal=sig_name,
+                timeout=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
             )
             if self.workflow_worker:
                 asyncio.create_task(self._shutdown_worker())
@@ -150,8 +154,8 @@ class Worker:
             loop.add_signal_handler(signal.SIGTERM, lambda: handle_signal("SIGTERM"))
             loop.add_signal_handler(signal.SIGINT, lambda: handle_signal("SIGINT"))
             logger.debug("Registered SIGTERM and SIGINT handlers")
-        except (ValueError, RuntimeError) as e:
-            logger.warning(f"Could not set up signal handlers: {e}")
+        except (ValueError, RuntimeError):
+            logger.warning("Could not set up signal handlers", exc_info=True)
 
     async def _shutdown_worker(self) -> None:
         """Shutdown the worker gracefully.
@@ -168,8 +172,8 @@ class Worker:
             logger.info("Stopping polling, waiting for in-flight activities...")
             await self.workflow_worker.shutdown()
             logger.info("Worker shutdown complete")
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+        except Exception:
+            logger.error("Error during worker shutdown", exc_info=True)
 
     def __init__(
         self,
@@ -269,8 +273,8 @@ class Worker:
                     asyncio.run(self.start(daemon=False))
                 except (SystemExit, KeyboardInterrupt):
                     return
-                except Exception as e:
-                    logger.error(f"Worker daemon crashed: {e}", exc_info=True)
+                except Exception:
+                    logger.error("Worker daemon crashed", exc_info=True)
                 else:
                     logger.warning("Worker daemon exited without error")
 
@@ -311,17 +315,21 @@ class Worker:
 
             if TEMPORAL_BUILD_ID and TEMPORAL_DEPLOYMENT_NAME:
                 logger.info(
-                    f"Starting versioned worker with task queue: {self.workflow_client.worker_task_queue}, "
-                    f"deployment: {TEMPORAL_DEPLOYMENT_NAME}, build_id: {TEMPORAL_BUILD_ID}"
+                    "Starting versioned worker",
+                    task_queue=self.workflow_client.worker_task_queue,
+                    deployment=TEMPORAL_DEPLOYMENT_NAME,
+                    build_id=TEMPORAL_BUILD_ID,
                 )
             elif TEMPORAL_BUILD_ID:
                 logger.info(
-                    f"Starting versioned worker with task queue: {self.workflow_client.worker_task_queue}, "
-                    f"build_id: {TEMPORAL_BUILD_ID}"
+                    "Starting versioned worker",
+                    task_queue=self.workflow_client.worker_task_queue,
+                    build_id=TEMPORAL_BUILD_ID,
                 )
             else:
                 logger.info(
-                    f"Starting worker with task queue: {self.workflow_client.worker_task_queue}"
+                    "Starting worker",
+                    task_queue=self.workflow_client.worker_task_queue,
                 )
 
             # Set up signal handlers and run worker
@@ -332,5 +340,4 @@ class Worker:
             logger.info("Worker stopped")
 
         except Exception as e:
-            logger.error(f"Error starting worker: {e}")
-            raise e
+            raise rewrap(e, "Error starting worker") from e

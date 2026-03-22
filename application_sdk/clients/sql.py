@@ -30,6 +30,7 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_user,
 )
 from application_sdk.common.error_codes import ClientError, CommonError
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.observability.logger_adaptor import get_logger
@@ -115,9 +116,7 @@ class BaseSQLClient(ClientInterface):
             self.connection = None
 
         except Exception as e:
-            logger.error(
-                f"{ClientError.SQL_CLIENT_AUTH_ERROR}: Error loading SQL client: {str(e)}"
-            )
+            logger.error("Error loading SQL client", exc_info=True)
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
@@ -362,7 +361,7 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("Engine is not initialized. Call load() first.")
 
         loop = asyncio.get_running_loop()
-        logger.info(f"Running query: {query}")
+        logger.info("Running query", query=query)
 
         # Use context manager for automatic connection cleanup
         with self.engine.connect() as connection:
@@ -370,31 +369,27 @@ class BaseSQLClient(ClientInterface):
                 connection = connection.execution_options(yield_per=batch_size)
 
             with ThreadPoolExecutor() as pool:
-                try:
-                    from sqlalchemy import text
+                from sqlalchemy import text
 
-                    cursor = await loop.run_in_executor(
-                        pool, connection.execute, text(query)
+                cursor = await loop.run_in_executor(
+                    pool, connection.execute, text(query)
+                )
+                if not cursor or not cursor.cursor:
+                    raise ValueError("Cursor is not supported")
+                column_names: List[str] = [
+                    description.name.lower()
+                    for description in cursor.cursor.description
+                ]
+
+                while True:
+                    rows = await loop.run_in_executor(
+                        pool, cursor.fetchmany, batch_size
                     )
-                    if not cursor or not cursor.cursor:
-                        raise ValueError("Cursor is not supported")
-                    column_names: List[str] = [
-                        description.name.lower()
-                        for description in cursor.cursor.description
-                    ]
+                    if not rows:
+                        break
 
-                    while True:
-                        rows = await loop.run_in_executor(
-                            pool, cursor.fetchmany, batch_size
-                        )
-                        if not rows:
-                            break
-
-                        results = [dict(zip(column_names, row)) for row in rows]
-                        yield results
-                except Exception as e:
-                    logger.error("Error running query in batch: {error}", error=str(e))
-                    raise e
+                    results = [dict(zip(column_names, row)) for row in rows]
+                    yield results
             # Connection automatically closed by context manager
 
         logger.info("Query execution completed")
@@ -523,8 +518,7 @@ class BaseSQLClient(ClientInterface):
             result = await self._execute_async_read_operation(query, self.chunk_size)
             return cast(Iterator["pd.DataFrame"], result)
         except Exception as e:
-            logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
-            raise
+            raise rewrap(e, "Error reading batched data(pandas) from SQL") from e
 
     async def get_results(self, query: str) -> "pd.DataFrame":
         """Get all query results as a single pandas DataFrame asynchronously.
@@ -545,8 +539,7 @@ class BaseSQLClient(ClientInterface):
             raise Exception("Unable to get pandas dataframe from SQL query results")
 
         except Exception as e:
-            logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
-            raise e
+            raise rewrap(e, "Error reading data(pandas) from SQL") from e
 
 
 class AsyncBaseSQLClient(BaseSQLClient):
@@ -603,7 +596,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             self.connection = None
 
         except Exception as e:
-            logger.error(f"Error establishing database connection: {str(e)}")
+            logger.error("Error establishing database connection", exc_info=True)
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
@@ -639,7 +632,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.engine:
             raise ValueError("Engine is not initialized. Call load() first.")
 
-        logger.info(f"Running query: {query}")
+        logger.info("Running query", query=query)
         use_server_side_cursor = self.use_server_side_cursor
 
         # Use async context manager for automatic connection cleanup
@@ -671,8 +664,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
                     yield [dict(zip(column_names, row)) for row in rows]
 
             except Exception as e:
-                logger.error(f"Error executing query: {str(e)}")
-                raise
+                raise rewrap(e, "Error executing query") from e
             # Async connection automatically closed by context manager
 
         logger.info("Query execution completed")

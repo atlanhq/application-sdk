@@ -63,6 +63,7 @@ from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivitiesState,
     queries,
 )
+from application_sdk.common.exc_utils import rewrap
 
 # Column extraction helpers (generic orchestration utilities)
 from application_sdk.common.incremental.column_extraction import (
@@ -398,7 +399,8 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             )
             self.fetch_table_sql = resolved_sql
             logger.info(
-                f"Using incremental table SQL (marker: {args.metadata.marker_timestamp})"
+                "Using incremental table SQL",
+                marker=args.metadata.marker_timestamp,
             )
         else:
             base_sql = self._original_fetch_table_sql
@@ -468,7 +470,8 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         """
         args = IncrementalWorkflowArgs.model_validate(workflow_args)
         logger.info(
-            f"Fetching incremental marker (enabled: {args.metadata.incremental_extraction})"
+            "Fetching incremental marker",
+            enabled=args.metadata.incremental_extraction,
         )
 
         if not args.metadata.incremental_extraction:
@@ -561,8 +564,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
 
             return args.model_dump(by_alias=True, exclude_none=True)
         except Exception as e:
-            logger.error(f"Failed to read current-state: {e}")
-            raise
+            raise rewrap(e, "Failed to read current-state") from e
 
     @activity.defn
     @auto_heartbeater
@@ -583,8 +585,9 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         conn_qn, app_name = _extract_conn_and_app(workflow_args)
 
         logger.info(
-            f"Starting write_current_state with ancestral merge "
-            f"(workflow: {workflow_id}, run: {run_id})"
+            "Starting write_current_state with ancestral merge",
+            workflow_id=workflow_id,
+            run_id=run_id,
         )
 
         previous_state_dir = None
@@ -631,8 +634,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             return args.model_dump(by_alias=True, exclude_none=True)
 
         except Exception as e:
-            logger.error(f"Failed to write current-state: {e}")
-            raise
+            raise rewrap(e, "Failed to write current-state") from e
         finally:
             # Always clean up temporary previous state directory, even on failure
             cleanup_previous_state(previous_state_dir)
@@ -673,7 +675,9 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         transformed_dir = Path(transformed_local_path)
         transformed_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"Downloading transformed files from S3: {transformed_s3_prefix}")
+        logger.info(
+            "Downloading transformed files from S3", s3_prefix=transformed_s3_prefix
+        )
         await ObjectStore.download_prefix(
             source=transformed_s3_prefix,
             destination=str(transformed_dir),
@@ -681,7 +685,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         )
 
         batch_size = args.metadata.column_batch_size
-        logger.info(f"Preparing column extraction batches (batch_size={batch_size})")
+        logger.info("Preparing column extraction batches", batch_size=batch_size)
 
         # Step 2: Download previous current-state from S3 for backfill comparison
         current_state_available = args.metadata.current_state_available
@@ -701,8 +705,8 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
 
             if not has_table_files:
                 logger.info(
-                    f"Downloading current-state from S3 for backfill comparison: "
-                    f"{current_state_s3_prefix}"
+                    "Downloading current-state from S3 for backfill comparison",
+                    s3_prefix=current_state_s3_prefix,
                 )
                 try:
                     await download_s3_prefix_with_structure(
@@ -710,18 +714,21 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
                         local_destination=previous_current_state_dir,
                     )
                     logger.info(
-                        f"Current-state downloaded to: {previous_current_state_dir}"
+                        "Current-state downloaded",
+                        path=str(previous_current_state_dir),
                     )
-                except Exception as e:
+                except Exception:
                     logger.warning(
-                        f"Failed to download current-state for backfill: {e}"
+                        "Failed to download current-state for backfill",
+                        exc_info=True,
                     )
                     previous_current_state_dir = None
             else:
                 table_file_count = len(list(table_dir.glob("*.json")))
                 logger.info(
-                    f"Previous current-state already present at: "
-                    f"{previous_current_state_dir} (table files: {table_file_count})"
+                    "Previous current-state already present",
+                    path=str(previous_current_state_dir),
+                    table_file_count=table_file_count,
                 )
 
         # Step 3: Find backfill tables using DuckDB
@@ -730,7 +737,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             transformed_dir, previous_current_state_dir
         )
         backfill_count_for_log = len(backfill_qns) if backfill_qns else 0
-        logger.info(f"Found {backfill_count_for_log} tables needing backfill")
+        logger.info("Found tables needing backfill", count=backfill_count_for_log)
 
         # Step 4: Get tables needing column extraction using Daft
         filtered_df, changed_count, backfill_count, no_change_count = (
@@ -747,7 +754,11 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
                 "total_tables": 0,
             }
 
-        logger.info(f"Batching {total_tables} tables into groups of {batch_size}")
+        logger.info(
+            "Batching tables into groups",
+            total_tables=total_tables,
+            batch_size=batch_size,
+        )
 
         # Step 5: Batch table_ids into JSON files
         output_dir = _ensure_batches_dir(workflow_args)
@@ -773,13 +784,15 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             total_tables_batched += len(current_batch)
 
         logger.info(
-            f"Created {batch_idx} batch files for {total_tables_batched} tables "
-            f"in directory: {output_dir}"
+            "Created batch files",
+            batch_count=batch_idx,
+            total_tables=total_tables_batched,
+            output_dir=str(output_dir),
         )
 
         # Step 6: Upload batch files to S3 for multi-worker support
         batches_s3_prefix = get_object_store_prefix(str(output_dir))
-        logger.info(f"Uploading batch files to S3: {batches_s3_prefix}")
+        logger.info("Uploading batch files to S3", s3_prefix=batches_s3_prefix)
         await ObjectStore.upload_prefix(
             source=str(output_dir),
             destination=batches_s3_prefix,
@@ -832,14 +845,17 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         )
 
         if not batch_file.exists():
-            logger.warning(f"Batch file not found: {batch_file}")
+            logger.warning("Batch file not found", batch_file=str(batch_file))
             return {"batch_index": batch_idx, "records": 0, "status": "not_found"}
 
         # Read table_ids from JSON
         table_ids = json.loads(batch_file.read_text(encoding="utf-8"))
 
         logger.info(
-            f"Executing batch {batch_idx + 1}/{total_batches}: {len(table_ids)} tables"
+            "Executing column batch",
+            batch=batch_idx + 1,
+            total_batches=total_batches,
+            table_count=len(table_ids),
         )
 
         # Delegate to app-specific implementation
@@ -851,7 +867,10 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         )
 
         logger.info(
-            f"Batch {batch_idx + 1}/{total_batches} complete: {batch_records} records"
+            "Column batch complete",
+            batch=batch_idx + 1,
+            total_batches=total_batches,
+            records=batch_records,
         )
 
         args = IncrementalWorkflowArgs.model_validate(batch_args)
@@ -895,7 +914,9 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             raw_input_path = os.path.join(output_path, "raw")
         else:
             raw_input_path = os.path.join(output_path, "raw", typename)
-        logger.info(f"Reading raw data from: {raw_input_path} (typename={typename})")
+        logger.info(
+            "Reading raw data", raw_input_path=raw_input_path, typename=typename
+        )
 
         raw_input = ParquetFileReader(
             path=raw_input_path,
@@ -921,7 +942,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
 
             async for dataframe in raw_input:
                 if not is_empty_dataframe(dataframe):
-                    logger.info(f"Processing dataframe: (typename={typename})")
+                    logger.info("Processing dataframe", typename=typename)
 
                     transform_metadata = state.transformer.transform_metadata(
                         dataframe=dataframe,  # type: ignore
@@ -950,5 +971,6 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
                 id=workflow_id, value=workflow_args, type=StateType.WORKFLOWS
             )
         except Exception as e:
-            logger.error(f"Failed to save workflow state for {workflow_id}: {e}")
-            raise
+            raise rewrap(
+                e, f"Failed to save workflow state (workflow_id={workflow_id})"
+            ) from e

@@ -872,7 +872,7 @@ class TestBaseSQLMetadataExtractionActivities:
         # Mock exception
         mock_get_batched_dataframe.side_effect = Exception("Database error")
 
-        with pytest.raises(Exception, match="Database error"):
+        with pytest.raises(Exception, match="Error during query execution or output writing"):
             await sql_utils.execute_single_db(
                 sql_client, prepared_query, parquet_output, write_to_file=True
             )

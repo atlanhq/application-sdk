@@ -25,6 +25,7 @@ from typing import (
 
 import orjson
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import ENABLE_ATLAN_UPLOAD, UPSTREAM_OBJECT_STORE_NAME
@@ -140,8 +141,12 @@ class Reader(ABC):
                     os.remove(file_path)
                 elif os.path.isdir(file_path):
                     shutil.rmtree(file_path, ignore_errors=True)
-            except Exception as e:
-                logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
+            except Exception:
+                logger.warning(
+                    "Failed to clean up temporary file",
+                    file_path=file_path,
+                    exc_info=True,
+                )
 
         self._downloaded_files.clear()
 
@@ -421,8 +426,7 @@ class Writer(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)
         except Exception as e:
-            logger.error(f"Error writing batched dataframe: {str(e)}")
-            raise
+            raise rewrap(e, "Error writing batched dataframe") from e
 
     async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
         """Write a pandas DataFrame to Parquet files and upload to object store.
@@ -501,7 +505,7 @@ class Writer(ABC):
                 },
                 description="Number of errors while writing to files",
             )
-            logger.error(f"Error writing pandas dataframe to files: {str(e)}")
+            logger.error("Error writing pandas dataframe to files", exc_info=True)
             raise
 
     async def _write_batched_daft_dataframe(
@@ -536,8 +540,7 @@ class Writer(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self._write_daft_dataframe(dataframe)
         except Exception as e:
-            logger.error(f"Error writing batched daft dataframe: {str(e)}")
-            raise
+            raise rewrap(e, "Error writing batched daft dataframe") from e
 
     @abstractmethod
     async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):  # noqa: F821
@@ -625,8 +628,7 @@ class Writer(ABC):
             return self._statistics
 
         except Exception as e:
-            logger.error(f"Error closing writer: {str(e)}")
-            raise
+            raise rewrap(e, "Error closing writer") from e
 
     async def _upload_file(self, file_name: str):
         """Upload a file to the object store."""
@@ -683,8 +685,8 @@ class Writer(ABC):
                 labels={"type": "output", "error": str(e)},
                 description="Number of errors while writing to files",
             )
-            logger.error(f"Error flushing buffer to files: {str(e)}")
-            raise e
+            logger.error("Error flushing buffer to files", exc_info=True)
+            raise
 
     async def _write_statistics(
         self, typename: Optional[str] = None
@@ -726,8 +728,10 @@ class Writer(ABC):
                         statistics_dir, f"statistics-chunk-{cs}.json.ignore"
                     )
             except Exception:
-                # If accessing chunk_start fails, fallback to default filename
-                pass
+                logger.warning(
+                    "Failed to access chunk_start for statistics filename, using default",
+                    exc_info=True,
+                )
 
             # Write the statistics dictionary to the JSON file
             with open(output_file_name, "wb") as f:
@@ -742,5 +746,4 @@ class Writer(ABC):
 
             return statistics
         except Exception as e:
-            logger.error(f"Error writing statistics: {str(e)}")
-            raise
+            raise rewrap(e, "Error writing statistics") from e

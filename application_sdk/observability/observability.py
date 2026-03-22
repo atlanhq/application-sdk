@@ -129,8 +129,8 @@ class AtlanObservability(Generic[T], ABC):
         for instance in cls._instances:
             try:
                 await instance._flush_buffer(force=True)
-            except Exception as e:
-                logging.error(f"Error flushing instance: {e}")
+            except Exception:
+                logging.error("Error flushing instance", exc_info=True)
 
     @classmethod
     def _reset_for_testing(cls) -> None:
@@ -233,8 +233,8 @@ class AtlanObservability(Generic[T], ABC):
         except asyncio.CancelledError:
             # Handle task cancellation gracefully
             await self._flush_buffer(force=True)
-        except Exception as e:
-            logging.error(f"Error in periodic flush: {e}")
+        except Exception:
+            logging.error("Error in periodic flush", exc_info=True)
 
     async def _flush_buffer(self, force=False):
         """Flush the buffer to storage.
@@ -329,9 +329,10 @@ class AtlanObservability(Generic[T], ABC):
                             local_path,
                             store=self._get_deployment_store(),
                         )
-                    except Exception as e:
+                    except Exception:
                         logging.warning(
-                            f"Deployment objectstore upload failed (non-fatal): {e}"
+                            "Deployment objectstore upload failed (non-fatal)",
+                            exc_info=True,
                         )
 
                     # Upload to Atlan bucket (independent, MDLH reads from here)
@@ -343,12 +344,12 @@ class AtlanObservability(Generic[T], ABC):
                         )
 
                     logging.debug(
-                        f"Exported {len(partition_data)} records → {remote_key}"
+                        "Exported %d records → %s", len(partition_data), remote_key
                     )
 
-                except Exception as partition_error:
+                except Exception:
                     logging.error(
-                        f"Error processing partition {partition_path}: {str(partition_error)}"
+                        "Error processing partition %s", partition_path, exc_info=True
                     )
                 finally:
                     # Always clean up local file to prevent disk leaks
@@ -359,8 +360,8 @@ class AtlanObservability(Generic[T], ABC):
             if self._cleanup_enabled:
                 await self._check_and_cleanup()
 
-        except Exception as e:
-            logging.error(f"Error flushing records batch: {e}")
+        except Exception:
+            logging.error("Error flushing records batch", exc_info=True)
 
     async def _check_and_cleanup(self):
         """Check if cleanup is needed and perform it if necessary.
@@ -392,8 +393,8 @@ class AtlanObservability(Generic[T], ABC):
                         self._last_cleanup_key,
                         {"value": datetime.now().isoformat()},
                     )
-        except Exception as e:
-            logging.error(f"Error checking cleanup status: {e}")
+        except Exception:
+            logging.error("Error checking cleanup status", exc_info=True)
 
     async def _cleanup_old_records(self):
         """Clean up records older than retention_days.
@@ -467,8 +468,8 @@ class AtlanObservability(Generic[T], ABC):
                                     store=self._get_upstream_store(),
                                 )
 
-        except Exception as e:
-            logging.error(f"Error cleaning up old records: {e}")
+        except Exception:
+            logging.error("Error cleaning up old records", exc_info=True)
 
     def add_record(self, record: T):
         """Add a record to the buffer and process it.
@@ -507,8 +508,8 @@ class AtlanObservability(Generic[T], ABC):
             # Export the record
             self.export_record(record)
 
-        except Exception as e:
-            logging.error(f"Error adding record: {e}")
+        except Exception:
+            logging.error("Error adding record", exc_info=True)
 
 
 class DuckDBUI:

@@ -102,7 +102,9 @@ class BaseApplication:
 
         manifest_path = Path.cwd() / "contract" / "generated" / "manifest.json"
         if manifest_path.exists():
-            logger.info(f"Serving manifest from contract: {manifest_path}")
+            logger.info(
+                "Serving manifest from contract", manifest_path=str(manifest_path)
+            )
             with open(manifest_path) as f:
                 raw = f.read()
             raw = raw.replace("{deployment_name}", DEPLOYMENT_NAME or "default")
@@ -125,7 +127,7 @@ class BaseApplication:
             return
 
         for consume in event_registration.consumes:
-            logger.info(f"Setting up event registration for {consume}")
+            logger.debug("Setting up event registration", consume=str(consume))
             event_trigger: EventWorkflowTrigger = EventWorkflowTrigger(
                 event_type=consume.event_type,
                 event_name=consume.event_name,
@@ -298,8 +300,8 @@ class BaseApplication:
             try:
                 mcp_http_app = await self.mcp_server.get_http_app()
                 lifespan = mcp_http_app.lifespan
-            except Exception as e:
-                logger.warning(f"Failed to get MCP HTTP app: {e}")
+            except Exception:
+                logger.warning("Failed to get MCP HTTP app", exc_info=True)
 
         # Store for use by get_manifest()
         self._primary_workflow_class = workflow_class
@@ -317,8 +319,8 @@ class BaseApplication:
         if mcp_http_app:
             try:
                 self.server.app.mount("", mcp_http_app)  # Mount at root
-            except Exception as e:
-                logger.warning(f"Failed to mount MCP HTTP app: {e}")
+            except Exception:
+                logger.warning("Failed to mount MCP HTTP app", exc_info=True)
 
         # Register event-based workflows if any
         if self.event_subscriptions:

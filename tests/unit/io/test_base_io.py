@@ -395,7 +395,10 @@ class TestReaderDownloadFiles:
             )
 
             mock_logger.info.assert_called_with(
-                "Found 1 .parquet files locally at: /data/test.parquet"
+                "Found files locally",
+                file_count=1,
+                file_extension=".parquet",
+                path="/data/test.parquet",
             )
 
     @pytest.mark.asyncio
@@ -421,8 +424,9 @@ class TestReaderDownloadFiles:
                 )
 
             mock_logger.info.assert_any_call(
-                "No local .parquet files found at /data/test.parquet, checking object store..."
+                "No local files found, checking object store",
+                file_extension=".parquet",
+                path="/data/test.parquet",
             )
-            mock_logger.error.assert_called_with(
-                "Failed to download from object store: Download failed"
-            )
+            # Download error now propagates in the exception (SDKIOError.__cause__)
+            # rather than being separately logged, verified via pytest.raises above

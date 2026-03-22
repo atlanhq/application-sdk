@@ -17,6 +17,7 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.base import BaseClient
 from application_sdk.common.error_codes import ActivityError
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.observability.logger_adaptor import get_logger
@@ -86,20 +87,21 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
         # Extract credentials from state store if credential_guid is available
         if "credential_guid" in workflow_args:
             logger.info(
-                f"Retrieving credentials for credential_guid: {workflow_args['credential_guid']}"
+                "Retrieving credentials",
+                credential_guid=workflow_args["credential_guid"],
             )
             try:
                 credentials = await SecretStore.get_credentials(
                     workflow_args["credential_guid"]
                 )
                 logger.info(
-                    f"Successfully retrieved credentials with keys: {list(credentials.keys())}"
+                    "Successfully retrieved credentials",
+                    keys=list(credentials.keys()),
                 )
                 # Load the client with credentials
                 await client.load(credentials=credentials)
             except Exception as e:
-                logger.error(f"Failed to retrieve credentials: {e}")
-                raise
+                raise rewrap(e, "Failed to retrieve credentials") from e
 
         state.client = client
 
@@ -141,7 +143,8 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
         # Use workflow_id/workflow_run_id as the prefix to migrate specific data
         migration_prefix = workflow_args["output_path"]
         logger.info(
-            f"Starting migration from object store with prefix: {migration_prefix}"
+            "Starting migration from object store",
+            prefix=migration_prefix,
         )
         upload_stats = await AtlanStorage.migrate_from_objectstore_to_atlan(
             prefix=migration_prefix
@@ -149,14 +152,15 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
 
         # Log upload statistics
         logger.info(
-            f"Atlan upload completed: {upload_stats.migrated_files} files uploaded, "
-            f"{upload_stats.failed_migrations} failed"
+            "Atlan upload completed",
+            migrated_files=upload_stats.migrated_files,
+            failed_migrations=upload_stats.failed_migrations,
         )
 
         if upload_stats.failures:
-            logger.error(f"Upload failed with {len(upload_stats.failures)} errors")
+            logger.error("Upload failed", error_count=len(upload_stats.failures))
             for failure in upload_stats.failures:
-                logger.error(f"Upload error: {failure}")
+                logger.error("Upload error", failure=str(failure))
 
             # Mark activity as failed when there are upload failures
             raise ActivityError(

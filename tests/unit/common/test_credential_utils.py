@@ -230,8 +230,9 @@ class TestCredentialUtils:
         # Mock the state store (though it won't be reached due to the exception)
         mock_get_state.return_value = {}
 
-        with pytest.raises(Exception, match="Connection failed"):
+        with pytest.raises(Exception, match="Failed to fetch secret") as exc_info:
             SecretStore.get_secret("test-key", component_name="test-component")
+        assert "Connection failed" in str(exc_info.value.__cause__)
 
     @patch("application_sdk.services.secretstore.SecretStore.get_secret")
     def test_fetch_single_key_secrets_success(self, mock_get_secret):

@@ -12,6 +12,7 @@ from typing import (
 )
 
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.utils import (
     get_database_names,
@@ -117,10 +118,7 @@ async def execute_single_db(
 
         return True, batched_iterator
     except Exception as e:
-        logger.error(
-            f"Error during query execution or output writing: {e}", exc_info=True
-        )
-        raise
+        raise rewrap(e, "Error during query execution or output writing") from e
 
 
 async def finalize_multidb_results(
@@ -197,9 +195,9 @@ async def finalize_multidb_results(
             if concatenated_parquet_output:
                 await concatenated_parquet_output.write(concatenated)  # type: ignore
                 return await concatenated_parquet_output.close()
-        except Exception as e:
+        except Exception:
             logger.error(
-                f"Error concatenating multi-DB dataframes: {str(e)}",
+                "Error concatenating multi-DB dataframes",
                 exc_info=True,
             )
             raise
@@ -280,11 +278,14 @@ async def execute_multidb_flow(
             )
 
             if success:
-                logger.info(f"Successfully processed database: {database_name}")
+                logger.info(
+                    "Successfully processed database", database_name=database_name
+                )
 
-        except Exception as e:
+        except Exception:
             logger.error(
-                f"Failed to process database '{database_name}': {str(e)}. Failing the workflow.",
+                "Failed to process database, failing the workflow",
+                database_name=database_name,
                 exc_info=True,
             )
             raise
@@ -296,7 +297,9 @@ async def execute_multidb_flow(
 
     # Log results
     logger.info(
-        f"Successfully processed {len(successful_databases)} databases: {successful_databases}"
+        "Successfully processed databases",
+        count=len(successful_databases),
+        databases=successful_databases,
     )
 
     # Finalize results

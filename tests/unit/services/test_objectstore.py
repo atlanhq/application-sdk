@@ -391,10 +391,13 @@ class TestObjectStore:
         mock_client.invoke_binding.side_effect = Exception("File not found")
         mock_dapr_client.return_value.__enter__.return_value = mock_client
 
-        with pytest.raises(Exception, match="File not found"):
+        with pytest.raises(
+            Exception, match=r"Error getting file content \(key=nonexistent/file.txt\)"
+        ) as exc_info:
             await ObjectStore.get_content(
                 key="nonexistent/file.txt", suppress_error=False
             )
+        assert "File not found" in str(exc_info.value.__cause__)
 
     @patch("application_sdk.services.objectstore.DaprClient")
     async def test_get_content_file_not_found_with_suppress_error_true(
@@ -422,8 +425,11 @@ class TestObjectStore:
         mock_client.invoke_binding.return_value = mock_response
         mock_dapr_client.return_value.__enter__.return_value = mock_client
 
-        with pytest.raises(Exception, match="No data received for file: test/file.txt"):
+        with pytest.raises(
+            Exception, match=r"Error getting file content \(key=test/file.txt\)"
+        ) as exc_info:
             await ObjectStore.get_content(key="test/file.txt", suppress_error=False)
+        assert "No data received" in str(exc_info.value.__cause__)
 
     @patch("application_sdk.services.objectstore.DaprClient")
     async def test_get_content_no_data_with_suppress_error_true(
@@ -451,8 +457,11 @@ class TestObjectStore:
         mock_client.invoke_binding.return_value = mock_response
         mock_dapr_client.return_value.__enter__.return_value = mock_client
 
-        with pytest.raises(Exception, match="No data received for file: test/file.txt"):
+        with pytest.raises(
+            Exception, match=r"Error getting file content \(key=test/file.txt\)"
+        ) as exc_info:
             await ObjectStore.get_content(key="test/file.txt", suppress_error=False)
+        assert "No data received" in str(exc_info.value.__cause__)
 
     @patch("application_sdk.services.objectstore.DaprClient")
     async def test_get_content_empty_data_with_suppress_error_true(
@@ -495,7 +504,9 @@ class TestObjectStore:
         mock_logger.warning.assert_called_once()
         warning_call = mock_logger.warning.call_args[0][0]
         assert "exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH" in warning_call
-        assert f"{DAPR_MAX_GRPC_MESSAGE_LENGTH + 1:,}" in warning_call
+        # Data size is now passed as a structured kwarg
+        warning_kwargs = mock_logger.warning.call_args[1]
+        assert warning_kwargs.get("data_size_bytes") == DAPR_MAX_GRPC_MESSAGE_LENGTH + 1
 
         # Verify DaprClient was called with increased max_grpc_message_length
         # With 5% buffer: (DAPR_MAX_GRPC_MESSAGE_LENGTH + 1) + 5% of (DAPR_MAX_GRPC_MESSAGE_LENGTH + 1)

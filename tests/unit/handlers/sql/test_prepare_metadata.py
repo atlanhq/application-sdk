@@ -115,7 +115,8 @@ class TestPrepareMetadata:
 
         with pytest.raises(KeyError) as exc_info:
             await handler.prepare_metadata()
-        assert "TABLE_SCHEMA" in str(exc_info.value)
+        assert "Failed to fetch metadata" in str(exc_info.value)
+        assert "TABLE_SCHEMA" in str(exc_info.value.__cause__)
         handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio

@@ -80,8 +80,10 @@ class CorrelationContextOutboundInterceptor(WorkflowOutboundInterceptor):
                         new_headers[key] = payload
 
                 input = replace(input, headers=new_headers)
-        except Exception as e:
-            logger.warning(f"Failed to inject correlation context headers: {e}")
+        except Exception:
+            logger.warning(
+                "Failed to inject correlation context headers", exc_info=True
+            )
 
         return self.next.start_activity(input)
 
@@ -124,8 +126,10 @@ class CorrelationContextWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                         self.correlation_data["correlation_id"] = cid
                     if self.correlation_data:
                         correlation_context.set(self.correlation_data)
-        except Exception as e:
-            logger.warning(f"Failed to extract correlation context from args: {e}")
+        except Exception:
+            logger.warning(
+                "Failed to extract correlation context from args", exc_info=True
+            )
 
         return await super().execute_workflow(input)
 
@@ -151,8 +155,10 @@ class CorrelationContextActivityInboundInterceptor(ActivityInboundInterceptor):
             if atlan_fields:
                 correlation_context.set(atlan_fields)
 
-        except Exception as e:
-            logger.warning(f"Failed to extract correlation context from headers: {e}")
+        except Exception:
+            logger.warning(
+                "Failed to extract correlation context from headers", exc_info=True
+            )
 
         return await super().execute_activity(input)
 

@@ -47,7 +47,11 @@ def get_ip_address():
             s.close()
             return ip
         except Exception:
-            return "127.0.0.1"  # Return localhost if all else fails
+            logger.warning(
+                "IP detection via socket failed, falling back to 127.0.0.1",
+                exc_info=True,
+            )
+            return "127.0.0.1"
 
 
 @router.get("/health")
@@ -103,7 +107,7 @@ async def shutdown(force: bool = False):
                 for task in asyncio.all_tasks()
                 if task is not asyncio.current_task()
             ]
-            logger.info(f"Cancelling {len(pending_tasks)} tasks")
+            logger.info("Cancelling pending tasks", task_count=len(pending_tasks))
 
             # Send cancel signal to all pending tasks
             for task in pending_tasks:
@@ -114,8 +118,8 @@ async def shutdown(force: bool = False):
                 await asyncio.wait(pending_tasks, timeout=10)
             except asyncio.CancelledError:
                 logger.info("Tasks cancelled successfully")
-            except Exception as e:
-                logger.error(f"Error during task cancellation: {e}")
+            except Exception:
+                logger.error("Error during task cancellation", exc_info=True)
 
     # TO BE IMPLEMENTED - currently graceful shutdown is dysfunctional
     # asyncio.create_task(shutdown())

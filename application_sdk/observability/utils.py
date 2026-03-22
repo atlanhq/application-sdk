@@ -77,8 +77,8 @@ def parse_otel_resource_attributes(env_var: str) -> dict[str, str]:
                 for item in attributes
                 if "=" in item
             }
-    except Exception as e:
-        logging.error(f"Failed to parse OTLP resource attributes: {e}")
+    except Exception:
+        logging.error("Failed to parse OTLP resource attributes", exc_info=True)
     return {}
 
 

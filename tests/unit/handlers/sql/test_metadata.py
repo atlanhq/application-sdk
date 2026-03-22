@@ -271,7 +271,8 @@ class TestSQLWorkflowHandler:
 
         with pytest.raises(Exception) as exc_info:
             await handler.fetch_metadata(metadata_type=MetadataType.DATABASE)
-        assert str(exc_info.value) == "Database query failed"
+        assert "Failed to fetch metadata" in str(exc_info.value)
+        assert "Database query failed" in str(exc_info.value.__cause__)
         mock_sql_client.run_query.assert_called_once_with(handler.metadata_sql)
 
     @pytest.mark.asyncio
@@ -388,10 +389,11 @@ class TestSQLWorkflowHandler:
         )
 
         # Execute and Assert with MetadataType.SCHEMA but no database
-        with pytest.raises(
-            ValueError, match="Database must be specified when fetching schemas"
-        ):
+        with pytest.raises(ValueError, match="Failed to fetch metadata") as exc_info:
             await handler.fetch_metadata(metadata_type=MetadataType.SCHEMA)
+        assert "Database must be specified when fetching schemas" in str(
+            exc_info.value.__cause__
+        )
 
         # Verify neither method was called
         mock_sql_client.run_query.assert_not_called()
@@ -437,8 +439,9 @@ class TestSQLWorkflowHandler:
     ) -> None:
         """Test fetch_metadata with None type and no database (should error)"""
         # Execute and Assert with None type and no database
-        with pytest.raises(ValueError, match="Invalid metadata type: None"):
+        with pytest.raises(ValueError, match="Failed to fetch metadata") as exc_info:
             await handler.fetch_metadata()
+        assert "Invalid metadata type: None" in str(exc_info.value.__cause__)
 
         # Verify neither method was called
         mock_sql_client.run_query.assert_not_called()
@@ -450,8 +453,9 @@ class TestSQLWorkflowHandler:
     ) -> None:
         """Test fetch_metadata with None type and database (should error)"""
         # Execute and Assert with None type and database
-        with pytest.raises(ValueError, match="Invalid metadata type: None"):
+        with pytest.raises(ValueError, match="Failed to fetch metadata") as exc_info:
             await handler.fetch_metadata(database="test_db")
+        assert "Invalid metadata type: None" in str(exc_info.value.__cause__)
 
         # Verify neither method was called
         mock_sql_client.run_query.assert_not_called()

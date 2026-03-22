@@ -199,11 +199,11 @@ class BaseClient(ClientInterface):
                     auth=auth if auth is not None else httpx.USE_CLIENT_DEFAULT,
                 )
                 return response
-            except httpx.HTTPStatusError as e:
-                logger.error(f"HTTP error for {url}: {e.response.status_code}")
+            except httpx.HTTPStatusError:
+                logger.error("HTTP error for %s", url, exc_info=True)
                 return None
-            except Exception as e:
-                logger.error(f"Request failed for {url}: {e}")
+            except Exception:
+                logger.error("Request failed for %s", url, exc_info=True)
                 return None
 
     async def execute_http_post_request(
@@ -285,9 +285,9 @@ class BaseClient(ClientInterface):
                     follow_redirects=follow_redirects,
                 )
                 return response
-            except httpx.HTTPStatusError as e:
-                logger.error(f"HTTP error for {url}: {e.response.status_code}")
+            except httpx.HTTPStatusError:
+                logger.error("HTTP error for %s", url, exc_info=True)
                 return None
-            except Exception as e:
-                logger.error(f"Request failed for {url}: {e}")
+            except Exception:
+                logger.error("Request failed for %s", url, exc_info=True)
                 return None

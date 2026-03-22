@@ -53,13 +53,15 @@ def temporal_client() -> TemporalWorkflowClient:
 @pytest.fixture
 def mock_dapr_output_client() -> Generator[Mock, None, None]:
     """Mock Dapr output clients."""
-    with patch(
-        "application_sdk.clients.temporal.StateStore"
-    ) as mock_state_output, patch(
-        "application_sdk.services.statestore.StateStore.get_state"
-    ) as mock_get_state, patch(
-        "application_sdk.services.objectstore.ObjectStore.upload_file"
-    ) as mock_push_file:
+    with (
+        patch("application_sdk.clients.temporal.StateStore") as mock_state_output,
+        patch(
+            "application_sdk.services.statestore.StateStore.get_state"
+        ) as mock_get_state,
+        patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
+        ) as mock_push_file,
+    ):
         mock_state_output.save_state = AsyncMock()
         mock_state_output.save_state_object = AsyncMock()
         mock_get_state.return_value = {}  # Return empty state
@@ -540,7 +542,7 @@ async def test_publish_token_refresh_event_exception_handling(
     mock_publish_event.assert_called_once()
     mock_logger.info.assert_not_called()
     mock_logger.warning.assert_called_once_with(
-        "Failed to publish token refresh event: Event store connection failed"
+        "Failed to publish token refresh event", exc_info=True
     )
 
 

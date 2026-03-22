@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Callable, Dict, Optional, Set
 
 from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
     count_json_files_recursive,
@@ -110,7 +111,9 @@ async def download_transformed_data(output_path: str) -> Path:
     transformed_local_path = os.path.join(output_path_str, "transformed")
     transformed_s3_prefix = get_object_store_prefix(transformed_local_path)
 
-    logger.info(f"Downloading transformed files from S3: {transformed_s3_prefix}")
+    logger.info(
+        "Downloading transformed files from S3", s3_prefix=transformed_s3_prefix
+    )
 
     # Ensure local directory exists before download
     transformed_dir = Path(transformed_local_path)
@@ -171,21 +174,21 @@ async def prepare_previous_state(
     previous_state_temp_dir.mkdir(parents=True, exist_ok=True)
 
     # Download previous state from S3 to temporary location
-    logger.info(f"Downloading previous state from S3: {current_state_s3_prefix}")
+    logger.info("Downloading previous state from S3", s3_prefix=current_state_s3_prefix)
     try:
         await download_s3_prefix_with_structure(
             s3_prefix=current_state_s3_prefix,
             local_destination=previous_state_temp_dir,
         )
         logger.info(
-            f"Previous state downloaded to temporary location: {previous_state_temp_dir}"
+            "Previous state downloaded to temporary location",
+            path=str(previous_state_temp_dir),
         )
         return previous_state_temp_dir
     except Exception as e:
-        logger.error(f"Failed to download previous state: {e}")
         if previous_state_temp_dir.exists():
             shutil.rmtree(previous_state_temp_dir)
-        raise
+        raise rewrap(e, "Failed to download previous state") from e
 
 
 def copy_non_column_entities(
@@ -221,7 +224,11 @@ def copy_non_column_entities(
                 entity_dir, dest_dir, max_workers=copy_workers
             )
             copy_counts[entity_type.value] = count
-            logger.info(f"Copied {count} {entity_type.value} files to current state")
+            logger.info(
+                "Copied entity files to current state",
+                entity_type=entity_type.value,
+                count=count,
+            )
 
     return copy_counts
 
@@ -259,7 +266,7 @@ async def upload_current_state(
         destination=current_state_s3_prefix,
         store_name=UPSTREAM_OBJECT_STORE_NAME,
     )
-    logger.info(f"Current-state uploaded to S3: {current_state_s3_prefix}")
+    logger.info("Current-state uploaded to S3", s3_prefix=current_state_s3_prefix)
 
     return current_state_s3_prefix
 
@@ -280,12 +287,13 @@ def cleanup_previous_state(previous_state_dir: Optional[Path]) -> None:
         try:
             shutil.rmtree(previous_state_dir)
             logger.info(
-                f"Cleaned up temporary previous state directory: {previous_state_dir}"
+                "Cleaned up temporary previous state directory",
+                path=str(previous_state_dir),
             )
-        except Exception as e:
+        except Exception:
             # Non-critical cleanup failure - log warning but don't raise
             logger.warning(
-                f"Failed to clean up temporary previous state directory: {e}"
+                "Failed to clean up temporary previous state directory", exc_info=True
             )
 
 
@@ -379,7 +387,8 @@ async def create_current_state_snapshot(
                 )
 
             logger.info(
-                f"Creating current-state snapshot with {get_scope_length(table_scope)} tables"
+                "Creating current-state snapshot",
+                table_count=get_scope_length(table_scope),
             )
 
             # Step 2: Clear and prepare current-state directory
@@ -408,14 +417,14 @@ async def create_current_state_snapshot(
             total_files = count_json_files_recursive(current_state_dir)
 
             logger.info(
-                f"Current-state merge complete: "
-                f"tables={get_scope_length(table_scope)}, "
-                f"columns={merge_result.columns_total} "
-                f"(current={merge_result.columns_from_current}, "
-                f"ancestral={merge_result.columns_from_ancestral}), "
-                f"excluded="
-                f"{merge_result.excluded_already_extracted + merge_result.excluded_table_removed}, "
-                f"total_files={total_files}"
+                "Current-state merge complete",
+                tables=get_scope_length(table_scope),
+                columns_total=merge_result.columns_total,
+                columns_from_current=merge_result.columns_from_current,
+                columns_from_ancestral=merge_result.columns_from_ancestral,
+                excluded=merge_result.excluded_already_extracted
+                + merge_result.excluded_table_removed,
+                total_files=total_files,
             )
 
             # Step 5: Create incremental-diff (only changed assets from this run)
@@ -451,7 +460,8 @@ async def create_current_state_snapshot(
                     store_name=UPSTREAM_OBJECT_STORE_NAME,
                 )
                 logger.info(
-                    f"Incremental-diff uploaded to S3: {incremental_diff_s3_prefix}"
+                    "Incremental-diff uploaded to S3",
+                    s3_prefix=incremental_diff_s3_prefix,
                 )
             else:
                 logger.info(
@@ -470,7 +480,7 @@ async def create_current_state_snapshot(
         destination=current_state_s3_prefix,
         store_name=UPSTREAM_OBJECT_STORE_NAME,
     )
-    logger.info(f"Current-state uploaded to S3: {current_state_s3_prefix}")
+    logger.info("Current-state uploaded to S3", s3_prefix=current_state_s3_prefix)
 
     return CurrentStateResult(
         current_state_dir=current_state_dir,

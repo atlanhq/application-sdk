@@ -259,14 +259,18 @@ def create_aws_client(
         # Priority 1: Use provided session
         if session is not None:
             logger.debug(
-                f"Creating {service} client using provided session in region {region}"
+                "Creating AWS client using provided session",
+                service=service,
+                region=region,
             )
             return session.client(service, region_name=region)  # type: ignore
 
         # Priority 2: Use temporary credentials
         if temp_credentials is not None:
             logger.debug(
-                f"Creating {service} client using temporary credentials in region {region}"
+                "Creating AWS client using temporary credentials",
+                service=service,
+                region=region,
             )
             return boto3.client(  # type: ignore
                 service,
@@ -279,13 +283,14 @@ def create_aws_client(
         # Priority 3: Use default credentials
         if use_default_credentials:
             logger.debug(
-                f"Creating {service} client using default credentials in region {region}"
+                "Creating AWS client using default credentials",
+                service=service,
+                region=region,
             )
             return boto3.client(service, region_name=region)  # type: ignore
 
     except Exception as e:
-        logger.error(f"Failed to create {service} client in region {region}: {e}")
-        raise Exception(f"Failed to create {service} client: {str(e)}")
+        raise Exception(f"Failed to create {service} client: {str(e)}") from e
 
 
 def create_engine_url(
@@ -332,10 +337,11 @@ def get_all_aws_regions() -> list[str]:
         response = ec2_client.describe_regions()
         regions = [region["RegionName"] for region in response["Regions"]]
         return sorted(regions)  # Sort for consistent ordering
-    except Exception as e:
+    except Exception:
         # Fallback to a comprehensive hardcoded list if API call fails
         logger.warning(
-            f"Failed to retrieve AWS regions dynamically: {e}. Using fallback list."
+            "Failed to retrieve AWS regions dynamically, using fallback list",
+            exc_info=True,
         )
         return [
             "ap-northeast-1",

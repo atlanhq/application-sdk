@@ -86,13 +86,18 @@ async def download_files(
     )
     if local_files:
         logger.info(
-            f"Found {len(local_files)} {file_extension} files locally at: {path}"
+            "Found files locally",
+            file_count=len(local_files),
+            file_extension=file_extension,
+            path=path,
         )
         return local_files
 
     # Step 2: Try to download from object store
     logger.info(
-        f"No local {file_extension} files found at {path}, checking object store..."
+        "No local files found, checking object store",
+        file_extension=file_extension,
+        path=path,
     )
 
     try:
@@ -142,7 +147,9 @@ async def download_files(
         # Check results
         if downloaded_paths:
             logger.info(
-                f"Successfully downloaded {len(downloaded_paths)} {file_extension} files from object store"
+                "Successfully downloaded files from object store",
+                file_count=len(downloaded_paths),
+                file_extension=file_extension,
             )
             return downloaded_paths
         else:
@@ -151,11 +158,10 @@ async def download_files(
             )
 
     except Exception as e:
-        logger.error(f"Failed to download from object store: {str(e)}")
         raise IOError(
             f"{IOError.OBJECT_STORE_DOWNLOAD_ERROR}: No {file_extension} files found locally at '{path}' and failed to download from object store. "
             f"Error: {str(e)}"
-        )
+        ) from e
 
 
 def estimate_dataframe_record_size(

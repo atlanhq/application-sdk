@@ -61,9 +61,9 @@ async def cleanup() -> CleanupResult:
     # Use configured paths or default to workflow-specific artifacts directory
     if CLEANUP_BASE_PATHS:
         base_paths = CLEANUP_BASE_PATHS
-        logger.info(f"Using CLEANUP_BASE_PATHS: {base_paths} for cleanup")
+        logger.info("Using CLEANUP_BASE_PATHS for cleanup", base_paths=base_paths)
 
-    logger.info(f"Cleaning up all contents from base paths: {base_paths}")
+    logger.info("Cleaning up all contents from base paths", base_paths=base_paths)
 
     for base_path in base_paths:
         try:
@@ -71,17 +71,19 @@ async def cleanup() -> CleanupResult:
                 if os.path.isdir(base_path):
                     # Remove entire directory and recreate it empty
                     shutil.rmtree(base_path)
-                    logger.info(f"Cleaned up all contents from: {base_path}")
+                    logger.info("Cleaned up all contents from path", path=base_path)
                     path_results[base_path] = True
                 else:
-                    logger.warning(f"Path is not a directory: {base_path}")
+                    logger.warning("Path is not a directory", path=base_path)
                     path_results[base_path] = False
             else:
-                logger.debug(f"Directory doesn't exist: {base_path}")
+                logger.debug("Directory doesn't exist", path=base_path)
                 path_results[base_path] = True
 
-        except Exception as e:
-            logger.error(f"Unexpected error cleaning up {base_path}: {e}")
+        except Exception:
+            logger.error(
+                "Unexpected error cleaning up path", exc_info=True, path=base_path
+            )
             path_results[base_path] = False
 
     return CleanupResult(
@@ -112,9 +114,6 @@ class CleanupWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         output = None
         try:
             output = await self.next.execute_workflow(input)
-        except Exception:
-            raise
-
         finally:
             # Always attempt cleanup regardless of workflow success/failure
             try:
@@ -128,8 +127,8 @@ class CleanupWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
                 logger.info("Cleanup completed successfully")
 
-            except Exception as e:
-                logger.warning(f"Failed to cleanup artifacts: {e}")
+            except Exception:
+                logger.warning("Failed to cleanup artifacts", exc_info=True)
                 # Don't re-raise - cleanup failures shouldn't fail the workflow
 
         return output

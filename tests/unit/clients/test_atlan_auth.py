@@ -21,18 +21,23 @@ async def auth_client() -> AtlanAuthClient:
         }
         return mock_config.get(key)
 
-    with patch("application_sdk.constants.AUTH_ENABLED", True), patch(
-        "application_sdk.constants.AUTH_URL", "http://auth.test/token"
-    ), patch("application_sdk.constants.APPLICATION_NAME", "test-app"), patch(
-        "application_sdk.clients.atlan_auth.APPLICATION_NAME", "test-app"
-    ), patch(
-        "application_sdk.constants.WORKFLOW_AUTH_CLIENT_ID_KEY", "test_app_client_id"
-    ), patch(
-        "application_sdk.constants.WORKFLOW_AUTH_CLIENT_SECRET_KEY",
-        "test_app_client_secret",
-    ), patch(
-        "application_sdk.clients.atlan_auth.SecretStore.get_deployment_secret",
-        side_effect=mock_get_deployment_secret,
+    with (
+        patch("application_sdk.constants.AUTH_ENABLED", True),
+        patch("application_sdk.constants.AUTH_URL", "http://auth.test/token"),
+        patch("application_sdk.constants.APPLICATION_NAME", "test-app"),
+        patch("application_sdk.clients.atlan_auth.APPLICATION_NAME", "test-app"),
+        patch(
+            "application_sdk.constants.WORKFLOW_AUTH_CLIENT_ID_KEY",
+            "test_app_client_id",
+        ),
+        patch(
+            "application_sdk.constants.WORKFLOW_AUTH_CLIENT_SECRET_KEY",
+            "test_app_client_secret",
+        ),
+        patch(
+            "application_sdk.clients.atlan_auth.SecretStore.get_deployment_secret",
+            side_effect=mock_get_deployment_secret,
+        ),
     ):
         client = AtlanAuthClient()
         return client

@@ -11,6 +11,7 @@ from typing import (
     cast,
 )
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
     DAPR_MAX_GRPC_MESSAGE_LENGTH,
@@ -195,15 +196,14 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(f"Reading {len(parquet_files)} parquet files")
+            logger.info("Reading parquet files", file_count=len(parquet_files))
 
             return pd.concat(
                 (pd.read_parquet(parquet_file) for parquet_file in parquet_files),
                 ignore_index=True,
             )
         except Exception as e:
-            logger.error(f"Error reading data from parquet file(s): {str(e)}")
-            raise
+            raise rewrap(e, "Error reading data from parquet file(s)") from e
 
     async def _get_batched_dataframe(
         self,
@@ -256,7 +256,9 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(f"Reading {len(parquet_files)} parquet files in batches")
+            logger.info(
+                "Reading parquet files in batches", file_count=len(parquet_files)
+            )
 
             # Process each file individually to maintain memory efficiency
             for parquet_file in parquet_files:
@@ -264,10 +266,7 @@ class ParquetFileReader(Reader):
                 for i in range(0, len(df), self.chunk_size):
                     yield df.iloc[i : i + self.chunk_size]  # type: ignore
         except Exception as e:
-            logger.error(
-                f"Error reading data from parquet file(s) in batches: {str(e)}"
-            )
-            raise
+            raise rewrap(e, "Error reading data from parquet file(s) in batches") from e
 
     async def _get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Read data from parquet file(s) and return as daft DataFrame.
@@ -309,15 +308,14 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(f"Reading {len(parquet_files)} parquet files with daft")
+            logger.info(
+                "Reading parquet files with daft", file_count=len(parquet_files)
+            )
 
             # Use the discovered/downloaded files directly
             return daft.read_parquet(parquet_files)
         except Exception as e:
-            logger.error(
-                f"Error reading data from parquet file(s) using daft: {str(e)}"
-            )
-            raise
+            raise rewrap(e, "Error reading data from parquet file(s) using daft") from e
 
     async def _get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # type: ignore
         """Get batched daft dataframe from parquet file(s).
@@ -369,7 +367,9 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info(f"Reading {len(parquet_files)} parquet files as daft batches")
+            logger.info(
+                "Reading parquet files as daft batches", file_count=len(parquet_files)
+            )
 
             # Create a lazy dataframe without loading data into memory
             lazy_df = daft.read_parquet(parquet_files)
@@ -384,9 +384,10 @@ class ParquetFileReader(Reader):
 
             del lazy_df
 
-        except Exception as error:
+        except Exception:
             logger.error(
-                f"Error reading data from parquet file(s) in batches using daft: {error}"
+                "Error reading data from parquet file(s) in batches using daft",
+                exc_info=True,
             )
             raise
 
@@ -537,9 +538,9 @@ class ParquetFileWriter(Writer):
             # Phase 3: Cleanup temp folders
             await self._cleanup_temp_folders()
 
-        except Exception as e:
+        except Exception:
             logger.error(
-                f"Error in batched dataframe writing with consolidation: {str(e)}"
+                "Error in batched dataframe writing with consolidation", exc_info=True
             )
             await self._cleanup_temp_folders()  # Cleanup on error
             raise
@@ -626,8 +627,8 @@ class ParquetFileWriter(Writer):
                 # Delete the directory from object store
                 try:
                     await ObjectStore.delete_prefix(prefix=self.path)
-                except FileNotFoundError as e:
-                    logger.info(f"No files found under prefix {self.path}: {str(e)}")
+                except FileNotFoundError:
+                    logger.info("No files found under prefix", path=self.path)
             for path in file_paths:
                 if ENABLE_ATLAN_UPLOAD:
                     await ObjectStore.upload_file(
@@ -657,7 +658,7 @@ class ParquetFileWriter(Writer):
                 },
                 description="Number of errors while writing to Parquet files",
             )
-            logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
+            logger.error("Error writing daft dataframe to parquet", exc_info=True)
             raise
 
     def get_full_path(self) -> str:
@@ -798,12 +799,16 @@ class ParquetFileWriter(Writer):
             )
 
             logger.info(
-                f"Consolidated folder {self.temp_folder_index} with {self.current_folder_records} records"
+                "Consolidated folder",
+                folder_index=self.temp_folder_index,
+                record_count=self.current_folder_records,
             )
 
-        except Exception as e:
+        except Exception:
             logger.error(
-                f"Error consolidating folder {self.temp_folder_index}: {str(e)}"
+                "Error consolidating folder",
+                folder_index=self.temp_folder_index,
+                exc_info=True,
             )
             raise
 
@@ -833,8 +838,8 @@ class ParquetFileWriter(Writer):
             self.temp_folder_index = 0
             self.current_folder_records = 0
 
-        except Exception as e:
-            logger.warning(f"Error cleaning up temp folders: {str(e)}")
+        except Exception:
+            logger.warning("Error cleaning up temp folders", exc_info=True)
 
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
         """Write a chunk to a Parquet file.

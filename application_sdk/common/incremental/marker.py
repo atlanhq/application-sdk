@@ -28,6 +28,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.incremental.helpers import (
     download_marker_from_s3,
     get_persistent_artifacts_path,
@@ -89,8 +90,10 @@ def process_marker_timestamp(
     if prepone_enabled and prepone_hours > 0:
         adjusted = prepone_marker_timestamp(normalized, prepone_hours)
         logger.info(
-            f"Marker preponed: original={normalized}, adjusted={adjusted} "
-            f"(preponed by {prepone_hours}h)"
+            "Marker preponed",
+            original=normalized,
+            adjusted=adjusted,
+            prepone_hours=prepone_hours,
         )
         return adjusted
 
@@ -144,7 +147,7 @@ async def fetch_marker_from_storage(
         )
 
     if not marker:
-        logger.info(f"No marker found - full extraction (next_marker={next_marker})")
+        logger.info("No marker found - full extraction", next_marker=next_marker)
         return None, next_marker
 
     # Process the marker (normalize and optionally prepone)
@@ -155,7 +158,9 @@ async def fetch_marker_from_storage(
     )
 
     logger.info(
-        f"Incremental extraction: marker={processed_marker}, next={next_marker}"
+        "Incremental extraction",
+        marker=processed_marker,
+        next_marker=next_marker,
     )
 
     return processed_marker, next_marker
@@ -204,11 +209,13 @@ async def persist_marker_to_storage(
     local_marker_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Write marker to local file
-    logger.info(f"Writing marker to local file: {local_marker_path}")
+    logger.info(
+        "Writing marker to local file", local_marker_path=str(local_marker_path)
+    )
     local_marker_path.write_text(marker_value, encoding="utf-8")
 
     # Upload marker to S3
-    logger.info(f"Uploading marker to S3: {marker_s3_key}")
+    logger.info("Uploading marker to S3", marker_s3_key=marker_s3_key)
     try:
         await ObjectStore.upload_file(
             source=str(local_marker_path),
@@ -216,10 +223,13 @@ async def persist_marker_to_storage(
             store_name=UPSTREAM_OBJECT_STORE_NAME,
             retain_local_copy=True,
         )
-        logger.info(f"Marker uploaded to S3: {marker_s3_key} → {marker_value}")
+        logger.info(
+            "Marker uploaded to S3",
+            marker_s3_key=marker_s3_key,
+            marker_value=marker_value,
+        )
     except Exception as e:
-        logger.error(f"Failed to upload marker to S3: {e}")
-        raise
+        raise rewrap(e, "Failed to upload marker to S3") from e
 
     return {
         "marker_written": True,

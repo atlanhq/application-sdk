@@ -103,7 +103,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
 
-        logger.info(f"Starting miner workflow for {workflow_id}")
+        logger.info("Starting miner workflow", workflow_id=workflow_id)
         retry_policy = _to_temporal_retry_policy(
             RetryPolicy(max_attempts=6, backoff_coefficient=2)
         )
@@ -137,4 +137,4 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
 
         await asyncio.gather(*miner_activities)
 
-        logger.info(f"Miner workflow completed for {workflow_id}")
+        logger.info("Miner workflow completed", workflow_id=workflow_id)

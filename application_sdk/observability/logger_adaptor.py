@@ -383,8 +383,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                             target=self._start_asyncio_flush, daemon=True
                         ).start()
                     AtlanLoggerAdapter._flush_task_started = True
-                except Exception as e:
-                    logging.error(f"Failed to start flush task: {e}")
+                except Exception:
+                    logging.error("Failed to start flush task", exc_info=True)
 
         # OTLP export: build list of processors, wire up only if any are enabled.
         #   ENABLE_OTLP_LOGS: primary exporter (host DaemonSet, central ClickHouse)
@@ -405,7 +405,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                     )
                 )
                 logging.info(
-                    f"OTLP primary exporter enabled: {OTEL_EXPORTER_OTLP_ENDPOINT}"
+                    "OTLP primary exporter enabled: %s", OTEL_EXPORTER_OTLP_ENDPOINT
                 )
 
             if ENABLE_OTLP_WORKFLOW_LOGS and OTEL_WORKFLOW_LOGS_ENDPOINT:
@@ -421,7 +421,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                     )
                 )
                 logging.info(
-                    f"OTLP workflow logs exporter enabled: {OTEL_WORKFLOW_LOGS_ENDPOINT}"
+                    "OTLP workflow logs exporter enabled: %s",
+                    OTEL_WORKFLOW_LOGS_ENDPOINT,
                 )
 
             if otlp_processors:
@@ -435,8 +436,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
                 self.logger.add(self.otlp_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
 
-        except Exception as e:
-            logging.error(f"Failed to setup OTLP logging: {str(e)}")
+        except Exception:
+            logging.error("Failed to setup OTLP logging", exc_info=True)
 
         # Mark initialization complete only after all sinks are successfully added
         AtlanLoggerAdapter._initialized = True
@@ -604,8 +605,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 bound_logger.opt(exception=exc_info).debug(msg, *args)
             else:
                 bound_logger.debug(msg, *args)
-        except Exception as e:
-            logging.error(f"Error in debug logging: {e}")
+        except Exception:
+            logging.error("Error in debug logging", exc_info=True)
             self._sync_flush()
 
     def info(self, msg: str, *args: Any, **kwargs: Any):
@@ -625,8 +626,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 bound_logger.opt(exception=exc_info).info(msg, *args)
             else:
                 bound_logger.info(msg, *args)
-        except Exception as e:
-            logging.error(f"Error in info logging: {e}")
+        except Exception:
+            logging.error("Error in info logging", exc_info=True)
             self._sync_flush()
 
     def warning(self, msg: str, *args: Any, **kwargs: Any):
@@ -646,8 +647,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 bound_logger.opt(exception=exc_info).warning(msg, *args)
             else:
                 bound_logger.warning(msg, *args)
-        except Exception as e:
-            logging.error(f"Error in warning logging: {e}")
+        except Exception:
+            logging.error("Error in warning logging", exc_info=True)
             self._sync_flush()
 
     def error(self, msg: str, *args: Any, **kwargs: Any):
@@ -671,8 +672,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 bound_logger.error(msg, *args)
             # Force flush on error logs
             self._sync_flush()
-        except Exception as e:
-            logging.error(f"Error in error logging: {e}")
+        except Exception:
+            logging.error("Error in error logging", exc_info=True)
             self._sync_flush()
 
     def exception(self, msg: str, *args: Any, **kwargs: Any):
@@ -711,8 +712,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 bound_logger.critical(msg, *args)
             # Force flush on critical logs
             self._sync_flush()
-        except Exception as e:
-            logging.error(f"Error in critical logging: {e}")
+        except Exception:
+            logging.error("Error in critical logging", exc_info=True)
             self._sync_flush()
 
     def activity(self, msg: str, *args: Any, **kwargs: Any):
@@ -731,8 +732,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             local_kwargs["log_type"] = "activity"
             processed_msg, processed_kwargs = self.process(msg, local_kwargs)
             self.logger.bind(**processed_kwargs).log("ACTIVITY", processed_msg, *args)
-        except Exception as e:
-            logging.error(f"Error in activity logging: {e}")
+        except Exception:
+            logging.error("Error in activity logging", exc_info=True)
             self._sync_flush()
 
     def metric(self, msg: str, *args: Any, **kwargs: Any):
@@ -751,8 +752,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             local_kwargs["log_type"] = "metric"
             processed_msg, processed_kwargs = self.process(msg, local_kwargs)
             self.logger.bind(**processed_kwargs).log("METRIC", processed_msg, *args)
-        except Exception as e:
-            logging.error(f"Error in metric logging: {e}")
+        except Exception:
+            logging.error("Error in metric logging", exc_info=True)
             self._sync_flush()
 
     def _send_to_otel(self, record: Dict[str, Any]):
@@ -770,8 +771,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             otel_record = self._create_log_record(record)
             otel_logger = self.logger_provider.get_logger(SERVICE_NAME)
             otel_logger.emit(otel_record)
-        except Exception as e:
-            logging.error(f"Error sending log to OpenTelemetry: {e}")
+        except Exception:
+            logging.error("Error sending log to OpenTelemetry", exc_info=True)
 
     def _sync_flush(self):
         """Flush the log buffer, dispatching appropriately for the current context.
@@ -795,8 +796,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                     loop.run_until_complete(self._flush_buffer(force=True))
                 finally:
                     loop.close()
-        except Exception as e:
-            logging.error(f"Error during sync flush: {e}")
+        except Exception:
+            logging.error("Error during sync flush", exc_info=True)
 
     def tracing(self, msg: str, *args: Any, **kwargs: Any):
         """Log a trace-specific message with trace context.
@@ -827,8 +828,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         try:
             log_record = _make_log_record_dict(message)
             self.add_record(log_record)
-        except Exception as e:
-            logging.error(f"Error buffering log: {e}")
+        except Exception:
+            logging.error("Error buffering log", exc_info=True)
 
     def otlp_sink(self, message: Any):
         """Process log message and emit to OTLP.
@@ -843,8 +844,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         try:
             log_record = _make_log_record_dict(message)
             self._send_to_otel(log_record)
-        except Exception as e:
-            logging.error(f"Error processing log record: {e}")
+        except Exception:
+            logging.error("Error processing log record", exc_info=True)
 
     def __del__(self):
         """Cleanup when the logger is destroyed."""

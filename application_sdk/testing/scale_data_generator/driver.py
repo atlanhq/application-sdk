@@ -22,21 +22,18 @@ def driver(args: DriverArgs):
     if os.path.exists(args.output_dir):
         shutil.rmtree(args.output_dir)
 
-    try:
-        start_time = time.time()
-        config_loader = ConfigLoader(args.config_path)
-        generator = DataGenerator(config_loader)
-        generator.generate_data(args.output_format, args.output_dir)
-        generator.generate_duckdb_tables(args.output_dir)
-        end_time = time.time()
-        logger.info(
-            f"Data generated successfully in {args.output_format} format at {args.output_dir}. "
-            f"Time taken: {end_time - start_time} seconds"
-        )
-
-    except Exception as e:
-        logger.error(f"Error generating data: {e}")
-        raise e
+    start_time = time.time()
+    config_loader = ConfigLoader(args.config_path)
+    generator = DataGenerator(config_loader)
+    generator.generate_data(args.output_format, args.output_dir)
+    generator.generate_duckdb_tables(args.output_dir)
+    end_time = time.time()
+    logger.info(
+        "Data generated successfully",
+        output_format=args.output_format,
+        output_dir=args.output_dir,
+        duration_s=end_time - start_time,
+    )
 
 
 if __name__ == "__main__":

@@ -199,6 +199,17 @@ fail_under = 50
 show_missing = true
 precision = 2
 
+[tool.ruff.lint]
+extend-select = [
+    "G004",   # f-string in log call
+    "G003",   # string concatenation in log call
+]
+
+[tool.ruff.lint.per-file-ignores]
+"application_sdk/main.py" = ["T201"]
+".github/**" = ["G004"]
+"tests/**" = ["G004"]
+
 [tool.uv]
 default-groups = ["dev", "test"]
 constraint-dependencies = [

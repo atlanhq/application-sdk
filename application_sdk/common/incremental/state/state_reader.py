@@ -70,7 +70,9 @@ async def download_current_state(
         shutil.rmtree(current_state_dir)
     current_state_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Downloading current-state folder from S3: {current_state_s3_prefix}")
+    logger.info(
+        "Downloading current-state folder from S3", s3_prefix=current_state_s3_prefix
+    )
 
     exists = False
     json_count = 0
@@ -86,13 +88,13 @@ async def download_current_state(
         exists = json_count > 0
 
         if exists:
-            logger.info(f"Current-state downloaded with {json_count} JSON files")
+            logger.info("Current-state downloaded", json_count=json_count)
         else:
             logger.info("Current-state downloaded but empty (no JSON files)")
-    except Exception as e:
+    except Exception:
         # First run - current-state doesn't exist in S3 yet
         # This is expected behavior, not an error
-        logger.info(f"Current-state not found in S3 (first run): {e}")
+        logger.info("Current-state not found in S3 (first run)")
 
     if not exists:
         logger.info("Current-state not available (first run or empty)")

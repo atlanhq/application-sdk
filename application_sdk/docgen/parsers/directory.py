@@ -197,7 +197,9 @@ class DirectoryParser:
 
         if not files:
             self.logger.debug(
-                f"No files found in {subdir.value} directory at {os.path.join(self.docs_directory, subdir.value)}"
+                "No files found in directory",
+                subdir=subdir.value,
+                path=os.path.join(self.docs_directory, subdir.value),
             )
             return True
 

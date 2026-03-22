@@ -210,13 +210,16 @@ class TestPreparePreviousState:
                 new_callable=AsyncMock,
                 side_effect=Exception("S3 failure"),
             ):
-                with pytest.raises(Exception, match="S3 failure"):
+                with pytest.raises(
+                    Exception, match="Failed to download previous state"
+                ) as exc_info:
                     await prepare_previous_state(
                         connection_qualified_name="t/c/123",
                         current_state_available=True,
                         current_state_dir=state_dir,
                         application_name="oracle",
                     )
+                assert "S3 failure" in str(exc_info.value.__cause__)
 
             # Temp dir should be cleaned up after failure
             expected_temp = state_dir.parent / f"{state_dir.name}.previous"

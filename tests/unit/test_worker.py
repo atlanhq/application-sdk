@@ -146,8 +146,9 @@ async def test_worker_start_with_workflow_client_error(
         workflow_activities=[AsyncMock()],
     )
 
-    with pytest.raises(Exception, match="Connection failed"):
+    with pytest.raises(Exception, match="Error starting worker") as exc_info:
         await worker.start(daemon=False)
+    assert "Connection failed" in str(exc_info.value.__cause__)
 
 
 @pytest.mark.skipif(

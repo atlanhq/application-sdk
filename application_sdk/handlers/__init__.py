@@ -9,12 +9,13 @@ warnings.warn(
 )
 
 import json
-import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict
 
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 # Convention: generated contract files live here
 CONTRACT_GENERATED_DIR = Path.cwd() / "contract" / "generated"
@@ -88,7 +89,9 @@ class HandlerInterface(ABC):
         if CONTRACT_GENERATED_DIR.exists():
             for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
                 if json_file.stem == config_map_id:
-                    logger.debug(f"Serving configmap from contract: {json_file}")
+                    logger.debug(
+                        "Serving configmap from contract", json_file=str(json_file)
+                    )
                     with open(json_file) as f:
                         raw = json.load(f)
                     return HandlerInterface._wrap_configmap(config_map_id, raw)

@@ -89,7 +89,9 @@ def merge_ancestral_columns(
     # Get tables that have columns from current extraction
     if current_json_files:
         logger.info(
-            f"Processing {len(current_json_files)} column files from {current_column_dir}"
+            "Processing column files",
+            count=len(current_json_files),
+            directory=str(current_column_dir),
         )
         tables_with_columns = get_table_qns_from_columns(current_column_dir, conn=conn)
         if tables_with_columns is None:
@@ -101,7 +103,8 @@ def merge_ancestral_columns(
             )
         tables_with_extracted_columns = tables_with_columns
         logger.info(
-            f"Found {len(tables_with_extracted_columns)} tables with extracted columns"
+            "Found tables with extracted columns",
+            count=len(tables_with_extracted_columns),
         )
 
     # Tables needing ancestral = in current run's scope but not already extracted
@@ -120,11 +123,12 @@ def merge_ancestral_columns(
         )
 
     logger.info(
-        f"Column merge complete: {result.columns_total} total "
-        f"(current={result.columns_from_current}, ancestral={result.columns_from_ancestral}), "
-        f"excluded={result.excluded_already_extracted + result.excluded_table_removed} "
-        f"(already_extracted={result.excluded_already_extracted}, "
-        f"table_removed={result.excluded_table_removed})"
+        "Column merge complete",
+        columns_total=result.columns_total,
+        columns_from_current=result.columns_from_current,
+        columns_from_ancestral=result.columns_from_ancestral,
+        excluded_already_extracted=result.excluded_already_extracted,
+        excluded_table_removed=result.excluded_table_removed,
     )
 
     return result, tables_with_extracted_columns
@@ -209,8 +213,9 @@ def _consolidate_columns(
         result.columns_from_current = count_result[0] if count_result else 0
 
         logger.info(
-            f"Loaded {result.columns_from_current} current columns "
-            f"from {len(current_json_files)} files"
+            "Loaded current columns",
+            columns=result.columns_from_current,
+            files=len(current_json_files),
         )
     else:
         conn.execute(
@@ -275,8 +280,9 @@ def _consolidate_columns(
         """)
 
         logger.info(
-            f"Loaded {result.columns_from_ancestral} ancestral columns "
-            f"from {len(ancestral_json_files)} files"
+            "Loaded ancestral columns",
+            columns=result.columns_from_ancestral,
+            files=len(ancestral_json_files),
         )
     else:
         conn.execute(
@@ -344,8 +350,10 @@ def _consolidate_columns(
         files_written += 1
 
     logger.info(
-        f"Wrote {result.columns_total} columns across {files_written} chunk files "
-        f"(chunk_size={column_chunk_size})"
+        "Wrote columns across chunk files",
+        columns=result.columns_total,
+        files=files_written,
+        chunk_size=column_chunk_size,
     )
 
     return result

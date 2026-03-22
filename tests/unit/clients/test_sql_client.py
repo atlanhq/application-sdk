@@ -410,10 +410,13 @@ async def test_run_query_property_based(
     query_result: Dict[str, Any],
 ):
     """Property-based test for query execution with various result structures"""
-    with patch("sqlalchemy.text") as mock_text, patch(
-        "application_sdk.clients.sql.asyncio.get_running_loop",
-        new_callable=MagicMock,
-    ) as mock_get_running_loop:
+    with (
+        patch("sqlalchemy.text") as mock_text,
+        patch(
+            "application_sdk.clients.sql.asyncio.get_running_loop",
+            new_callable=MagicMock,
+        ) as mock_get_running_loop,
+    ):
         # Mock the query text
         query = "SELECT * FROM test_table"
         mock_text.return_value = query
@@ -456,10 +459,13 @@ async def test_run_query_error_property_based(
     error_type: str,
 ):
     """Property-based test for query execution with various error scenarios"""
-    with patch("sqlalchemy.text") as mock_text, patch(
-        "application_sdk.clients.sql.asyncio.get_running_loop",
-        new_callable=MagicMock,
-    ) as mock_get_running_loop:
+    with (
+        patch("sqlalchemy.text") as mock_text,
+        patch(
+            "application_sdk.clients.sql.asyncio.get_running_loop",
+            new_callable=MagicMock,
+        ) as mock_get_running_loop,
+    ):
         # Mock the engine to avoid "Engine is not initialized" error
         mock_engine = MagicMock()
         mock_connection = MagicMock()

@@ -92,13 +92,18 @@ class LocalCapacityPool:
     ) -> int:
         """Always grants the full requested amount."""
         logger.debug(
-            f"capacity acquired (local) pool={pool_name} requested={requested} granted={requested}"
+            "capacity acquired (local) pool={} requested={} granted={}",
+            pool_name,
+            requested,
+            requested,
         )
         return requested
 
     async def release(self, pool_name: str, holder_id: str) -> None:
         """No-op for local pool."""
-        logger.debug(f"capacity released (local) pool={pool_name} holder={holder_id}")
+        logger.debug(
+            "capacity released (local) pool={} holder={}", pool_name, holder_id
+        )
 
     async def renew(
         self, pool_name: str, holder_id: str, ttl_seconds: int = 120
@@ -131,7 +136,7 @@ def configure_capacity_pool(pool: CapacityPool) -> None:
     """
     global _capacity_pool
     _capacity_pool = pool
-    logger.debug(f"capacity pool configured pool_type={type(pool).__name__}")
+    logger.debug("capacity pool configured pool_type={}", type(pool).__name__)
 
 
 def get_capacity_pool() -> CapacityPool | None:

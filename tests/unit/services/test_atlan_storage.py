@@ -163,8 +163,9 @@ class TestAtlanStorage:
         """Test migration when listing files fails."""
         mock_create_store.return_value = MagicMock()
 
-        with pytest.raises(Exception, match="List error"):
+        with pytest.raises(Exception, match="Migration failed") as exc_info:
             await AtlanStorage.migrate_from_objectstore_to_atlan("test_prefix")
+        assert "List error" in str(exc_info.value.__cause__)
 
     @patch("application_sdk.services.atlan_storage.create_store_from_binding")
     @patch(

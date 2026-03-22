@@ -87,7 +87,8 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
         max_locks = lock_config.get("max_locks", 5)
         if not input.schedule_to_close_timeout:
             logger.error(
-                f"Activity '{input.activity}' with @needs_lock decorator requires schedule_to_close_timeout"
+                "Activity with @needs_lock decorator requires schedule_to_close_timeout",
+                activity=input.activity,
             )
             raise WorkflowError(
                 f"{WorkflowError.WORKFLOW_CONFIG_ERROR}: Activity '{input.activity}' with @needs_lock decorator must be called with schedule_to_close_timeout parameter. "
@@ -127,7 +128,11 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
                 schedule_to_close_timeout=schedule_to_close_timeout,
             )
 
-            logger.debug(f"Lock acquired: {lock_result}, executing {input.activity}")
+            logger.debug(
+                "Lock acquired, executing activity",
+                lock_result=lock_result,
+                activity=input.activity,
+            )
 
             # Step 2: Execute the business activity and return its handle
             return await self.next.start_activity(input)
@@ -142,10 +147,13 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
                         start_to_close_timeout=timedelta(seconds=5),
                         retry_policy=RetryPolicy(maximum_attempts=1),
                     )
-                    logger.debug(f"Lock released: {lock_result['resource_id']}")
-                except Exception as e:
+                    logger.debug(
+                        "Lock released", resource_id=lock_result["resource_id"]
+                    )
+                except Exception:
                     # Silent failure - TTL will handle cleanup
                     logger.warning(
-                        f"Lock release failed for {lock_result['resource_id']}: {e}. "
-                        f"TTL will handle cleanup."
+                        "Lock release failed, TTL will handle cleanup",
+                        exc_info=True,
+                        resource_id=lock_result["resource_id"],
                     )

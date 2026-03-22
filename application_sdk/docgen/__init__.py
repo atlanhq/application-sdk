@@ -69,14 +69,11 @@ class AtlanDocsGenerator:
             )
             return
 
-        try:
-            manifest = self.manifest_parser.parse_manifest()
-        except Exception as e:
-            raise e
+        manifest = self.manifest_parser.parse_manifest()
 
         directory_parser_result = self.directory_parser.parse()
         for attr, value in directory_parser_result:
-            logger.info(f"Directory validation - {attr}: {value}")
+            logger.info("Directory validation", attr=attr, value=value)
 
         pages: List[Page] = []
 
@@ -195,4 +192,4 @@ class AtlanDocsGenerator:
         finally:
             cfg.plugins.on_shutdown()
 
-        logger.info(f"Documentation exported to {self.export_path}")
+        logger.info("Documentation exported", export_path=self.export_path)

@@ -352,8 +352,8 @@ class TestActivitiesInterfaceErrorHandling:
             # Ensure state is empty initially
             assert workflow_id not in activities._state
 
-            # Call _get_state, expect exception re-raised
-            with pytest.raises(Exception, match="DB Connection Failed"):
+            # Call _get_state, expect exception re-raised (rewrapped with context message)
+            with pytest.raises(Exception, match="Error getting state"):
                 await activities._get_state({})
 
             # Verify state was cleaned up (entry removed)

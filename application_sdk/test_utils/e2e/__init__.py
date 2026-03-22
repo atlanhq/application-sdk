@@ -260,9 +260,9 @@ class TestInterface:
 
             extracted_file_path = self._get_extracted_dir_path(expected_file_postfix)
 
-            logger.info(f"Validating data for: {expected_file_postfix}")
+            logger.info("Validating data", postfix=expected_file_postfix)
             # Load the pandera schema from the yaml file
             schema = from_yaml(schema_yaml_file_path)
             dataframe = self._get_normalised_dataframe(extracted_file_path)
             schema.validate(dataframe, lazy=True)
-            logger.info(f"Data Validation for {expected_file_postfix} successful")
+            logger.info("Data validation successful", postfix=expected_file_postfix)

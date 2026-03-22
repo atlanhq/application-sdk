@@ -156,15 +156,17 @@ class TestStateStoreMethodsProtected:
         legitimate_id = "workflow-test-123"
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch(
-                "application_sdk.services.statestore.TEMPORARY_PATH", tmpdir
-            ), patch(
-                "application_sdk.services.statestore.ObjectStore.get_content",
-                new_callable=AsyncMock,
-                return_value=None,
-            ), patch(
-                "application_sdk.services.statestore.ObjectStore.upload_file",
-                new_callable=AsyncMock,
+            with (
+                patch("application_sdk.services.statestore.TEMPORARY_PATH", tmpdir),
+                patch(
+                    "application_sdk.services.statestore.ObjectStore.get_content",
+                    new_callable=AsyncMock,
+                    return_value=None,
+                ),
+                patch(
+                    "application_sdk.services.statestore.ObjectStore.upload_file",
+                    new_callable=AsyncMock,
+                ),
             ):
                 result = await StateStore.save_state_object(
                     id=legitimate_id,
@@ -194,13 +196,16 @@ class TestNoFileCreatedOutsideBase:
         if os.path.exists(potentially_pwned_dir):
             os.rmdir(potentially_pwned_dir)
 
-        with patch(
-            "application_sdk.services.statestore.ObjectStore.get_content",
-            new_callable=AsyncMock,
-            return_value=None,
-        ), patch(
-            "application_sdk.services.statestore.ObjectStore.upload_file",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "application_sdk.services.statestore.ObjectStore.get_content",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "application_sdk.services.statestore.ObjectStore.upload_file",
+                new_callable=AsyncMock,
+            ),
         ):
             with pytest.raises(PathTraversalError):
                 await StateStore.save_state_object(

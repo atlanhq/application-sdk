@@ -146,8 +146,9 @@ class SegmentClient:
         self._start_worker_thread()
 
         logging.info(
-            f"Segment metrics client initialized (batch_size={self._batch_size}, "
-            f"batch_timeout={self._batch_timeout_seconds}s)"
+            "Segment metrics client initialized (batch_size=%d, batch_timeout=%ss)",
+            self._batch_size,
+            self._batch_timeout_seconds,
         )
 
     def _start_worker_thread(self) -> None:
@@ -228,8 +229,8 @@ class SegmentClient:
         try:
             # Schedule coroutine in the worker thread's event loop
             asyncio.run_coroutine_threadsafe(self._queue.put(metric_record), self._loop)
-        except Exception as e:
-            logging.warning(f"Failed to queue metric for Segment: {e}")
+        except Exception:
+            logging.warning("Failed to queue metric for Segment", exc_info=True)
 
     async def _process_queue(self) -> None:
         """Background worker that processes metrics from the queue.
@@ -278,11 +279,11 @@ class SegmentClient:
                 if batch:
                     try:
                         await self._send_batch_to_segment(batch)
-                    except Exception as e:
-                        logging.warning(f"Error sending final batch: {e}")
+                    except Exception:
+                        logging.warning("Error sending final batch", exc_info=True)
                 break
-            except Exception as e:
-                logging.warning(f"Error processing Segment metric queue: {e}")
+            except Exception:
+                logging.warning("Error processing Segment metric queue", exc_info=True)
 
     def _build_track_event(self, metric_record: "MetricRecord") -> SegmentTrackEvent:
         """Build a Segment track event from a metric record.
@@ -352,12 +353,12 @@ class SegmentClient:
             response.raise_for_status()
 
             logging.debug(
-                f"Successfully sent batch of {len(metric_records)} metrics to Segment"
+                "Successfully sent batch of %d metrics to Segment", len(metric_records)
             )
-        except httpx.HTTPError as e:
-            logging.warning(f"HTTP error sending metric to Segment: {e}")
-        except Exception as e:
-            logging.warning(f"Unexpected error sending metric to Segment: {e}")
+        except httpx.HTTPError:
+            logging.warning("HTTP error sending metric to Segment", exc_info=True)
+        except Exception:
+            logging.warning("Unexpected error sending metric to Segment", exc_info=True)
 
     def close(self) -> None:
         """Close the Segment client and cleanup resources.
@@ -374,8 +375,8 @@ class SegmentClient:
         if self._loop and self._worker_task and not self._worker_task.done():
             try:
                 self._loop.call_soon_threadsafe(self._worker_task.cancel)
-            except Exception as e:
-                logging.warning(f"Error cancelling worker task: {e}")
+            except Exception:
+                logging.warning("Error cancelling worker task", exc_info=True)
 
         # Close httpx client
         if self._loop and self._client:
@@ -393,13 +394,15 @@ class SegmentClient:
                     # Wait for close to complete (with timeout)
                     try:
                         future.result(timeout=2.0)
-                    except Exception as e:
-                        logging.warning(f"Timeout or error closing httpx client: {e}")
+                    except Exception:
+                        logging.warning(
+                            "Timeout or error closing httpx client", exc_info=True
+                        )
                 else:
                     # If loop is not running, run it directly
                     self._loop.run_until_complete(close_client())
-            except Exception as e:
-                logging.warning(f"Error closing httpx client: {e}")
+            except Exception:
+                logging.warning("Error closing httpx client", exc_info=True)
 
         # Wait for worker thread to finish (with timeout)
         if self._worker_thread and self._worker_thread.is_alive():
@@ -409,8 +412,8 @@ class SegmentClient:
                     logging.warning(
                         "SegmentClient worker thread did not terminate within timeout"
                     )
-            except Exception as e:
-                logging.warning(f"Error joining worker thread: {e}")
+            except Exception:
+                logging.warning("Error joining worker thread", exc_info=True)
 
     def _should_send_metric(self, metric_record: "MetricRecord") -> bool:
         """Determine if a metric should be sent to Segment.

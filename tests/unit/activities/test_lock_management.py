@@ -57,7 +57,6 @@ class TestAcquireDistributedLock:
             await acquire_distributed_lock("test_resource", 5, 100, "owner1")
 
         assert "Redis error during lock acquisition" in str(exc_info.value)
-        assert "Redis connection failed" in str(exc_info.value)
 
     @patch("application_sdk.execution._temporal.lock_activities.RedisClientAsync")
     async def test_acquire_lock_not_available(self, mock_redis_client_class):

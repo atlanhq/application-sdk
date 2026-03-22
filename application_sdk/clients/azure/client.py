@@ -168,26 +168,21 @@ class AzureClient(ClientInterface):
             logger.info("Azure client loaded successfully")
 
         except ClientAuthenticationError as e:
-            logger.error(f"Azure authentication failed: {str(e)}")
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
         except AzureError as e:
-            logger.error(f"Azure connection error: {str(e)}")
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
         except ValueError as e:
-            logger.error(f"Invalid Azure client parameters: {str(e)}")
             raise ClientError(
                 f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {str(e)}"
-            )
+            ) from e
         except TypeError as e:
-            logger.error(f"Wrong Azure client parameter types: {str(e)}")
             raise ClientError(
                 f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameter types - {str(e)}"
-            )
+            ) from e
         except Exception as e:
-            logger.error(f"Unexpected error loading Azure client: {str(e)}")
             raise ClientError(
                 f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {str(e)}"
-            )
+            ) from e
 
     async def close(self) -> None:
         """Close Azure connections and clean up resources."""
@@ -201,8 +196,12 @@ class AzureClient(ClientInterface):
                         await service_client.close()
                     elif hasattr(service_client, "disconnect"):
                         await service_client.disconnect()
-                except Exception as e:
-                    logger.warning(f"Error closing {service_name} client: {str(e)}")
+                except Exception:
+                    logger.warning(
+                        "Error closing service client",
+                        service_name=service_name,
+                        exc_info=True,
+                    )
 
             # Clear service cache
             self._services.clear()
@@ -215,8 +214,8 @@ class AzureClient(ClientInterface):
 
             logger.info("Azure client closed successfully")
 
-        except Exception as e:
-            logger.error(f"Error closing Azure client: {str(e)}")
+        except Exception:
+            logger.error("Error closing Azure client", exc_info=True)
 
     async def health_check(self) -> HealthStatus:
         """
@@ -287,23 +286,17 @@ class AzureClient(ClientInterface):
             # Test the credential by getting a token
             await run_sync(self.credential.get_token)(AZURE_MANAGEMENT_API_ENDPOINT)
         except ClientAuthenticationError as e:
-            logger.error(
-                f"Azure connection test failed - authentication error: {str(e)}"
-            )
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
         except AzureError as e:
-            logger.error(f"Azure connection test failed - service error: {str(e)}")
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
         except ValueError as e:
-            logger.error(f"Azure connection test failed - invalid parameters: {str(e)}")
             raise ClientError(
                 f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {str(e)}"
-            )
+            ) from e
         except Exception as e:
-            logger.error(f"Azure connection test failed - unexpected error: {str(e)}")
             raise ClientError(
                 f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {str(e)}"
-            )
+            ) from e
 
     def __enter__(self):
         """Context manager entry."""

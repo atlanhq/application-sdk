@@ -207,9 +207,9 @@ class EventStore:
 
             # Send to Segment
             metrics.segment_client.send_metric(metric_record)
-        except Exception as e:
+        except Exception:
             # Don't fail event publishing if Segment sending fails
-            logger.debug(f"Failed to send lifecycle event to Segment: {e}")
+            logger.debug("Failed to send lifecycle event to Segment")
 
     @classmethod
     async def publish_event(cls, event: Event):
@@ -287,10 +287,12 @@ class EventStore:
                     binding_metadata=binding_metadata,
                 )
                 logger.info(
-                    f"Published event via binding on topic: {event.get_topic_name()}"
+                    "Published event via binding",
+                    topic=event.get_topic_name(),
                 )
-        except Exception as e:
+        except Exception:
             logger.error(
-                f"Failed to publish event on topic {event.get_topic_name()}: {e}",
+                "Failed to publish event",
+                topic=event.get_topic_name(),
                 exc_info=True,
             )

@@ -40,6 +40,7 @@ from application_sdk.activities.common.utils import (
     get_workflow_run_id,
 )
 from application_sdk.common.error_codes import OrchestratorError
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_converter import FileType, convert_data_files
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.handlers import HandlerInterface
@@ -170,16 +171,15 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             return self._state[workflow_id]
         except OrchestratorError as e:
             logger.error(
-                f"Error getting state: {str(e)}",
+                "Error getting state",
                 error_code=OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
                 exc_info=e,
             )
             await self._clean_state()
             raise
         except Exception as err:
-            logger.error(f"Error getting state: {str(err)}", exc_info=err)
             await self._clean_state()
-            raise
+            raise rewrap(err, "Error getting state") from err
 
     async def _clean_state(self):
         """Remove the state data for the current workflow.
@@ -223,8 +223,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             from application_sdk.services.statestore import StateStore, StateType
 
             workflow_args = await StateStore.get_state(workflow_id, StateType.WORKFLOWS)
-        except Exception as e:
-            logger.warning(f"StateStore lookup failed for {workflow_id}: {e}")
+        except Exception:
+            logger.warning(
+                "StateStore lookup failed", workflow_id=workflow_id, exc_info=True
+            )
             workflow_args = None
 
         if not workflow_args:
@@ -355,7 +357,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
 
         except OrchestratorError as e:
             logger.error(
-                f"Preflight check failed: {str(e)}",
+                "Preflight check failed",
                 error_code=OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
                 exc_info=e,
             )

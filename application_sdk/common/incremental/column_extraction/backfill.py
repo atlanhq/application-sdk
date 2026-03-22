@@ -15,6 +15,7 @@ from typing import Set
 
 import duckdb
 
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.incremental.models import EntityType
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnectionManager,
@@ -80,7 +81,7 @@ def get_backfill_tables(
             backfill_qns = {row[0] for row in result}
 
             if backfill_qns:
-                logger.info(f"Found {len(backfill_qns)} assets needing backfill:")
+                logger.info("Found assets needing backfill", count=len(backfill_qns))
                 for qn in sorted(backfill_qns):
                     type_result = conn.execute(
                         """
@@ -90,7 +91,9 @@ def get_backfill_tables(
                         [qn],
                     ).fetchone()
                     asset_type = type_result[0] if type_result else None
-                    logger.info(f"  - {asset_type}: {qn}")
+                    logger.debug(
+                        "Backfill asset", asset_type=asset_type, qualified_name=qn
+                    )
             else:
                 logger.info(
                     "No backfill tables found - all current tables exist in "
@@ -99,8 +102,8 @@ def get_backfill_tables(
 
             return backfill_qns
 
-    except Exception as e:
-        logger.error(f"DuckDB analysis failed: {e}, returning None")
+    except Exception:
+        logger.error("DuckDB analysis failed, returning None", exc_info=True)
         return None
 
 
@@ -125,8 +128,7 @@ def _load_tables_to_duckdb(
         if table_dir.exists():
             json_files = [f.resolve() for f in table_dir.glob("*.json")]
     except OSError as e:
-        logger.error(f"Failed to scan JSON files from '{base_dir}': {e}")
-        raise
+        raise rewrap(e, f"Failed to scan JSON files (base_dir={base_dir})") from e
 
     if not json_files:
         conn.execute(f"""
@@ -162,10 +164,12 @@ def _load_tables_to_duckdb(
             CREATE TABLE {table_name} AS
             {union_query}
         """)
-    except duckdb.Error as e:
+    except duckdb.Error:
         logger.error(
-            f"DuckDB failed to load {len(json_files)} JSON files "
-            f"into '{table_name}': {e}"
+            "DuckDB failed to load JSON files",
+            file_count=len(json_files),
+            table_name=table_name,
+            exc_info=True,
         )
         raise
 

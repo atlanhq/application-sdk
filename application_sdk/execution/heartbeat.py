@@ -9,12 +9,13 @@ Two modes of heartbeating are supported:
 
 import asyncio
 import functools
-import logging
 import time
 from collections.abc import Callable
 from typing import Any, Protocol, TypeVar
 
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 T = TypeVar("T")
 
@@ -117,9 +118,11 @@ async def auto_heartbeat_loop(
         if actual_elapsed > interval_seconds + warning_threshold:
             blocked_time = actual_elapsed - interval_seconds
             logger.warning(
-                f"Event loop blocked for {blocked_time:.1f}s during task '{task_name}'. "
-                f"Auto-heartbeating may be unreliable. Use self.task_context.run_in_thread() "
-                f"for blocking operations, or switch to manual heartbeating."
+                "Event loop blocked during task, auto-heartbeating may be unreliable. "
+                "Use self.task_context.run_in_thread() for blocking operations, "
+                "or switch to manual heartbeating.",
+                blocked_time=round(blocked_time, 1),
+                task_name=task_name,
             )
 
         try:

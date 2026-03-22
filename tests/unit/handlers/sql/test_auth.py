@@ -48,8 +48,11 @@ class TestAuthenticationHandler:
         with pytest.raises(Exception) as exc_info:
             await handler.test_auth()
 
-        # Verify error
-        assert str(exc_info.value) == "Authentication failed"
+        # Verify error: outer message is the wrapper, original in __cause__
+        assert "Failed to authenticate with the given credentials" in str(
+            exc_info.value
+        )
+        assert "Authentication failed" in str(exc_info.value.__cause__)
         handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
@@ -78,8 +81,11 @@ class TestAuthenticationHandler:
         with pytest.raises(AttributeError) as exc_info:
             await handler.test_auth()
 
-        # Verify error and call
-        assert "object has no attribute 'to_dict'" in str(exc_info.value)
+        # Verify error and call: original AttributeError in __cause__
+        assert "Failed to authenticate with the given credentials" in str(
+            exc_info.value
+        )
+        assert "object has no attribute 'to_dict'" in str(exc_info.value.__cause__)
         handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio
@@ -96,8 +102,11 @@ class TestAuthenticationHandler:
         with pytest.raises(Exception) as exc_info:
             await handler.test_auth()
 
-        # Verify error and call
-        assert str(exc_info.value) == "DataFrame conversion error"
+        # Verify error and call: original error in __cause__
+        assert "Failed to authenticate with the given credentials" in str(
+            exc_info.value
+        )
+        assert "DataFrame conversion error" in str(exc_info.value.__cause__)
         handler.sql_client.get_results.assert_called_once()
 
     @pytest.mark.asyncio

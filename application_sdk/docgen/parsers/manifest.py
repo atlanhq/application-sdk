@@ -93,9 +93,5 @@ class ManifestParser:
         Raises:
             Exception: If the manifest file cannot be found or read.
         """
-        try:
-            manifest_dict = self.read_manifest_file(self.find_manifest_path())
-        except Exception as e:
-            raise e
-
+        manifest_dict = self.read_manifest_file(self.find_manifest_path())
         return DocsManifest(**manifest_dict)

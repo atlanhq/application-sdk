@@ -87,8 +87,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                         target=self._start_asyncio_flush, daemon=True
                     ).start()
                 AtlanTracesAdapter._flush_task_started = True
-            except Exception as e:
-                logging.error(f"Failed to start traces flush task: {e}")
+            except Exception:
+                logging.error("Failed to start traces flush task", exc_info=True)
 
     def _setup_otel_traces(self):
         """Set up OpenTelemetry traces exporter and configuration.
@@ -121,9 +121,10 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                         timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
                     )
                     exporters.append(otlp_exporter)
-                except Exception as e:
+                except Exception:
                     logging.warning(
-                        f"Failed to setup OTLP exporter: {e}. Falling back to console only."
+                        "Failed to setup OTLP exporter, falling back to console only",
+                        exc_info=True,
                     )
 
             # Create span processors for each exporter
@@ -150,8 +151,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             # Create tracer
             self.tracer = self.tracer_provider.get_tracer(SERVICE_NAME)
 
-        except Exception as e:
-            logging.error(f"Failed to setup OpenTelemetry traces: {e}")
+        except Exception:
+            logging.error("Failed to setup OpenTelemetry traces", exc_info=True)
             # Fall back to console-only tracing
             self._setup_console_only_traces()
 
@@ -190,8 +191,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             # Create tracer
             self.tracer = self.tracer_provider.get_tracer(SERVICE_NAME)
 
-        except Exception as e:
-            logging.error(f"Failed to setup console-only tracing: {e}")
+        except Exception:
+            logging.error("Failed to setup console-only tracing", exc_info=True)
 
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic trace flushing.
@@ -331,8 +332,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                             timestamp=timestamp_nanos,
                         )
 
-        except Exception as e:
-            logging.error(f"Error sending trace to OpenTelemetry: {e}")
+        except Exception:
+            logging.error("Error sending trace to OpenTelemetry", exc_info=True)
 
     def _log_to_console(self, trace_record: TraceRecord):
         """Log trace to console using the logger.
@@ -363,8 +364,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
 
             logger = get_logger()
             logger.tracing(log_message)
-        except Exception as e:
-            logging.error(f"Error logging trace to console: {e}")
+        except Exception:
+            logging.error("Error logging trace to console", exc_info=True)
 
     def record_trace(
         self,
@@ -415,8 +416,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             # Add record using base class method
             self.add_record(trace_record)
 
-        except Exception as e:
-            logging.error(f"Error recording trace: {e}")
+        except Exception:
+            logging.error("Error recording trace", exc_info=True)
             raise
 
 
