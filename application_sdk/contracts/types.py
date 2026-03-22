@@ -310,8 +310,9 @@ class ConnectionRef(BaseModel, frozen=True):
     def from_connection(conn: Any) -> "ConnectionRef":
         """Convert a pyatlan_v9 Connection (msgspec.Struct) to ConnectionRef.
 
-        Accepts the AE wire shape with camelCase keys (qualifiedName → qualified_name)
-        via Pydantic alias support.
+        The pyatlan_v9 struct is flat (all attributes at top level with camelCase
+        keys); ``to_atlas_format`` converts it to the nested Atlas API shape
+        ``{"typeName": ..., "attributes": {...}}`` that ConnectionRef expects.
 
         Args:
             conn: A pyatlan_v9 Connection msgspec.Struct instance.
@@ -319,21 +320,20 @@ class ConnectionRef(BaseModel, frozen=True):
         Returns:
             A ConnectionRef with normalized snake_case fields.
         """
-        import msgspec
+        from pyatlan_v9.model.transform import to_atlas_format  # type: ignore[import]
 
-        raw = msgspec.to_builtins(conn)
-        return ConnectionRef.model_validate(raw)
+        return ConnectionRef.model_validate(to_atlas_format(conn))
 
     def to_connection(self) -> Any:
         """Convert back to a pyatlan_v9 Connection (msgspec.Struct).
 
-        Emits camelCase keys (qualified_name → qualifiedName) via serialize_by_alias.
+        ``model_dump(by_alias=True)`` produces the nested Atlas API shape
+        ``{"typeName": ..., "attributes": {...}}``; ``from_atlas_format``
+        flattens that back into the pyatlan_v9 struct.
 
         Returns:
             A pyatlan_v9 Connection msgspec.Struct instance.
         """
-        import msgspec
-        from pyatlan_v9.model.transform import get_type  # type: ignore[import]
+        from pyatlan_v9.model.transform import from_atlas_format  # type: ignore[import]
 
-        cls = get_type(self.type_name)
-        return msgspec.convert(self.model_dump(by_alias=True), cls, strict=False)
+        return from_atlas_format(self.model_dump(by_alias=True))
