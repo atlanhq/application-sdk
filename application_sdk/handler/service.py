@@ -76,6 +76,45 @@ def _wrap_response(
     return {"success": success, "message": message, "data": data}
 
 
+async def _get_workflow_result(
+    client: "Client",
+    *,
+    workflow_id: str,
+    output_type: type | None,
+) -> dict[str, Any]:
+    """Fetch and normalise a completed workflow result.
+
+    Attempts typed deserialization first (so the OutputContract dataclass is
+    reconstructed properly). Falls back to untyped if that fails, logging a
+    warning so the mismatch is visible.
+
+    ``result_type`` is a parameter of ``get_workflow_handle``, not of
+    ``handle.result()`` — the Temporal SDK bakes the return type into the
+    handle at construction time.
+
+    Returns a plain dict suitable for JSON serialisation.
+    """
+    try:
+        result = await client.get_workflow_handle(
+            workflow_id, result_type=output_type
+        ).result()
+    except Exception as deser_exc:
+        logger.warning(
+            "Typed deserialization failed for workflow result; "
+            "falling back to untyped (dict) result",
+            workflow_id=workflow_id,
+            output_type=str(output_type),
+            error=str(deser_exc),
+        )
+        result = await client.get_workflow_handle(workflow_id).result()
+
+    if dataclasses.is_dataclass(result) and not isinstance(result, type):
+        return dataclasses.asdict(result)
+    if isinstance(result, dict):
+        return result
+    return {}
+
+
 # ---------------------------------------------------------------------------
 # Workflow client config and singleton
 # ---------------------------------------------------------------------------
@@ -612,14 +651,11 @@ def create_app_handler_service(
 
             if wait:
                 try:
-                    result = await handle.result()
-                    result_data = (
-                        dataclasses.asdict(result)
-                        if (
-                            dataclasses.is_dataclass(result)
-                            and not isinstance(result, type)
-                        )
-                        else {}
+                    output_type = getattr(
+                        _workflow_config.app_class, "_output_type", None
+                    )
+                    result_data = await _get_workflow_result(
+                        client, workflow_id=workflow_id, output_type=output_type
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -659,14 +695,11 @@ def create_app_handler_service(
                 )
             elif status == "COMPLETED":
                 try:
-                    result = await handle.result()
-                    result_data = (
-                        dataclasses.asdict(result)
-                        if (
-                            dataclasses.is_dataclass(result)
-                            and not isinstance(result, type)
-                        )
-                        else {}
+                    output_type = getattr(
+                        _workflow_config.app_class, "_output_type", None
+                    )
+                    result_data = await _get_workflow_result(
+                        client, workflow_id=workflow_id, output_type=output_type
                     )
                     return JSONResponse(
                         content=_wrap_response(
