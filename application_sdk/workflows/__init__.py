@@ -19,10 +19,10 @@ from datetime import timedelta
 from typing import Any, Callable, Dict, Generic, Optional, Sequence, Type, TypeVar
 
 from temporalio import workflow
-from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.constants import HEARTBEAT_TIMEOUT, START_TO_CLOSE_TIMEOUT
+from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -87,7 +87,9 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
         workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
             self.activities_cls.get_workflow_args,
             workflow_config,  # Pass the whole config containing workflow_id
-            retry_policy=_to_temporal_retry_policy(RetryPolicy(max_attempts=3, backoff_coefficient=2)),
+            retry_policy=_to_temporal_retry_policy(
+                RetryPolicy(max_attempts=3, backoff_coefficient=2)
+            ),
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
@@ -95,7 +97,9 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
         logger.info("Starting workflow execution")
 
         try:
-            retry_policy = _to_temporal_retry_policy(RetryPolicy(max_attempts=2, backoff_coefficient=2))
+            retry_policy = _to_temporal_retry_policy(
+                RetryPolicy(max_attempts=2, backoff_coefficient=2)
+            )
 
             await workflow.execute_activity_method(
                 self.activities_cls.preflight_check,

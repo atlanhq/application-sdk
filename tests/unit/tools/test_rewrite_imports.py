@@ -93,9 +93,7 @@ class TestModulePathChange:
     def test_clients_temporal(self):
         src = "from application_sdk.clients.temporal import TemporalWorkflowClient"
         out, changes = rewrite(src)
-        assert (
-            "from application_sdk.execution import TemporalWorkflowClient" in out
-        )
+        assert "from application_sdk.execution import TemporalWorkflowClient" in out
 
     def test_test_utils_scale_data_generator(self):
         src = "from application_sdk.test_utils.scale_data_generator import ScaleDataGenerator"

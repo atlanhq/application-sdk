@@ -11,9 +11,9 @@ warnings.warn(
 from typing import Any, Dict
 
 from temporalio import workflow
-from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 
 from application_sdk.constants import ENABLE_ATLAN_UPLOAD
+from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.workflows import WorkflowInterface
 

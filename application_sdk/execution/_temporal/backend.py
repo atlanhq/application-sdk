@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from temporalio.client import Client
+
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 
 if TYPE_CHECKING:
