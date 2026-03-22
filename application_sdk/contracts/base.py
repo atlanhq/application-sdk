@@ -20,16 +20,24 @@ Choosing the wrong base type for a zone is a correctness error, not just style.
     require a custom ``pydantic_data_converter`` and break the existing
     serialization contract.
 
-**HTTP API zone** — handler request/response schemas, manifest contracts,
-    any type that crosses an external HTTP boundary:
+**External boundary zone** — handler request/response schemas, manifest
+    contracts, pub/sub event payloads, and any type whose shape is owned by
+    external consumers (HTTP clients, pub/sub subscribers, external config):
     MUST be ``pydantic.BaseModel``. Pydantic gives boundary validation on
     ingress (``model_validate`` / ``model_validate_json``), direct JSON
-    serialization on egress (``model_dump_json()`` → ``Response``), and
-    automatic OpenAPI schema generation. Do NOT use plain dataclasses here —
-    the ``dataclasses.asdict`` + ``JSONResponse`` pattern forces an unnecessary
-    intermediate dict and loses all boundary validation.
+    serialization on egress (``model_dump_json()``), and automatic OpenAPI
+    schema generation. Do NOT use plain dataclasses here — the
+    ``dataclasses.asdict`` + ``JSONResponse`` pattern loses all boundary
+    validation.
 
-    See ``application_sdk/handler/manifest.py`` for the canonical example.
+    Event types (``contracts/events.py``) belong in this zone even though they
+    may transit Temporal. The contract is defined by external pub/sub consumers,
+    not the Temporal execution engine, so Pydantic is correct. Call
+    ``event.model_dump()`` before passing to Temporal — the resulting dict
+    serialises cleanly through Temporal's JSON data converter.
+
+    See ``application_sdk/handler/manifest.py`` and
+    ``application_sdk/contracts/events.py`` for canonical examples.
 
 Usage:
     from dataclasses import dataclass

@@ -16,7 +16,12 @@ We needed to decide when and how to validate contracts (inputs/outputs for Apps 
 
 ## Decision
 
-We chose **build-time type safety**: strongly-typed contracts with pyright in CI and `__init_subclass__`/decorator hooks that validate contracts at class-definition time (import time). The specific typing mechanism (plain dataclasses, Pydantic v2, msgspec, etc.) is left to the implementer, provided it is statically analysable by pyright and serialises correctly through Temporal's JSON data converter.
+We chose **build-time type safety**: strongly-typed contracts with pyright in CI and `__init_subclass__`/decorator hooks that validate contracts at class-definition time (import time). The specific typing mechanism varies by zone:
+
+- **Temporal zone** (`Input`, `Output`, `HeartbeatDetails`, `Record`): plain `@dataclass`. Serialises natively through Temporal's JSON data converter with zero runtime overhead.
+- **External boundary zone** (HTTP handler DTOs, pub/sub event payloads, external config): `pydantic.BaseModel`. The contract shape is owned by external consumers (HTTP clients, pub/sub subscribers), so Pydantic's runtime validation and serialisation are appropriate. For types that transit Temporal (e.g. event payloads), call `.model_dump()` at the Temporal boundary — the resulting dict serialises cleanly.
+
+In both zones the build-time principle holds: pyright enforces type correctness statically, and import-time hooks catch structural violations before any code runs.
 
 ## Options Considered
 
