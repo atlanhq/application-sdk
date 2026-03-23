@@ -31,11 +31,21 @@ jobs:
 
       - name: Compute tag prefix
         id: tag_prefix
+        env:
+          TAG_PREFIX_INPUT: ${{ inputs.tag_prefix }}
         run: |
-          if [ -n "${{ inputs.tag_prefix }}" ]; then
-            echo "value=${{ inputs.tag_prefix }}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # Release builds always use 'main' to preserve existing tag names
+            # (main-latest, main-<version>) and keep the Snyk import gate working.
+            echo "value=main" >> "$GITHUB_OUTPUT"
+          elif [ -n "${TAG_PREFIX_INPUT:-}" ]; then
+            if ! printf '%s' "$TAG_PREFIX_INPUT" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+              echo "Invalid tag_prefix: must match ^[A-Za-z0-9._-]+$" >&2
+              exit 1
+            fi
+            echo "value=${TAG_PREFIX_INPUT}" >> "$GITHUB_OUTPUT"
           else
-            echo "value=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Get SDK version
