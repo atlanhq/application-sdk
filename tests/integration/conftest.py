@@ -14,10 +14,30 @@ from uuid import uuid4
 
 import pytest
 
-# Disable Dapr and observability sinks — integration tests only need Temporal.
-os.environ.setdefault("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false")
-os.environ.setdefault("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR", "false")
-os.environ.setdefault("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
+
+@pytest.fixture(scope="session", autouse=True)
+def _integration_env_vars():
+    """Disable interceptors and Dapr sinks for the integration test session.
+
+    Using a session-scoped fixture rather than module-level os.environ calls
+    prevents these settings from leaking into unit tests when the full test
+    suite is run with ``pytest tests/``.  The module-level pattern runs at
+    conftest import time (before any tests) and poisons the process env for
+    tests in other directories that rely on the defaults.
+    """
+    overrides = {
+        "ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK": "false",
+        "APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR": "false",
+        "APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR": "false",
+    }
+    old = {k: os.environ.get(k) for k in overrides}
+    os.environ.update(overrides)
+    yield
+    for k, v in old.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
 
 
 @pytest.fixture(scope="session")

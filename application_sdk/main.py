@@ -67,6 +67,9 @@ signal.signal(signal.SIGUSR1, _debug_dump_handler)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
+
+    from dapr.clients import DaprClient
 
     from application_sdk.app.base import App
     from application_sdk.infrastructure.context import InfrastructureContext
@@ -199,6 +202,129 @@ class AppConfig:
         )
 
 
+# Allowlist of Dapr component metadata keys that are safe to log.
+# Keys NOT in this set (e.g. accessKey, secretKey, connectionString, url)
+# are silently suppressed even if present in the component YAML.
+_SAFE_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        "rootPath",
+        "bucket",
+        "region",
+        "endpoint",
+        "containerName",
+        "accountName",
+        "storageAccount",
+        "forcePathStyle",
+        "brokers",
+        "consumerGroup",
+        "clientId",
+        "authType",
+        "actorStateStore",
+        "keyPrefix",
+        "HotReload",
+    }
+)
+
+
+def _parse_all_component_yamls(components_dir: "Path") -> dict[str, dict[str, str]]:
+    """Parse all Dapr component YAML files and return safe metadata per component.
+
+    Returns a mapping of component name → dict of allowlisted metadata values.
+    Non-allowlisted keys (secrets, connection strings, credentials) are never included.
+    Silently returns an empty dict on any parse error.
+    """
+    import yaml
+
+    from application_sdk.storage.binding import _parse_dapr_metadata
+
+    result: dict[str, dict[str, str]] = {}
+    try:
+        for yaml_file in sorted(components_dir.glob("*.yaml")):
+            with yaml_file.open() as fh:
+                doc = yaml.safe_load(fh)
+            if not doc or doc.get("kind") != "Component":
+                continue
+            name = doc.get("metadata", {}).get("name")
+            if not name:
+                continue
+            spec = doc.get("spec", {})
+            all_meta = _parse_dapr_metadata(spec.get("metadata", []))
+            safe = {k: v for k, v in all_meta.items() if k in _SAFE_METADATA_KEYS}
+            result[name] = safe
+    except Exception:
+        logger.warning("Could not parse component YAMLs for diagnostics", exc_info=True)
+    return result
+
+
+def _log_dapr_components(
+    dapr_client: "DaprClient",
+    components_dir: "Path",
+) -> None:
+    """Log registered Dapr components and their safe configuration at startup.
+
+    Queries the Dapr sidecar metadata API for all registered components and
+    emits one INFO log line per component showing its type, version, and any
+    non-sensitive metadata from the corresponding component YAML.
+
+    Also warns about expected components (state store, secret store, object
+    store, event binding) that are not registered in the sidecar.
+
+    This is best-effort: any failure is logged as a WARNING and never blocks
+    startup.
+    """
+    from application_sdk.constants import (
+        DEPLOYMENT_OBJECT_STORE_NAME,
+        EVENT_STORE_NAME,
+        SECRET_STORE_NAME,
+        STATE_STORE_NAME,
+    )
+
+    try:
+        metadata = dapr_client.get_metadata()
+    except Exception:
+        logger.warning(
+            "Could not query Dapr metadata — component diagnostics unavailable",
+            exc_info=True,
+        )
+        return
+
+    registered = {c.name: c for c in getattr(metadata, "registered_components", [])}
+    yaml_details = _parse_all_component_yamls(components_dir)
+
+    for name, comp in registered.items():
+        safe_meta = yaml_details.get(name, {})
+        if safe_meta:
+            detail = ", ".join("%s=%s" % (k, v) for k, v in safe_meta.items())
+            logger.info(
+                "Dapr component: %s (type=%s, version=%s) — %s",
+                name,
+                comp.type,
+                comp.version,
+                detail,
+            )
+        else:
+            logger.info(
+                "Dapr component: %s (type=%s, version=%s)",
+                name,
+                comp.type,
+                comp.version,
+            )
+
+    expected = {
+        STATE_STORE_NAME: "state_store",
+        SECRET_STORE_NAME: "secret_store",
+        DEPLOYMENT_OBJECT_STORE_NAME: "object_store",
+        EVENT_STORE_NAME: "event_binding",
+    }
+    for comp_name, role in expected.items():
+        if comp_name not in registered:
+            logger.warning(
+                "Expected Dapr component %s (role=%s) not registered in sidecar",
+                comp_name,
+                role,
+            )
+
+
 def _create_infrastructure(
     credential_stores: "Mapping[str, SecretStore] | None" = None,
 ) -> "InfrastructureContext":
@@ -239,6 +365,7 @@ def _create_infrastructure(
 
         dapr_client = create_dapr_client()
         components_dir = Path(os.environ.get("DAPR_COMPONENTS_PATH", "./components"))
+        _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
         return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
