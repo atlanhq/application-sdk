@@ -56,7 +56,7 @@ runs:
 
     - name: Run Trivy scan (JSON)
       id: scan
-      uses: aquasecurity/trivy-action@0.33.1
+      uses: aquasecurity/trivy-action@0.35.0
       with:
         image-ref: 'trivy-scan-target:latest'
         format: 'json'
@@ -72,7 +72,7 @@ runs:
       run: echo "results-file=trivy-container-results.json" >> $GITHUB_OUTPUT
 
     - name: Run Trivy scan (SARIF)
-      uses: aquasecurity/trivy-action@0.33.1
+      uses: aquasecurity/trivy-action@0.35.0
       with:
         image-ref: 'trivy-scan-target:latest'
         format: 'sarif'
@@ -94,7 +94,7 @@ runs:
 
     - name: Fail on HIGH/CRITICAL vulnerabilities (with fix available)
       if: inputs.fail-on-vulns == 'true'
-      uses: aquasecurity/trivy-action@0.33.1
+      uses: aquasecurity/trivy-action@0.35.0
       with:
         image-ref: 'trivy-scan-target:latest'
         format: 'table'
