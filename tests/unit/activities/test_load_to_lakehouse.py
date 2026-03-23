@@ -2,7 +2,7 @@
 
 import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -349,11 +349,15 @@ class TestConvertRawParquetToJsonl:
     @patch(
         "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID", "t1"
     )
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.ObjectStore")
     @patch("application_sdk.activities.metadata_extraction.lakehouse.download_files")
     @patch("application_sdk.activities.metadata_extraction.lakehouse.SafeFileOps")
-    async def test_no_parquet_files_skips(self, mock_fileops, mock_download):
+    async def test_no_parquet_files_skips(
+        self, mock_fileops, mock_download, mock_objectstore
+    ):
         """No parquet files for a typename → skips without writing."""
         mock_download.return_value = []
+        mock_objectstore.upload_prefix = AsyncMock()
         args = {"output_path": "/tmp/out", "workflow_id": "w1", "workflow_run_id": "r1"}
         result = await convert_raw_parquet_to_jsonl(args, ["database"])
         assert result.endswith("raw_lakehouse")
@@ -362,10 +366,14 @@ class TestConvertRawParquetToJsonl:
     @patch(
         "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID", "t1"
     )
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.ObjectStore")
     @patch("application_sdk.activities.metadata_extraction.lakehouse.download_files")
-    async def test_writes_jsonl_with_correct_schema(self, mock_download, tmp_path):
+    async def test_writes_jsonl_with_correct_schema(
+        self, mock_download, mock_objectstore, tmp_path
+    ):
         """Parquet rows are wrapped with metadata columns in output JSONL."""
         mock_download.return_value = [str(tmp_path / "fake.parquet")]
+        mock_objectstore.upload_prefix = AsyncMock()
 
         mock_df = MagicMock()
         mock_df.to_pydict.return_value = {
@@ -411,12 +419,14 @@ class TestConvertRawParquetToJsonl:
     @patch(
         "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID", "t1"
     )
+    @patch("application_sdk.activities.metadata_extraction.lakehouse.ObjectStore")
     @patch("application_sdk.activities.metadata_extraction.lakehouse.download_files")
     async def test_unknown_typename_has_empty_entity_name(
-        self, mock_download, tmp_path
+        self, mock_download, mock_objectstore, tmp_path
     ):
         """Typename not in _RAW_ENTITY_NAME_FIELDS → entity_name is empty."""
         mock_download.return_value = [str(tmp_path / "fake.parquet")]
+        mock_objectstore.upload_prefix = AsyncMock()
 
         mock_df = MagicMock()
         mock_df.to_pydict.return_value = {"some_col": ["val"]}

@@ -35,6 +35,7 @@ from application_sdk.constants import (
 )
 from application_sdk.io.utils import download_files
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 
@@ -258,5 +259,10 @@ async def convert_raw_parquet_to_jsonl(
                 f"Prepared {n_rows} raw rows for lakehouse: "
                 f"typename={typename}, file={out_file}"
             )
+
+    # Upload JSONL files to object store so MDLH can read them from S3
+    logger.info(f"Uploading raw_lakehouse JSONL files to object store: {base_dir}")
+    await ObjectStore.upload_prefix(source=base_dir, destination=base_dir)
+    logger.info("raw_lakehouse JSONL upload complete")
 
     return base_dir
