@@ -45,7 +45,9 @@ jobs:
             fi
             echo "value=${TAG_PREFIX_INPUT}" >> "$GITHUB_OUTPUT"
           else
-            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            # Sanitize branch name: replace any char not in [A-Za-z0-9._-] with '-'
+            sanitized=$(printf '%s' "${GITHUB_REF_NAME}" | tr -cs 'A-Za-z0-9._-' '-')
+            echo "value=${sanitized}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Get SDK version
