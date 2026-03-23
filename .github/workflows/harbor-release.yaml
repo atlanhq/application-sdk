@@ -4,6 +4,10 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag_prefix:
+        description: 'Tag prefix to use (e.g. "refactor-v3"). Defaults to the branch name.'
+        required: false
 
 permissions:
   contents: read
@@ -24,6 +28,15 @@ jobs:
       - name: Set up Buildx
         id: buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Compute tag prefix
+        id: tag_prefix
+        run: |
+          if [ -n "${{ inputs.tag_prefix }}" ]; then
+            echo "value=${{ inputs.tag_prefix }}" >> $GITHUB_OUTPUT
+          else
+            echo "value=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Get SDK version
         id: get_version
@@ -51,7 +64,7 @@ jobs:
         id: harbor_docker_build
         uses: ./.github/actions/secure-build-push-apps
         with:
-          branch: main
+          branch: ${{ steps.tag_prefix.outputs.value }}
           snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
           snyk-ghcr-integration-id: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
           snyk-docker-integration-id: ${{ secrets.SNYK_DOCKER_INTEGRATION_ID }}
@@ -62,11 +75,11 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            registry.atlan.com/public/app-runtime-base:main-latest
-            registry.atlan.com/public/app-runtime-base:main-${{ steps.get_version.outputs.version }}
+            registry.atlan.com/public/app-runtime-base:${{ steps.tag_prefix.outputs.value }}-latest
+            registry.atlan.com/public/app-runtime-base:${{ steps.tag_prefix.outputs.value }}-${{ steps.get_version.outputs.version }}
             registry.atlan.com/public/app-runtime-base:sha-${{ steps.get_sha.outputs.sha }}
-            registry.atlan.com/public/application-sdk:main-latest
-            registry.atlan.com/public/application-sdk:main-${{ steps.get_version.outputs.version }}
+            registry.atlan.com/public/application-sdk:${{ steps.tag_prefix.outputs.value }}-latest
+            registry.atlan.com/public/application-sdk:${{ steps.tag_prefix.outputs.value }}-${{ steps.get_version.outputs.version }}
             registry.atlan.com/public/application-sdk:sha-${{ steps.get_sha.outputs.sha }}
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
