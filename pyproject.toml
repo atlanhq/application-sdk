@@ -201,14 +201,17 @@ precision = 2
 
 [tool.ruff.lint]
 extend-select = [
-    "G004",   # f-string in log call
+    "G001",   # % operator inline in log call (not lazy)
     "G003",   # string concatenation in log call
+    "G004",   # f-string in log call
+    "T201",   # print() in production code
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "application_sdk/main.py" = ["T201"]
-".github/**" = ["G004"]
+".github/**" = ["G004", "T201"]
 "tests/**" = ["G004"]
+"tools/**" = ["T201"]
 
 [tool.uv]
 default-groups = ["dev", "test"]

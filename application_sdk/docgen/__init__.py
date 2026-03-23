@@ -73,7 +73,7 @@ class AtlanDocsGenerator:
 
         directory_parser_result = self.directory_parser.parse()
         for attr, value in directory_parser_result:
-            logger.info("Directory validation", attr=attr, value=value)
+            logger.info("Directory validation: %s=%s", attr, value)
 
         pages: List[Page] = []
 
@@ -192,4 +192,4 @@ class AtlanDocsGenerator:
         finally:
             cfg.plugins.on_shutdown()
 
-        logger.info("Documentation exported", export_path=self.export_path)
+        logger.info("Documentation exported: %s", self.export_path)

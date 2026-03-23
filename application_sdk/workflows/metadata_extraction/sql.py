@@ -233,7 +233,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 heartbeat_timeout=self.default_heartbeat_timeout,
             )
 
-            logger.info("Starting extraction workflow", workflow_id=workflow_id)
+            logger.info("Starting extraction workflow: %s", workflow_id)
             retry_policy = RetryPolicy(max_attempts=6, backoff_coefficient=2)
 
             fetch_functions = self.get_fetch_functions()
@@ -244,7 +244,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             ]
 
             await asyncio.gather(*fetch_and_transforms)
-            logger.info("Extraction workflow completed", workflow_id=workflow_id)
+            logger.info("Extraction workflow completed: %s", workflow_id)
             workflow_success = True
 
             # Build output paths for AE downstream nodes (e.g. publish app)

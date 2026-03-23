@@ -169,7 +169,7 @@ def load_app_class(module_path: str) -> type[App]:
             module_path=module_path,
         )
 
-    logger.info("Loaded app class", module_path=module_path, app_class=class_name)
+    logger.info("Loaded app class: %s from %s", class_name, module_path)
     return cls  # type: ignore[return-value]
 
 

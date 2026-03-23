@@ -435,9 +435,9 @@ def _loop_exception_handler(
     exc = context.get("exception")
     msg = context.get("message", "Unhandled asyncio exception")
     if exc is not None:
-        logger.error("Unhandled asyncio task exception", message=msg, exc_info=exc)
+        logger.error("Unhandled asyncio task exception: %s", msg, exc_info=exc)
     else:
-        logger.error("Asyncio exception (no exception object)", message=msg)
+        logger.error("Asyncio exception (no exception object): %s", msg)
     # Schedule a flush — non-blocking so the loop can continue
     loop.create_task(_flush_observability())
     # Preserve the default stderr output
@@ -485,10 +485,10 @@ async def run_worker_mode(config: AppConfig) -> None:
     from application_sdk.infrastructure.context import set_infrastructure
 
     logger.info(
-        "Starting worker mode",
-        app_module=config.app_module,
-        temporal_host=config.temporal_host,
-        task_queue=config.task_queue,
+        "Starting worker mode: app=%s temporal=%s queue=%s",
+        config.app_module,
+        config.temporal_host,
+        config.task_queue,
     )
 
     infra = _create_infrastructure()
@@ -499,9 +499,9 @@ async def run_worker_mode(config: AppConfig) -> None:
     app_name = app_class._app_name  # type: ignore[attr-defined]
 
     logger.info(
-        "Loaded app",
-        app_name=app_name,
-        app_version=app_class._app_version,  # type: ignore[attr-defined]
+        "Loaded app %s version %s",
+        app_name,
+        app_class._app_version,  # type: ignore[attr-defined]
     )
 
     data_converter = create_data_converter_for_app(app_class)
@@ -526,7 +526,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         api_key = await auth_manager.acquire_initial_token()
         logger.info("Acquired initial auth token")
 
-    logger.info("Connecting to Temporal", host=config.temporal_host)
+    logger.info("Connecting to Temporal %s", config.temporal_host)
     client = await create_temporal_client(
         config.temporal_host,
         config.temporal_namespace,
@@ -548,14 +548,12 @@ async def run_worker_mode(config: AppConfig) -> None:
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
-        logger.info(
-            "Registered app", app_name=registered_app, app_version=app_meta.version
-        )
+        logger.info("Registered app %s version %s", registered_app, app_meta.version)
 
     for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
         for task_meta in tasks:
             logger.debug(
-                "Registered task", app_name=registered_app, task_name=task_meta.name
+                "Registered task %s for app %s", task_meta.name, registered_app
             )
 
     # Graceful shutdown
@@ -575,7 +573,7 @@ async def run_worker_mode(config: AppConfig) -> None:
     health_server = WorkerHealthServer(port=config.health_port)
     health_server.set_temporal_client(client)
 
-    logger.info("Worker started", app_name=app_name, task_queue=config.task_queue)
+    logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
     async with health_server:
         async with worker:
             await shutdown_event.wait()
@@ -604,10 +602,10 @@ def run_handler_mode(config: AppConfig) -> None:
     set_infrastructure(infra)
 
     logger.info(
-        "Starting handler mode",
-        app_module=config.app_module,
-        host=config.handler_host,
-        port=config.handler_port,
+        "Starting handler mode: app=%s host=%s port=%d",
+        config.app_module,
+        config.handler_host,
+        config.handler_port,
     )
 
     app_class = load_app_class(config.app_module)
@@ -619,12 +617,12 @@ def run_handler_mode(config: AppConfig) -> None:
     )
     if handler_class is None:
         handler_class = DefaultHandler
-        logger.info("Using DefaultHandler", app_name=app_name)
+        logger.info("Using DefaultHandler for %s", app_name)
     else:
         logger.info(
-            "Loaded custom handler",
-            handler_class=handler_class.__name__,
-            app_name=app_name,
+            "Loaded custom handler %s for %s",
+            handler_class.__name__,
+            app_name,
         )
 
     handler = handler_class()
@@ -691,11 +689,11 @@ async def run_combined_mode(config: AppConfig) -> None:
         infra = _existing_infra
 
     logger.info(
-        "Starting combined mode",
-        app_module=config.app_module,
-        temporal_host=config.temporal_host,
-        task_queue=config.task_queue,
-        handler_port=config.handler_port,
+        "Starting combined mode: app=%s temporal=%s queue=%s port=%d",
+        config.app_module,
+        config.temporal_host,
+        config.task_queue,
+        config.handler_port,
     )
 
     app_class = load_app_class(config.app_module)
@@ -703,9 +701,9 @@ async def run_combined_mode(config: AppConfig) -> None:
     app_name = app_class._app_name  # type: ignore[attr-defined]
 
     logger.info(
-        "Loaded app",
-        app_name=app_name,
-        app_version=app_class._app_version,  # type: ignore[attr-defined]
+        "Loaded app %s version %s",
+        app_name,
+        app_class._app_version,  # type: ignore[attr-defined]
     )
 
     data_converter = create_data_converter_for_app(app_class)
@@ -729,7 +727,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         api_key = await auth_manager.acquire_initial_token()
         logger.info("Acquired initial auth token")
 
-    logger.info("Connecting to Temporal", host=config.temporal_host)
+    logger.info("Connecting to Temporal %s", config.temporal_host)
     client = await create_temporal_client(
         config.temporal_host,
         config.temporal_namespace,
@@ -750,14 +748,12 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
-        logger.info(
-            "Registered app", app_name=registered_app, app_version=app_meta.version
-        )
+        logger.info("Registered app %s version %s", registered_app, app_meta.version)
 
     for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
         for task_meta in tasks:
             logger.debug(
-                "Registered task", app_name=registered_app, task_name=task_meta.name
+                "Registered task %s for app %s", task_meta.name, registered_app
             )
 
     handler_class = load_handler_class(
@@ -766,12 +762,12 @@ async def run_combined_mode(config: AppConfig) -> None:
     )
     if handler_class is None:
         handler_class = DefaultHandler
-        logger.info("Using DefaultHandler", app_name=app_name)
+        logger.info("Using DefaultHandler for %s", app_name)
     else:
         logger.info(
-            "Loaded custom handler",
-            handler_class=handler_class.__name__,
-            app_name=app_name,
+            "Loaded custom handler %s for %s",
+            handler_class.__name__,
+            app_name,
         )
 
     handler = handler_class()
@@ -825,10 +821,10 @@ async def run_combined_mode(config: AppConfig) -> None:
     health_server.set_temporal_client(client)
 
     logger.info(
-        "Combined mode started",
-        app_name=app_name,
-        task_queue=config.task_queue,
-        handler_port=config.handler_port,
+        "Combined mode started: app=%s queue=%s port=%d",
+        app_name,
+        config.task_queue,
+        config.handler_port,
     )
     async with health_server:
         async with worker:
@@ -1019,21 +1015,21 @@ def main() -> NoReturn:
         sys.exit(1)
 
     logger.info(
-        "Application SDK starting",
-        mode=config.mode,
-        app_module=config.app_module,
-        service_name=config.service_name,
+        "Application SDK starting: mode=%s app=%s service=%s",
+        config.mode,
+        config.app_module,
+        config.service_name,
     )
 
     try:
         run_main(config)
-    except DiscoveryError as e:
-        logger.error("Discovery error", error=str(e))
+    except DiscoveryError:
+        logger.error("Discovery error", exc_info=True)
         sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
-    except Exception as e:
-        logger.exception("Fatal error", error=str(e))
+    except Exception:
+        logger.exception("Fatal error")
         try:
             asyncio.run(_flush_observability())
         except Exception:

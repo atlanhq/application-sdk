@@ -256,10 +256,10 @@ async def _publish_event_via_binding(event: Event) -> None:
         metadata=binding_metadata,
     )
     logger.info(
-        "Published event via binding",
-        event_name=event.event_name,
-        event_type=event.event_type,
-        topic=event.get_topic_name(),
+        "Published event via binding: name=%s type=%s topic=%s",
+        event.event_name,
+        event.event_type,
+        event.get_topic_name(),
     )
 
 
@@ -275,7 +275,7 @@ async def publish_event(event_data: dict) -> None:
     try:
         event = Event(**event_data)
         await _publish_event_via_binding(event)
-        logger.info("Published event", event_name=event_data.get("event_name", ""))
+        logger.info("Published event: %s", event_data.get("event_name", ""))
     except Exception as e:
         raise rewrap(e, "Failed to publish event") from e
 

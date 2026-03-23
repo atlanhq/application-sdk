@@ -77,7 +77,9 @@ class DuckDBConnectionManager:
         os.makedirs(self._instance_path, exist_ok=True)
         os.makedirs(self._temp_dir, exist_ok=True)
 
-        logger.info("Creating DuckDB", db_file=self._db_file, memory_limit=memory_limit)
+        logger.info(
+            "Creating DuckDB: file=%s memory_limit=%s", self._db_file, memory_limit
+        )
         self._connection = duckdb.connect(
             self._db_file,
             config={

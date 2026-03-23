@@ -102,9 +102,11 @@ class AtlasTransformer(TransformerInterface):
                 if transformed_metadata:
                     transformed_metadata_list.append(transformed_metadata)
                 else:
-                    logger.warning("Skipped invalid data", typename=typename, row=row)
+                    logger.warning(
+                        "Skipped invalid data: typename=%s row=%s", typename, row
+                    )
             except Exception:
-                logger.error("Error processing row", typename=typename, exc_info=True)
+                logger.error("Error processing row: %s", typename, exc_info=True)
 
         return daft.from_pylist(transformed_metadata_list)
 
@@ -175,14 +177,10 @@ class AtlasTransformer(TransformerInterface):
 
                 return entity.dict(by_alias=True, exclude_none=True, exclude_unset=True)
             except Exception:
-                logger.error(
-                    "Error transforming entity",
-                    typename=typename,
-                    exc_info=True,
-                )
+                logger.error("Error transforming entity: %s", typename, exc_info=True)
                 return None
         else:
-            logger.error("Unknown typename", typename=typename)
+            logger.error("Unknown typename: %s", typename)
             return None
 
     def _enrich_entity_with_metadata(

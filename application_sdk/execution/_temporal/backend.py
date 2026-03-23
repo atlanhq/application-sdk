@@ -140,7 +140,7 @@ def _build_tls_config(
                 f"TLS root CA cert file not found: {server_root_ca_cert_path}"
             )
         server_root_ca_cert = path.read_bytes()
-        logger.info("Loaded TLS root CA cert", path=server_root_ca_cert_path)
+        logger.info("Loaded TLS root CA cert: %s", server_root_ca_cert_path)
 
     has_cert = bool(client_cert_path)
     has_key = bool(client_private_key_path)
@@ -227,14 +227,14 @@ async def create_temporal_client(
         else:
             tls_config = True
         logger.info(
-            "Connecting to Temporal with TLS",
-            host=host,
-            namespace=namespace,
-            mtls=bool(tls_client_cert_path),
+            "Connecting to Temporal with TLS: host=%s namespace=%s mtls=%s",
+            host,
+            namespace,
+            bool(tls_client_cert_path),
         )
     else:
         logger.info(
-            "Connecting to Temporal (plaintext)", host=host, namespace=namespace
+            "Connecting to Temporal (plaintext): host=%s namespace=%s", host, namespace
         )
 
     kwargs: dict[str, Any] = {
@@ -253,25 +253,25 @@ async def create_temporal_client(
     for attempt in range(1, connect_max_attempts + 1):
         try:
             client = await Client.connect(**kwargs)
-            logger.info("Connected to Temporal", host=host, namespace=namespace)
+            logger.info("Connected to Temporal: host=%s namespace=%s", host, namespace)
             return client
         except Exception as exc:
             last_exc = exc
             if attempt < connect_max_attempts:
                 logger.warning(
-                    "Temporal connection attempt failed, retrying",
+                    "Temporal connection attempt %d/%d failed, retrying in %.1fs",
+                    attempt,
+                    connect_max_attempts,
+                    delay,
                     exc_info=True,
-                    attempt=attempt,
-                    max_attempts=connect_max_attempts,
-                    retry_delay=delay,
                 )
                 await asyncio.sleep(delay)
                 delay *= 2
             else:
                 logger.error(
-                    "Temporal connection failed after all attempts",
+                    "Temporal connection failed after %d attempts",
+                    connect_max_attempts,
                     exc_info=True,
-                    max_attempts=connect_max_attempts,
                 )
 
     raise RuntimeError(

@@ -58,7 +58,7 @@ async def acquire_distributed_lock(
                 resource_id, owner_id, ttl_seconds
             )
             if acquired:
-                logger.info("Lock acquired", slot=slot, resource_id=resource_id)
+                logger.info("Lock acquired: slot=%s resource_id=%s", slot, resource_id)
                 return {
                     "status": True,
                     "slot_id": slot,
@@ -98,16 +98,14 @@ async def release_distributed_lock(
             released, result = await redis_client._release_lock(resource_id, owner_id)
             if released:
                 logger.info(
-                    "Lock released successfully",
-                    resource_id=resource_id,
-                    result=result.value,
+                    "Lock released successfully: resource_id=%s result=%s",
+                    resource_id,
+                    result.value,
                 )
             return released
 
     except Exception:
-        logger.error(
-            "Redis error during lock release", exc_info=True, resource_id=resource_id
-        )
+        logger.error("Redis error during lock release: %s", resource_id, exc_info=True)
         # Don't raise exception for lock release failures - log and return False
         # Lock release is best-effort and shouldn't fail the workflow
         return False

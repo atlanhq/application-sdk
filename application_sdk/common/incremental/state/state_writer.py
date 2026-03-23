@@ -174,7 +174,7 @@ async def prepare_previous_state(
     previous_state_temp_dir.mkdir(parents=True, exist_ok=True)
 
     # Download previous state from S3 to temporary location
-    logger.info("Downloading previous state from S3", s3_prefix=current_state_s3_prefix)
+    logger.info("Downloading previous state from S3: %s", current_state_s3_prefix)
     try:
         await download_s3_prefix_with_structure(
             s3_prefix=current_state_s3_prefix,
@@ -266,7 +266,7 @@ async def upload_current_state(
         destination=current_state_s3_prefix,
         store_name=UPSTREAM_OBJECT_STORE_NAME,
     )
-    logger.info("Current-state uploaded to S3", s3_prefix=current_state_s3_prefix)
+    logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)
 
     return current_state_s3_prefix
 
@@ -480,7 +480,7 @@ async def create_current_state_snapshot(
         destination=current_state_s3_prefix,
         store_name=UPSTREAM_OBJECT_STORE_NAME,
     )
-    logger.info("Current-state uploaded to S3", s3_prefix=current_state_s3_prefix)
+    logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)
 
     return CurrentStateResult(
         current_state_dir=current_state_dir,

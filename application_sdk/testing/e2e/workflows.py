@@ -1,12 +1,12 @@
 """Workflow trigger and status helpers for K8s e2e tests."""
 
 import asyncio
-import logging
 from typing import Any
 
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e.portforward import kube_http_call
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _TERMINAL_STATES = {"completed", "failed", "cancelled", "terminated"}
 

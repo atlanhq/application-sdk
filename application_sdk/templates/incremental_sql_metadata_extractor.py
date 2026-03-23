@@ -457,7 +457,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         )
 
         batch_size = input.column_batch_size
-        logger.info("Preparing column extraction batches", batch_size=batch_size)
+        logger.info("Preparing column extraction batches: batch_size=%d", batch_size)
 
         # Step 2: Download previous current-state for backfill comparison
         previous_current_state_dir = None
@@ -503,7 +503,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         logger.info("Analyzing table state to identify backfill candidates...")
         backfill_qns = get_backfill_tables(transformed_dir, previous_current_state_dir)
         backfill_count_for_log = len(backfill_qns) if backfill_qns else 0
-        logger.info("Found tables needing backfill", count=backfill_count_for_log)
+        logger.info("Found %d tables needing backfill", backfill_count_for_log)
 
         # Step 4: Get tables needing column extraction using Daft
         filtered_df, changed_count, backfill_count, _no_change_count = (
@@ -561,7 +561,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
 
         # Step 6: Upload batch files to S3
         batches_s3_prefix = get_object_store_prefix(str(batches_dir))
-        logger.info("Uploading batch files to S3", prefix=batches_s3_prefix)
+        logger.info("Uploading batch files to S3: %s", batches_s3_prefix)
         await ObjectStore.upload_prefix(
             source=str(batches_dir),
             destination=batches_s3_prefix,
@@ -635,7 +635,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         )
 
         if not batch_file.exists():
-            logger.warning("Batch file not found", path=str(batch_file))
+            logger.warning("Batch file not found: %s", batch_file)
             return ExecuteColumnBatchOutput(
                 batch_index=input.batch_index,
                 records=0,

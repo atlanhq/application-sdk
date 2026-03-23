@@ -155,14 +155,14 @@ class StateStore:
             )
             if not object_store_content:
                 logger.warning(
-                    "No state found, returning empty dict",
-                    state_type=type.value,
-                    state_id=id,
+                    "No state found for %s (type=%s), returning empty dict",
+                    id,
+                    type.value,
                 )
                 return {}
 
             state = json.loads(object_store_content)
-            logger.info("State object retrieved", state_id=id, state_type=str(type))
+            logger.info("State object retrieved: %s (type=%s)", id, type)
 
             return state
         except Exception as e:
@@ -277,11 +277,7 @@ class StateStore:
             ... )
         """
         try:
-            logger.info(
-                "Saving state object in object store",
-                state_id=id,
-                state_type=str(type),
-            )
+            logger.info("Saving state object in object store: %s (type=%s)", id, type)
             # get the current state from object store
             current_state = await cls.get_state(id, type)
             state_file_path = build_state_store_path(id, type)
@@ -301,11 +297,7 @@ class StateStore:
                 destination=state_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
-            logger.info(
-                "State object created in object store",
-                state_id=id,
-                state_type=str(type),
-            )
+            logger.info("State object created in object store: %s (type=%s)", id, type)
             return current_state
         except PathTraversalError:
             raise

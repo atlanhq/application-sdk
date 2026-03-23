@@ -195,8 +195,8 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             workflow_id = get_workflow_id()
             if workflow_id in self._state:
                 self._state.pop(workflow_id)
-        except OrchestratorError as e:
-            logger.warning("Failed to clean state", exc_info=e)
+        except OrchestratorError:
+            logger.warning("Failed to clean state", exc_info=True)
 
     @activity.defn
     @auto_heartbeater

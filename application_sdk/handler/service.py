@@ -595,7 +595,7 @@ def create_app_handler_service(
             )
 
         except TypeError as e:
-            logger.error("Invalid workflow input", app_name=app_name, error=str(e))
+            logger.error("Invalid workflow input for app %s: %s", app_name, e)
             raise HTTPException(status_code=400, detail=f"Invalid input: {e}") from None
         except Exception as e:
             logger.error(

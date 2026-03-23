@@ -139,7 +139,7 @@ def normalize_marker_timestamp(marker: str) -> str:
     """Remove nanoseconds from marker timestamp (e.g., .123456789Z -> Z)."""
     normalized = re.sub(r"\.\d{1,9}(?=Z$)", "", marker)
     if normalized != marker:
-        logger.info("Normalized marker", original=marker, normalized=normalized)
+        logger.info("Normalized marker: %s -> %s", marker, normalized)
     return normalized
 
 
@@ -172,7 +172,7 @@ def prepone_marker_timestamp(marker: str, hours: float) -> str:
     # Format back to string
     adjusted_str = adjusted.strftime(MARKER_TIMESTAMP_FORMAT)
 
-    logger.info("Preponed marker", hours=hours, original=marker, adjusted=adjusted_str)
+    logger.info("Preponed marker by %.1f hours: %s -> %s", hours, marker, adjusted_str)
     return adjusted_str
 
 
@@ -196,7 +196,7 @@ async def download_marker_from_s3(
     )
     local_marker_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Downloading marker from S3", marker_s3_key=marker_s3_key)
+    logger.info("Downloading marker from S3: %s", marker_s3_key)
     try:
         await ObjectStore.download_file(
             source=marker_s3_key,
@@ -205,7 +205,7 @@ async def download_marker_from_s3(
         )
         if local_marker_path.exists() and local_marker_path.stat().st_size > 0:
             marker = local_marker_path.read_text(encoding="utf-8").strip()
-            logger.info("Marker downloaded", marker=marker)
+            logger.info("Marker downloaded: %s", marker)
             return marker
         logger.info("Marker file downloaded but empty")
     except FileNotFoundError:

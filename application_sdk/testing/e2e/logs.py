@@ -1,12 +1,12 @@
 """LogCollector: kubectl-based log collection for K8s e2e tests."""
 
 import asyncio
-import logging
 from pathlib import Path
 
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e.pods import get_pods
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def _run_to_file(args: list[str], output_path: Path) -> None:

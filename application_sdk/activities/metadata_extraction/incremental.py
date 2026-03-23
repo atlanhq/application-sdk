@@ -399,8 +399,8 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             )
             self.fetch_table_sql = resolved_sql
             logger.info(
-                "Using incremental table SQL",
-                marker=args.metadata.marker_timestamp,
+                "Using incremental table SQL (marker=%s)",
+                args.metadata.marker_timestamp,
             )
         else:
             base_sql = self._original_fetch_table_sql
@@ -470,8 +470,8 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         """
         args = IncrementalWorkflowArgs.model_validate(workflow_args)
         logger.info(
-            "Fetching incremental marker",
-            enabled=args.metadata.incremental_extraction,
+            "Fetching incremental marker (enabled=%s)",
+            args.metadata.incremental_extraction,
         )
 
         if not args.metadata.incremental_extraction:
@@ -585,9 +585,9 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         conn_qn, app_name = _extract_conn_and_app(workflow_args)
 
         logger.info(
-            "Starting write_current_state with ancestral merge",
-            workflow_id=workflow_id,
-            run_id=run_id,
+            "Starting write_current_state with ancestral merge: workflow_id=%s run_id=%s",
+            workflow_id,
+            run_id,
         )
 
         previous_state_dir = None
@@ -675,9 +675,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         transformed_dir = Path(transformed_local_path)
         transformed_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(
-            "Downloading transformed files from S3", s3_prefix=transformed_s3_prefix
-        )
+        logger.info("Downloading transformed files from S3: %s", transformed_s3_prefix)
         await ObjectStore.download_prefix(
             source=transformed_s3_prefix,
             destination=str(transformed_dir),
@@ -685,7 +683,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         )
 
         batch_size = args.metadata.column_batch_size
-        logger.info("Preparing column extraction batches", batch_size=batch_size)
+        logger.info("Preparing column extraction batches: size=%d", batch_size)
 
         # Step 2: Download previous current-state from S3 for backfill comparison
         current_state_available = args.metadata.current_state_available
@@ -705,8 +703,8 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
 
             if not has_table_files:
                 logger.info(
-                    "Downloading current-state from S3 for backfill comparison",
-                    s3_prefix=current_state_s3_prefix,
+                    "Downloading current-state from S3 for backfill comparison: %s",
+                    current_state_s3_prefix,
                 )
                 try:
                     await download_s3_prefix_with_structure(
@@ -714,8 +712,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
                         local_destination=previous_current_state_dir,
                     )
                     logger.info(
-                        "Current-state downloaded",
-                        path=str(previous_current_state_dir),
+                        "Current-state downloaded: %s", previous_current_state_dir
                     )
                 except Exception:
                     logger.warning(
@@ -726,9 +723,9 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             else:
                 table_file_count = len(list(table_dir.glob("*.json")))
                 logger.info(
-                    "Previous current-state already present",
-                    path=str(previous_current_state_dir),
-                    table_file_count=table_file_count,
+                    "Previous current-state already present: path=%s files=%d",
+                    previous_current_state_dir,
+                    table_file_count,
                 )
 
         # Step 3: Find backfill tables using DuckDB
@@ -737,7 +734,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             transformed_dir, previous_current_state_dir
         )
         backfill_count_for_log = len(backfill_qns) if backfill_qns else 0
-        logger.info("Found tables needing backfill", count=backfill_count_for_log)
+        logger.info("Found %d tables needing backfill", backfill_count_for_log)
 
         # Step 4: Get tables needing column extraction using Daft
         filtered_df, changed_count, backfill_count, no_change_count = (
@@ -754,11 +751,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
                 "total_tables": 0,
             }
 
-        logger.info(
-            "Batching tables into groups",
-            total_tables=total_tables,
-            batch_size=batch_size,
-        )
+        logger.info("Batching %d tables into groups of %d", total_tables, batch_size)
 
         # Step 5: Batch table_ids into JSON files
         output_dir = _ensure_batches_dir(workflow_args)
@@ -784,15 +777,15 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             total_tables_batched += len(current_batch)
 
         logger.info(
-            "Created batch files",
-            batch_count=batch_idx,
-            total_tables=total_tables_batched,
-            output_dir=str(output_dir),
+            "Created %d batch files: total_tables=%d output_dir=%s",
+            batch_idx,
+            total_tables_batched,
+            output_dir,
         )
 
         # Step 6: Upload batch files to S3 for multi-worker support
         batches_s3_prefix = get_object_store_prefix(str(output_dir))
-        logger.info("Uploading batch files to S3", s3_prefix=batches_s3_prefix)
+        logger.info("Uploading batch files to S3: %s", batches_s3_prefix)
         await ObjectStore.upload_prefix(
             source=str(output_dir),
             destination=batches_s3_prefix,
@@ -845,17 +838,17 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         )
 
         if not batch_file.exists():
-            logger.warning("Batch file not found", batch_file=str(batch_file))
+            logger.warning("Batch file not found: %s", batch_file)
             return {"batch_index": batch_idx, "records": 0, "status": "not_found"}
 
         # Read table_ids from JSON
         table_ids = json.loads(batch_file.read_text(encoding="utf-8"))
 
         logger.info(
-            "Executing column batch",
-            batch=batch_idx + 1,
-            total_batches=total_batches,
-            table_count=len(table_ids),
+            "Executing column batch %d/%d: %d tables",
+            batch_idx + 1,
+            total_batches,
+            len(table_ids),
         )
 
         # Delegate to app-specific implementation
@@ -867,10 +860,10 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
         )
 
         logger.info(
-            "Column batch complete",
-            batch=batch_idx + 1,
-            total_batches=total_batches,
-            records=batch_records,
+            "Column batch %d/%d complete: %d records",
+            batch_idx + 1,
+            total_batches,
+            batch_records,
         )
 
         args = IncrementalWorkflowArgs.model_validate(batch_args)
@@ -914,9 +907,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
             raw_input_path = os.path.join(output_path, "raw")
         else:
             raw_input_path = os.path.join(output_path, "raw", typename)
-        logger.info(
-            "Reading raw data", raw_input_path=raw_input_path, typename=typename
-        )
+        logger.info("Reading raw data: path=%s typename=%s", raw_input_path, typename)
 
         raw_input = ParquetFileReader(
             path=raw_input_path,
@@ -942,7 +933,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
 
             async for dataframe in raw_input:
                 if not is_empty_dataframe(dataframe):
-                    logger.info("Processing dataframe", typename=typename)
+                    logger.info("Processing dataframe: %s", typename)
 
                     transform_metadata = state.transformer.transform_metadata(
                         dataframe=dataframe,  # type: ignore

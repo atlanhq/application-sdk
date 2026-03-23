@@ -156,7 +156,7 @@ class JsonFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(json_files)
-            logger.info("Reading JSON files in batches", file_count=len(json_files))
+            logger.info("Reading %d JSON files in batches", len(json_files))
 
             for json_file in json_files:
                 json_reader_obj = pd.read_json(
@@ -226,7 +226,7 @@ class JsonFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(json_files)
-            logger.info("Reading JSON files with daft", file_count=len(json_files))
+            logger.info("Reading %d JSON files with daft", len(json_files))
 
             # Use the discovered/downloaded files directly
             return daft.read_json(json_files)

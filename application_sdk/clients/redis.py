@@ -127,10 +127,10 @@ class BaseRedisClient:
         """
         if not isinstance(result, int):
             logger.error(
-                "Unexpected eval result type",
-                resource_id=resource_id,
-                result_type=str(type(result)),
-                result_value=result,
+                "Unexpected eval result type: resource_id=%s type=%s value=%s",
+                resource_id,
+                type(result),
+                result,
             )
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
@@ -147,7 +147,9 @@ class BaseRedisClient:
             return False, LockReleaseResult.WRONG_OWNER
         else:
             logger.error(
-                "Unknown Redis eval result", resource_id=resource_id, result=result
+                "Unknown Redis eval result: resource_id=%s result=%s",
+                resource_id,
+                result,
             )
             raise ClientError(
                 f"{ClientError.REDIS_CONNECTION_ERROR}: Redis connection failed"
@@ -189,10 +191,8 @@ class RedisClient(BaseRedisClient):
     def _connect_via_sentinel(self) -> None:
         """Connect to Redis via Sentinel using sync client."""
         sentinel_hosts = self._parse_sentinel_hosts()
-        logger.info(
-            "Connecting to Redis via sync Sentinel", sentinel_hosts=sentinel_hosts
-        )
-        logger.info("Sentinel service name", service_name=REDIS_SENTINEL_SERVICE_NAME)
+        logger.info("Connecting to Redis via sync Sentinel: %s", sentinel_hosts)
+        logger.info("Sentinel service name: %s", REDIS_SENTINEL_SERVICE_NAME)
 
         try:
             # Create Sentinel with password
@@ -211,7 +211,9 @@ class RedisClient(BaseRedisClient):
     def _connect_standalone(self) -> None:
         """Connect to standalone Redis instance using sync client."""
         logger.debug(
-            "Connecting to standalone sync Redis", host=REDIS_HOST, port=REDIS_PORT
+            "Connecting to standalone sync Redis: host=%s port=%s",
+            REDIS_HOST,
+            REDIS_PORT,
         )
 
         try:
@@ -340,10 +342,8 @@ class RedisClientAsync(BaseRedisClient):
     async def _connect_via_sentinel(self) -> None:
         """Connect to Redis via Sentinel using async client."""
         sentinel_hosts = self._parse_sentinel_hosts()
-        logger.info(
-            "Connecting to Redis via async Sentinel", sentinel_hosts=sentinel_hosts
-        )
-        logger.info("Sentinel service name", service_name=REDIS_SENTINEL_SERVICE_NAME)
+        logger.info("Connecting to Redis via async Sentinel: %s", sentinel_hosts)
+        logger.info("Sentinel service name: %s", REDIS_SENTINEL_SERVICE_NAME)
 
         try:
             # Create Sentinel with password
@@ -362,7 +362,9 @@ class RedisClientAsync(BaseRedisClient):
     async def _connect_standalone(self) -> None:
         """Connect to standalone Redis instance using async client."""
         logger.debug(
-            "Connecting to standalone async Redis", host=REDIS_HOST, port=REDIS_PORT
+            "Connecting to standalone async Redis: host=%s port=%s",
+            REDIS_HOST,
+            REDIS_PORT,
         )
 
         try:

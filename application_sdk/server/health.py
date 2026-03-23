@@ -317,11 +317,7 @@ class WorkerHealthServer:
         )
         self._started_at = _utc_now()
 
-        logger.info(
-            "Health server started",
-            host=self.host,
-            port=self.port,
-        )
+        logger.info("Health server started: host=%s port=%d", self.host, self.port)
 
     async def stop(self) -> None:
         """Stop the health check server."""

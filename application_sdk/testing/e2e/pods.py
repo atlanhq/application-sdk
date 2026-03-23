@@ -2,10 +2,11 @@
 
 import asyncio
 import json
-import logging
 import time
 
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 async def _run(args: list[str]) -> tuple[int, str, str]:

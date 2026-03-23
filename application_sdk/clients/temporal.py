@@ -283,8 +283,7 @@ class TemporalWorkflowClient(WorkflowClient):
         # Configure Temporal runtime with Prometheus metrics (process-level singleton)
         connection_options["runtime"] = self._get_prometheus_runtime()
         logger.info(
-            "Temporal Prometheus metrics enabled",
-            bind_address=TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+            "Temporal Prometheus metrics enabled: %s", TEMPORAL_PROMETHEUS_BIND_ADDRESS
         )
 
         # Create the client
@@ -298,8 +297,8 @@ class TemporalWorkflowClient(WorkflowClient):
             )
             self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
             logger.info(
-                "Started token refresh loop",
-                initial_interval_s=self._token_refresh_interval,
+                "Started token refresh loop (interval=%d s)",
+                self._token_refresh_interval,
             )
 
     async def close(self) -> None:
@@ -353,7 +352,7 @@ class TemporalWorkflowClient(WorkflowClient):
             await StateStore.save_state_object(
                 id=workflow_id, value=workflow_args, type=StateType.WORKFLOWS
             )
-            logger.info("Created workflow config", workflow_id=workflow_id)
+            logger.info("Created workflow config: %s", workflow_id)
         # Pass the full workflow_args to the workflow
         if not self.client:
             raise ValueError("Client is not loaded")
@@ -373,7 +372,9 @@ class TemporalWorkflowClient(WorkflowClient):
         )
 
         logger.info(
-            "Workflow started", workflow_id=handle.id, run_id=handle.result_run_id
+            "Workflow started: workflow_id=%s run_id=%s",
+            handle.id,
+            handle.result_run_id,
         )
         return {
             "workflow_id": handle.id,
@@ -401,9 +402,9 @@ class TemporalWorkflowClient(WorkflowClient):
             await workflow_handle.terminate()
         except Exception as e:
             logger.error(
-                "Error terminating workflow",
-                workflow_id=workflow_id,
-                run_id=run_id,
+                "Error terminating workflow: workflow_id=%s run_id=%s",
+                workflow_id,
+                run_id,
                 exc_info=True,
             )
             raise Exception(f"Error terminating workflow {workflow_id} {run_id}: {e}")
@@ -454,8 +455,8 @@ class TemporalWorkflowClient(WorkflowClient):
             )
             self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
             logger.info(
-                "Started token refresh loop",
-                initial_interval_s=self._token_refresh_interval,
+                "Started token refresh loop (interval=%d s)",
+                self._token_refresh_interval,
             )
 
         # Start with provided activities and add system activities
@@ -492,9 +493,9 @@ class TemporalWorkflowClient(WorkflowClient):
                 default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
             )
             logger.info(
-                "Worker Deployment versioning enabled",
-                deployment=TEMPORAL_DEPLOYMENT_NAME,
-                build_id=TEMPORAL_BUILD_ID,
+                "Worker Deployment versioning enabled: deployment=%s build_id=%s",
+                TEMPORAL_DEPLOYMENT_NAME,
+                TEMPORAL_BUILD_ID,
             )
         elif TEMPORAL_BUILD_ID:
             deployment_config = WorkerDeploymentConfig(
@@ -505,7 +506,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 use_worker_versioning=True,
                 default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
             )
-            logger.info("Worker versioning enabled", build_id=TEMPORAL_BUILD_ID)
+            logger.info("Worker versioning enabled: build_id=%s", TEMPORAL_BUILD_ID)
 
         # Build interceptors list
         interceptors = [

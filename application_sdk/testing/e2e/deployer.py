@@ -1,12 +1,12 @@
 """AppDeployer: helm-based deploy/undeploy for K8s e2e tests."""
 
 import asyncio
-import logging
 from pathlib import Path
 
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e.config import AppConfig
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Path to the bundled Helm chart (relative to this file's package root).
 _HELM_CHART_PATH = Path(__file__).parents[3] / "helm" / "atlan-app"

@@ -117,13 +117,11 @@ class SecretStore:
                     else credential_guid
                 )
                 try:
-                    logger.debug("Fetching multi-key secret", key=key_to_fetch)
+                    logger.debug("Fetching multi-key secret: %s", key_to_fetch)
                     secret_data = cls.get_secret(secret_key=key_to_fetch)
                 except Exception:
                     logger.warning(
-                        "Failed to fetch secret bundle",
-                        key=key_to_fetch,
-                        exc_info=True,
+                        "Failed to fetch secret bundle: %s", key_to_fetch, exc_info=True
                     )
 
             # Single-key mode → per-field secret lookup
@@ -142,9 +140,7 @@ class SecretStore:
             return await _get_credentials_async(credential_guid)
         except Exception as e:
             logger.error(
-                "Error resolving credentials",
-                credential_guid=credential_guid,
-                exc_info=True,
+                "Error resolving credentials for %s", credential_guid, exc_info=True
             )
             raise CommonError(
                 CommonError.CREDENTIALS_RESOLUTION_ERROR,
@@ -180,7 +176,7 @@ class SecretStore:
                                 continue
                             collected[k] = v
                 except Exception:
-                    logger.debug("Skipping single-key field", field=field)
+                    logger.debug("Skipping single-key field: %s", field)
             elif field == "extra" and isinstance(value, dict):
                 # Recursively process string values in the extra dictionary
                 for extra_key, extra_value in value.items():
@@ -272,8 +268,8 @@ class SecretStore:
         """
         if not is_component_registered(DEPLOYMENT_SECRET_STORE_NAME):
             logger.warning(
-                "Deployment secret store component not registered",
-                component=DEPLOYMENT_SECRET_STORE_NAME,
+                "Deployment secret store component not registered: %s",
+                DEPLOYMENT_SECRET_STORE_NAME,
             )
             return None
 
@@ -284,7 +280,7 @@ class SecretStore:
             if isinstance(secret_data, dict) and key in secret_data:
                 return secret_data[key]
 
-            logger.debug("Multi-key not found, checking single-key secret", key=key)
+            logger.debug("Multi-key not found, checking single-key secret: %s", key)
             single_secret_data = cls.get_secret(key, DEPLOYMENT_SECRET_STORE_NAME)
             if isinstance(single_secret_data, dict):
                 # Handle both {key:value} and {"value": "..."} cases

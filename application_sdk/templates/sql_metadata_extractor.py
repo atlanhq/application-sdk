@@ -151,7 +151,7 @@ class SqlMetadataExtractor(App):
         Override to customize the orchestration order or add additional steps.
         """
         workflow_id = input.workflow_id
-        logger.info("Starting SQL metadata extraction", workflow_id=workflow_id)
+        logger.info("Starting SQL metadata extraction: %s", workflow_id)
 
         try:
             # Prefer credential_ref; fall back to legacy credential_guid

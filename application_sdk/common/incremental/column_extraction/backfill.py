@@ -81,7 +81,7 @@ def get_backfill_tables(
             backfill_qns = {row[0] for row in result}
 
             if backfill_qns:
-                logger.info("Found assets needing backfill", count=len(backfill_qns))
+                logger.info("Found %d assets needing backfill", len(backfill_qns))
                 for qn in sorted(backfill_qns):
                     type_result = conn.execute(
                         """
@@ -91,9 +91,7 @@ def get_backfill_tables(
                         [qn],
                     ).fetchone()
                     asset_type = type_result[0] if type_result else None
-                    logger.debug(
-                        "Backfill asset", asset_type=asset_type, qualified_name=qn
-                    )
+                    logger.debug("Backfill asset: type=%s qn=%s", asset_type, qn)
             else:
                 logger.info(
                     "No backfill tables found - all current tables exist in "

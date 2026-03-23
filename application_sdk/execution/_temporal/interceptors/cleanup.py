@@ -61,9 +61,9 @@ async def cleanup() -> CleanupResult:
     # Use configured paths or default to workflow-specific artifacts directory
     if CLEANUP_BASE_PATHS:
         base_paths = CLEANUP_BASE_PATHS
-        logger.info("Using CLEANUP_BASE_PATHS for cleanup", base_paths=base_paths)
+        logger.info("Using CLEANUP_BASE_PATHS for cleanup: %s", base_paths)
 
-    logger.info("Cleaning up all contents from base paths", base_paths=base_paths)
+    logger.info("Cleaning up all contents from base paths: %s", base_paths)
 
     for base_path in base_paths:
         try:
@@ -71,18 +71,18 @@ async def cleanup() -> CleanupResult:
                 if os.path.isdir(base_path):
                     # Remove entire directory and recreate it empty
                     shutil.rmtree(base_path)
-                    logger.info("Cleaned up all contents from path", path=base_path)
+                    logger.info("Cleaned up all contents from path: %s", base_path)
                     path_results[base_path] = True
                 else:
-                    logger.warning("Path is not a directory", path=base_path)
+                    logger.warning("Path is not a directory: %s", base_path)
                     path_results[base_path] = False
             else:
-                logger.debug("Directory doesn't exist", path=base_path)
+                logger.debug("Directory doesn't exist: %s", base_path)
                 path_results[base_path] = True
 
         except Exception:
             logger.error(
-                "Unexpected error cleaning up path", exc_info=True, path=base_path
+                "Unexpected error cleaning up path: %s", base_path, exc_info=True
             )
             path_results[base_path] = False
 

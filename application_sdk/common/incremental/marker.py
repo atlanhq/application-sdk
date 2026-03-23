@@ -90,10 +90,10 @@ def process_marker_timestamp(
     if prepone_enabled and prepone_hours > 0:
         adjusted = prepone_marker_timestamp(normalized, prepone_hours)
         logger.info(
-            "Marker preponed",
-            original=normalized,
-            adjusted=adjusted,
-            prepone_hours=prepone_hours,
+            "Marker preponed by %.1f hours: %s -> %s",
+            prepone_hours,
+            normalized,
+            adjusted,
         )
         return adjusted
 
@@ -147,7 +147,7 @@ async def fetch_marker_from_storage(
         )
 
     if not marker:
-        logger.info("No marker found - full extraction", next_marker=next_marker)
+        logger.info("No marker found - full extraction (next=%s)", next_marker)
         return None, next_marker
 
     # Process the marker (normalize and optionally prepone)
@@ -158,9 +158,7 @@ async def fetch_marker_from_storage(
     )
 
     logger.info(
-        "Incremental extraction",
-        marker=processed_marker,
-        next_marker=next_marker,
+        "Incremental extraction: marker=%s next=%s", processed_marker, next_marker
     )
 
     return processed_marker, next_marker
@@ -209,13 +207,11 @@ async def persist_marker_to_storage(
     local_marker_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Write marker to local file
-    logger.info(
-        "Writing marker to local file", local_marker_path=str(local_marker_path)
-    )
+    logger.info("Writing marker to local file: %s", local_marker_path)
     local_marker_path.write_text(marker_value, encoding="utf-8")
 
     # Upload marker to S3
-    logger.info("Uploading marker to S3", marker_s3_key=marker_s3_key)
+    logger.info("Uploading marker to S3: %s", marker_s3_key)
     try:
         await ObjectStore.upload_file(
             source=str(local_marker_path),
@@ -224,9 +220,7 @@ async def persist_marker_to_storage(
             retain_local_copy=True,
         )
         logger.info(
-            "Marker uploaded to S3",
-            marker_s3_key=marker_s3_key,
-            marker_value=marker_value,
+            "Marker uploaded to S3: key=%s value=%s", marker_s3_key, marker_value
         )
     except Exception as e:
         raise rewrap(e, "Failed to upload marker to S3") from e

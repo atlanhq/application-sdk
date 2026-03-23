@@ -71,7 +71,7 @@ def extract_database_names_from_regex_common(
                 if require_wildcard_schema:
                     # For exclude regex, we need at least 2 parts and schema must be wildcard
                     if len(parts) < 2:
-                        logger.warning("Invalid database name format", pattern=pattern)
+                        logger.warning("Invalid database name format: %s", pattern)
                         continue
                     db_name = parts[0].strip()
                     schema_part = parts[1].strip()
@@ -92,11 +92,9 @@ def extract_database_names_from_regex_common(
                 if re.match(r"^[a-zA-Z_][a-zA-Z0-9_$-]*$", db_name):
                     database_names.add(db_name)
                 else:
-                    logger.warning("Invalid database name format", db_name=db_name)
+                    logger.warning("Invalid database name format: %s", db_name)
             except Exception:
-                logger.warning(
-                    "Error processing pattern", pattern=pattern, exc_info=True
-                )
+                logger.warning("Error processing pattern: %s", pattern, exc_info=True)
                 continue
 
         if not database_names:

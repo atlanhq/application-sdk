@@ -107,7 +107,7 @@ async def shutdown(force: bool = False):
                 for task in asyncio.all_tasks()
                 if task is not asyncio.current_task()
             ]
-            logger.info("Cancelling pending tasks", task_count=len(pending_tasks))
+            logger.info("Cancelling %d pending tasks", len(pending_tasks))
 
             # Send cancel signal to all pending tasks
             for task in pending_tasks:

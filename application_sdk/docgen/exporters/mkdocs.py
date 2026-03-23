@@ -107,7 +107,7 @@ class MkDocsExporter:
             with open(os.path.join(docs_dir, f"{page.id}.md"), "w") as f:
                 f.write(page.content)
 
-        self.logger.info("Documentation exported", export_path=self.export_path)
+        self.logger.info("Documentation exported: %s", self.export_path)
 
     def generate_nav(self, pages: List[Page]) -> List[Dict[str, Any]]:
         """Generate navigation structure from manifest pages.

@@ -127,7 +127,7 @@ class BaseApplication:
             return
 
         for consume in event_registration.consumes:
-            logger.debug("Setting up event registration", consume=str(consume))
+            logger.debug("Setting up event registration: %s", consume)
             event_trigger: EventWorkflowTrigger = EventWorkflowTrigger(
                 event_type=consume.event_type,
                 event_name=consume.event_name,

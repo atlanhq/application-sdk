@@ -126,10 +126,10 @@ class AtlanStorage:
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
 
-            logger.debug("Successfully migrated file", path=file_path)
+            logger.debug("Successfully migrated file: %s", file_path)
             return file_path, True, ""
         except Exception as e:
-            logger.error("Failed to migrate file", path=file_path, exc_info=True)
+            logger.error("Failed to migrate file: %s", file_path, exc_info=True)
             return file_path, False, str(e)
 
     @classmethod
@@ -177,8 +177,8 @@ class AtlanStorage:
         """
         try:
             logger.info(
-                "Starting migration from objectstore to Atlan storage",
-                prefix=prefix,
+                "Starting migration from objectstore to Atlan storage (prefix=%s)",
+                prefix,
             )
 
             # Get list of all files to migrate from objectstore
@@ -187,7 +187,7 @@ class AtlanStorage:
             )
 
             total_files = len(files_to_migrate)
-            logger.info("Found files to migrate", count=total_files)
+            logger.info("Found %d files to migrate", total_files)
 
             if total_files == 0:
                 logger.info("No files found to migrate")
@@ -203,7 +203,7 @@ class AtlanStorage:
             ]
 
             # Execute all migrations in parallel
-            logger.info("Starting parallel migration", count=total_files)
+            logger.info("Starting parallel migration of %d files", total_files)
             results = await asyncio.gather(*migration_tasks, return_exceptions=True)
 
             # Process results
@@ -234,10 +234,10 @@ class AtlanStorage:
             )
 
             logger.info(
-                "Migration completed",
-                total=migration_summary.total_files,
-                migrated=migration_summary.migrated_files,
-                failed=migration_summary.failed_migrations,
+                "Migration completed: total=%d migrated=%d failed=%d",
+                migration_summary.total_files,
+                migration_summary.migrated_files,
+                migration_summary.failed_migrations,
             )
             return migration_summary
 

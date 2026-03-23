@@ -196,7 +196,7 @@ class ParquetFileReader(Reader):
             )
             # Track downloaded files for cleanup on close
             self._downloaded_files.extend(parquet_files)
-            logger.info("Reading parquet files", file_count=len(parquet_files))
+            logger.info("Reading %d parquet files", len(parquet_files))
 
             return pd.concat(
                 (pd.read_parquet(parquet_file) for parquet_file in parquet_files),
@@ -628,7 +628,7 @@ class ParquetFileWriter(Writer):
                 try:
                     await ObjectStore.delete_prefix(prefix=self.path)
                 except FileNotFoundError:
-                    logger.info("No files found under prefix", path=self.path)
+                    logger.info("No files found under prefix: %s", self.path)
             for path in file_paths:
                 if ENABLE_ATLAN_UPLOAD:
                     await ObjectStore.upload_file(

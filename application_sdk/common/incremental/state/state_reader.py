@@ -70,9 +70,7 @@ async def download_current_state(
         shutil.rmtree(current_state_dir)
     current_state_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(
-        "Downloading current-state folder from S3", s3_prefix=current_state_s3_prefix
-    )
+    logger.info("Downloading current-state folder from S3: %s", current_state_s3_prefix)
 
     exists = False
     json_count = 0
@@ -88,7 +86,7 @@ async def download_current_state(
         exists = json_count > 0
 
         if exists:
-            logger.info("Current-state downloaded", json_count=json_count)
+            logger.info("Current-state downloaded (%d JSON files)", json_count)
         else:
             logger.info("Current-state downloaded but empty (no JSON files)")
     except Exception:

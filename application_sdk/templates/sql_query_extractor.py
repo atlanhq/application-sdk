@@ -79,7 +79,7 @@ class SqlQueryExtractor(App):
         Override to customize batch processing (e.g., parallel batches).
         """
         workflow_id = input.workflow_id
-        logger.info("Starting SQL query extraction", workflow_id=workflow_id)
+        logger.info("Starting SQL query extraction: %s", workflow_id)
 
         try:
             # Prefer credential_ref; fall back to legacy credential_guid

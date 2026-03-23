@@ -241,13 +241,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             try:
                 await old_sql_client.close()
                 logger.debug(
-                    "Closed existing SQL client during state refresh",
-                    workflow_id=workflow_id,
+                    "Closed existing SQL client during state refresh: %s", workflow_id
                 )
             except Exception:
                 logger.warning(
-                    "Failed to close existing SQL client during state refresh",
-                    workflow_id=workflow_id,
+                    "Failed to close existing SQL client during state refresh: %s",
+                    workflow_id,
                     exc_info=True,
                 )
                 # Continue even if close fails - new client is already ready
@@ -430,8 +429,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         if parquet_output:
             logger.info(
-                "Successfully wrote query results",
-                path=parquet_output.get_full_path(),
+                "Successfully wrote query results: %s", parquet_output.get_full_path()
             )
             return await parquet_output.close()
 
@@ -726,25 +724,22 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         # Upload data from object store to Atlan storage
         # Use workflow_id/workflow_run_id as the prefix to migrate specific data
         migration_prefix = workflow_args["output_path"]
-        logger.info(
-            "Starting migration from object store",
-            prefix=migration_prefix,
-        )
+        logger.info("Starting migration from object store: %s", migration_prefix)
         upload_stats = await AtlanStorage.migrate_from_objectstore_to_atlan(
             prefix=migration_prefix
         )
 
         # Log upload statistics
         logger.info(
-            "Atlan upload completed",
-            migrated_files=upload_stats.migrated_files,
-            failed_migrations=upload_stats.failed_migrations,
+            "Atlan upload completed: migrated=%d failed=%d",
+            upload_stats.migrated_files,
+            upload_stats.failed_migrations,
         )
 
         if upload_stats.failures:
-            logger.error("Upload failed", error_count=len(upload_stats.failures))
+            logger.error("Upload failed: %d errors", len(upload_stats.failures))
             for failure in upload_stats.failures:
-                logger.error("Upload error", failure=str(failure))
+                logger.error("Upload error: %s", failure)
 
             # Mark activity as failed when there are upload failures
             raise ActivityError(

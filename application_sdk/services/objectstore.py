@@ -166,7 +166,7 @@ class ObjectStore:
                     elif isinstance(item, dict) and isinstance(item.get("Name"), str):
                         paths.append(item["Name"])
                     else:
-                        logger.warning("Skipping invalid path entry", entry=item)
+                        logger.warning("Skipping invalid path entry: %s", item)
             elif isinstance(file_list, dict) and "Contents" in file_list:
                 paths = [item["Key"] for item in file_list["Contents"] if "Key" in item]
             elif isinstance(file_list, dict):
@@ -177,7 +177,7 @@ class ObjectStore:
             valid_list = []
             for path in paths:
                 if not isinstance(path, str):
-                    logger.warning("Skipping non-string path", path=path)
+                    logger.warning("Skipping non-string path: %s", path)
                     continue
 
                 # Normalize path separators for cross-platform compatibility
@@ -235,7 +235,7 @@ class ObjectStore:
                     return None
                 raise Exception(f"No data received for file: {normalized_key}")
 
-            logger.debug("Successfully retrieved file content", key=normalized_key)
+            logger.debug("Successfully retrieved file content: %s", normalized_key)
             return response_data
 
         except Exception as e:
@@ -290,7 +290,7 @@ class ObjectStore:
             data=data,
             store_name=store_name,
         )
-        logger.debug("Successfully deleted file", key=normalized_key)
+        logger.debug("Successfully deleted file: %s", normalized_key)
 
     @classmethod
     async def delete_prefix(
@@ -316,8 +316,8 @@ class ObjectStore:
                 # If we can't list files for any reason, we can't delete them either
                 # Raise FileNotFoundError to give developers clear feedback
                 logger.info(
-                    "Cannot list files under prefix",
-                    prefix=normalized_prefix,
+                    "Cannot list files under prefix: %s",
+                    normalized_prefix,
                     exc_info=True,
                 )
                 raise FileNotFoundError(
@@ -325,13 +325,13 @@ class ObjectStore:
                 )
 
             if not files_to_delete:
-                logger.info("No files found under prefix", prefix=normalized_prefix)
+                logger.info("No files found under prefix: %s", normalized_prefix)
                 return
 
             logger.info(
-                "Deleting files under prefix",
-                count=len(files_to_delete),
-                prefix=normalized_prefix,
+                "Deleting %d files under prefix: %s",
+                len(files_to_delete),
+                normalized_prefix,
             )
 
             # Delete each file individually
@@ -340,19 +340,18 @@ class ObjectStore:
                     await cls.delete_file(key=file_path, store_name=store_name)
                 except Exception:
                     logger.warning(
-                        "Failed to delete file", path=file_path, exc_info=True
+                        "Failed to delete file: %s", file_path, exc_info=True
                     )
                     # Continue with other files even if one fails
 
             logger.info(
-                "Successfully deleted all files under prefix",
-                prefix=normalized_prefix,
+                "Successfully deleted all files under prefix: %s", normalized_prefix
             )
 
         except Exception:
             logger.error(
-                "Error deleting files under prefix",
-                prefix=normalized_prefix,
+                "Error deleting files under prefix: %s",
+                normalized_prefix,
                 exc_info=True,
             )
             raise
@@ -394,11 +393,11 @@ class ObjectStore:
                 metadata=cls._create_file_metadata(normalized_destination),
                 store_name=store_name,
             )
-            logger.debug("Successfully uploaded file", key=normalized_destination)
+            logger.debug("Successfully uploaded file: %s", normalized_destination)
         except Exception:
             logger.error(
-                "Error uploading file to object store",
-                key=normalized_destination,
+                "Error uploading file to object store: %s",
+                normalized_destination,
                 exc_info=True,
             )
             raise
@@ -437,11 +436,11 @@ class ObjectStore:
                 metadata=cls._create_file_metadata(destination),
                 store_name=store_name,
             )
-            logger.debug("Successfully uploaded file from bytes", key=destination)
+            logger.debug("Successfully uploaded file from bytes: %s", destination)
         except Exception:
             logger.error(
-                "Error uploading file from bytes to object store",
-                key=destination,
+                "Error uploading file from bytes to object store: %s",
+                destination,
                 exc_info=True,
             )
             raise
@@ -506,12 +505,10 @@ class ObjectStore:
                         file_path, store_key, store_name, retain_local_copy
                     )
 
-            logger.info("Completed uploading directory to object store", source=source)
+            logger.info("Completed uploading directory to object store: %s", source)
         except Exception:
             logger.error(
-                "Unexpected error uploading directory",
-                source=source,
-                exc_info=True,
+                "Unexpected error uploading directory: %s", source, exc_info=True
             )
             raise
 
@@ -553,7 +550,7 @@ class ObjectStore:
         with SafeFileOps.open(destination, "wb") as f:
             f.write(response_data)
 
-        logger.info("Successfully downloaded file", key=normalized_source)
+        logger.info("Successfully downloaded file: %s", normalized_source)
 
     @classmethod
     async def download_prefix(
@@ -574,9 +571,9 @@ class ObjectStore:
         file_list = await cls.list_files(normalized_source, store_name)
 
         logger.info(
-            "Found files to download",
-            count=len(file_list),
-            prefix=normalized_source,
+            "Found %d files to download under prefix: %s",
+            len(file_list),
+            normalized_source,
         )
 
         # Normalize source prefix to use forward slashes for comparison
@@ -595,7 +592,9 @@ class ObjectStore:
             local_file_path = os.path.join(destination, relative_path)
             await cls.download_file(file_path, local_file_path, store_name)
 
-        logger.info("Successfully downloaded all files", prefix=normalized_source)
+        logger.info(
+            "Successfully downloaded all files under prefix: %s", normalized_source
+        )
 
     @classmethod
     async def _invoke_dapr_binding(
@@ -634,11 +633,12 @@ class ObjectStore:
             grpc_overhead_buffer = max(int(data_size * 0.05), 1024)
             required_max_length = data_size + grpc_overhead_buffer
             logger.warning(
-                "Data size exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH",
-                data_size_bytes=data_size,
-                max_grpc_bytes=DAPR_MAX_GRPC_MESSAGE_LENGTH,
-                required_max_length=required_max_length,
-                overhead_buffer=grpc_overhead_buffer,
+                "Data size %d bytes exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH %d"
+                " (required=%d with %d overhead)",
+                data_size,
+                DAPR_MAX_GRPC_MESSAGE_LENGTH,
+                required_max_length,
+                grpc_overhead_buffer,
             )
             # Set max_grpc_message_length to accommodate the data size plus gRPC overhead
             max_message_length = required_max_length
@@ -670,4 +670,4 @@ class ObjectStore:
         except FileNotFoundError:
             pass  # ignore if the file or directory doesn't exist
         except Exception:
-            logger.warning("Error cleaning up path", path=path, exc_info=True)
+            logger.warning("Error cleaning up path: %s", path, exc_info=True)

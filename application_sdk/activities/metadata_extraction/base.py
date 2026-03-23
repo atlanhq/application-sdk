@@ -86,17 +86,13 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
         client = self.client_class()
         # Extract credentials from state store if credential_guid is available
         if "credential_guid" in workflow_args:
-            logger.info(
-                "Retrieving credentials",
-                credential_guid=workflow_args["credential_guid"],
-            )
+            logger.info("Retrieving credentials: %s", workflow_args["credential_guid"])
             try:
                 credentials = await SecretStore.get_credentials(
                     workflow_args["credential_guid"]
                 )
                 logger.info(
-                    "Successfully retrieved credentials",
-                    keys=list(credentials.keys()),
+                    "Successfully retrieved credentials: %s", list(credentials.keys())
                 )
                 # Load the client with credentials
                 await client.load(credentials=credentials)
@@ -142,25 +138,22 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
         # Upload data from object store to Atlan storage
         # Use workflow_id/workflow_run_id as the prefix to migrate specific data
         migration_prefix = workflow_args["output_path"]
-        logger.info(
-            "Starting migration from object store",
-            prefix=migration_prefix,
-        )
+        logger.info("Starting migration from object store: %s", migration_prefix)
         upload_stats = await AtlanStorage.migrate_from_objectstore_to_atlan(
             prefix=migration_prefix
         )
 
         # Log upload statistics
         logger.info(
-            "Atlan upload completed",
-            migrated_files=upload_stats.migrated_files,
-            failed_migrations=upload_stats.failed_migrations,
+            "Atlan upload completed: migrated=%d failed=%d",
+            upload_stats.migrated_files,
+            upload_stats.failed_migrations,
         )
 
         if upload_stats.failures:
-            logger.error("Upload failed", error_count=len(upload_stats.failures))
+            logger.error("Upload failed: %d errors", len(upload_stats.failures))
             for failure in upload_stats.failures:
-                logger.error("Upload error", failure=str(failure))
+                logger.error("Upload error: %s", failure)
 
             # Mark activity as failed when there are upload failures
             raise ActivityError(

@@ -1,13 +1,14 @@
 """Ephemeral kubectl port-forward helper for K8s e2e tests."""
 
 import asyncio
-import logging
 import socket
 from typing import Any
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 def _find_free_port() -> int:

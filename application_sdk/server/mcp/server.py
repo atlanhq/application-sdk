@@ -86,12 +86,12 @@ class MCPServer:
                 )
             else:
                 self.logger.info(
-                    "Tool is marked as not visible, skipping registration",
-                    tool_name=mcp_metadata.name,
+                    "Tool is marked as not visible, skipping registration: %s",
+                    mcp_metadata.name,
                 )
 
         tools = await self.server.get_tools()
-        self.logger.info("Registered tools", count=len(tools), tools=list(tools.keys()))
+        self.logger.info("Registered %d tools: %s", len(tools), list(tools.keys()))
 
     async def register_tools_from_registry(self, app_name: str) -> None:
         """Discover @mcp_tool-decorated tasks via the v3 TaskRegistry.
@@ -134,8 +134,8 @@ class MCPServer:
                 )
             else:
                 self.logger.info(
-                    "Tool is marked as not visible, skipping registration",
-                    tool_name=mcp_metadata.name,
+                    "Tool is marked as not visible, skipping registration: %s",
+                    mcp_metadata.name,
                 )
 
         tools = await self.server.get_tools()

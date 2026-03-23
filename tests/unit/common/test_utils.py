@@ -445,7 +445,7 @@ class TestExtractDatabaseNamesFromIncludeRegex:
 
         # Should log warning for invalid database name
         mock_logger.warning.assert_called_with(
-            "Invalid database name format", db_name="123db"
+            "Invalid database name format: %s", "123db"
         )
         assert result == "'^(valid_db)$'"
 
@@ -465,7 +465,7 @@ class TestExtractDatabaseNamesFromIncludeRegex:
 
         # Should log warning for invalid database name format
         mock_logger.warning.assert_called_with(
-            "Invalid database name format", db_name="invalid^pattern"
+            "Invalid database name format: %s", "invalid^pattern"
         )
         assert result == "'^(db1|db2)$'"
 
@@ -767,7 +767,7 @@ class TestExtractDatabaseNamesFromExcludeRegex:
 
         # Should log warning for invalid database name
         mock_logger.warning.assert_called_with(
-            "Invalid database name format", db_name="123db"
+            "Invalid database name format: %s", "123db"
         )
         assert result == "'^(valid_db)$'"
 
@@ -784,9 +784,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         )
 
         # Should log warning for invalid database name format
-        # Exclude regex uses pattern= kwarg when pattern has no schema part
         mock_logger.warning.assert_called_with(
-            "Invalid database name format", pattern="invalid-pattern"
+            "Invalid database name format: %s", "invalid-pattern"
         )
         assert result == "'^(db1|db2)$'"
 

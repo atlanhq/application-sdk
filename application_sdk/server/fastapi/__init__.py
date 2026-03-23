@@ -972,7 +972,7 @@ class APIServer(ServerInterface):
         if self.ui_enabled:
             self.register_ui_routes()
 
-        logger.info("Starting application", host=host, port=port)
+        logger.info("Starting application: host=%s port=%d", host, port)
         server = Server(
             Config(
                 app=self.app,

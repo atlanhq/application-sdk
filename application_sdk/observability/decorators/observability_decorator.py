@@ -54,12 +54,12 @@ def _record_success_observability(
             events=[{"name": f"{func_name}_success", "timestamp": time.time()}],
             duration_ms=duration_ms,
         )
-        logger.debug("Successfully recorded trace", func_name=func_name)
+        logger.debug("Successfully recorded trace: %s", func_name)
     except Exception:
-        logger.error("Failed to record trace", exc_info=True, func_name=func_name)
+        logger.error("Failed to record trace: %s", func_name, exc_info=True)
 
     # Debug logging before recording metric
-    logger.debug("Recording success metric", func_name=func_name)
+    logger.debug("Recording success metric: %s", func_name)
 
     try:
         # Record success metric
@@ -71,14 +71,12 @@ def _record_success_observability(
             description=f"Successful {func_name}",
             unit="count",
         )
-        logger.debug("Successfully recorded metric", func_name=func_name)
+        logger.debug("Successfully recorded metric: %s", func_name)
     except Exception:
-        logger.error("Failed to record metric", exc_info=True, func_name=func_name)
+        logger.error("Failed to record metric: %s", func_name, exc_info=True)
 
     # Log completion
-    logger.debug(
-        "Completed function", func_name=func_name, duration_ms=round(duration_ms, 2)
-    )
+    logger.debug("Completed function: %s in %.2fms", func_name, round(duration_ms, 2))
 
 
 def _record_error_observability(
@@ -97,7 +95,7 @@ def _record_error_observability(
     duration_ms = (time.time() - start_time) * 1000
 
     # Debug logging for error case
-    logger.error("Error in function", exc_info=error, func_name=func_name)
+    logger.error("Error in function: %s", func_name, exc_info=True)
 
     try:
         # Record failure trace
@@ -121,9 +119,9 @@ def _record_error_observability(
             ],
             duration_ms=duration_ms,
         )
-        logger.debug("Successfully recorded error trace", func_name=func_name)
+        logger.debug("Successfully recorded error trace: %s", func_name)
     except Exception:
-        logger.error("Failed to record error trace", exc_info=True, func_name=func_name)
+        logger.error("Failed to record error trace: %s", func_name, exc_info=True)
 
     try:
         # Record failure metric
@@ -135,14 +133,12 @@ def _record_error_observability(
             description=f"Failed {func_name}",
             unit="count",
         )
-        logger.debug("Successfully recorded error metric", func_name=func_name)
+        logger.debug("Successfully recorded error metric: %s", func_name)
     except Exception:
-        logger.error(
-            "Failed to record error metric", exc_info=True, func_name=func_name
-        )
+        logger.error("Failed to record error metric: %s", func_name, exc_info=True)
 
     # Log error
-    logger.error("Error in function", exc_info=error, func_name=func_name)
+    logger.error("Error in function: %s", func_name, exc_info=True)
 
 
 def observability(
@@ -205,7 +201,7 @@ def observability(
 
             try:
                 # Log start of operation
-                actual_logger.debug("Starting async function", func_name=func_name)
+                actual_logger.debug("Starting async function: %s", func_name)
 
                 # Execute the function
                 result = await func(*args, **kwargs)
@@ -250,7 +246,7 @@ def observability(
 
             try:
                 # Log start of operation
-                actual_logger.debug("Starting sync function", func_name=func_name)
+                actual_logger.debug("Starting sync function: %s", func_name)
 
                 # Execute the function
                 result = func(*args, **kwargs)

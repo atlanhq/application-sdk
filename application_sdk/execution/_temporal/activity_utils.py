@@ -286,6 +286,6 @@ def send_periodic_heartbeat_sync(
     while not stop_event.wait(timeout=delay):
         try:
             activity.heartbeat(*details)
-        except Exception as e:
-            logger.error("Error sending heartbeat: %s", e, exc_info=e)
+        except Exception:
+            logger.error("Error sending heartbeat", exc_info=True)
             return

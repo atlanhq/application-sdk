@@ -217,9 +217,11 @@ class QueryBasedTransformer(TransformerInterface):
 
         # Handle columns at this level
         if "columns" in level:
-            logger.debug("Processing columns at level", columns=level["columns"])
+            logger.debug("Processing columns at level: %s", level["columns"])
             for full_col, suffix in level["columns"]:
-                logger.debug("Processing column", full_col=full_col, suffix=suffix)
+                logger.debug(
+                    "Processing column: full_col=%s suffix=%s", full_col, suffix
+                )
                 field = daft.col(full_col).alias(suffix)
                 struct_fields.append(field)
                 # Add to non_null check by negating is_null()
@@ -228,7 +230,7 @@ class QueryBasedTransformer(TransformerInterface):
         # Handle nested levels
         for component, sub_level in level.items():
             if component != "columns":  # Skip the columns key
-                logger.debug("Processing nested component", component=component)
+                logger.debug("Processing nested component: %s", component)
                 nested_struct = self._build_struct(sub_level, component)
                 if nested_struct is not None:
                     struct_fields.append(nested_struct)
@@ -237,7 +239,7 @@ class QueryBasedTransformer(TransformerInterface):
 
         # Only create a struct if we have fields
         if struct_fields:
-            logger.debug("Creating struct", field_count=len(struct_fields))
+            logger.debug("Creating struct with %d fields", len(struct_fields))
             # Create the struct first
             struct = to_struct(*struct_fields)
 
@@ -253,7 +255,7 @@ class QueryBasedTransformer(TransformerInterface):
 
             return struct.alias(prefix)
 
-        logger.warning("No fields found for level", level=level)
+        logger.warning("No fields found for level: %s", level)
         return None
 
     def get_grouped_dataframe_by_prefix(
@@ -294,7 +296,7 @@ class QueryBasedTransformer(TransformerInterface):
         # Get all column names
         columns = dataframe.column_names
         logger.debug("=== DEBUG: get_grouped_dataframe_by_prefix ===")
-        logger.debug("Input DataFrame columns", columns=columns)
+        logger.debug("Input DataFrame columns: %s", columns)
 
         # Group columns by their path components
         path_groups = {}
@@ -302,7 +304,7 @@ class QueryBasedTransformer(TransformerInterface):
 
         for col in columns:
             if col is None:
-                logger.error("Found None column in DataFrame columns", columns=columns)
+                logger.error("Found None column in DataFrame columns: %s", columns)
                 continue
 
             if "." in col:
@@ -330,12 +332,12 @@ class QueryBasedTransformer(TransformerInterface):
         for col in standalone_columns:
             new_columns.append(daft.col(col))
 
-        logger.debug("path_groups", path_groups=path_groups)
-        logger.debug("standalone_columns", standalone_columns=standalone_columns)
+        logger.debug("path_groups: %s", path_groups)
+        logger.debug("standalone_columns: %s", standalone_columns)
 
         # Build nested structs starting from the root level
         for prefix, level in path_groups.items():
-            logger.debug("Building struct for prefix", prefix=prefix, level=level)
+            logger.debug("Building struct for prefix=%s level=%s", prefix, level)
             struct_expr = self._build_struct(level, prefix)
             new_columns.append(struct_expr)
 

@@ -82,9 +82,9 @@ class TemporalAuthManager:
         token_url = self._resolve_token_url()
 
         logger.info(
-            "Acquiring initial Temporal auth token",
-            client_id=self.config.client_id,
-            token_url=token_url,
+            "Acquiring initial Temporal auth token: client_id=%s token_url=%s",
+            self.config.client_id,
+            token_url,
         )
 
         try:
@@ -96,8 +96,8 @@ class TemporalAuthManager:
 
         expires_at = self._get_token_service().current_expires_at
         logger.info(
-            "Initial Temporal auth token acquired",
-            expires_at=str(expires_at) if expires_at else "unknown",
+            "Initial Temporal auth token acquired (expires_at=%s)",
+            expires_at or "unknown",
         )
         return access_token
 
@@ -213,8 +213,7 @@ class TemporalAuthManager:
         client.api_key = access_token
 
         logger.info(
-            "Temporal auth token refreshed",
-            expires_at=str(expires_at) if expires_at else "unknown",
+            "Temporal auth token refreshed (expires_at=%s)", expires_at or "unknown"
         )
 
         await self._emit_token_refresh_event(expires_at)

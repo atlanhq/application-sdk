@@ -145,7 +145,7 @@ class AzureAuthProvider:
             ClientAuthenticationError: If credential creation fails.
         """
         try:
-            logger.debug("Creating Azure credential", auth_type=auth_type)
+            logger.debug("Creating Azure credential: %s", auth_type)
 
             if auth_type.lower() != "service_principal":
                 raise CommonError(
@@ -217,8 +217,8 @@ class AzureAuthProvider:
             ) from e
 
         logger.debug(
-            "Creating service principal credential",
-            tenant_id=validated_credentials.tenant_id,
+            "Creating service principal credential: tenant_id=%s",
+            validated_credentials.tenant_id,
         )
 
         try:
