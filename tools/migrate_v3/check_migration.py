@@ -145,6 +145,13 @@ _RE_TEMPORALIO_DIRECT = re.compile(
 # self._state  — direct state access; migrated code uses self.context.state_store.
 _RE_SELF_STATE = re.compile(r"\bself\._state\b")
 
+# Direct loguru import — must not appear in connector code; use get_logger() instead.
+_RE_DIRECT_LOGURU = re.compile(r"^\s*(?:from\s+loguru\b|import\s+loguru\b)", re.MULTILINE)
+
+# Direct stdlib logging.getLogger() setup — bypasses the SDK's AtlanLoggerAdapter.
+# Only flag when the file also doesn't import get_logger (i.e. it's not the adaptor itself).
+_RE_LOGGING_GETLOGGER = re.compile(r"\blogging\.getLogger\s*\(")
+
 
 # ---------------------------------------------------------------------------
 # Core checker
@@ -270,7 +277,7 @@ def check_file(path: Path, *, is_test: bool = False) -> list[CheckResult]:
         message_template=(
             "allow_unbounded_fields=True is forbidden in connector contracts. "
             "Use Annotated[list[T], MaxItems(N)] or FileReference for large data. "
-            "See §7 of MIGRATION_PROMPT.md."
+            "See §8 of MIGRATION_PROMPT.md."
         ),
     )
 
@@ -341,6 +348,36 @@ def check_file(path: Path, *, is_test: bool = False) -> list[CheckResult]:
             "Use self.context.state_store (or self.app_state) instead."
         ),
     )
+
+    # ── WARN: direct loguru import ────────────────────────────────────────
+    results += _find_pattern(
+        lines,
+        _RE_DIRECT_LOGURU,
+        path=path,
+        level=WARN,
+        rule="no-direct-loguru",
+        message_template=(
+            "Direct loguru import bypasses the SDK's AtlanLoggerAdapter. "
+            "Replace with: from application_sdk.observability.logger_adaptor import get_logger  "
+            "then logger = get_logger(__name__). See §7 of MIGRATION_PROMPT.md."
+        ),
+    )
+
+    # ── WARN: logging.getLogger() direct setup ────────────────────────────
+    # Skip files that import get_logger — those are the adaptor implementation itself.
+    if not re.search(r"from application_sdk\.observability\.logger_adaptor import", full_text):
+        results += _find_pattern(
+            lines,
+            _RE_LOGGING_GETLOGGER,
+            path=path,
+            level=WARN,
+            rule="no-direct-logging-getlogger",
+            message_template=(
+                "logging.getLogger() bypasses the SDK's AtlanLoggerAdapter. "
+                "Replace with: from application_sdk.observability.logger_adaptor import get_logger  "
+                "then logger = get_logger(__name__). See §7 of MIGRATION_PROMPT.md."
+            ),
+        )
 
     # ── WARN: response format changed in v3 ──────────────────────────────
     # Only fires for Handler subclasses — reminds developer to update

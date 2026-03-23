@@ -243,7 +243,7 @@ class MyConnector(App):
 ### Checklist
 
 - [ ] For each `@activity.defn` method in the old activities class:
-  - Define a typed `Input` / `Output` model pair (see §7 of the migration guide).
+  - Define a typed `Input` / `Output` model pair (see §8 of the migration guide).
   - Move the method body into a `@task` method on the new `App` subclass.
   - Rename `workflow_args: Dict[str, Any]` → `input: MyInput`.
 - [ ] For the old `@workflow.run` method, implement `run()` on the `App` subclass.
@@ -365,7 +365,62 @@ CMD ["application-sdk", "--mode", "combined", "--app", "my_package.apps:MyExtrac
 
 ---
 
-## 7. Typed Contracts — quick reference
+## 7. Logging
+
+All connector code must use the SDK's logger — **never** import loguru or stdlib
+`logging` directly.  Direct imports bypass `AtlanLoggerAdapter`, which injects
+Temporal/tenant context, enforces `%`-style formatting, and routes to the
+observability back-end.
+
+### Setup (every module that logs)
+
+```python
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+```
+
+### Forbidden patterns
+
+```python
+# BAD — bypasses AtlanLoggerAdapter entirely
+from loguru import logger
+import loguru
+
+# BAD — bypasses AtlanLoggerAdapter
+import logging
+logger = logging.getLogger(__name__)
+```
+
+### Log call style
+
+Use `%`-style placeholders in the message body.  Do **not** pass structured
+data as keyword arguments (they are not indexed in the Grafana/ClickHouse
+back-end and add noise without signal).
+
+```python
+# CORRECT
+logger.info("Fetched %d rows from schema %s", row_count, schema_name)
+logger.warning("Skipping table %s — permission denied", table_name)
+logger.error("Connection failed after %d retries", retries, exc_info=True)
+
+# WRONG — kwargs are silently swallowed, not logged or indexed
+logger.info("Fetched rows", row_count=row_count, schema=schema_name)
+```
+
+### Checklist
+
+- [ ] Replace every `from loguru import logger` / `import loguru` with
+      `from application_sdk.observability.logger_adaptor import get_logger` +
+      `logger = get_logger(__name__)`.
+- [ ] Replace every `logging.getLogger(...)` with the same.
+- [ ] Convert any `f"..."` log messages to `%`-style (`"... %s", value`).
+- [ ] Remove structured kwargs from log calls — embed values in the message body.
+- [ ] `exc_info=True` is the only keyword argument that should remain.
+
+---
+
+## 8. Typed Contracts — quick reference
 
 ```python
 from application_sdk.contracts.base import Input, Output
@@ -394,7 +449,7 @@ contracts. If you have an unbounded list, use `Annotated[list[T], MaxItems(N)]` 
 
 ---
 
-## 8. Final verification
+## 9. Final verification
 
 ```bash
 # 1. Import rewriter should already have run. Re-run to confirm zero remaining rewrites:
@@ -417,7 +472,7 @@ production deployment.
 
 ---
 
-## 9. E2E test migration reference
+## 10. E2E test migration reference
 
 If the connector has e2e tests that use a `BaseTest` / `TestInterface` pattern from
 v2, replace them with the v3 `application_sdk.testing.e2e` API.
@@ -505,7 +560,7 @@ original. Do NOT delete the original test file — a human must verify equivalen
 
 ---
 
-## 10. Directory consolidation
+## 11. Directory consolidation
 
 v2 connectors typically use a split directory layout:
 
