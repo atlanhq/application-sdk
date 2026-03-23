@@ -392,7 +392,7 @@ pyarrow==22.0.0
     # via
     #   atlan-application-sdk
     #   daft
-pyatlan==9.3.0
+pyatlan==9.3.1
     # via atlan-application-sdk
 pycparser==2.23 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
