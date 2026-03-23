@@ -1,7 +1,8 @@
 # Reusable publish workflow for Atlan first-party app repos.
 #
 # Uses the `atlan` CLI to build the image and register the version in the
-# Global Marketplace as a **draft** release that requires admin approval.
+# Global Marketplace. Draft/active status is determined by GM based on
+# the target channel and caller's tenant.
 #
 # The CLI handles:
 #   - Reading atlan.yaml for app name and config
@@ -48,7 +49,7 @@ on:
         description: "Atlan CLI version to install"
         required: false
         type: string
-        default: "v0.1.11"
+        default: "v0.1.10"
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -111,21 +112,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          ARGS="--draft"
+          ARGS=()
 
           if [ -n "$REF" ]; then
-            ARGS="$ARGS --ref $REF"
+            ARGS+=(--ref "$REF")
           fi
 
           # Tenants takes precedence over channel
           if [ -n "$TENANTS" ]; then
-            ARGS="$ARGS --tenants $TENANTS"
+            ARGS+=(--tenants "$TENANTS")
           elif [ -n "$CHANNEL" ]; then
-            ARGS="$ARGS --channel $CHANNEL"
-          else
-            echo "::error::Either 'channel' or 'tenants' input must be provided"
-            exit 1
+            ARGS+=(--channel "$CHANNEL")
           fi
 
-          echo "Running: atlan app publish $ARGS"
-          atlan app publish $ARGS
+          echo "Running: atlan app publish ${ARGS[*]}"
+          atlan app publish "${ARGS[@]}"
