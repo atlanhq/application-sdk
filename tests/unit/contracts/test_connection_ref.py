@@ -76,6 +76,25 @@ class TestConnectionAttributes:
         assert dumped["adminGroups"] == ["g1"]
         assert "qualified_name" not in dumped
 
+    def test_connector_name_and_category(self) -> None:
+        attrs = ConnectionAttributes.model_validate(
+            {
+                "qualifiedName": "x",
+                "connectorName": "snowflake",
+                "category": "warehouse",
+            }
+        )
+        assert attrs.connector_name == "snowflake"
+        assert attrs.category == "warehouse"
+        dumped = attrs.model_dump(by_alias=True)
+        assert dumped["connectorName"] == "snowflake"
+        assert dumped["category"] == "warehouse"
+
+    def test_connector_name_and_category_default_none(self) -> None:
+        attrs = ConnectionAttributes(qualified_name="x")
+        assert attrs.connector_name is None
+        assert attrs.category is None
+
     def test_extra_fields_allowed(self) -> None:
         attrs = ConnectionAttributes.model_validate(
             {"qualifiedName": "x", "unknownField": "preserved"}

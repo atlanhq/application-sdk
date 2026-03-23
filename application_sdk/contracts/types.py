@@ -248,6 +248,8 @@ class ConnectionAttributes(BaseModel, frozen=True):
 
     qualified_name: str = ""
     name: str = ""
+    connector_name: str | None = None
+    category: str | None = None
     admin_users: list[str] = Field(default_factory=list)
     admin_roles: list[str] = Field(default_factory=list)
     admin_groups: list[str] = Field(default_factory=list)
