@@ -10,6 +10,7 @@ from application_sdk.activities.metadata_extraction.lakehouse import (
     submit_and_poll_mdlh_load,
 )
 from application_sdk.clients.base import BaseClient
+from application_sdk.common.error_codes import ActivityError
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.observability.logger_adaptor import get_logger
@@ -182,9 +183,7 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    async def prepare_raw_for_lakehouse(
-        self, workflow_args: Dict[str, Any]
-    ) -> str:
+    async def prepare_raw_for_lakehouse(self, workflow_args: Dict[str, Any]) -> str:
         """Convert raw parquet files into common-schema JSONL for lakehouse ingestion.
 
         Reads output_path, workflow_id, workflow_run_id, connection info
