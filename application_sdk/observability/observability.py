@@ -273,8 +273,6 @@ class AtlanObservability(Generic[T], ABC):
         if not ENABLE_OBSERVABILITY_STORE_SINK or not records:
             return
         try:
-            from time import time_ns
-
             # Group records by partition using record's own timestamp
             partition_records: Dict[str, List[Dict[str, Any]]] = {}
             for record in records:
@@ -296,10 +294,12 @@ class AtlanObservability(Generic[T], ABC):
                         partition_data[0]["timestamp"]
                     )
 
-                    # Lexi-sortable filename
-                    filename = (
-                        f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
-                    )
+                    # Lexi-sortable filename.
+                    # Use datetime.now() rather than time.time_ns(): the latter is
+                    # restricted inside Temporal's workflow sandbox (non-deterministic),
+                    # while datetime.now() is patched by the SDK to be safe there.
+                    ts_ns = int(datetime.now().timestamp() * 1e9)
+                    filename = f"{ts_ns}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
                     local_path = os.path.join(partition_path, filename)
 
                     # Write NDJSON with gzip compression

@@ -288,6 +288,8 @@ class EventStore:
                 )
                 logger.info(
                     "Published event via binding",
+                    event_name=event.event_name,
+                    event_type=event.event_type,
                     topic=event.get_topic_name(),
                 )
         except Exception:

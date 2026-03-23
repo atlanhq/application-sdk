@@ -263,7 +263,7 @@ class WorkerHealthServer:
         except TimeoutError:
             logger.debug("Health check request timed out")
         except Exception as e:
-            logger.error("Error handling health check request", error=str(e))
+            logger.warning("Error handling health check request", exc_info=True)
             with contextlib.suppress(Exception):
                 await self._send_response(
                     writer, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(e)}

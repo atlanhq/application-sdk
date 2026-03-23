@@ -255,7 +255,12 @@ async def _publish_event_via_binding(event: Event) -> None:
         data=payload,
         metadata=binding_metadata,
     )
-    logger.info("Published event via binding", topic=event.get_topic_name())
+    logger.info(
+        "Published event via binding",
+        event_name=event.event_name,
+        event_type=event.event_type,
+        topic=event.get_topic_name(),
+    )
 
 
 # Activity for publishing events (runs outside sandbox)
