@@ -63,9 +63,9 @@ def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
 
     if not connection_id.isdigit():
         logger.warning(
-            "Connection ID is not purely numeric, using it anyway",
-            connection_id=connection_id,
-            connection_qualified_name=connection_qualified_name,
+            "Connection ID %s is not purely numeric (qn=%s), using it anyway",
+            connection_id,
+            connection_qualified_name,
         )
 
     return connection_id
@@ -105,9 +105,9 @@ def get_persistent_s3_prefix(
     )
 
     logger.debug(
-        "S3 prefix for connection",
-        connection_qualified_name=connection_qualified_name,
-        s3_prefix=s3_prefix,
+        "S3 prefix for connection %s: %s",
+        connection_qualified_name,
+        s3_prefix,
     )
     return s3_prefix
 

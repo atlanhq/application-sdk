@@ -171,8 +171,8 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             return self._state[workflow_id]
         except OrchestratorError as e:
             logger.error(
-                "Error getting state",
-                error_code=OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
+                "Error getting state (error_code=%s)",
+                OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
                 exc_info=e,
             )
             await self._clean_state()

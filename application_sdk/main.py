@@ -1012,8 +1012,8 @@ def main() -> NoReturn:
 
     try:
         config = AppConfig.from_args_and_env(args)
-    except ValueError as e:
-        logger.error("Configuration error: %s", e)
+    except ValueError:
+        logger.error("Configuration error", exc_info=True)
         sys.exit(1)
 
     logger.info(

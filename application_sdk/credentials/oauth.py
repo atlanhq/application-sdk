@@ -147,9 +147,9 @@ class OAuthTokenService:
             data["scope"] = " ".join(self._base.scopes)
 
         logger.debug(
-            "Exchanging OAuth client credentials",
-            token_url=self._base.token_url,
-            client_id=self._base.client_id,
+            "Exchanging OAuth client credentials for %s at %s",
+            self._base.client_id,
+            self._base.token_url,
         )
 
         try:
@@ -176,10 +176,7 @@ class OAuthTokenService:
                 datetime.now(UTC) + timedelta(seconds=int(expires_in))
             ).isoformat()
 
-        logger.debug(
-            "OAuth token acquired",
-            expires_at=expires_at or "unknown",
-        )
+        logger.debug("OAuth token acquired, expires_at=%s", expires_at or "unknown")
         return self._base.with_new_token(
             access_token=access_token,
             expires_at=expires_at,

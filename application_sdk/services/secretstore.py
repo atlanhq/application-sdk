@@ -190,8 +190,8 @@ class SecretStore:
                                     collected[k] = v
                         except Exception:
                             logger.debug(
-                                "Skipping single-key extra field",
-                                extra_key=extra_key,
+                                "Skipping single-key extra field: %s",
+                                extra_key,
                             )
         return collected
 

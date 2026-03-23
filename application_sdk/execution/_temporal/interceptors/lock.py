@@ -129,9 +129,9 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
             )
 
             logger.debug(
-                "Lock acquired, executing activity",
-                lock_result=lock_result,
-                activity=input.activity,
+                "Lock acquired for %s, executing %s",
+                lock_result,
+                input.activity,
             )
 
             # Step 2: Execute the business activity and return its handle
@@ -147,13 +147,11 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
                         start_to_close_timeout=timedelta(seconds=5),
                         retry_policy=RetryPolicy(maximum_attempts=1),
                     )
-                    logger.debug(
-                        "Lock released", resource_id=lock_result["resource_id"]
-                    )
+                    logger.debug("Lock released: %s", lock_result["resource_id"])
                 except Exception:
                     # Silent failure - TTL will handle cleanup
                     logger.warning(
-                        "Lock release failed, TTL will handle cleanup",
+                        "Lock release failed for %s, TTL will handle cleanup",
+                        lock_result["resource_id"],
                         exc_info=True,
-                        resource_id=lock_result["resource_id"],
                     )

@@ -25,8 +25,8 @@ def is_component_registered(component_name: str) -> bool:
     except Exception:
         # If we cannot read metadata, behave conservatively and report unavailable
         logger.warning(
-            "Failed to read Dapr metadata for component availability check; treating as unavailable",
+            "Failed to read Dapr metadata for component %s; treating as unavailable",
+            component_name,
             exc_info=True,
-            extra={"component_name": component_name},
         )
         return False

@@ -49,6 +49,8 @@ class _TaskFailureLoggingActivityInboundInterceptor(ActivityInboundInterceptor):
         """
         try:
             log_attrs = self._collect_temporal_context()
+            # kwargs are temporal.*/tenant.* keys promoted to indexed OTEL fields by _build_extra_dict
+            # TODO(signal-over-noise): [L24] deliberate structured context — temporal.*/tenant.* keys are top-level indexed. See reference/logging-patterns.md#L24
             logger.error("Temporal activity failed", exc_info=True, **log_attrs)
         except Exception:
             logger.warning("Failed to log activity failure context", exc_info=True)

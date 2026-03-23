@@ -287,14 +287,14 @@ class EventStore:
                     binding_metadata=binding_metadata,
                 )
                 logger.info(
-                    "Published event via binding",
-                    event_name=event.event_name,
-                    event_type=event.event_type,
-                    topic=event.get_topic_name(),
+                    "Published %s event (%s) to topic %s",
+                    event.event_name,
+                    event.event_type,
+                    event.get_topic_name(),
                 )
         except Exception:
             logger.error(
-                "Failed to publish event",
-                topic=event.get_topic_name(),
+                "Failed to publish event to topic %s",
+                event.get_topic_name(),
                 exc_info=True,
             )

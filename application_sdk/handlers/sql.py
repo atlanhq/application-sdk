@@ -391,8 +391,8 @@ class BaseSQLHandler(HandlerInterface):
                         # Handle tuple version info (like (15, 4))
                         client_version = ".".join(str(x) for x in version_info)
                         logger.info(
-                            "Detected client version from dialect",
-                            client_version=client_version,
+                            "Detected client version from dialect: %s",
+                            client_version,
                         )
 
             # If dialect version not available and client_version_sql is defined, use SQL query
@@ -405,13 +405,13 @@ class BaseSQLHandler(HandlerInterface):
                 if version_match:
                     client_version = version_match.group(1)
                     logger.info(
-                        "Detected client version from SQL query",
-                        client_version=client_version,
+                        "Detected client version from SQL query: %s",
+                        client_version,
                     )
                 else:
                     logger.warning(
-                        "Could not extract version number from string",
-                        version_string=version_string,
+                        "Could not extract version number from string: %s",
+                        version_string,
                     )
 
             # If no client version could be determined
@@ -426,7 +426,8 @@ class BaseSQLHandler(HandlerInterface):
             # If no minimum version requirement is set, just report the client version
             if not min_version:
                 logger.info(
-                    "No minimum version requirement set", client_version=client_version
+                    "No minimum version requirement set, client_version=%s",
+                    client_version,
                 )
                 return {
                     "success": True,

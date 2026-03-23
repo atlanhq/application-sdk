@@ -54,7 +54,7 @@ if sys.platform not in ("win32", "cygwin"):
         asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     except (ImportError, ModuleNotFoundError):
         # uvloop is not available, use default asyncio
-        logger.warning("uvloop is not available, using default asyncio")
+        logger.warning("uvloop is not available, using default asyncio", exc_info=True)
         pass
 elif sys.platform == "win32":
     # Use WindowsSelectorEventLoopPolicy for Windows platform

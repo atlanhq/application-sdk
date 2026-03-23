@@ -129,7 +129,9 @@ class TemporalAuthManager:
             try:
                 await asyncio.wait_for(self._refresh_task, timeout=5.0)
             except TimeoutError:
-                logger.warning("Token refresh task did not stop in time, cancelling")
+                logger.warning(
+                    "Token refresh task did not stop in time, cancelling", exc_info=True
+                )
                 self._refresh_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._refresh_task

@@ -35,7 +35,7 @@ async def get_pods(namespace: str, label_selector: str = "") -> list[dict]:  # t
     try:
         return json.loads(stdout).get("items", [])
     except json.JSONDecodeError:
-        logger.warning("get_pods: failed to parse JSON output")
+        logger.warning("get_pods: failed to parse JSON output", exc_info=True)
         return []
 
 
