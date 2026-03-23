@@ -55,13 +55,16 @@ otel:
     enabled: true  # Enable to set OTEL_RESOURCE_ATTRIBUTES with cluster/pod metadata
 
 # Object storage for DAPR binding (type + provider-specific metadata)
-# For S3, bucket/region auto-resolve from atlan-defaults ConfigMap if not set.
+# "auto" (default) detects the binding type from atlan-defaults ConfigMap cloud key
+# (aws → bindings.aws.s3, gcp → bindings.gcp.bucket, azure → bindings.azure.blobstorage).
+# Provider-specific metadata is also auto-filled from atlan-defaults and cluster secrets.
+# Set to an explicit type to bypass auto-detection, or "" to disable entirely.
 storage:
-  type: bindings.aws.s3       # DAPR binding type
+  type: "auto"
   metadata: {}
-  # S3:    bucket, region, accessKey, secretKey, endpoint, forcePathStyle
-  # GCS:   bucket, project_id, client_email, private_key
-  # Azure: accountName, accountKey, containerName
+  # S3:    bucket, region (auto-filled from atlan-defaults); accessKey, secretKey, endpoint, forcePathStyle
+  # GCS:   bucket (auto-filled from atlan-defaults); auth via workload identity
+  # Azure: container (auto-filled from atlan-defaults bucket), storageAccount + storageAccessKey (auto-filled from azurestorage Secret)
   # Local: rootPath
 
 # Connector credentials for DAPR secret store resolution (optional)
