@@ -122,7 +122,11 @@ handler:
     limits:
       memory: "512Mi"
       cpu: "500m"
-  extraEnv: []
+  extraEnv:
+    - name: ATLAN_TEMPORARY_PATH
+      value: /tmp/
+    - name: APP_STORAGE_ROOT
+      value: /tmp/local/dapr/objectstore
   podAnnotations: {}
   # Startup probe: gives the handler time to fully initialize (OTEL, imports,
   # uvicorn) before the liveness probe kicks in. The handler only responds to
@@ -155,7 +159,11 @@ worker:
   # Set equal to APP_GRACEFUL_SHUTDOWN_TIMEOUT (default 3600s) so DAPR never
   # kills Python before Temporal's activity drain completes.
   gracefulShutdownSeconds: 3600
-  extraEnv: []
+  extraEnv:
+    - name: ATLAN_TEMPORARY_PATH
+      value: /tmp/
+    - name: APP_STORAGE_ROOT
+      value: /tmp/local/dapr/objectstore
   podAnnotations: {}
   # Startup probe: gives the worker time to fully initialize (OTEL, Temporal
   # connection, DAPR component init) before the liveness probe kicks in.
