@@ -94,7 +94,7 @@ jobs:
           tar -xzf atlan-cli.tar.gz
           chmod +x atlan
           sudo mv atlan /usr/local/bin/atlan
-          atlan version
+          atlan --version
 
       - name: Configure Atlan CLI
         env:
