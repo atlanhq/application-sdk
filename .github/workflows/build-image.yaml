@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - chore-bump-temporalio
     paths:
       - 'Dockerfile'
       - 'pyproject.toml'
