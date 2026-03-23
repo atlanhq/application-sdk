@@ -11,7 +11,6 @@ import os
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
-from loguru import logger
 from temporalio.client import Client
 from temporalio.common import VersioningBehavior
 from temporalio.worker import Interceptor as TemporalInterceptor
@@ -27,6 +26,9 @@ from application_sdk.execution.settings import (
     load_execution_settings,
     load_interceptor_settings,
 )
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     pass
@@ -240,8 +242,9 @@ def create_worker(
             default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
         )
         logger.info(
-            f"Worker Deployment versioning enabled: "
-            f"deployment={APP_DEPLOYMENT_NAME}, build_id={APP_BUILD_ID}"
+            "Worker Deployment versioning enabled: deployment=%s build_id=%s",
+            APP_DEPLOYMENT_NAME,
+            APP_BUILD_ID,
         )
     elif APP_BUILD_ID:
         deployment_config = WorkerDeploymentConfig(

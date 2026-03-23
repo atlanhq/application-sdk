@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from loguru import logger
+from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
     from application_sdk.handler.contracts import HandlerCredential
@@ -81,12 +81,9 @@ class HandlerContext:
 
     @property
     def log(self) -> Any:
-        """Bound logger with app_name and request_id context."""
+        """Logger with app context (app_name and request_id are auto-injected by the adapter)."""
         if self._logger is None:
-            self._logger = logger.bind(
-                app_name=self.app_name,
-                request_id=self.request_id_str,
-            )
+            self._logger = get_logger(__name__)
         return self._logger
 
     async def get_secret(self, name: str) -> str:

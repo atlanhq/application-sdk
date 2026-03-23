@@ -16,7 +16,6 @@ import dataclasses
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from loguru import logger
 from temporalio import workflow
 from temporalio.converter import default as default_converter
 from temporalio.worker import (
@@ -35,6 +34,10 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from temporalio.api.common.v1 import Payload
+
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 _HEADER_CORRELATION_ID = "x-correlation-id"
 

@@ -202,8 +202,8 @@ class APIServer(ServerInterface):
                 StaticFiles(directory=f"{self.docs_export_path}/site", html=True),
                 name="atlandocs",
             )
-        except Exception as e:
-            logger.warning(str(e))
+        except Exception:
+            logger.warning("Failed to mount static docs directory", exc_info=True)
 
     def frontend_home(self, request: Request) -> HTMLResponse:
         frontend_html_path = os.path.join(
@@ -478,9 +478,8 @@ class APIServer(ServerInterface):
         static_dir = Path(self.frontend_assets_path)
         if not static_dir.is_dir():
             logger.warning(
-                "Static UI assets not found, skipping static mount",
-                static_dir=str(static_dir),
-                frontend_assets_path=self.frontend_assets_path,
+                "Static UI assets not found at %s, skipping static mount",
+                static_dir,
             )
             return
 

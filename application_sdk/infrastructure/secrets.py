@@ -2,9 +2,10 @@
 
 from typing import ClassVar, Protocol
 
-from loguru import logger
-
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 class SecretStoreError(Exception):
@@ -174,7 +175,7 @@ class EnvironmentSecretStore:
         value = os.environ.get(env_name)
         if value is None:
             logger.debug(
-                f"Secret '{name}' not found in environment (env var: {env_name})"
+                "Secret '%s' not found in environment (env var: %s)", name, env_name
             )
             raise SecretNotFoundError(name)
         return value

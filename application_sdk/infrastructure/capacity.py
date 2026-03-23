@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from loguru import logger
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 class CapacityPool(Protocol):

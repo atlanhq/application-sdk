@@ -18,7 +18,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from loguru import logger
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from temporalio.client import Client
@@ -174,8 +176,9 @@ class TemporalAuthManager:
 
             expires_at = self._get_token_service().current_expires_at
             logger.debug(
-                f"Token refresh sleeping {sleep_seconds:.0f}s, "
-                f"expires_at={expires_at or 'unknown'}"
+                "Token refresh sleeping %.0fs, expires_at=%s",
+                sleep_seconds,
+                expires_at or "unknown",
             )
 
             try:
@@ -191,7 +194,8 @@ class TemporalAuthManager:
                 await self._do_refresh(client)
             except Exception:
                 logger.warning(
-                    f"Token refresh failed, will retry in {_RETRY_INTERVAL_SECONDS}s",
+                    "Token refresh failed, will retry in %ss",
+                    _RETRY_INTERVAL_SECONDS,
                     exc_info=True,
                 )
                 try:

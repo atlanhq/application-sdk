@@ -4,7 +4,10 @@ import os
 from typing import Callable, List, Tuple
 
 import pydantic
-from loguru import logger
+
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 class DocsSubDirectory(enum.Enum):

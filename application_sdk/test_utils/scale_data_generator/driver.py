@@ -4,10 +4,11 @@ import shutil
 import time
 from dataclasses import dataclass
 
-from loguru import logger
-
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.test_utils.scale_data_generator.config_loader import ConfigLoader
 from application_sdk.test_utils.scale_data_generator.data_generator import DataGenerator
+
+logger = get_logger(__name__)
 
 
 @dataclass

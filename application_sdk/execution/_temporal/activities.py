@@ -17,7 +17,6 @@ from datetime import timedelta
 from typing import Any, cast
 from uuid import uuid4
 
-from loguru import logger
 from temporalio import activity
 
 from application_sdk.app.registry import AppRegistry, TaskRegistry
@@ -25,6 +24,9 @@ from application_sdk.app.task import TaskMetadata
 from application_sdk.constants import TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclasses.dataclass

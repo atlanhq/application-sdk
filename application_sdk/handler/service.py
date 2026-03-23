@@ -36,7 +36,6 @@ from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
-from loguru import logger
 from pydantic import BaseModel as PydanticBaseModel
 
 from application_sdk.constants import DEPLOYMENT_NAME
@@ -52,6 +51,9 @@ from application_sdk.handler.contracts import (
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -99,13 +101,12 @@ async def _get_workflow_result(
         result = await client.get_workflow_handle(
             workflow_id, result_type=output_type
         ).result()
-    except Exception as deser_exc:
+    except Exception:
         logger.warning(
-            "Typed deserialization failed for workflow result; "
-            "falling back to untyped (dict) result",
-            workflow_id=workflow_id,
-            output_type=str(output_type),
-            error=str(deser_exc),
+            "Typed deserialization failed for workflow %s (output_type=%s), falling back to untyped result",
+            workflow_id,
+            output_type,
+            exc_info=True,
         )
         result = await client.get_workflow_handle(workflow_id).result()
 
@@ -348,16 +349,14 @@ def create_app_handler_service(
 
         try:
             logger.info(
-                "Auth test started",
-                app_name=app_name,
-                request_id=context.request_id_str,
+                "Auth test started: app=%s request=%s", app_name, context.request_id_str
             )
             result = await handler.test_auth(auth_input)
             logger.info(
-                "Auth test completed",
-                app_name=app_name,
-                request_id=context.request_id_str,
-                status=result.status.value,
+                "Auth test completed: app=%s request=%s status=%s",
+                app_name,
+                context.request_id_str,
+                result.status.value,
             )
             return JSONResponse(
                 content=_wrap_response(
@@ -367,19 +366,20 @@ def create_app_handler_service(
             )
         except HandlerError as e:
             logger.error(
-                "Auth test failed",
-                app_name=app_name,
-                request_id=context.request_id_str,
-                error=str(e),
+                "Auth test failed for app %s (request %s): %s",
+                app_name,
+                context.request_id_str,
+                e,
+                exc_info=True,
             )
             raise HTTPException(status_code=e.http_status, detail=str(e)) from None
         except Exception as e:
             logger.error(
-                "Auth test failed unexpectedly",
-                app_name=app_name,
-                request_id=context.request_id_str,
-                error=str(e),
-                error_type=type(e).__name__,
+                "Auth test failed unexpectedly for app %s (request %s): %s",
+                app_name,
+                context.request_id_str,
+                e,
+                exc_info=True,
             )
             raise HTTPException(
                 status_code=500, detail=f"Internal error: {e}"
@@ -403,17 +403,17 @@ def create_app_handler_service(
 
         try:
             logger.info(
-                "Preflight check started",
-                app_name=app_name,
-                request_id=context.request_id_str,
+                "Preflight check started: app=%s request=%s",
+                app_name,
+                context.request_id_str,
             )
             result = await handler.preflight_check(preflight_input)
             logger.info(
-                "Preflight check completed",
-                app_name=app_name,
-                request_id=context.request_id_str,
-                status=result.status.value,
-                checks_count=len(result.checks),
+                "Preflight check completed: app=%s request=%s status=%s checks=%d",
+                app_name,
+                context.request_id_str,
+                result.status.value,
+                len(result.checks),
             )
             return JSONResponse(
                 content=_wrap_response(
@@ -423,19 +423,20 @@ def create_app_handler_service(
             )
         except HandlerError as e:
             logger.error(
-                "Preflight check failed",
-                app_name=app_name,
-                request_id=context.request_id_str,
-                error=str(e),
+                "Preflight check failed for app %s (request %s): %s",
+                app_name,
+                context.request_id_str,
+                e,
+                exc_info=True,
             )
             raise HTTPException(status_code=e.http_status, detail=str(e)) from None
         except Exception as e:
             logger.error(
-                "Preflight check failed unexpectedly",
-                app_name=app_name,
-                request_id=context.request_id_str,
-                error=str(e),
-                error_type=type(e).__name__,
+                "Preflight check failed unexpectedly for app %s (request %s): %s",
+                app_name,
+                context.request_id_str,
+                e,
+                exc_info=True,
             )
             raise HTTPException(
                 status_code=500, detail=f"Internal error: {e}"
@@ -459,17 +460,17 @@ def create_app_handler_service(
 
         try:
             logger.info(
-                "Metadata fetch started",
-                app_name=app_name,
-                request_id=context.request_id_str,
+                "Metadata fetch started: app=%s request=%s",
+                app_name,
+                context.request_id_str,
             )
             result = await handler.fetch_metadata(metadata_input)
             logger.info(
-                "Metadata fetch completed",
-                app_name=app_name,
-                request_id=context.request_id_str,
-                object_count=len(result.objects),
-                truncated=result.truncated,
+                "Metadata fetch completed: app=%s request=%s objects=%d truncated=%s",
+                app_name,
+                context.request_id_str,
+                len(result.objects),
+                result.truncated,
             )
             return JSONResponse(
                 content=_wrap_response(
@@ -479,19 +480,20 @@ def create_app_handler_service(
             )
         except HandlerError as e:
             logger.error(
-                "Metadata fetch failed",
-                app_name=app_name,
-                request_id=context.request_id_str,
-                error=str(e),
+                "Metadata fetch failed for app %s (request %s): %s",
+                app_name,
+                context.request_id_str,
+                e,
+                exc_info=True,
             )
             raise HTTPException(status_code=e.http_status, detail=str(e)) from None
         except Exception as e:
             logger.error(
-                "Metadata fetch failed unexpectedly",
-                app_name=app_name,
-                request_id=context.request_id_str,
-                error=str(e),
-                error_type=type(e).__name__,
+                "Metadata fetch failed unexpectedly for app %s (request %s): %s",
+                app_name,
+                context.request_id_str,
+                e,
+                exc_info=True,
             )
             raise HTTPException(
                 status_code=500, detail=f"Internal error: {e}"
@@ -549,10 +551,10 @@ def create_app_handler_service(
             corr_ctx = CorrelationContext(correlation_id=correlation_id)
 
             logger.info(
-                "Starting workflow",
-                app_name=app_name,
-                workflow_id=workflow_id,
-                task_queue=_workflow_config.task_queue,
+                "Starting workflow: app=%s workflow_id=%s queue=%s",
+                app_name,
+                workflow_id,
+                _workflow_config.task_queue,
             )
 
             handle = await client.start_workflow(
@@ -564,11 +566,11 @@ def create_app_handler_service(
             )
 
             logger.info(
-                "Workflow started",
-                app_name=app_name,
-                workflow_id=handle.id,
-                run_id=handle.result_run_id,
-                correlation_id=correlation_id,
+                "Workflow started: app=%s workflow_id=%s run_id=%s correlation_id=%s",
+                app_name,
+                handle.id,
+                handle.result_run_id,
+                correlation_id,
             )
 
             if _state_store is not None:
@@ -580,8 +582,8 @@ def create_app_handler_service(
                     await _state_store.save(f"workflows/{handle.id}", config_to_store)
                 except Exception:
                     logger.warning(
-                        "Failed to save workflow config to state store",
-                        workflow_id=handle.id,
+                        "Failed to save workflow config to state store for workflow %s",
+                        handle.id,
                         exc_info=True,
                     )
 
@@ -595,15 +597,17 @@ def create_app_handler_service(
             )
 
         except TypeError as e:
-            logger.error("Invalid workflow input for app %s: %s", app_name, e)
+            logger.error(
+                "Invalid workflow input for app %s: %s", app_name, e, exc_info=True
+            )
             raise HTTPException(status_code=400, detail=f"Invalid input: {e}") from None
         except Exception as e:
             logger.error(
-                "Failed to start workflow",
-                app_name=app_name,
-                workflow_id=workflow_id,
-                error=str(e),
-                error_type=type(e).__name__,
+                "Failed to start workflow %s for app %s: %s",
+                workflow_id,
+                app_name,
+                e,
+                exc_info=True,
             )
             raise HTTPException(
                 status_code=500, detail=f"Failed to start workflow: {e}"
@@ -630,10 +634,11 @@ def create_app_handler_service(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
             logger.error(
-                "Failed to stop workflow",
-                workflow_id=workflow_id,
-                run_id=run_id,
-                error=error_msg,
+                "Failed to stop workflow %s run %s: %s",
+                workflow_id,
+                run_id,
+                error_msg,
+                exc_info=True,
             )
             raise HTTPException(
                 status_code=500, detail=f"Failed to stop workflow: {error_msg}"
@@ -753,9 +758,10 @@ def create_app_handler_service(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
             logger.error(
-                "Failed to get workflow result",
-                workflow_id=workflow_id,
-                error=error_msg,
+                "Failed to get workflow result for %s: %s",
+                workflow_id,
+                error_msg,
+                exc_info=True,
             )
             raise HTTPException(
                 status_code=500, detail=f"Failed to get workflow result: {error_msg}"
@@ -802,10 +808,11 @@ def create_app_handler_service(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
             logger.error(
-                "Failed to get workflow status",
-                workflow_id=workflow_id,
-                run_id=run_id,
-                error=error_msg,
+                "Failed to get workflow status for %s run %s: %s",
+                workflow_id,
+                run_id,
+                error_msg,
+                exc_info=True,
             )
             raise HTTPException(
                 status_code=500, detail=f"Failed to get workflow status: {error_msg}"
@@ -1033,9 +1040,10 @@ def create_app_handler_service(
             )
         except Exception as e:
             logger.error(
-                "Failed to start event-triggered workflow",
-                event_id=event_id,
-                error=str(e),
+                "Failed to start event-triggered workflow for event %s: %s",
+                event_id,
+                e,
+                exc_info=True,
             )
             return JSONResponse(content={"status": "RETRY"}, status_code=500)
 

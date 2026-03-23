@@ -36,11 +36,10 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from loguru import logger
-
 from application_sdk.app.base import App
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -57,6 +56,8 @@ from application_sdk.templates.contracts.sql_metadata import (
     TransformInput,
     TransformOutput,
 )
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     pass
