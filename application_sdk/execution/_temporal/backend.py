@@ -6,11 +6,13 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from datetime import timedelta

@@ -20,9 +20,10 @@ import importlib
 import inspect
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
-
 from application_sdk.errors import DISCOVERY_ERROR, ErrorCode
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from application_sdk.app.base import App

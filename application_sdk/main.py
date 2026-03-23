@@ -75,7 +75,9 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure.context import InfrastructureContext
     from application_sdk.infrastructure.secrets import SecretStore
 
-from loguru import logger  # noqa: E402
+from application_sdk.observability.logger_adaptor import get_logger  # noqa: E402
+
+logger = get_logger(__name__)
 
 from application_sdk.discovery import (  # noqa: E402
     DiscoveryError,

@@ -272,6 +272,15 @@ class AtlanObservability(Generic[T], ABC):
         """
         if not ENABLE_OBSERVABILITY_STORE_SINK or not records:
             return
+        # File I/O is restricted inside Temporal's workflow sandbox — skip the
+        # store sink there; records are still exported via OTLP/console.
+        try:
+            from temporalio.workflow import unsafe as _wf_unsafe
+
+            if _wf_unsafe.in_sandbox():
+                return
+        except ImportError:
+            pass
         try:
             # Group records by partition using record's own timestamp
             partition_records: Dict[str, List[Dict[str, Any]]] = {}
