@@ -88,6 +88,7 @@ async def submit_and_poll_mdlh_load(
     pattern = f"{s3_prefix}/**/*{file_extension}"
 
     request = LhLoadRequest(
+        file_keys=[],
         patterns=[pattern],
         namespace=namespace,
         table_name=table_name,
