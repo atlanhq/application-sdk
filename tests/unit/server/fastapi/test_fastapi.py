@@ -845,11 +845,9 @@ class TestUIRouteRegistration:
         mock_warning.assert_called_once()
         warning_message = mock_warning.call_args[0][0]
         assert "Static UI assets not found" in warning_message
-        # Path is now passed as a keyword argument (structured logging)
-        warning_kwargs = mock_warning.call_args[1]
-        assert str(tmp_path / "missing-static") in warning_kwargs.get(
-            "frontend_assets_path", ""
-        ) or str(tmp_path / "missing-static") in warning_kwargs.get("static_dir", "")
+        # Path is passed as a positional arg in %-style logging
+        warning_args = mock_warning.call_args[0]
+        assert any(str(tmp_path / "missing-static") in str(arg) for arg in warning_args)
         mock_server.serve.assert_awaited_once()
 
     def test_register_ui_routes_mounts_configured_static_directory(self, tmp_path):

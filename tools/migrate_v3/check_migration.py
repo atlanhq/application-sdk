@@ -146,7 +146,9 @@ _RE_TEMPORALIO_DIRECT = re.compile(
 _RE_SELF_STATE = re.compile(r"\bself\._state\b")
 
 # Direct loguru import — must not appear in connector code; use get_logger() instead.
-_RE_DIRECT_LOGURU = re.compile(r"^\s*(?:from\s+loguru\b|import\s+loguru\b)", re.MULTILINE)
+_RE_DIRECT_LOGURU = re.compile(
+    r"^\s*(?:from\s+loguru\b|import\s+loguru\b)", re.MULTILINE
+)
 
 # Direct stdlib logging.getLogger() setup — bypasses the SDK's AtlanLoggerAdapter.
 # Only flag when the file also doesn't import get_logger (i.e. it's not the adaptor itself).
@@ -365,7 +367,9 @@ def check_file(path: Path, *, is_test: bool = False) -> list[CheckResult]:
 
     # ── WARN: logging.getLogger() direct setup ────────────────────────────
     # Skip files that import get_logger — those are the adaptor implementation itself.
-    if not re.search(r"from application_sdk\.observability\.logger_adaptor import", full_text):
+    if not re.search(
+        r"from application_sdk\.observability\.logger_adaptor import", full_text
+    ):
         results += _find_pattern(
             lines,
             _RE_LOGGING_GETLOGGER,
