@@ -312,7 +312,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             or not workflow_id
             or not workflow_run_id
         ):
-            logger.warning("Missing required workflow arguments")
             raise ValueError("Missing required workflow arguments")
         return output_prefix, output_path, typename, workflow_id, workflow_run_id
 
@@ -380,7 +379,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         """
         # Common pre-checks and setup shared by both multidb and single-db paths
         if not sql_client:
-            logger.error("SQL client is not provided")
             raise ValueError("SQL client is required for query execution")
 
         if not sql_query:
@@ -487,7 +485,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client:
-            logger.error("SQL client not initialized")
             raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
@@ -521,7 +518,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client:
-            logger.error("SQL client not initialized")
             raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
@@ -555,7 +551,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client:
-            logger.error("SQL client not initialized")
             raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
@@ -591,7 +586,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client:
-            logger.error("SQL client not initialized")
             raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
@@ -627,7 +621,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client:
-            logger.error("SQL client not initialized")
             raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(

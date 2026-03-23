@@ -195,8 +195,8 @@ class ObjectStore:
 
         except Exception:
             logger.error(
-                "Error listing files",
-                prefix=normalized_prefix or prefix,
+                "Error listing files (prefix=%s)",
+                normalized_prefix or prefix,
                 exc_info=True,
             )
             raise

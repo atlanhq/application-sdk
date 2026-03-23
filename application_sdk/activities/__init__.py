@@ -311,7 +311,6 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             # Verify handler and client are properly initialized
             if hasattr(handler, "sql_client") and handler.sql_client:
                 if not handler.sql_client.engine:
-                    logger.error("SQL client engine is not initialized")
                     raise ValueError(
                         "Preflight check failed: SQL client engine not initialized. "
                         "This may indicate credentials were not loaded properly."
@@ -357,8 +356,8 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
 
         except OrchestratorError as e:
             logger.error(
-                "Preflight check failed",
-                error_code=OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
+                "Preflight check failed (error_code=%s)",
+                OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
                 exc_info=e,
             )
             raise

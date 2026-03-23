@@ -284,8 +284,8 @@ async def execute_multidb_flow(
 
         except Exception:
             logger.error(
-                "Failed to process database, failing the workflow",
-                database_name=database_name,
+                "Failed to process database %s, failing the workflow",
+                database_name,
                 exc_info=True,
             )
             raise

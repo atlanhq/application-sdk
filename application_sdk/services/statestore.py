@@ -108,9 +108,8 @@ def build_state_store_path(id: str, state_type: StateType) -> str:
 
     if not resolved_path.startswith(base_path + os.sep) and resolved_path != base_path:
         logger.warning(
-            "Path traversal attempt detected in state id",
-            state_id=id,
-            security_event="path_traversal_blocked",
+            "Path traversal attempt detected in state_id=%s (security_event=path_traversal_blocked)",
+            id,
         )
         raise PathTraversalError("Invalid state id: path traversal detected")
 

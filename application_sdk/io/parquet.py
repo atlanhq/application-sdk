@@ -806,8 +806,8 @@ class ParquetFileWriter(Writer):
 
         except Exception:
             logger.error(
-                "Error consolidating folder",
-                folder_index=self.temp_folder_index,
+                "Error consolidating folder %s",
+                self.temp_folder_index,
                 exc_info=True,
             )
             raise

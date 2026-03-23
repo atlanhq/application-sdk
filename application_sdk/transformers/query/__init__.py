@@ -204,12 +204,10 @@ class QueryBasedTransformer(TransformerInterface):
 
         # Check if level is None
         if level is None:
-            logger.error("ERROR: level is None in _build_struct!")
             raise ValueError("level cannot be None in _build_struct")
 
         # Check if prefix is None
         if prefix is None:
-            logger.error("ERROR: prefix is None in _build_struct!")
             raise ValueError("prefix cannot be None in _build_struct")
 
         struct_fields = []

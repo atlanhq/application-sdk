@@ -210,7 +210,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             state = await self._get_state(workflow_args)
             sql_client = state.sql_client
             if not sql_client:
-                logger.error("SQL client not initialized")
                 raise ValueError("SQL client not initialized")
 
             formatted_query = self.get_formatted_query(
