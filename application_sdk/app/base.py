@@ -118,8 +118,15 @@ def _safe_log(level: str, message: str, **attrs: Any) -> None:
     if _is_atlan_logger(wf_logger):
         log_method(message, **attrs)
     else:
-        if attrs:
-            log_method(message, extra=attrs)
+        # stdlib logging reserves exc_info, stack_info, stacklevel as direct
+        # kwargs — stuffing them into extra= causes makeRecord to raise KeyError.
+        _STDLIB_RESERVED = {"exc_info", "stack_info", "stacklevel"}
+        reserved = {k: v for k, v in attrs.items() if k in _STDLIB_RESERVED}
+        extra = {k: v for k, v in attrs.items() if k not in _STDLIB_RESERVED}
+        if extra:
+            log_method(message, extra=extra, **reserved)
+        elif reserved:
+            log_method(message, **reserved)
         else:
             log_method(message)
 
