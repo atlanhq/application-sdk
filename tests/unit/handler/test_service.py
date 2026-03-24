@@ -80,9 +80,21 @@ class TestHealthEndpoints:
         assert response.status_code == 200
         assert response.json() == {"status": "healthy"}
 
+    def test_server_health_alias_returns_200(self) -> None:
+        client = _make_client()
+        response = client.get("/server/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "healthy"}
+
     def test_ready_endpoint_returns_200(self) -> None:
         client = _make_client()
         response = client.get("/server/ready")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+    def test_ready_alias_returns_200(self) -> None:
+        client = _make_client()
+        response = client.get("/ready")
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
 

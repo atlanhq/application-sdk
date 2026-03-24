@@ -21,7 +21,9 @@ from application_sdk.services.objectstore import ObjectStore
 # Paths to exclude from logging and metrics (health checks and event ingress)
 EXCLUDED_LOG_PATHS: frozenset[str] = frozenset(
     {
+        "/health",
         "/server/health",
+        "/ready",
         "/server/ready",
         "/api/eventingress/",
         "/api/eventingress",

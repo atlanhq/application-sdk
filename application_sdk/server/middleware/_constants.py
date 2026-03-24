@@ -6,6 +6,7 @@ EXCLUDED_LOG_PATHS: frozenset[str] = frozenset(
     {
         "/health",
         "/server/health",
+        "/ready",
         "/server/ready",
         "/api/eventingress/",
         "/api/eventingress",
