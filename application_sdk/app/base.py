@@ -628,7 +628,7 @@ class App(ABC):
             **kwargs: Keyword arguments for func.
 
         Returns:
-            Result of func(*args, **kwargs).
+            Result of ``func(*args, **kwargs)``.
 
         Raises:
             RuntimeError: If called outside a @task method.
@@ -1010,6 +1010,7 @@ class App(ABC):
         """Framework task: clean up local files after a workflow run.
 
         Removes two categories of local files:
+
         1. ``FileReference`` local paths tracked during the run (auto-materialised
            or persisted files, including their ``.sha256`` sidecars).
         2. Convention-based temp directories: ``input.extra_paths`` if provided,

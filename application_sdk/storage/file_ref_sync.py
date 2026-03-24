@@ -211,6 +211,7 @@ async def materialize_file_refs(store: "ObjectStore", data: Any) -> Any:
     """Download all durable FileReferences in *data* to local temp files.
 
     Handles:
+
     * Normal case: ``local_path`` is ``None`` → download + write sidecar.
     * Retry on different worker: ``local_path`` set but file gone → download.
     * Missing sidecar: file exists but no ``.sha256`` sidecar → validate

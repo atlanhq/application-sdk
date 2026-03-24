@@ -366,7 +366,8 @@ async def run_health_server(
     Returns:
         Running WorkerHealthServer instance.
 
-    Example:
+    Example::
+
         server = await run_health_server(
             port=8081,
             temporal_client=client,

@@ -179,14 +179,14 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         This method is abstract — connectors must implement it. The inputs carry
         everything needed to choose the correct SQL:
 
-        **Full extraction** (``input.marker_timestamp`` is empty or
-        ``input.current_state_available`` is False):
-            Use the standard full-extraction SQL (``self.fetch_table_sql``).
+        **Full extraction** — when ``input.marker_timestamp`` is empty or
+        ``input.current_state_available`` is False:
+        use the standard full-extraction SQL (``self.fetch_table_sql``).
 
-        **Incremental extraction** (both ``input.marker_timestamp`` and
-        ``input.current_state_available`` are truthy):
-            Use ``self.incremental_table_sql`` with the marker timestamp injected.
-            This SQL should filter to only tables modified since the marker.
+        **Incremental extraction** — when both ``input.marker_timestamp`` and
+        ``input.current_state_available`` are truthy:
+        use ``self.incremental_table_sql`` with the marker timestamp injected
+        (filter to tables modified since the marker).
 
         Recommended implementation pattern::
 
@@ -447,9 +447,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         transformed_dir = pathlib.Path(transformed_local_path)
         transformed_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(
-            "Downloading transformed files from S3", prefix=transformed_s3_prefix
-        )
+        logger.info("Downloading transformed files from S3: %s", transformed_s3_prefix)
         await ObjectStore.download_prefix(
             source=transformed_s3_prefix,
             destination=str(transformed_dir),
@@ -474,8 +472,8 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
 
             if not has_table_files:
                 logger.info(
-                    "Downloading current-state from S3 for backfill comparison",
-                    prefix=input.current_state_s3_prefix,
+                    "Downloading current-state from S3 for backfill comparison: %s",
+                    input.current_state_s3_prefix,
                 )
                 try:
                     await download_s3_prefix_with_structure(
@@ -483,8 +481,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                         local_destination=previous_current_state_dir,
                     )
                     logger.info(
-                        "Current-state downloaded",
-                        path=str(previous_current_state_dir),
+                        "Current-state downloaded: %s", previous_current_state_dir
                     )
                 except Exception:
                     logger.warning(
@@ -495,8 +492,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             else:
                 table_file_count = len(list(table_dir.glob("*.json")))
                 logger.info(
-                    "Previous current-state already present",
-                    table_file_count=table_file_count,
+                    "Previous current-state already present: %d files", table_file_count
                 )
 
         # Step 3: Find backfill tables using DuckDB
@@ -520,11 +516,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 total_tables=0,
             )
 
-        logger.info(
-            "Batching tables into groups",
-            total_tables=total_tables,
-            batch_size=batch_size,
-        )
+        logger.info("Batching %d tables into groups of %d", total_tables, batch_size)
 
         # Step 5: Batch table_ids into JSON files
         batches_dir = pathlib.Path(input.output_path).joinpath(
@@ -553,10 +545,10 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             total_tables_batched += len(current_batch)
 
         logger.info(
-            "Created batch files",
-            batch_count=batch_idx,
-            total_tables=total_tables_batched,
-            directory=str(batches_dir),
+            "Created %d batch files for %d tables at %s",
+            batch_idx,
+            total_tables_batched,
+            batches_dir,
         )
 
         # Step 6: Upload batch files to S3
@@ -645,20 +637,20 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         table_ids = json.loads(batch_file.read_text(encoding="utf-8"))
 
         logger.info(
-            "Executing column batch",
-            batch=input.batch_index + 1,
-            total_batches=input.total_batches,
-            table_count=len(table_ids),
+            "Executing column batch %d/%d: %d tables",
+            input.batch_index + 1,
+            input.total_batches,
+            len(table_ids),
         )
 
         sql = self.build_incremental_column_sql(table_ids, ctx)
         batch_records = await self.execute_column_sql(sql, input, ctx)
 
         logger.info(
-            "Column batch complete",
-            batch=input.batch_index + 1,
-            total_batches=input.total_batches,
-            records=batch_records,
+            "Column batch %d/%d complete: %d records",
+            input.batch_index + 1,
+            input.total_batches,
+            batch_records,
         )
 
         return ExecuteColumnBatchOutput(
@@ -723,9 +715,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         app_name = input.application_name
 
         logger.info(
-            "Starting write_current_state with ancestral merge",
-            workflow_id=input.workflow_id,
-            run_id=run_id,
+            "Starting write_current_state with ancestral merge: workflow_id=%s run_id=%s",
+            input.workflow_id,
+            run_id,
         )
 
         previous_state_dir = None

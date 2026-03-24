@@ -75,6 +75,7 @@ class AtlanClientMixin:
         """Return a cached AsyncAtlanClient for the given credential ref.
 
         Lookup order:
+
         1. Per-credential named cache (``async_atlan_client:{name}``) — fastest
            path on all calls after the first.
         2. Validated client hand-off (``_VALIDATED_ASYNC_CLIENT_KEY``) — reuses
