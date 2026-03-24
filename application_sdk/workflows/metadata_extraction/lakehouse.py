@@ -1,6 +1,6 @@
-"""Lakehouse workflow mixin — raw + transformed loading into Iceberg via MDLH.
+"""Lakehouse workflow mixin — raw data loading into Iceberg via MDLH.
 
-Provides methods that MetadataExtractionWorkflow calls to load data into
+Provides methods that MetadataExtractionWorkflow calls to load raw data into
 the lakehouse.  All env-var checks and MDLH interaction are encapsulated here.
 """
 
@@ -14,29 +14,10 @@ from application_sdk.constants import (
     LH_LOAD_RAW_MODE,
     LH_LOAD_RAW_NAMESPACE,
     LH_LOAD_RAW_TABLE_NAME,
-    LH_LOAD_TRANSFORMED_MODE,
-    LH_LOAD_TRANSFORMED_NAMESPACE,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-
-# SDK typenames that don't match the MDLH Iceberg table name directly.
-# Default behaviour: table_name = typename.lower()
-_TYPENAME_OVERRIDES: Dict[str, str] = {
-    "extras-procedure": "procedure",
-}
-
-
-def resolve_iceberg_table(typename: str) -> str:
-    """Resolve SDK typename to Iceberg table name in entity_metadata.
-
-    MDLH tables follow the convention: lowercase(AtlasTypeDef).
-    Most SDK typenames already match (e.g. "database", "table", "column",
-    "lookerdashboard", "snowflakedynamictable").  Overrides exist only for
-    SDK-specific naming quirks like "extras-procedure" -> "procedure".
-    """
-    return _TYPENAME_OVERRIDES.get(typename, typename.lower())
 
 
 class LakehouseLoadMixin:
@@ -94,50 +75,6 @@ class LakehouseLoadMixin:
             mode=LH_LOAD_RAW_MODE,
             file_extension=".parquet",
         )
-
-    async def load_transformed_to_lakehouse(
-        self,
-        workflow_args: Dict[str, Any],
-    ) -> None:
-        """Load transformed data into per-entity-type Iceberg tables.
-
-        For each typename produced during extraction, loads the transformed
-        JSONL files into entity_metadata.{typename.lower()} via MDLH /load API.
-
-        No-op if lakehouse loading is disabled or no typenames were extracted.
-        """
-        if not (ENABLE_LAKEHOUSE_LOAD and LH_LOAD_TRANSFORMED_NAMESPACE):
-            logger.info("Lakehouse load (transformed) skipped")
-            return
-
-        typenames: List[str] = workflow_args.get("_extracted_typenames", [])
-        if not typenames:
-            logger.info("No typenames extracted, skipping lakehouse load (transformed)")
-            return
-
-        output_path = workflow_args.get("output_path", "")
-
-        load_tasks = []
-        for typename in typenames:
-            iceberg_table = resolve_iceberg_table(typename)
-            logger.info(
-                f"Loading transformed data for typename={typename} "
-                f"into {LH_LOAD_TRANSFORMED_NAMESPACE}.{iceberg_table}"
-            )
-            load_tasks.append(
-                self._submit_lakehouse_load(
-                    output_path=f"{output_path}/transformed/{typename}",
-                    namespace=LH_LOAD_TRANSFORMED_NAMESPACE,
-                    table_name=iceberg_table,
-                    mode=LH_LOAD_TRANSFORMED_MODE,
-                    file_extension=".jsonl",
-                )
-            )
-
-        # Load all typenames concurrently — each is an independent MDLH /load job
-        import asyncio
-
-        await asyncio.gather(*load_tasks)
 
     async def _submit_lakehouse_load(
         self,

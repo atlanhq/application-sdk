@@ -399,14 +399,6 @@ LH_LOAD_RAW_NAMESPACE = os.getenv("LH_LOAD_RAW_NAMESPACE", "int_entity_raw")
 LH_LOAD_RAW_TABLE_NAME = os.getenv("LH_LOAD_RAW_TABLE_NAME", APPLICATION_NAME)
 LH_LOAD_RAW_MODE = os.getenv("LH_LOAD_RAW_MODE", "APPEND")
 
-# Transformed table config (after transform)
-# Namespace in the Iceberg catalog where per-entity-type tables live.
-# Table name is derived automatically from the typename (e.g. "table" -> "table").
-LH_LOAD_TRANSFORMED_NAMESPACE = os.getenv(
-    "LH_LOAD_TRANSFORMED_NAMESPACE", "entity_metadata"
-)
-LH_LOAD_TRANSFORMED_MODE = os.getenv("LH_LOAD_TRANSFORMED_MODE", "APPEND")
-
 # Daft analytics are disabled via ENV vars in the Dockerfile (DO_NOT_TRACK,
 # SCARF_NO_ANALYTICS, DAFT_ANALYTICS_ENABLED). They must NOT be set here at
 # module level — os.environ assignments call os.putenv(), which Temporal's

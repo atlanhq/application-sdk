@@ -20,7 +20,7 @@ from application_sdk.activities.common import sql_utils
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.activities.metadata_extraction.lakehouse import (
-    convert_raw_parquet_to_jsonl,
+    convert_raw_parquet_to_parquet,
     submit_and_poll_mdlh_load,
 )
 from application_sdk.clients.sql import BaseSQLClient
@@ -767,14 +767,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    async def prepare_raw_for_lakehouse(
-        self, workflow_args: Dict[str, Any]
-    ) -> str:
-        """Convert raw parquet files into common-schema JSONL for lakehouse ingestion.
+    async def prepare_raw_for_lakehouse(self, workflow_args: Dict[str, Any]) -> str:
+        """Enrich raw parquet files with metadata columns for lakehouse ingestion.
 
         Reads output_path, workflow_id, workflow_run_id, connection info
         directly from workflow_args. typenames is passed via
         workflow_args["_extracted_typenames"].
         """
         typenames = workflow_args.get("_extracted_typenames", [])
-        return await convert_raw_parquet_to_jsonl(workflow_args, typenames)
+        return await convert_raw_parquet_to_parquet(workflow_args, typenames)

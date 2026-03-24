@@ -19,9 +19,6 @@ from application_sdk.activities.metadata_extraction.lakehouse import (
     submit_and_poll_mdlh_load,
 )
 from application_sdk.common.error_codes import ActivityError
-from application_sdk.workflows.metadata_extraction.lakehouse import (
-    resolve_iceberg_table,
-)
 
 
 def _write_test_parquet(path: str, data: dict) -> str:
@@ -347,20 +344,6 @@ class TestLhLoadResponseModels:
         )
         assert resp.job_id == "j1"
         assert resp.status == "COMPLETED"
-
-
-class TestResolveIcebergTable:
-    def test_standard_typename(self):
-        assert resolve_iceberg_table("database") == "database"
-
-    def test_uppercase_typename(self):
-        assert resolve_iceberg_table("LookerDashboard") == "lookerdashboard"
-
-    def test_extras_procedure_override(self):
-        assert resolve_iceberg_table("extras-procedure") == "procedure"
-
-    def test_unknown_typename(self):
-        assert resolve_iceberg_table("snowflakedynamictable") == "snowflakedynamictable"
 
 
 class TestConvertRawParquetToParquet:
