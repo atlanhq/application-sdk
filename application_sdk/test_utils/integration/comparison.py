@@ -392,11 +392,30 @@ def load_actual_output(
 
 
 def _get_asset_name(asset: Dict[str, Any]) -> Optional[str]:
-    """Extract the name from an asset's attributes."""
+    """Extract a unique lookup key from an asset's attributes.
+
+    For child assets like Columns that share names across parents (e.g.,
+    ``city_id`` exists in both ``cities`` and ``state_provinces``), the key
+    includes the parent name: ``cities/city_id``. This prevents collisions
+    in the lookup dict.
+
+    Parent is resolved from ``tableName``, ``viewName``, or ``parentName``
+    (in that order). If no parent context exists, falls back to just ``name``.
+    """
     attrs = asset.get("attributes", {})
-    if isinstance(attrs, dict):
-        return attrs.get("name")
-    return None
+    if not isinstance(attrs, dict):
+        return None
+
+    name = attrs.get("name")
+    if name is None:
+        return None
+
+    # Build composite key for child assets that have a parent reference
+    parent = attrs.get("tableName") or attrs.get("viewName") or attrs.get("parentName")
+    if parent:
+        return f"{parent}/{name}"
+
+    return name
 
 
 def _compare_attributes(
