@@ -9,7 +9,8 @@ Endpoints:
     GET /ready  - Returns 200 only if Temporal client is connected
     GET /live   - Returns 200 if worker is responsive
 
-Usage:
+Usage::
+
     from application_sdk.server.health import WorkerHealthServer
 
     # Start health server alongside worker
@@ -95,7 +96,8 @@ class WorkerHealthServer:
         port: Port to listen on (default 8081).
         host: Host to bind to (default 0.0.0.0).
 
-    Example:
+    Example::
+
         # As context manager
         async with WorkerHealthServer(port=8081) as server:
             server.set_temporal_client(client)

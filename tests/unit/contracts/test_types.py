@@ -69,7 +69,7 @@ class TestFileReference:
 
     def test_from_local_nonexistent_path(self) -> None:
         ref = FileReference.from_local("/nonexistent/file.json")
-        assert ref.local_path == "/nonexistent/file.json"
+        assert ref.local_path == str(Path("/nonexistent/file.json"))
         assert ref.is_durable is False
 
     def test_from_local_with_path_object(self, tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 """App module - core developer-facing abstractions for building Apps.
 
-Usage:
+Usage::
+
     from application_sdk.app import App, task, Input, Output
 
     @dataclass

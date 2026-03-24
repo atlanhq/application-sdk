@@ -24,6 +24,7 @@ sidecar is checked:
 * **Sidecar mismatch** — file is corrupt or partially written; re-download.
 
 This ensures that:
+
 1. A Temporal retry on a different worker (stale ``local_path``) always
    triggers a fresh download.
 2. A crash mid-download (partial file, no sidecar) is detected and recovered.

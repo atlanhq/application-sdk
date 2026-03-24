@@ -60,7 +60,7 @@ def create_async_atlan_client(cred: "Credential") -> "object":
 class AtlanClientMixin:
     """Mixin providing cached async Atlan client access for App subclasses.
 
-    Mix into an ``App`` subclass to get ``get_or_create_async_atlan_client``:
+    Mix into an ``App`` subclass to get ``get_or_create_async_atlan_client``::
 
         class MyApp(AtlanClientMixin, App):
             @task
