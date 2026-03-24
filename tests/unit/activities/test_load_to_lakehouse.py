@@ -97,6 +97,10 @@ class _MockSessionFactory:
 
 _COMMON_PATCHES = [
     patch(
+        "application_sdk.activities.metadata_extraction.lakehouse.check_lakehouse_enabled",
+        new=AsyncMock(return_value=True),
+    ),
+    patch(
         "application_sdk.activities.metadata_extraction.lakehouse.LH_LOAD_POLL_INTERVAL_SECONDS",
         0,
     ),
@@ -165,6 +169,10 @@ class TestLoadToLakehouse:
             await submit_and_poll_mdlh_load(_make_workflow_args())
 
     @patch(
+        "application_sdk.activities.metadata_extraction.lakehouse.check_lakehouse_enabled",
+        new=AsyncMock(return_value=True),
+    )
+    @patch(
         "application_sdk.activities.metadata_extraction.lakehouse.LH_LOAD_POLL_INTERVAL_SECONDS",
         0,
     )
@@ -203,6 +211,10 @@ class TestLoadToLakehouse:
         ):
             await submit_and_poll_mdlh_load(_make_workflow_args())
 
+    @patch(
+        "application_sdk.activities.metadata_extraction.lakehouse.check_lakehouse_enabled",
+        new=AsyncMock(return_value=True),
+    )
     @patch(
         "application_sdk.activities.metadata_extraction.lakehouse.MDLH_BASE_URL",
         "http://test:4541",
@@ -258,6 +270,15 @@ class TestLoadToLakehouse:
             await submit_and_poll_mdlh_load(
                 {"lh_load_config": {"output_path": "/tmp/test", "namespace": "ns"}}
             )
+
+    @patch(
+        "application_sdk.activities.metadata_extraction.lakehouse.check_lakehouse_enabled",
+        new=AsyncMock(return_value=False),
+    )
+    async def test_load_skipped_when_mdlh_unavailable(self):
+        """MDLH health check fails → returns skipped stats instead of raising."""
+        result = await submit_and_poll_mdlh_load(_make_workflow_args())
+        assert result.typename == "lakehouse-load-skipped"
 
     def test_path_conversion(self):
         """get_object_store_prefix strips TEMPORARY_PATH prefix."""

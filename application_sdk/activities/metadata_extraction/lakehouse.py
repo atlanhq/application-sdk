@@ -13,7 +13,6 @@ from typing import Any, Dict, List
 
 import aiohttp
 import orjson
-from temporalio import activity
 
 from application_sdk.activities.common.models import (
     ActivityStatistics,
@@ -21,10 +20,7 @@ from application_sdk.activities.common.models import (
     LhLoadResponse,
     LhLoadStatusResponse,
 )
-from application_sdk.activities.common.utils import (
-    auto_heartbeater,
-    get_object_store_prefix,
-)
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
@@ -50,6 +46,37 @@ _RAW_ENTITY_NAME_FIELDS: Dict[str, str] = {
     "table": "table_name",
     "column": "column_name",
 }
+
+
+# ---------------------------------------------------------------------------
+# Tenant-level lakehouse availability check
+# ---------------------------------------------------------------------------
+
+
+async def check_lakehouse_enabled() -> bool:
+    """Check whether the lakehouse service is available on this tenant.
+
+    Hits the MDLH Spring Boot actuator health endpoint.  Returns True if
+    MDLH is reachable and healthy, False otherwise.  This lets the SDK
+    gracefully skip lakehouse loading on tenants where MDLH is not deployed
+    (i.e. lakehouse-secrets / lakehouse-config are not mounted).
+    """
+    health_url = f"{MDLH_BASE_URL}/actuator/health"
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=5)
+        ) as session:
+            async with session.get(health_url) as resp:
+                if resp.status == 200:
+                    return True
+                logger.info(
+                    f"MDLH health check returned {resp.status}, "
+                    "lakehouse not available on this tenant"
+                )
+                return False
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+        logger.info(f"MDLH not reachable ({e}), lakehouse not available on this tenant")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +111,11 @@ async def submit_and_poll_mdlh_load(
             f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: "
             "Missing required fields in lh_load_config (namespace, table_name, output_path, file_extension)"
         )
+
+    # Pre-flight: verify MDLH is deployed on this tenant
+    if not await check_lakehouse_enabled():
+        logger.info("Lakehouse load skipped — MDLH not available on this tenant")
+        return ActivityStatistics(typename="lakehouse-load-skipped")
 
     s3_prefix = get_object_store_prefix(output_path)
     pattern = f"{s3_prefix}/**/*{file_extension}"
