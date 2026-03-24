@@ -420,9 +420,12 @@ class BaseIntegrationTest:
                 failed_details = []
                 for path, detail in assertion_results.items():
                     if not detail["passed"]:
+                        desc_suffix = ""
+                        if detail.get("description"):
+                            desc_suffix = f"\n    \u2192 {detail['description']}"
                         failed_details.append(
                             f"  - {path}: expected {detail['expected']}, "
-                            f"got {detail['actual']!r}"
+                            f"got {detail['actual']!r}{desc_suffix}"
                         )
                 error_msg = (
                     f"Assertions failed for scenario '{scenario.name}':\n"
@@ -475,14 +478,18 @@ class BaseIntegrationTest:
         for path, predicate in assertions.items():
             actual = self._get_nested_value(response, path)
             expected_desc = getattr(predicate, "__doc__", str(predicate))
+            custom_desc = getattr(predicate, "description", None)
 
             try:
                 passed = predicate(actual)
-                results[path] = {
+                result_entry = {
                     "passed": passed,
                     "actual": actual,
                     "expected": expected_desc,
                 }
+                if custom_desc:
+                    result_entry["description"] = custom_desc
+                results[path] = result_entry
                 if not passed:
                     logger.debug(
                         f"Assertion failed: {path} - "
@@ -490,12 +497,15 @@ class BaseIntegrationTest:
                     )
             except Exception as e:
                 logger.error(f"Assertion error for {path}: {e}")
-                results[path] = {
+                result_entry = {
                     "passed": False,
                     "actual": actual,
                     "expected": expected_desc,
                     "error": str(e),
                 }
+                if custom_desc:
+                    result_entry["description"] = custom_desc
+                results[path] = result_entry
 
         return results
 

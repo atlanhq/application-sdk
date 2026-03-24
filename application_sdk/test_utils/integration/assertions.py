@@ -11,7 +11,7 @@ The design follows functional programming principles:
 
 Example:
     >>> from application_sdk.test_utils.integration import Scenario, equals, exists, one_of
-    >>> 
+    >>>
     >>> Scenario(
     ...     name="auth_test",
     ...     api="auth",
@@ -25,7 +25,7 @@ Example:
 """
 
 import re
-from typing import Any, Callable, List, Pattern, Union
+from typing import Any, Callable, List, Optional, Pattern, Union
 
 # Type alias for predicate functions
 Predicate = Callable[[Any], bool]
@@ -36,11 +36,12 @@ Predicate = Callable[[Any], bool]
 # =============================================================================
 
 
-def equals(expected: Any) -> Predicate:
+def equals(expected: Any, *, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value equals the expected value.
 
     Args:
         expected: The expected value.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual == expected.
@@ -49,20 +50,24 @@ def equals(expected: Any) -> Predicate:
         >>> check = equals(True)
         >>> check(True)   # True
         >>> check(False)  # False
+        >>> check = equals(True, description="Auth should succeed")
     """
 
     def predicate(actual: Any) -> bool:
         return actual == expected
 
     predicate.__doc__ = f"equals({expected!r})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def not_equals(unexpected: Any) -> Predicate:
+def not_equals(unexpected: Any, *, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value does not equal the unexpected value.
 
     Args:
         unexpected: The value that should not match.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual != unexpected.
@@ -77,11 +82,16 @@ def not_equals(unexpected: Any) -> Predicate:
         return actual != unexpected
 
     predicate.__doc__ = f"not_equals({unexpected!r})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def exists() -> Predicate:
+def exists(*, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is not None.
+
+    Args:
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual is not None.
@@ -96,11 +106,16 @@ def exists() -> Predicate:
         return actual is not None
 
     predicate.__doc__ = "exists()"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def is_none() -> Predicate:
+def is_none(*, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is None.
+
+    Args:
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual is None.
@@ -115,11 +130,16 @@ def is_none() -> Predicate:
         return actual is None
 
     predicate.__doc__ = "is_none()"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def is_true() -> Predicate:
+def is_true(*, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is truthy.
+
+    Args:
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if bool(actual) is True.
@@ -135,11 +155,16 @@ def is_true() -> Predicate:
         return bool(actual)
 
     predicate.__doc__ = "is_true()"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def is_false() -> Predicate:
+def is_false(*, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is falsy.
+
+    Args:
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if bool(actual) is False.
@@ -155,6 +180,8 @@ def is_false() -> Predicate:
         return not bool(actual)
 
     predicate.__doc__ = "is_false()"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
@@ -163,11 +190,12 @@ def is_false() -> Predicate:
 # =============================================================================
 
 
-def one_of(options: List[Any]) -> Predicate:
+def one_of(options: List[Any], *, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is one of the given options.
 
     Args:
         options: List of valid values.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual is in options.
@@ -182,14 +210,17 @@ def one_of(options: List[Any]) -> Predicate:
         return actual in options
 
     predicate.__doc__ = f"one_of({options!r})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def not_one_of(excluded: List[Any]) -> Predicate:
+def not_one_of(excluded: List[Any], *, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is not one of the given values.
 
     Args:
         excluded: List of values that should not match.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual is not in excluded.
@@ -204,16 +235,19 @@ def not_one_of(excluded: List[Any]) -> Predicate:
         return actual not in excluded
 
     predicate.__doc__ = f"not_one_of({excluded!r})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def contains(item: Any) -> Predicate:
+def contains(item: Any, *, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value contains the given item.
 
     Works for strings (substring check) and collections (membership check).
 
     Args:
         item: The item to search for.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if item is in actual.
@@ -222,7 +256,7 @@ def contains(item: Any) -> Predicate:
         >>> check = contains("error")
         >>> check("An error occurred")  # True
         >>> check("Success")            # False
-        >>> 
+        >>>
         >>> check = contains(42)
         >>> check([1, 42, 3])  # True
     """
@@ -234,14 +268,17 @@ def contains(item: Any) -> Predicate:
             return False
 
     predicate.__doc__ = f"contains({item!r})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def not_contains(item: Any) -> Predicate:
+def not_contains(item: Any, *, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value does not contain the given item.
 
     Args:
         item: The item that should not be present.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if item is not in actual.
@@ -259,14 +296,17 @@ def not_contains(item: Any) -> Predicate:
             return True
 
     predicate.__doc__ = f"not_contains({item!r})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def has_length(expected_length: int) -> Predicate:
+def has_length(expected_length: int, *, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value has the expected length.
 
     Args:
         expected_length: The expected length.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if len(actual) == expected_length.
@@ -285,11 +325,16 @@ def has_length(expected_length: int) -> Predicate:
             return False
 
     predicate.__doc__ = f"has_length({expected_length})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def is_empty() -> Predicate:
+def is_empty(*, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is empty.
+
+    Args:
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual is empty.
@@ -308,11 +353,16 @@ def is_empty() -> Predicate:
             return False
 
     predicate.__doc__ = "is_empty()"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def is_not_empty() -> Predicate:
+def is_not_empty(*, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is not empty.
+
+    Args:
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual is not empty.
@@ -331,6 +381,8 @@ def is_not_empty() -> Predicate:
             return False
 
     predicate.__doc__ = "is_not_empty()"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
@@ -339,11 +391,14 @@ def is_not_empty() -> Predicate:
 # =============================================================================
 
 
-def greater_than(value: Union[int, float]) -> Predicate:
+def greater_than(
+    value: Union[int, float], *, description: Optional[str] = None
+) -> Predicate:
     """Assert that the actual value is greater than the given value.
 
     Args:
         value: The value to compare against.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual > value.
@@ -362,14 +417,19 @@ def greater_than(value: Union[int, float]) -> Predicate:
             return False
 
     predicate.__doc__ = f"greater_than({value})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def greater_than_or_equal(value: Union[int, float]) -> Predicate:
+def greater_than_or_equal(
+    value: Union[int, float], *, description: Optional[str] = None
+) -> Predicate:
     """Assert that the actual value is greater than or equal to the given value.
 
     Args:
         value: The value to compare against.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual >= value.
@@ -388,14 +448,19 @@ def greater_than_or_equal(value: Union[int, float]) -> Predicate:
             return False
 
     predicate.__doc__ = f"greater_than_or_equal({value})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def less_than(value: Union[int, float]) -> Predicate:
+def less_than(
+    value: Union[int, float], *, description: Optional[str] = None
+) -> Predicate:
     """Assert that the actual value is less than the given value.
 
     Args:
         value: The value to compare against.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual < value.
@@ -413,14 +478,19 @@ def less_than(value: Union[int, float]) -> Predicate:
             return False
 
     predicate.__doc__ = f"less_than({value})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def less_than_or_equal(value: Union[int, float]) -> Predicate:
+def less_than_or_equal(
+    value: Union[int, float], *, description: Optional[str] = None
+) -> Predicate:
     """Assert that the actual value is less than or equal to the given value.
 
     Args:
         value: The value to compare against.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual <= value.
@@ -439,15 +509,23 @@ def less_than_or_equal(value: Union[int, float]) -> Predicate:
             return False
 
     predicate.__doc__ = f"less_than_or_equal({value})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def between(min_value: Union[int, float], max_value: Union[int, float]) -> Predicate:
+def between(
+    min_value: Union[int, float],
+    max_value: Union[int, float],
+    *,
+    description: Optional[str] = None,
+) -> Predicate:
     """Assert that the actual value is between min and max (inclusive).
 
     Args:
         min_value: The minimum value (inclusive).
         max_value: The maximum value (inclusive).
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if min_value <= actual <= max_value.
@@ -466,6 +544,8 @@ def between(min_value: Union[int, float], max_value: Union[int, float]) -> Predi
             return False
 
     predicate.__doc__ = f"between({min_value}, {max_value})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
@@ -474,11 +554,14 @@ def between(min_value: Union[int, float], max_value: Union[int, float]) -> Predi
 # =============================================================================
 
 
-def matches(pattern: Union[str, Pattern]) -> Predicate:
+def matches(
+    pattern: Union[str, Pattern], *, description: Optional[str] = None
+) -> Predicate:
     """Assert that the actual value matches the given regex pattern.
 
     Args:
         pattern: A regex pattern string or compiled pattern.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual matches the pattern.
@@ -497,14 +580,17 @@ def matches(pattern: Union[str, Pattern]) -> Predicate:
         return compiled.match(str(actual)) is not None
 
     predicate.__doc__ = f"matches({pattern!r})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def starts_with(prefix: str) -> Predicate:
+def starts_with(prefix: str, *, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value starts with the given prefix.
 
     Args:
         prefix: The expected prefix.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual starts with prefix.
@@ -522,14 +608,17 @@ def starts_with(prefix: str) -> Predicate:
             return False
 
     predicate.__doc__ = f"starts_with({prefix!r})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def ends_with(suffix: str) -> Predicate:
+def ends_with(suffix: str, *, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value ends with the given suffix.
 
     Args:
         suffix: The expected suffix.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual ends with suffix.
@@ -547,6 +636,8 @@ def ends_with(suffix: str) -> Predicate:
             return False
 
     predicate.__doc__ = f"ends_with({suffix!r})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
@@ -555,11 +646,12 @@ def ends_with(suffix: str) -> Predicate:
 # =============================================================================
 
 
-def is_type(expected_type: type) -> Predicate:
+def is_type(expected_type: type, *, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is an instance of the given type.
 
     Args:
         expected_type: The expected type.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if isinstance(actual, expected_type).
@@ -574,11 +666,16 @@ def is_type(expected_type: type) -> Predicate:
         return isinstance(actual, expected_type)
 
     predicate.__doc__ = f"is_type({expected_type.__name__})"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def is_dict() -> Predicate:
+def is_dict(*, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is a dictionary.
+
+    Args:
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual is a dict.
@@ -588,11 +685,17 @@ def is_dict() -> Predicate:
         >>> check({"key": "value"})  # True
         >>> check([1, 2, 3])         # False
     """
-    return is_type(dict)
+    p = is_type(dict)
+    if description is not None:
+        p.description = description
+    return p
 
 
-def is_list() -> Predicate:
+def is_list(*, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is a list.
+
+    Args:
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual is a list.
@@ -602,11 +705,17 @@ def is_list() -> Predicate:
         >>> check([1, 2, 3])  # True
         >>> check("abc")      # False
     """
-    return is_type(list)
+    p = is_type(list)
+    if description is not None:
+        p.description = description
+    return p
 
 
-def is_string() -> Predicate:
+def is_string(*, description: Optional[str] = None) -> Predicate:
     """Assert that the actual value is a string.
+
+    Args:
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if actual is a str.
@@ -616,7 +725,10 @@ def is_string() -> Predicate:
         >>> check("hello")  # True
         >>> check(123)      # False
     """
-    return is_type(str)
+    p = is_type(str)
+    if description is not None:
+        p.description = description
+    return p
 
 
 # =============================================================================
@@ -624,11 +736,12 @@ def is_string() -> Predicate:
 # =============================================================================
 
 
-def all_of(*predicates: Predicate) -> Predicate:
+def all_of(*predicates: Predicate, description: Optional[str] = None) -> Predicate:
     """Assert that all predicates pass.
 
     Args:
         *predicates: Variable number of predicates to combine.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if all predicates pass.
@@ -643,14 +756,17 @@ def all_of(*predicates: Predicate) -> Predicate:
         return all(p(actual) for p in predicates)
 
     predicate.__doc__ = f"all_of({len(predicates)} predicates)"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def any_of(*predicates: Predicate) -> Predicate:
+def any_of(*predicates: Predicate, description: Optional[str] = None) -> Predicate:
     """Assert that at least one predicate passes.
 
     Args:
         *predicates: Variable number of predicates to combine.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if any predicate passes.
@@ -666,14 +782,17 @@ def any_of(*predicates: Predicate) -> Predicate:
         return any(p(actual) for p in predicates)
 
     predicate.__doc__ = f"any_of({len(predicates)} predicates)"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
-def none_of(*predicates: Predicate) -> Predicate:
+def none_of(*predicates: Predicate, description: Optional[str] = None) -> Predicate:
     """Assert that none of the predicates pass.
 
     Args:
         *predicates: Variable number of predicates to combine.
+        description: Optional human-readable explanation shown on failure.
 
     Returns:
         Predicate: A function that returns True if no predicate passes.
@@ -688,6 +807,8 @@ def none_of(*predicates: Predicate) -> Predicate:
         return not any(p(actual) for p in predicates)
 
     predicate.__doc__ = f"none_of({len(predicates)} predicates)"
+    if description is not None:
+        predicate.description = description
     return predicate
 
 
@@ -701,7 +822,9 @@ def custom(fn: Callable[[Any], bool], description: str = "custom") -> Predicate:
 
     Args:
         fn: A function that takes the actual value and returns True/False.
-        description: Optional description for error messages.
+        description: Description for error messages. Also stored as
+            the predicate's description attribute for consistency
+            with other assertion functions.
 
     Returns:
         Predicate: The function wrapped as a predicate.
@@ -712,4 +835,5 @@ def custom(fn: Callable[[Any], bool], description: str = "custom") -> Predicate:
         >>> check(3)  # False
     """
     fn.__doc__ = description
+    fn.description = description
     return fn
