@@ -278,7 +278,7 @@ class TestLoadRawToLakehouse:
         assert lh_config["namespace"] == "int_entity_raw"
         assert lh_config["table_name"] == "postgres"
         assert lh_config["mode"] == "APPEND"
-        assert lh_config["file_extension"] == ".jsonl"
+        assert lh_config["file_extension"] == ".parquet"
 
     @patch(
         "application_sdk.workflows.metadata_extraction.lakehouse.ENABLE_LAKEHOUSE_LOAD",

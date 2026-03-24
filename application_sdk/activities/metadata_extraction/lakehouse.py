@@ -2,17 +2,15 @@
 
 This module contains the core implementation for:
 - submit_and_poll_mdlh_load: POST to MDLH /load, poll until completion
-- convert_raw_parquet_to_jsonl: wrap raw parquet rows with metadata columns
+- convert_raw_parquet_to_parquet: enrich raw parquet with metadata columns
 """
 
 import asyncio
-import json
 import os
 from time import time
 from typing import Any, Dict, List
 
 import aiohttp
-import orjson
 
 from application_sdk.activities.common.models import (
     ActivityStatistics,
@@ -53,6 +51,10 @@ _RAW_ENTITY_NAME_FIELDS: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
+_lakehouse_enabled_cache: Dict[str, Any] = {"value": None, "expires_at": 0.0}
+_HEALTH_CHECK_TTL_SECONDS = 60
+
+
 async def check_lakehouse_enabled() -> bool:
     """Check whether the lakehouse service is available on this tenant.
 
@@ -60,7 +62,25 @@ async def check_lakehouse_enabled() -> bool:
     MDLH is reachable and healthy, False otherwise.  This lets the SDK
     gracefully skip lakehouse loading on tenants where MDLH is not deployed
     (i.e. lakehouse-secrets / lakehouse-config are not mounted).
+
+    Results are cached for 60 seconds to avoid redundant health checks
+    when multiple load calls happen within the same workflow run.
     """
+    now = time()
+    if (
+        _lakehouse_enabled_cache["value"] is not None
+        and now < _lakehouse_enabled_cache["expires_at"]
+    ):
+        return _lakehouse_enabled_cache["value"]
+
+    result = await _fetch_lakehouse_health()
+    _lakehouse_enabled_cache["value"] = result
+    _lakehouse_enabled_cache["expires_at"] = now + _HEALTH_CHECK_TTL_SECONDS
+    return result
+
+
+async def _fetch_lakehouse_health() -> bool:
+    """Hit the MDLH actuator health endpoint and return availability."""
     health_url = f"{MDLH_BASE_URL}/actuator/health"
     try:
         async with aiohttp.ClientSession(
@@ -148,14 +168,14 @@ async def submit_and_poll_mdlh_load(
         job_id = load_response.job_id
         logger.info(f"Lakehouse load job submitted: job_id={job_id}")
 
-    # Poll for completion
+    # Poll for completion — reuse a single session across all poll iterations
     status_url = f"{base_url}/{job_id}/status"
     poll_headers = {**headers, "X-Lakehouse-Job-Id": job_id}
-    for attempt in range(LH_LOAD_MAX_POLL_ATTEMPTS):
-        await asyncio.sleep(LH_LOAD_POLL_INTERVAL_SECONDS)
-        try:
-            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
-                async with session.get(status_url, headers=poll_headers) as resp:
+    async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as poll_session:
+        for attempt in range(LH_LOAD_MAX_POLL_ATTEMPTS):
+            await asyncio.sleep(LH_LOAD_POLL_INTERVAL_SECONDS)
+            try:
+                async with poll_session.get(status_url, headers=poll_headers) as resp:
                     if resp.status in _NON_RETRYABLE_STATUS_CODES:
                         body = await resp.text()
                         raise ActivityError(
@@ -169,26 +189,26 @@ async def submit_and_poll_mdlh_load(
                         )
                         continue
                     status_data = await resp.json()
-        except ActivityError:
-            raise
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning(
-                f"Lakehouse load status poll error (attempt {attempt + 1}/{LH_LOAD_MAX_POLL_ATTEMPTS}): {e}, retrying..."
-            )
-            continue
+            except ActivityError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.warning(
+                    f"Lakehouse load status poll error (attempt {attempt + 1}/{LH_LOAD_MAX_POLL_ATTEMPTS}): {e}, retrying..."
+                )
+                continue
 
-        status_response = LhLoadStatusResponse.model_validate(status_data)
-        current_status = status_response.status.upper()
+            status_response = LhLoadStatusResponse.model_validate(status_data)
+            current_status = status_response.status.upper()
 
-        if current_status == "COMPLETED":
-            logger.info(f"Lakehouse load job completed: job_id={job_id}")
-            return ActivityStatistics(typename="lakehouse-load-completed")
+            if current_status == "COMPLETED":
+                logger.info(f"Lakehouse load job completed: job_id={job_id}")
+                return ActivityStatistics(typename="lakehouse-load-completed")
 
-        if current_status in _TERMINAL_FAILURE_STATES:
-            raise ActivityError(
-                f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: "
-                f"Lakehouse load job {job_id} ended with status: {current_status}"
-            )
+            if current_status in _TERMINAL_FAILURE_STATES:
+                raise ActivityError(
+                    f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: "
+                    f"Lakehouse load job {job_id} ended with status: {current_status}"
+                )
 
     raise ActivityError(
         f"{ActivityError.LAKEHOUSE_LOAD_TIMEOUT_ERROR}: "
@@ -198,15 +218,15 @@ async def submit_and_poll_mdlh_load(
 
 
 # ---------------------------------------------------------------------------
-# Raw parquet → common-schema JSONL
+# Raw parquet → enriched parquet (with metadata columns)
 # ---------------------------------------------------------------------------
 
 
-async def convert_raw_parquet_to_jsonl(
+async def convert_raw_parquet_to_parquet(
     workflow_args: Dict[str, Any],
     typenames: List[str],
 ) -> str:
-    """Convert raw parquet files into common-schema JSONL for lakehouse ingestion.
+    """Enrich raw parquet files with metadata columns for lakehouse ingestion.
 
     Reads metadata from workflow_args:
         - output_path → raw parquet location ({output_path}/raw/{typename}/)
@@ -214,16 +234,19 @@ async def convert_raw_parquet_to_jsonl(
         - connection.connection_qualified_name → join key
         - tenant_id from APP_TENANT_ID constant
 
-    For each typename's parquet files, every row is wrapped into the
-    per-connector raw table schema::
+    For each typename's parquet files, adds metadata columns and a
+    ``raw_record`` column (JSON string of the original row) to produce
+    the per-connector raw table schema::
 
         typename, connection_qualified_name, workflow_id, workflow_run_id,
         extracted_at, tenant_id, entity_name, raw_record (JSON string)
 
-    Output JSONL files are written to ``{output_path}/raw_lakehouse/{typename}/``.
+    Output parquet files are written to ``{output_path}/raw_lakehouse/{typename}/``.
 
     Returns the root output directory.
     """
+    import json
+
     output_path = workflow_args.get("output_path", "")
     raw_output_path = os.path.join(output_path, "raw")
     workflow_id = workflow_args.get("workflow_id", "")
@@ -265,26 +288,36 @@ async def convert_raw_parquet_to_jsonl(
                 logger.warning(f"Failed to read parquet {pq_file}: {e}, skipping")
                 continue
 
-            out_file = os.path.join(out_dir, f"chunk-{chunk_idx}.jsonl")
-            with open(out_file, "wb") as f:
-                for i in range(n_rows):
-                    raw_row = {col: rows[col][i] for col in col_names}
-                    entity_name = (
-                        str(raw_row.get(entity_name_field, ""))
-                        if entity_name_field
-                        else ""
-                    )
-                    record = {
-                        "typename": typename,
-                        "connection_qualified_name": connection_qualified_name,
-                        "workflow_id": workflow_id,
-                        "workflow_run_id": workflow_run_id,
-                        "extracted_at": extracted_at,
-                        "tenant_id": APP_TENANT_ID,
-                        "entity_name": entity_name,
-                        "raw_record": json.dumps(raw_row, default=str),
-                    }
-                    f.write(orjson.dumps(record, option=orjson.OPT_APPEND_NEWLINE))
+            if n_rows == 0:
+                continue
+
+            # Build raw_record and entity_name lists vectorized over rows
+            raw_records = []
+            entity_names = []
+            for i in range(n_rows):
+                raw_row = {col: rows[col][i] for col in col_names}
+                raw_records.append(json.dumps(raw_row, default=str))
+                entity_names.append(
+                    str(raw_row.get(entity_name_field, "")) if entity_name_field else ""
+                )
+
+            enriched = {
+                "typename": [typename] * n_rows,
+                "connection_qualified_name": [connection_qualified_name] * n_rows,
+                "workflow_id": [workflow_id] * n_rows,
+                "workflow_run_id": [workflow_run_id] * n_rows,
+                "extracted_at": [extracted_at] * n_rows,
+                "tenant_id": [APP_TENANT_ID] * n_rows,
+                "entity_name": entity_names,
+                "raw_record": raw_records,
+            }
+
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+
+            table = pa.table(enriched)
+            out_file = os.path.join(out_dir, f"chunk-{chunk_idx}.parquet")
+            pq.write_table(table, out_file)
 
             chunk_idx += 1
             logger.info(
@@ -292,9 +325,9 @@ async def convert_raw_parquet_to_jsonl(
                 f"typename={typename}, file={out_file}"
             )
 
-    # Upload JSONL files to object store so MDLH can read them from S3
-    logger.info(f"Uploading raw_lakehouse JSONL files to object store: {base_dir}")
+    # Upload parquet files to object store so MDLH can read them from S3
+    logger.info(f"Uploading raw_lakehouse parquet files to object store: {base_dir}")
     await ObjectStore.upload_prefix(source=base_dir, destination=base_dir)
-    logger.info("raw_lakehouse JSONL upload complete")
+    logger.info("raw_lakehouse parquet upload complete")
 
     return base_dir
