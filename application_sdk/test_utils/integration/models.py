@@ -98,6 +98,9 @@ class Scenario:
             actual extracted metadata against the expected baseline.
         extracted_output_base_path: Optional base directory where connector writes
             extracted output. Falls back to the class-level attribute if not set.
+        output_subdirectory: Subdirectory within the run output dir to search for
+            JSONL files. Defaults to "transformed". Set to "" to search the
+            entire run directory.
         strict_comparison: If True, extra assets in actual output that are not in
             the expected JSON will cause the test to fail. Defaults to True.
         workflow_timeout: Seconds to wait for workflow completion. Defaults to 300.
@@ -120,6 +123,7 @@ class Scenario:
     skip_reason: str = ""
     expected_data: Optional[str] = None
     extracted_output_base_path: Optional[str] = None
+    output_subdirectory: str = "transformed"
     strict_comparison: bool = True
     workflow_timeout: int = 300
     polling_interval: int = 10

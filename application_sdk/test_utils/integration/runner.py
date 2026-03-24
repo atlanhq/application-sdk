@@ -31,8 +31,10 @@ Example (simplified - no helper functions needed):
 
 import os
 import time
-from typing import Any, Dict, List, Type
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Type
 
+import orjson
 import pytest
 import requests as http_requests
 
@@ -315,6 +317,96 @@ class BaseIntegrationTest:
                 + (f", {failed} failed" if failed else "")
             )
 
+            # Write machine-readable summary for CI
+            try:
+                cls._write_summary()
+            except Exception as e:
+                logger.warning(f"Failed to write test summary: {e}")
+
+    @classmethod
+    def _write_summary(cls) -> Optional[str]:
+        """Write a machine-readable JSON summary of all test results.
+
+        Writes to the path specified by INTEGRATION_TEST_SUMMARY_PATH env var,
+        defaulting to ./integration-test-summary.json.
+
+        Returns:
+            The path the summary was written to, or None if no results.
+        """
+        if not cls._results:
+            return None
+
+        summary_path = os.getenv(
+            "INTEGRATION_TEST_SUMMARY_PATH",
+            "./integration-test-summary.json",
+        )
+
+        passed = sum(1 for r in cls._results if r.success)
+        failed = sum(
+            1
+            for r in cls._results
+            if not r.success
+            and r.error
+            and not isinstance(r.error, pytest.skip.Exception)
+        )
+        skipped = sum(
+            1
+            for r in cls._results
+            if r.error and isinstance(r.error, pytest.skip.Exception)
+        )
+        total = len(cls._results)
+
+        scenarios_data = []
+        for result in cls._results:
+            scenario_entry: Dict[str, Any] = {
+                "name": result.scenario.name,
+                "api": result.scenario.api,
+                "status": "passed"
+                if result.success
+                else (
+                    "skipped"
+                    if result.error and isinstance(result.error, pytest.skip.Exception)
+                    else "failed"
+                ),
+                "duration_ms": round(result.duration_ms, 2),
+                "description": result.scenario.description or "",
+            }
+
+            if result.assertion_results:
+                scenario_entry["assertions"] = result.assertion_results
+
+            if not result.success and result.error:
+                scenario_entry["error"] = str(result.error)
+
+            if result.scenario.expected_data:
+                scenario_entry["metadata_validation"] = {
+                    "expected_file": result.scenario.expected_data,
+                    "strict": result.scenario.strict_comparison,
+                }
+
+            scenarios_data.append(scenario_entry)
+
+        summary = {
+            "app_name": os.getenv("ATLAN_APPLICATION_NAME", "unknown"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "server_url": cls.server_host,
+            "test_class": cls.__name__,
+            "total": total,
+            "passed": passed,
+            "failed": failed,
+            "skipped": skipped,
+            "scenarios": scenarios_data,
+        }
+
+        summary_dir = os.path.dirname(os.path.abspath(summary_path))
+        if summary_dir:
+            os.makedirs(summary_dir, exist_ok=True)
+        with open(summary_path, "wb") as f:
+            f.write(orjson.dumps(summary, option=orjson.OPT_INDENT_2))
+
+        logger.info(f"Integration test summary written to {summary_path}")
+        return summary_path
+
     def _build_scenario_args(self, scenario: Scenario) -> Dict[str, Any]:
         """Build the API args for a scenario.
 
@@ -565,7 +657,12 @@ class BaseIntegrationTest:
 
         # Load actual and expected data
         logger.info(f"Loading actual output from {base_path}/{workflow_id}/{run_id}")
-        actual = load_actual_output(base_path, workflow_id, run_id)
+        actual = load_actual_output(
+            base_path,
+            workflow_id,
+            run_id,
+            subdirectory=scenario.output_subdirectory,
+        )
 
         logger.info(f"Loading expected data from {scenario.expected_data}")
         expected = load_expected_data(scenario.expected_data)
@@ -576,11 +673,13 @@ class BaseIntegrationTest:
             actual=actual,
             strict=scenario.strict_comparison,
             ignored_fields=scenario.ignored_fields,
+            expected_file=scenario.expected_data,
         )
 
         if gap_report.has_gaps:
             raise AssertionError(
-                f"Metadata validation failed for scenario '{scenario.name}':\n\n"
+                f"Metadata validation failed for scenario '{scenario.name}' "
+                f"(baseline: {scenario.expected_data}):\n\n"
                 + gap_report.format_report()
             )
 

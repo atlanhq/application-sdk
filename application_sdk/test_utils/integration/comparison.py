@@ -66,6 +66,7 @@ DEFAULT_IGNORED_NESTED_FIELDS: Set[str] = {
     "view",
     "materialisedView",
     "parentTable",
+    "tablePartition",
 }
 
 
@@ -111,6 +112,7 @@ class GapReport:
 
     diffs: List[AssetDiff] = field(default_factory=list)
     summary: Dict[str, int] = field(default_factory=dict)
+    expected_file: Optional[str] = None
 
     @property
     def has_gaps(self) -> bool:
@@ -123,6 +125,11 @@ class GapReport:
             return "No gaps found — actual metadata matches expected."
 
         lines = ["Metadata validation failed:", ""]
+
+        # Show baseline file path if available
+        if self.expected_file:
+            lines.append(f"Expected baseline: {self.expected_file}")
+            lines.append("")
 
         # Summary
         lines.append("Summary:")
@@ -149,6 +156,7 @@ def compare_metadata(
     actual: List[Dict[str, Any]],
     strict: bool = True,
     ignored_fields: Optional[Set[str]] = None,
+    expected_file: Optional[str] = None,
 ) -> GapReport:
     """Compare actual extracted metadata against an expected baseline.
 
@@ -169,7 +177,7 @@ def compare_metadata(
     if ignored_fields is None:
         ignored_fields = DEFAULT_IGNORED_FIELDS
 
-    report = GapReport()
+    report = GapReport(expected_file=expected_file)
 
     # Group actual assets by typeName
     actual_by_type: Dict[str, List[Dict[str, Any]]] = {}
@@ -320,17 +328,25 @@ def load_expected_data(file_path: str) -> Dict[str, List[Dict[str, Any]]]:
 
 
 def load_actual_output(
-    base_path: str, workflow_id: str, run_id: str
+    base_path: str,
+    workflow_id: str,
+    run_id: str,
+    subdirectory: str = "transformed",
 ) -> List[Dict[str, Any]]:
     """Load all extracted metadata from the output directory.
 
-    Reads JSONL files from ``{base_path}/{workflow_id}/{run_id}/`` and returns
-    all records as a flat list.
+    Reads JSONL files from ``{base_path}/{workflow_id}/{run_id}/{subdirectory}/``
+    and returns all records as a flat list.
 
     Args:
         base_path: Base directory where connector writes extracted output.
         workflow_id: The workflow ID from the API response.
         run_id: The run ID from the API response.
+        subdirectory: Subdirectory within the run output to read from.
+            Defaults to "transformed". If the subdirectory exists, only
+            files within it are read. If it does not exist, falls back
+            to reading the entire run directory. Pass "" to always read
+            the full directory.
 
     Returns:
         List of asset records (each with typeName, attributes, etc.).
@@ -343,8 +359,21 @@ def load_actual_output(
     if not os.path.isdir(output_dir):
         raise FileNotFoundError(f"Extracted output directory not found: {output_dir}")
 
+    # Prefer subdirectory if specified and exists; fall back to full dir
+    search_dir = output_dir
+    if subdirectory:
+        sub_path = os.path.join(output_dir, subdirectory)
+        if os.path.isdir(sub_path):
+            search_dir = sub_path
+            logger.info(f"Reading actual output from subdirectory: {search_dir}")
+        else:
+            logger.warning(
+                f"Subdirectory '{subdirectory}' not found in {output_dir}, "
+                f"falling back to full directory"
+            )
+
     records: List[Dict[str, Any]] = []
-    json_files = glob(os.path.join(output_dir, "**", "*.json"), recursive=True)
+    json_files = glob(os.path.join(search_dir, "**", "*.json"), recursive=True)
 
     for json_file in sorted(json_files):
         with open(json_file, "rb") as f:
