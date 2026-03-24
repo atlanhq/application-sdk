@@ -1,15 +1,10 @@
 FROM cgr.dev/atlan.com/app-framework-golden:3.13
 
-# Dapr version arguments
-ARG DAPR_CLI_VERSION=1.17.0
+# Dapr version argument
 ARG DAPR_RUNTIME_PACKAGE=dapr-daprd-1.17
 
 # Switch to root for installation
 USER root
-
-# Install Dapr CLI (latest version for apps to use)
-RUN curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | DAPR_INSTALL_DIR="/usr/local/bin" /bin/bash -s ${DAPR_CLI_VERSION}
-
 
 # Install Dapr runtime from Chainguard APK
 RUN apk add --no-cache ${DAPR_RUNTIME_PACKAGE}
@@ -21,8 +16,7 @@ RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser
 RUN mkdir -p /app /home/appuser/.local/bin && \
     chown -R appuser:appuser /app /home/appuser
 
-# Remove curl and bash (no longer needed at runtime) and clean apk cache.
-# Note: bash is still available during the build steps above (Dapr CLI install).
+# Remove curl and bash (not needed at runtime) and clean apk cache
 RUN apk del curl bash && rm -rf /var/cache/apk/*
 
 # Switch to appuser before venv creation

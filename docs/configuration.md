@@ -6,6 +6,8 @@ The Application SDK uses environment variables for configuration. These can be s
 
 | Environment Variable | Description | Default Value | Use Case |
 |---------------------|-------------|---------------|----------|
+| `ATLAN_APP_MODULE` | **REQUIRED.** App class to load, in `module:ClassName` form | _(none — startup fails if unset)_ | Set in your app's `Dockerfile` as `ENV ATLAN_APP_MODULE=app.app:MyApp`; also accepted via `--app` CLI flag |
+| `ATLAN_APP_MODE` | Run mode: `worker`, `handler`, or `combined` | `combined` | Determines which subsystems start; override via `--mode` CLI flag |
 | `ATLAN_APPLICATION_NAME` | Name of the application, used for identification and path generation | `default` | Used in object store paths, logging, and workflow identification |
 | `ATLAN_DEPLOYMENT_NAME` | Name of the deployment, distinguishes between different deployments of the same application | `local` | Used to isolate resources between environments (dev, staging, prod) |
 | `ATLAN_APP_HTTP_HOST` | Host address for the application's HTTP server | `localhost` | Bind address for FastAPI/HTTP server |
@@ -130,6 +132,7 @@ For local development, most defaults work out of the box. Key configurations to 
 
 ### Production Deployment
 For production deployments, consider these essential configurations:
+- `ATLAN_APP_MODULE` **(mandatory)**: Set in every app's `Dockerfile` — startup hard-fails without it. Format: `module.path:ClassName` (e.g., `app.app:MyMetadataExtractor`)
 - `ATLAN_AUTH_ENABLED=true`: Enable authentication for Temporal
 - `ENABLE_ATLAN_UPLOAD=true`: Enable data upload to Atlan platform
 - `ATLAN_DEPLOYMENT_SECRETS`: Configure authentication secrets
