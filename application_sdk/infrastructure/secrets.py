@@ -136,7 +136,26 @@ class InMemorySecretStore:
 
     async def get_bulk(self, names: list[str]) -> dict[str, str]:
         """Get multiple secrets."""
-        return {name: self._secrets[name] for name in names if name in self._secrets}
+        result = {}
+        missing = []
+        for name in names:
+            if name in self._secrets:
+                result[name] = self._secrets[name]
+            else:
+                missing.append(name)
+        if missing and not result:
+            logger.warning(
+                "get_bulk: no secrets resolved; %d names not found: %s",
+                len(missing),
+                missing,
+            )
+        elif missing:
+            logger.debug(
+                "get_bulk: resolved %d, skipped %d not-found names",
+                len(result),
+                len(missing),
+            )
+        return result
 
     async def list_names(self) -> list[str]:
         """List available secret names."""
@@ -192,11 +211,26 @@ class EnvironmentSecretStore:
         import os
 
         result = {}
+        missing = []
         for name in names:
             env_name = f"{self._prefix}{name}"
             value = os.environ.get(env_name)
             if value is not None:
                 result[name] = value
+            else:
+                missing.append(name)
+        if missing and not result:
+            logger.warning(
+                "get_bulk: no secrets resolved; %d env vars not set: %s",
+                len(missing),
+                missing,
+            )
+        elif missing:
+            logger.debug(
+                "get_bulk: resolved %d, skipped %d unset env vars",
+                len(result),
+                len(missing),
+            )
         return result
 
     async def list_names(self) -> list[str]:
