@@ -181,8 +181,8 @@ class EnvironmentSecretStore:
 
         Args:
             prefix: Prefix for environment variable names.
-                   e.g., prefix="MYAPP_" means secret "DB_PASSWORD"
-                   maps to env var "MYAPP_DB_PASSWORD".
+                   e.g., prefix ``"MYAPP_"`` maps secret ``"DB_PASSWORD"``
+                   to env var ``"MYAPP_DB_PASSWORD"``.
         """
         self._prefix = prefix
 

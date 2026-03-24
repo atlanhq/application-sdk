@@ -393,6 +393,6 @@ class TaskRegistry:
             task_name: The task name.
 
         Returns:
-            Activity name in format '{app_name}:{task_name}'.
+            Activity name in format ``{app_name}:{task_name}``.
         """
         return f"{app_name}:{task_name}"

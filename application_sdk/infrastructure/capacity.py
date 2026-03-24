@@ -129,7 +129,8 @@ def configure_capacity_pool(pool: CapacityPool) -> None:
     Args:
         pool: CapacityPool implementation (Redis-backed or local fallback).
 
-    Example:
+    Example::
+
         from application_sdk.infrastructure.capacity import (
             LocalCapacityPool, configure_capacity_pool,
         )

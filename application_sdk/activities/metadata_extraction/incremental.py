@@ -933,6 +933,7 @@ class IncrementalSQLMetadataExtractionActivities(BaseSQLMetadataExtractionActivi
 
             async for dataframe in raw_input:
                 if not is_empty_dataframe(dataframe):
+                    # TODO(signal-over-noise): [L6] INFO inside async for loop — consider DEBUG. See reference/logging-patterns.md#L6
                     logger.info("Processing dataframe: %s", typename)
 
                     transform_metadata = state.transformer.transform_metadata(

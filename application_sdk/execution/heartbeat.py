@@ -1,6 +1,7 @@
 """Heartbeat support for long-running tasks.
 
 Two modes of heartbeating are supported:
+
 1. Automatic (framework-managed): background task sends heartbeats at configured
    intervals — zero developer effort.
 2. Manual (developer-controlled): developer calls heartbeat() with progress info
@@ -164,7 +165,7 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
         **kwargs: Keyword arguments for func.
 
     Returns:
-        Result of func(*args, **kwargs).
+        Result of ``func(*args, **kwargs)``.
     """
     import concurrent.futures
 

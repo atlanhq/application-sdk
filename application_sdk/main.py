@@ -63,7 +63,8 @@ def _debug_dump_handler(signum: int, frame: object) -> None:  # noqa: ARG001
     print(f"Debug dump written to {dump_path}", file=sys.stderr, flush=True)
 
 
-signal.signal(signal.SIGUSR1, _debug_dump_handler)
+if hasattr(signal, "SIGUSR1"):
+    signal.signal(signal.SIGUSR1, _debug_dump_handler)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -152,7 +153,12 @@ class AppConfig:
 
         mode = args.mode or _env("ATLAN_APP_MODE")
         if not mode:
-            raise ValueError("Mode is required. Use --mode or set ATLAN_APP_MODE.")
+            # Fall back to APPLICATION_MODE with value mapping for backwards-compat.
+            # WORKER→worker, SERVER→handler, anything else (LOCAL, unset)→combined
+            _legacy_mode = _env("APPLICATION_MODE").upper()
+            mode = {"WORKER": "worker", "SERVER": "handler"}.get(
+                _legacy_mode, "combined"
+            )
 
         app_module = args.app or _env("ATLAN_APP_MODULE")
         if not app_module:

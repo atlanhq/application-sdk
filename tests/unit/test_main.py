@@ -83,12 +83,51 @@ class TestAppConfigFromArgsAndEnv:
         config = AppConfig.from_args_and_env(args)
         assert config.app_module == "env_pkg:EnvApp"
 
-    def test_missing_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_legacy_application_mode_local_defaults_combined(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("ATLAN_APP_MODE", raising=False)
+        monkeypatch.setenv("APPLICATION_MODE", "LOCAL")
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
-        args = self._make_args(app="pkg:App")
-        with pytest.raises(ValueError, match="Mode is required"):
-            AppConfig.from_args_and_env(args)
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.mode == "combined"
+
+    def test_legacy_application_mode_worker(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_APP_MODE", raising=False)
+        monkeypatch.setenv("APPLICATION_MODE", "WORKER")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.mode == "worker"
+
+    def test_legacy_application_mode_server(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_APP_MODE", raising=False)
+        monkeypatch.setenv("APPLICATION_MODE", "SERVER")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.mode == "handler"
+
+    def test_legacy_application_mode_unset_defaults_combined(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_APP_MODE", raising=False)
+        monkeypatch.delenv("APPLICATION_MODE", raising=False)
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        # With neither var set the fallback resolves to "combined"
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.mode == "combined"
+
+    def test_atlan_app_mode_takes_precedence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODE", "handler")
+        monkeypatch.setenv("APPLICATION_MODE", "WORKER")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.mode == "handler"
 
     def test_missing_app_module_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ATLAN_APP_MODULE", raising=False)
