@@ -1,10 +1,16 @@
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Type
 
+from typing_extensions import deprecated
+
 from application_sdk.application import BaseApplication
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    DEPLOYMENT_NAME,
+    MAX_CONCURRENT_ACTIVITIES,
+)
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.observability.decorators.observability_decorator import (
     observability,
@@ -13,6 +19,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
+from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
@@ -39,7 +46,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         name: str,
         client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[BaseSQLHandler]] = None,
-        transformer_class: Optional[Type[QueryBasedTransformer]] = None,
+        transformer_class: Optional[Type[TransformerInterface]] = None,
         server: Optional[APIServer] = None,
     ):
         """
@@ -66,6 +73,78 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         self.workflow_client = get_workflow_client(
             application_name=self.application_name
         )
+
+    @staticmethod
+    def _task_queue(app_name: str) -> str:
+        return f"atlan-{app_name}-{DEPLOYMENT_NAME}" if DEPLOYMENT_NAME else app_name
+
+    def get_manifest(self) -> Optional[Dict[str, Any]]:
+        """Return the manifest for SQL extraction apps.
+
+        Priority:
+        1. contract/generated/manifest.json (if exists)
+        2. Default hardcoded extract + publish DAG
+        3. None (if no workflow class set)
+        """
+        # Check contract-generated manifest first
+        contract_manifest = super().get_manifest()
+        if contract_manifest is not None:
+            return contract_manifest
+
+        workflow_class = getattr(self, "_primary_workflow_class", None)
+        if workflow_class is None:
+            return None
+
+        extract_node_id = "extract"
+        return {
+            "execution_mode": "automation-engine",
+            "dag": {
+                extract_node_id: {
+                    "activity_name": "execute_workflow",
+                    "activity_display_name": f"Extract {APPLICATION_NAME.title()} Metadata",
+                    "app_name": "automation-engine",
+                    "inputs": {
+                        "workflow_type": workflow_class.__name__,
+                        "task_queue": self._task_queue(APPLICATION_NAME),
+                        "args": {
+                            "credential_guid": "{{credential-guid}}",
+                            "credential": "{{credential}}",
+                            "connection": "{{connection}}",
+                            "metadata": {
+                                "extraction-method": "{{extraction-method}}",
+                                "include-filter": "{{include-filter}}",
+                                "exclude-filter": "{{exclude-filter}}",
+                                "temp-table-regex": "{{temp-table-regex}}",
+                                "advanced-config": "{{advanced-config}}",
+                                "control-config-strategy": "{{control-config-strategy}}",
+                                "control-config": "{{control-config}}",
+                                "use-source-schema-filtering": "{{use-source-schema-filtering}}",
+                                "use-jdbc-internal-methods": "{{use-jdbc-internal-methods}}",
+                            },
+                        },
+                    },
+                },
+                "publish": {
+                    "activity_name": "execute_workflow",
+                    "activity_display_name": "Publish to Atlas",
+                    "app_name": "automation-engine",
+                    "inputs": {
+                        "workflow_type": "PublishWorkflow",
+                        "task_queue": self._task_queue("publish"),
+                        "args": {
+                            "connection_qualified_name": f"$.{extract_node_id}.outputs.connection_qualified_name",
+                            "transformed_data_prefix": f"$.{extract_node_id}.outputs.transformed_data_prefix",
+                            "publish_state_prefix": f"$.{extract_node_id}.outputs.publish_state_prefix",
+                            "current_state_prefix": f"$.{extract_node_id}.outputs.current_state_prefix",
+                            "connection_creation_enabled": True,
+                            "executor_enabled": True,
+                            "connection_entity": "{{connection}}",
+                        },
+                    },
+                    "depends_on": {"node_id": extract_node_id},
+                },
+            },
+        }
 
     @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_workflow(
@@ -147,7 +226,32 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         return workflow_response
 
     @observability(logger=logger, metrics=metrics, traces=traces)
+    async def start(
+        self,
+        workflow_class: Type = BaseSQLMetadataExtractionWorkflow,
+        ui_enabled: bool = True,
+        has_configmap: bool = False,
+    ):
+        """Start the SQL metadata extraction application.
+
+        Args:
+            workflow_class: The workflow class to register. Defaults to BaseSQLMetadataExtractionWorkflow.
+            ui_enabled: Whether to enable the UI. Defaults to True.
+            has_configmap: Whether the application has a configmap. Defaults to False.
+        """
+        await super().start(
+            workflow_class=workflow_class,
+            ui_enabled=ui_enabled,
+            has_configmap=has_configmap,
+        )
+
+    @deprecated("Use application.start(). Deprecated since v2.3.0.")
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def start_worker(self, daemon: bool = True):
+        return await self._start_worker(daemon=daemon)
+
+    @observability(logger=logger, metrics=metrics, traces=traces)
+    async def _start_worker(self, daemon: bool = True):
         """
         Start the worker for the SQL metadata extraction application.
         """
@@ -155,12 +259,27 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             raise ValueError("Worker not initialized")
         await self.worker.start(daemon=daemon)
 
+    @deprecated("Use application.start(). Deprecated since v2.3.0.")
     @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_server(
+        self,
+        workflow_class: Type = BaseSQLMetadataExtractionWorkflow,
+        ui_enabled: bool = True,
+        has_configmap: bool = False,
+    ):
+        return await self._setup_server(
+            workflow_class=workflow_class,
+            ui_enabled=ui_enabled,
+            has_configmap=has_configmap,
+        )
+
+    @observability(logger=logger, metrics=metrics, traces=traces)
+    async def _setup_server(
         self,
         workflow_class: Type[
             BaseSQLMetadataExtractionWorkflow
         ] = BaseSQLMetadataExtractionWorkflow,
+        ui_enabled: bool = True,
         has_configmap: bool = False,
     ) -> Any:
         """
@@ -168,6 +287,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
 
         Args:
             workflow_class (Type): Workflow class to register with the server. Defaults to BaseSQLMetadataExtractionWorkflow.
+            ui_enabled (bool): Whether to enable the UI. Defaults to True.
             has_configmap (bool): Whether the application has a configmap. Defaults to False.
 
         Returns:
@@ -176,11 +296,16 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         if self.workflow_client is None:
             await self.workflow_client.load()
 
+        # Store for use by get_manifest()
+        self._primary_workflow_class = workflow_class
+
         # setup application server. serves the UI, and handles the various triggers
         self.server = APIServer(
             handler=self.handler_class(sql_client=self.client_class()),
             workflow_client=self.workflow_client,
+            ui_enabled=ui_enabled,
             has_configmap=has_configmap,
+            manifest=self.get_manifest(),
         )
 
         # register the workflow on the application server

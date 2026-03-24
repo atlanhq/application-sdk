@@ -16,7 +16,7 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
-from application_sdk.constants import APPLICATION_NAME, ENABLE_ATLAN_UPLOAD
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
@@ -183,7 +183,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         return batches, chunk_start_numbers
 
     @workflow.run
-    async def run(self, workflow_config: Dict[str, Any]) -> None:
+    async def run(self, workflow_config: Dict[str, Any]) -> Dict[str, Any]:
         """Run the SQL metadata extraction workflow.
 
         This method orchestrates the entire metadata extraction process, including:
@@ -235,6 +235,26 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             await asyncio.gather(*fetch_and_transforms)
             logger.info(f"Extraction workflow completed for {workflow_id}")
             workflow_success = True
+
+            # Build output paths for AE downstream nodes (e.g. publish app)
+            # AE parent workflow references these via JSONPath: $.extract.outputs.*
+            output_path = workflow_args.get("output_path", "")
+            output_prefix = workflow_args.get("output_prefix", "")
+            # Strip local filesystem prefix to get object store path
+            if output_prefix and output_path.startswith(output_prefix):
+                transformed_prefix = (
+                    output_path[len(output_prefix) :].strip("/") + "/transformed"
+                )
+            else:
+                transformed_prefix = output_path + "/transformed"
+            connection = workflow_args.get("connection", {})
+            connection_qn = connection.get("connection_qualified_name", "")
+            return {
+                "transformed_data_prefix": transformed_prefix,
+                "connection_qualified_name": connection_qn,
+                "publish_state_prefix": f"persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}/publish-state",
+                "current_state_prefix": f"argo-artifacts/{connection_qn}/current-state",
+            }
         except Exception as e:
             logger.error(f"Workflow failed for {workflow_id}: {str(e)}")
             workflow_success = False
@@ -255,24 +275,6 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 description="Total execution time of SQL metadata extraction workflow in seconds",
                 unit="s",
             )
-
-    async def run_exit_activities(self, workflow_args: Dict[str, Any]) -> None:
-        """Run the exit activity for the workflow."""
-        retry_policy = RetryPolicy(
-            maximum_attempts=6,
-            backoff_coefficient=2,
-        )
-        if ENABLE_ATLAN_UPLOAD:
-            workflow_args["typename"] = "atlan-upload"
-            await workflow.execute_activity_method(
-                self.activities_cls.upload_to_atlan,
-                args=[workflow_args],
-                retry_policy=retry_policy,
-                start_to_close_timeout=self.default_start_to_close_timeout,
-                heartbeat_timeout=self.default_heartbeat_timeout,
-            )
-        else:
-            logger.info("Atlan upload skipped for workflow (disabled)")
 
     def get_fetch_functions(
         self,

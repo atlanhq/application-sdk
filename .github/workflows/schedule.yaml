@@ -27,5 +27,5 @@ jobs:
     name: Trivy Code Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: "./.github/actions/trivy"

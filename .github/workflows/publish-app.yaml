@@ -1,0 +1,129 @@
+# Reusable publish workflow for Atlan first-party app repos.
+#
+# Uses the `atlan` CLI to build the image and register the version in the
+# Global Marketplace. Draft/active status is determined by GM based on
+# the target channel and caller's tenant.
+#
+# The CLI handles:
+#   - Reading atlan.yaml for app name and config
+#   - Resolving git ref and SHA, computing image tag
+#   - Triggering/watching the build workflow (build-image.yaml)
+#   - Registering the version + creating a release in the marketplace
+#
+# Usage in each app repo (.github/workflows/publish.yaml):
+#
+#   jobs:
+#     publish:
+#       uses: atlanhq/application-sdk/.github/workflows/publish-app.yaml@main
+#       with:
+#         ref: ${{ inputs.ref || github.ref }}
+#         channel: ${{ inputs.channel }}
+#         tenants: ${{ inputs.tenants || '' }}
+#       secrets: inherit
+#
+name: Publish Atlan App
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Branch or SHA to checkout, build, and publish (default: caller's ref)"
+        required: false
+        type: string
+      channel:
+        description: "Target channel (e.g. 'all' for draft release requiring approval). Ignored when tenants is set."
+        required: false
+        type: string
+        default: "all"
+      tenants:
+        description: "Comma-separated tenant IDs for targeted publish. Takes precedence over channel."
+        required: false
+        type: string
+        default: ""
+      base_url:
+        description: "Marketplace API base URL (Heracles gateway)"
+        required: false
+        type: string
+        default: "https://home.atlan.com"
+      cli_version:
+        description: "Atlan CLI version to install"
+        required: false
+        type: string
+        default: "v0.1.10"
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
+        description: "Org-level PAT for GHCR login and gh CLI auth"
+      APP_PUBLISH_TOKEN:
+        required: true
+        description: "API token for marketplace publish"
+
+permissions:
+  contents: read
+  packages: write
+  actions: write
+
+jobs:
+  publish:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install Atlan CLI
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ inputs.cli_version }}"
+          REPO="atlanhq/atlan-cli-releases"
+          PATTERN="*Linux_amd64.tar.gz"
+
+          if [ "$VERSION" = "latest" ]; then
+            gh release download --repo "$REPO" --pattern "$PATTERN" --output atlan-cli.tar.gz
+          else
+            gh release download "$VERSION" --repo "$REPO" --pattern "$PATTERN" --output atlan-cli.tar.gz
+          fi
+
+          tar -xzf atlan-cli.tar.gz
+          chmod +x atlan
+          sudo mv atlan /usr/local/bin/atlan
+          atlan --version
+
+      - name: Configure Atlan CLI
+        env:
+          APP_PUBLISH_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN }}
+        run: |
+          atlan config set atlan_base_url "${{ inputs.base_url }}"
+          atlan config set atlan_api_key "$APP_PUBLISH_TOKEN"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          CHANNEL: ${{ inputs.channel }}
+          TENANTS: ${{ inputs.tenants }}
+          REF: ${{ inputs.ref || github.ref }}
+        run: |
+          set -euo pipefail
+
+          ARGS=()
+
+          if [ -n "$REF" ]; then
+            ARGS+=(--ref "$REF")
+          fi
+
+          # Tenants takes precedence over channel
+          if [ -n "$TENANTS" ]; then
+            ARGS+=(--tenants "$TENANTS")
+          elif [ -n "$CHANNEL" ]; then
+            ARGS+=(--channel "$CHANNEL")
+          fi
+
+          echo "Running: atlan app publish ${ARGS[*]}"
+          atlan app publish "${ARGS[@]}"

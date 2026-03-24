@@ -15,7 +15,13 @@ class MockHandler(HandlerInterface):
 
     async def preflight_check(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Mock preflight check."""
-        return {"status": "success"}
+        return {
+            "testCheck": {
+                "success": True,
+                "successMessage": "Test check passed",
+                "failureMessage": "",
+            }
+        }
 
     async def fetch_metadata(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Mock fetch metadata."""
@@ -238,15 +244,16 @@ class TestActivitiesInterfaceActivities:
         mock_build_output_path,
         mock_activities,
     ):
-        """Test get_workflow_args when extraction fails."""
+        """Test get_workflow_args when statestore fails — SDK logs warning and returns defaults."""
         workflow_config = {"workflow_id": "test-123"}
         mock_get_state.side_effect = Exception("Extraction failed")
         mock_get_workflow_id.return_value = "test-123"
         mock_get_workflow_run_id.return_value = "run-456"
         mock_build_output_path.return_value = "test/output/path"
 
-        with pytest.raises(Exception, match="Extraction failed"):
-            await mock_activities.get_workflow_args(workflow_config)
+        result = await mock_activities.get_workflow_args(workflow_config)
+        assert isinstance(result, dict)
+        assert result["workflow_id"] == "test-123"
 
     async def test_preflight_check_success(self, mock_activities):
         """Test successful preflight_check activity."""
@@ -259,7 +266,13 @@ class TestActivitiesInterfaceActivities:
 
         result = await mock_activities.preflight_check(workflow_args)
 
-        assert result == {"status": "success"}
+        assert result == {
+            "testCheck": {
+                "success": True,
+                "successMessage": "Test check passed",
+                "failureMessage": "",
+            }
+        }
 
     async def test_preflight_check_no_handler(self, mock_activities):
         """Test preflight_check when handler is not found."""
@@ -278,7 +291,13 @@ class TestActivitiesInterfaceActivities:
 
         mock_handler = MockHandler()
         mock_handler.preflight_check = AsyncMock(
-            return_value={"error": "Handler failed"}
+            return_value={
+                "testCheck": {
+                    "success": False,
+                    "successMessage": "",
+                    "failureMessage": "Handler failed",
+                }
+            }
         )
         state.handler = mock_handler
 

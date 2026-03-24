@@ -9,10 +9,9 @@ from hypothesis import strategies as st
 
 from application_sdk.observability.metrics_adaptor import (
     AtlanMetricsAdapter,
-    MetricRecord,
-    MetricType,
     get_metrics,
 )
+from application_sdk.observability.models import MetricRecord, MetricType
 
 
 @pytest.fixture
@@ -300,3 +299,105 @@ def test_get_metrics():
     metrics2 = get_metrics()
     assert metrics1 is metrics2
     assert isinstance(metrics1, AtlanMetricsAdapter)
+
+
+def test_export_record_with_segment_write_key():
+    """Test export_record() sends to Segment when write key is present.
+
+    Segment is automatically enabled when ATLAN_SEGMENT_WRITE_KEY is set.
+    """
+    with mock.patch.dict(
+        "os.environ",
+        {
+            "ATLAN_SEGMENT_WRITE_KEY": "test_key",
+            "ATLAN_SEGMENT_API_URL": "https://api.segment.io/v1/batch",
+            "METRICS_BATCH_SIZE": "100",
+            "METRICS_FLUSH_INTERVAL_SECONDS": "1",
+            "METRICS_RETENTION_DAYS": "7",
+            "METRICS_CLEANUP_ENABLED": "true",
+            "METRICS_FILE_NAME": "metrics.parquet",
+        },
+    ):
+        with mock.patch("opentelemetry.metrics.set_meter_provider"):
+            with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
+                with mock.patch(
+                    "application_sdk.observability.metrics_adaptor.SegmentClient"
+                ) as mock_segment_client_class:
+                    mock_segment_client = mock.MagicMock()
+                    mock_segment_client_class.return_value = mock_segment_client
+
+                    adapter = AtlanMetricsAdapter()
+
+                    record = MetricRecord(
+                        timestamp=datetime.now().timestamp(),
+                        name="test_metric",
+                        value=42.0,
+                        type=MetricType.COUNTER,
+                        labels={"test": "label"},
+                        description="Test metric",
+                        unit="count",
+                    )
+                    with mock.patch.object(
+                        adapter.segment_client, "send_metric"
+                    ) as mock_send:
+                        with mock.patch.object(adapter, "_log_to_console") as mock_log:
+                            adapter.export_record(record)
+                            mock_send.assert_called_once_with(record)
+                            mock_log.assert_called_once_with(record)
+
+
+def test_export_record_without_segment_write_key():
+    """Test export_record() when Segment write key is not set.
+
+    When no write key is provided, the Segment client is disabled but
+    send_metric is still called (the client handles the no-op internally).
+    """
+    with create_metrics_adapter() as metrics_adapter:
+        with mock.patch.object(
+            metrics_adapter.segment_client, "send_metric"
+        ) as mock_send:
+            with mock.patch.object(metrics_adapter, "_log_to_console") as mock_log:
+                record = MetricRecord(
+                    timestamp=datetime.now().timestamp(),
+                    name="test_metric",
+                    value=42.0,
+                    type=MetricType.COUNTER,
+                    labels={"test": "label"},
+                    description="Test metric",
+                    unit="count",
+                )
+                metrics_adapter.export_record(record)
+                mock_send.assert_called_once_with(record)
+                mock_log.assert_called_once_with(record)
+
+
+def test_segment_client_disabled_without_write_key():
+    """Test SegmentClient is disabled when write key is not provided.
+
+    The presence of the write key determines whether the client is enabled.
+    No separate boolean flag is needed.
+    """
+    with mock.patch.dict(
+        "os.environ",
+        {
+            "ATLAN_SEGMENT_WRITE_KEY": "",
+            "METRICS_BATCH_SIZE": "100",
+            "METRICS_FLUSH_INTERVAL_SECONDS": "1",
+            "METRICS_RETENTION_DAYS": "7",
+            "METRICS_CLEANUP_ENABLED": "true",
+            "METRICS_FILE_NAME": "metrics.parquet",
+        },
+    ):
+        with mock.patch("opentelemetry.metrics.set_meter_provider"):
+            with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
+                with mock.patch(
+                    "application_sdk.constants.SEGMENT_WRITE_KEY",
+                    "",
+                ):
+                    with mock.patch(
+                        "application_sdk.observability.segment_client.SEGMENT_WRITE_KEY",
+                        "",
+                    ):
+                        adapter = AtlanMetricsAdapter()
+                        assert adapter.segment_client is not None
+                        assert adapter.segment_client.enabled is False

@@ -1,3 +1,5 @@
+import sys
+import warnings
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Dict, Generator
@@ -8,7 +10,11 @@ from hypothesis import given
 from hypothesis import strategies as st
 from loguru import logger
 
-from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
+from application_sdk.observability.logger_adaptor import (
+    AtlanLoggerAdapter,
+    LogRecordModel,
+    get_logger,
+)
 from application_sdk.test_utils.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
@@ -43,6 +49,8 @@ def create_logger_adapter() -> Generator[AtlanLoggerAdapter, None, None]:
     Yields:
         AtlanLoggerAdapter: A configured logger adapter instance.
     """
+    # Reset initialization flag to allow fresh sink setup for each test
+    AtlanLoggerAdapter._reset_for_testing()
     with mock.patch.dict(
         "os.environ",
         {
@@ -382,6 +390,24 @@ class TestCorrelationContext:
                 assert kwargs["trace_id"] == self.TRACE_ID
                 assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
 
+    def test_process_extracts_correlation_id_from_correlation_context(self):
+        """Test process() extracts correlation_id from correlation context."""
+        with create_logger_adapter() as logger_adapter:
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.correlation_context"
+            ) as mock_corr_context:
+                mock_corr_context.get.return_value = {
+                    "trace_id": self.TRACE_ID,
+                    "correlation_id": "app-workflow-run-guid-abc",
+                    self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
+                }
+
+                msg, kwargs = logger_adapter.process("Test message", {})
+
+                assert kwargs["trace_id"] == self.TRACE_ID
+                assert kwargs["correlation_id"] == "app-workflow-run-guid-abc"
+                assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
+
     def test_process_without_trace_id(self):
         """Test process() when trace_id is not in correlation context."""
         with create_logger_adapter() as logger_adapter:
@@ -395,6 +421,7 @@ class TestCorrelationContext:
                 msg, kwargs = logger_adapter.process("Test message", {})
 
                 assert "trace_id" not in kwargs
+                assert "correlation_id" not in kwargs
                 assert kwargs[self.WORKFLOW_NAME_HEADER] == self.WORKFLOW_NAME
 
     def test_process_handles_none_correlation_context(self):
@@ -565,3 +592,386 @@ class TestCorrelationContextIntegration:
                     assert kwargs["workflow_id"] == self.WORKFLOW_ID
                     assert self.WORKFLOW_NAME_HEADER in kwargs
                     assert self.WORKFLOW_NODE_HEADER in kwargs
+
+
+def test_warning_inlines_exc_info_in_message(logger_adapter: AtlanLoggerAdapter):
+    """warning() should pass exc_info to loguru via opt(exception=...)."""
+    exc_info = (RuntimeError, RuntimeError("boom"), None)
+    mock_loguru = mock.MagicMock()
+    mock_opt = mock.MagicMock()
+    mock_bound = mock.MagicMock()
+    mock_loguru.bind.return_value = mock_bound
+    mock_bound.opt.return_value = mock_opt
+
+    logger_adapter.logger = mock_loguru
+
+    with mock.patch.object(
+        logger_adapter,
+        "process",
+        return_value=("Processed warning message", {"logger_name": "test_logger"}),
+    ):
+        logger_adapter.warning("Original warning message", exc_info=exc_info)
+
+    mock_loguru.bind.assert_called_once_with(logger_name="test_logger")
+    mock_bound.opt.assert_called_once_with(exception=exc_info)
+    mock_opt.warning.assert_called_once_with("Processed warning message")
+
+
+def test_exception_defaults_exc_info_true(logger_adapter: AtlanLoggerAdapter):
+    """exception() should behave like logging.Logger.exception()."""
+    with mock.patch.object(logger_adapter, "error") as mock_error:
+        logger_adapter.exception("Something failed")
+
+    mock_error.assert_called_once_with("Something failed", exc_info=True)
+
+
+def test_exception_keeps_explicit_exc_info(logger_adapter: AtlanLoggerAdapter):
+    """exception() should not override caller-provided exc_info."""
+    with mock.patch.object(logger_adapter, "error") as mock_error:
+        logger_adapter.exception("Something failed", exc_info=False)
+
+    mock_error.assert_called_once_with("Something failed", exc_info=False)
+
+
+def test_warning_with_exc_info_emits_traceback(capsys: pytest.CaptureFixture[str]):
+    """warning(..., exc_info=True) should render traceback in stderr output."""
+    with create_logger_adapter() as logger_adapter:
+        try:
+            raise ValueError("traceback-check")
+        except ValueError:
+            logger_adapter.warning("Completing activity as failed", exc_info=True)
+
+    stderr = capsys.readouterr().err
+    assert "Completing activity as failed" in stderr
+    assert "Traceback (most recent call last):" in stderr
+    assert "ValueError: traceback-check" in stderr
+
+
+def test_log_record_model_extracts_exception_attrs_from_loguru_record():
+    """Structured exception attributes should come from record['exception']."""
+    try:
+        raise ValueError("traceback-check")
+    except ValueError:
+        exc_type, exc_value, exc_tb = sys.exc_info()
+
+    test_message = mock.MagicMock()
+    level_mock = mock.MagicMock()
+    level_mock.name = "WARNING"
+    test_message.record = {
+        "time": datetime.now(),
+        "level": level_mock,
+        "extra": {"logger_name": "test_logger"},
+        "message": "Completing activity as failed",
+        "file": mock.MagicMock(path="worker.py"),
+        "line": 10,
+        "function": "run",
+        "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
+    }
+
+    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    assert model["message"] == "Completing activity as failed"
+    assert "Traceback" not in model["message"]
+    assert model["extra"]["exception.type"] == "builtins.ValueError"
+    assert model["extra"]["exception.message"] == "traceback-check"
+    assert (
+        "Traceback (most recent call last):" in model["extra"]["exception.stacktrace"]
+    )
+
+
+@pytest.mark.parametrize("attempt_value", ["1", 1])
+def test_log_record_model_serializes_attempt_without_warning(attempt_value):
+    """Attempt values should normalize to the canonical string form."""
+    test_message = mock.MagicMock()
+    level_mock = mock.MagicMock()
+    level_mock.name = "INFO"
+    test_message.record = {
+        "time": datetime.now(),
+        "level": level_mock,
+        "extra": {"logger_name": "test_logger", "attempt": attempt_value},
+        "message": "heartbeat",
+        "file": mock.MagicMock(path="worker.py"),
+        "line": 10,
+        "function": "run",
+        "exception": None,
+    }
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        model = LogRecordModel.from_loguru_message(test_message).model_dump()
+
+    assert model["extra"]["attempt"] == "1"
+    assert caught == []
+
+
+def test_log_record_model_extracts_nested_exception_type():
+    """Nested exception types should use module.qualname."""
+
+    class OuterError(Exception):
+        class InnerError(Exception):
+            pass
+
+    try:
+        raise OuterError.InnerError("nested-boom")
+    except OuterError.InnerError:
+        exc_type, exc_value, exc_tb = sys.exc_info()
+
+    test_message = mock.MagicMock()
+    level_mock = mock.MagicMock()
+    level_mock.name = "ERROR"
+    test_message.record = {
+        "time": datetime.now(),
+        "level": level_mock,
+        "extra": {"logger_name": "test_logger"},
+        "message": "failed",
+        "file": mock.MagicMock(path="worker.py"),
+        "line": 11,
+        "function": "run",
+        "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
+    }
+
+    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    assert model["message"] == "failed"
+    assert "Traceback" not in model["message"]
+    assert model["extra"]["exception.type"].endswith(".OuterError.InnerError")
+    assert model["extra"]["exception.message"] == "nested-boom"
+    assert (
+        "Traceback (most recent call last):" in model["extra"]["exception.stacktrace"]
+    )
+
+
+def test_otel_stacktrace_in_attributes_not_body_from_loguru_record(
+    logger_adapter: AtlanLoggerAdapter,
+):
+    """OTEL stacktrace should be in attributes only, not appended to body."""
+    try:
+        raise RuntimeError("otlp-body-check")
+    except RuntimeError:
+        exc_type, exc_value, exc_tb = sys.exc_info()
+
+    test_message = mock.MagicMock()
+    level_mock = mock.MagicMock()
+    level_mock.name = "ERROR"
+    test_message.record = {
+        "time": datetime.now(),
+        "level": level_mock,
+        "extra": {"logger_name": "test_logger"},
+        "message": "Query failed",
+        "file": mock.MagicMock(path="worker.py"),
+        "line": 12,
+        "function": "run",
+        "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
+    }
+
+    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    otel_record = logger_adapter._create_log_record(model)
+
+    assert otel_record.body == "Query failed"
+    assert "Traceback" not in otel_record.body
+    assert "exception.stacktrace" in otel_record.attributes
+    assert (
+        "RuntimeError: otlp-body-check"
+        in otel_record.attributes["exception.stacktrace"]
+    )
+
+
+def test_create_log_record_uses_structured_exception_attributes(
+    logger_adapter: AtlanLoggerAdapter,
+):
+    """OTEL log record should preserve structured exception attributes from extra."""
+    record = {
+        "timestamp": 1739971200.0,
+        "level": "WARNING",
+        "message": "Completing activity as failed\\nTraceback ...",
+        "file": "worker.py",
+        "line": 10,
+        "function": "run",
+        "extra": {
+            "exception.type": "ValueError",
+            "exception.message": "traceback-check",
+            "exception.stacktrace": "Traceback (most recent call last):\n...",
+        },
+    }
+
+    otel_record = logger_adapter._create_log_record(record)
+    assert otel_record.body == record["message"]
+    assert otel_record.attributes["exception.type"] == "ValueError"
+    assert otel_record.attributes["exception.message"] == "traceback-check"
+    assert (
+        "Traceback (most recent call last):"
+        in otel_record.attributes["exception.stacktrace"]
+    )
+
+
+def test_create_log_record_does_not_parse_exception_from_message(
+    logger_adapter: AtlanLoggerAdapter,
+):
+    """OTEL exception attributes should come from structured extra, not body parsing."""
+    record = {
+        "timestamp": 1739971200.0,
+        "level": "WARNING",
+        "message": (
+            "Completing activity as failed\\nTraceback (most recent call last):\\n"
+            "ValueError: traceback-check"
+        ),
+        "file": "worker.py",
+        "line": 10,
+        "function": "run",
+        "extra": {},
+    }
+
+    otel_record = logger_adapter._create_log_record(record)
+    assert "exception.type" not in otel_record.attributes
+    assert "exception.message" not in otel_record.attributes
+    assert "exception.stacktrace" not in otel_record.attributes
+
+
+class TestTemporalAttributePassthrough:
+    """Tests for temporal.* and tenant.* attribute passthrough to OTEL."""
+
+    def test_temporal_attributes_pass_through_to_otel(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        """temporal.* prefixed attributes should pass through to OTEL log record."""
+        record = {
+            "timestamp": 1739971200.0,
+            "level": "ERROR",
+            "message": "Temporal activity failed",
+            "file": "interceptor.py",
+            "line": 50,
+            "function": "execute_activity",
+            "extra": {
+                "temporal.activity.type": "fetch_metadata",
+                "temporal.activity.attempt": 3,
+                "temporal.workflow.id": "sync-abc-123",
+                "temporal.workflow.run_id": "run-def-456",
+                "temporal.workflow.type": "SyncWorkflow",
+                "temporal.activity.task_queue": "test-queue",
+                "temporal.activity.schedule_to_close_timeout": "0:05:00",
+                "temporal.activity.start_to_close_timeout": "0:05:00",
+                "temporal.activity.heartbeat_timeout": "0:00:30",
+            },
+        }
+
+        otel_record = logger_adapter._create_log_record(record)
+
+        assert otel_record.attributes["temporal.activity.type"] == "fetch_metadata"
+        assert otel_record.attributes["temporal.activity.attempt"] == 3
+        assert otel_record.attributes["temporal.workflow.id"] == "sync-abc-123"
+        assert otel_record.attributes["temporal.workflow.run_id"] == "run-def-456"
+        assert otel_record.attributes["temporal.workflow.type"] == "SyncWorkflow"
+        assert otel_record.attributes["temporal.activity.task_queue"] == "test-queue"
+        assert (
+            otel_record.attributes["temporal.activity.schedule_to_close_timeout"]
+            == "0:05:00"
+        )
+        assert (
+            otel_record.attributes["temporal.activity.start_to_close_timeout"]
+            == "0:05:00"
+        )
+        assert (
+            otel_record.attributes["temporal.activity.heartbeat_timeout"] == "0:00:30"
+        )
+
+    def test_tenant_attributes_pass_through_to_otel(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        """tenant.* prefixed attributes should pass through to OTEL log record."""
+        record = {
+            "timestamp": 1739971200.0,
+            "level": "ERROR",
+            "message": "Temporal activity failed",
+            "file": "interceptor.py",
+            "line": 50,
+            "function": "execute_activity",
+            "extra": {
+                "tenant.id": "acme-corp",
+            },
+        }
+
+        otel_record = logger_adapter._create_log_record(record)
+
+        assert otel_record.attributes["tenant.id"] == "acme-corp"
+
+    def test_temporal_and_tenant_combined_with_exception(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        """temporal.*, tenant.*, and exception.* attributes should all pass through."""
+        record = {
+            "timestamp": 1739971200.0,
+            "level": "ERROR",
+            "message": "Temporal activity failed",
+            "file": "interceptor.py",
+            "line": 50,
+            "function": "execute_activity",
+            "extra": {
+                "temporal.activity.type": "fetch_metadata",
+                "temporal.activity.attempt": 2,
+                "tenant.id": "acme-corp",
+                "exception.type": "ConnectionRefusedError",
+                "exception.message": "Connection refused",
+                "exception.stacktrace": "Traceback (most recent call last):\n...",
+            },
+        }
+
+        otel_record = logger_adapter._create_log_record(record)
+
+        # Temporal attributes
+        assert otel_record.attributes["temporal.activity.type"] == "fetch_metadata"
+        assert otel_record.attributes["temporal.activity.attempt"] == 2
+        # Tenant attributes
+        assert otel_record.attributes["tenant.id"] == "acme-corp"
+        # Exception attributes
+        assert otel_record.attributes["exception.type"] == "ConnectionRefusedError"
+        assert otel_record.attributes["exception.message"] == "Connection refused"
+        assert "Traceback" in otel_record.attributes["exception.stacktrace"]
+
+    def test_log_record_model_extracts_temporal_attributes_from_loguru(self):
+        """LogRecordModel should extract temporal.* attributes from loguru records."""
+        test_message = mock.MagicMock()
+        level_mock = mock.MagicMock()
+        level_mock.name = "ERROR"
+        test_message.record = {
+            "time": datetime.now(),
+            "level": level_mock,
+            "extra": {
+                "logger_name": "test_logger",
+                "temporal.activity.type": "fetch_databases",
+                "temporal.activity.attempt": 1,
+                "tenant.id": "test-tenant",
+            },
+            "message": "Temporal activity failed",
+            "file": mock.MagicMock(path="interceptor.py"),
+            "line": 50,
+            "function": "execute_activity",
+            "exception": None,
+        }
+
+        model = LogRecordModel.from_loguru_message(test_message).model_dump()
+
+        assert model["extra"]["temporal.activity.type"] == "fetch_databases"
+        assert model["extra"]["temporal.activity.attempt"] == 1  # Preserved as int
+        assert model["extra"]["tenant.id"] == "test-tenant"
+
+    def test_no_temporal_or_tenant_keys_baseline(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        """Logs without temporal/tenant keys should not have those attributes."""
+        record = {
+            "timestamp": 1739971200.0,
+            "level": "INFO",
+            "message": "Normal log message",
+            "file": "app.py",
+            "line": 10,
+            "function": "run",
+            "extra": {
+                "some_other_key": "value",
+            },
+        }
+
+        otel_record = logger_adapter._create_log_record(record)
+
+        # temporal.* and tenant.* should not be present
+        temporal_keys = [k for k in otel_record.attributes if k.startswith("temporal.")]
+        tenant_keys = [k for k in otel_record.attributes if k.startswith("tenant.")]
+        assert len(temporal_keys) == 0
+        assert len(tenant_keys) == 0

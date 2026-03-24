@@ -13,6 +13,7 @@ Example:
     ...         await state.handler.do_something()
 """
 
+import json
 import os
 from abc import ABC
 from datetime import datetime, timedelta
@@ -212,28 +213,56 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             from application_sdk.services.statestore import StateStore, StateType
 
             workflow_args = await StateStore.get_state(workflow_id, StateType.WORKFLOWS)
-            workflow_args["output_prefix"] = workflow_args.get(
-                "output_prefix", TEMPORARY_PATH
-            )
-            workflow_args["output_path"] = os.path.join(
-                workflow_args["output_prefix"], build_output_path()
-            )
-            workflow_args["workflow_id"] = workflow_id
-            workflow_args["workflow_run_id"] = get_workflow_run_id()
-
-            # Preserve atlan- prefixed keys from workflow_config for logging context
-            for key, value in workflow_config.items():
-                if key.startswith("atlan-") and value:
-                    workflow_args[key] = str(value)
-
-            return workflow_args
-
         except Exception as e:
-            logger.error(
-                f"Failed to retrieve workflow configuration for {workflow_id}: {str(e)}",
-                exc_info=e,
-            )
-            raise
+            logger.warning(f"StateStore lookup failed for {workflow_id}: {e}")
+            workflow_args = None
+
+        if not workflow_args:
+            # AE invocation path: args are passed directly in workflow_config
+            # (no state store round-trip needed)
+            workflow_args = dict(workflow_config)
+
+        # Normalize connection to canonical shape regardless of caller (AE, Argo, state-store)
+        # Handles three shapes:
+        #   AE path:   {attributes: {qualifiedName, name}, typeName: "Connection"}
+        #   Flat:      {qualifiedName, name}
+        #   SDK/state: {connection_qualified_name, connection_name} (already normalized)
+        connection = workflow_args.get("connection", {})
+        if isinstance(connection, str):
+            try:
+                connection = json.loads(connection)
+            except (json.JSONDecodeError, TypeError):
+                connection = {}
+        if isinstance(connection, dict) and connection:
+            attrs = connection.get("attributes", {}) or {}
+            workflow_args["connection"] = {
+                "connection_qualified_name": (
+                    attrs.get("qualifiedName")
+                    or connection.get("qualifiedName")
+                    or connection.get("connection_qualified_name")
+                ),
+                "connection_name": (
+                    attrs.get("name")
+                    or connection.get("name")
+                    or connection.get("connection_name")
+                ),
+            }
+
+        workflow_args["output_prefix"] = workflow_args.get(
+            "output_prefix", TEMPORARY_PATH
+        )
+        workflow_args["output_path"] = os.path.join(
+            workflow_args["output_prefix"], build_output_path()
+        )
+        workflow_args["workflow_id"] = workflow_id
+        workflow_args["workflow_run_id"] = get_workflow_run_id()
+
+        # Preserve atlan- prefixed keys from workflow_config for logging context
+        for key, value in workflow_config.items():
+            if key.startswith("atlan-") and value:
+                workflow_args[key] = str(value)
+
+        return workflow_args
 
     @activity.defn
     @auto_heartbeater
@@ -281,8 +310,35 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                 {"metadata": workflow_args["metadata"]}
             )
 
-            if not result or "error" in result:
-                raise ValueError("Preflight check failed")
+            # Guard against None or empty results
+            if not result:
+                raise ValueError("Preflight check failed: No results returned")
+
+            # Find all check entries (dicts with 'success' field)
+            check_entries = {
+                key: value
+                for key, value in result.items()
+                if isinstance(value, dict) and "success" in value
+            }
+
+            # Fail if no recognized check entries exist (pessimistic approach)
+            if not check_entries:
+                raise ValueError(
+                    "Preflight check failed: No recognized check results found"
+                )
+
+            # Check if any individual check failed
+            failed_checks = [
+                key for key, value in check_entries.items() if not value.get("success")
+            ]
+            if failed_checks:
+                failure_messages = [
+                    check_entries[key].get("failureMessage", "Unknown failure")
+                    for key in failed_checks
+                ]
+                raise ValueError(
+                    f"Preflight check failed: {'; '.join(failure_messages)}"
+                )
 
             logger.info("Preflight check completed successfully")
             return result

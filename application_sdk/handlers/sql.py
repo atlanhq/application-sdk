@@ -207,7 +207,6 @@ class BaseSQLHandler(HandlerInterface):
             logger.info("Preflight check completed successfully")
         except Exception as exc:
             logger.error(f"Error during preflight check {exc}", exc_info=True)
-            results["error"] = f"Preflight check failed: {str(exc)}"
         return results
 
     async def check_schemas_and_databases(
@@ -244,8 +243,7 @@ class BaseSQLHandler(HandlerInterface):
             return {
                 "success": False,
                 "successMessage": "",
-                "failureMessage": "Schemas and Databases check failed",
-                "error": str(exc),
+                "failureMessage": f"Schemas and Databases check failed: {str(exc)}",
             }
 
     def extract_allowed_schemas(
@@ -314,8 +312,7 @@ class BaseSQLHandler(HandlerInterface):
             return {
                 "success": False,
                 "successMessage": "",
-                "failureMessage": "Tables check failed",
-                "error": str(exc),
+                "failureMessage": f"Tables check failed: {str(exc)}",
             }
 
         if self.multidb:
@@ -445,6 +442,5 @@ class BaseSQLHandler(HandlerInterface):
             return {
                 "success": False,
                 "successMessage": "",
-                "failureMessage": "Client version check failed",
-                "error": str(exc),
+                "failureMessage": f"Client version check failed: {str(exc)}",
             }
