@@ -22,7 +22,7 @@ class AtlanApiToken(BearerTokenCredential, frozen=True):
     model_config = ConfigDict(frozen=True)
 
     base_url: str = ""
-    """URL of the Atlan instance (e.g. 'https://tenant.atlan.com')."""
+    """URL of the Atlan instance (e.g. ``https://tenant.atlan.com``)."""
 
     @property
     def credential_type(self) -> str:
@@ -65,7 +65,7 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
     model_config = ConfigDict(frozen=True)
 
     base_url: str = ""
-    """URL of the Atlan instance (e.g. 'https://tenant.atlan.com')."""
+    """URL of the Atlan instance (e.g. ``https://tenant.atlan.com``)."""
 
     @property
     def credential_type(self) -> str:
@@ -91,7 +91,8 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
         """Build the token request payload.
 
         Returns:
-            A ``(data_dict, use_json)`` tuple.
+            A ``(data_dict, use_json)`` tuple:
+
             - Keycloak endpoint: form-encoded (use_json=False)
             - Heracles endpoint: JSON with camelCase fields (use_json=True)
         """

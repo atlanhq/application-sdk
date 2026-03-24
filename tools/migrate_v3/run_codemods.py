@@ -287,7 +287,7 @@ def run_codemods(
             continue  # Nothing changed.
 
         try:
-            rel = str(path.relative_to(root.parent if root.is_file() else root))
+            rel = path.relative_to(root.parent if root.is_file() else root).as_posix()
         except ValueError:
             rel = path.name
 

@@ -215,7 +215,8 @@ class NonRetryableError(AppError):
 
     When raised in a workflow or activity, Temporal will NOT retry the operation.
 
-    Example:
+    Example::
+
         if not auth_result.success:
             raise NonRetryableError(
                 "Authentication failed: invalid API key",
@@ -381,7 +382,8 @@ class App(ABC):
 
     The run() method must be deterministic - use @task methods for side effects.
 
-    Example:
+    Example::
+
         class MyApp(App):
 
             @task
@@ -394,7 +396,8 @@ class App(ABC):
                 result = await self.fetch_data(FetchInput(url=input.url))
                 return MyOutput(data=result.data)
 
-    Override class attributes when needed:
+    Override class attributes when needed::
+
         class CsvPipeline(App):
             name = "csv-ingest-v2"  # Override derived name
             version = "2.0.0"       # Override default version
@@ -403,10 +406,11 @@ class App(ABC):
                 ...
 
     Name derivation from class name:
-        - Greeter -> greeter
-        - CsvPipeline -> csv-pipeline
-        - MyAwesomeApp -> my-awesome-app
-        - HTTPHandler -> http-handler
+
+    - ``Greeter`` → ``greeter``
+    - ``CsvPipeline`` → ``csv-pipeline``
+    - ``MyAwesomeApp`` → ``my-awesome-app``
+    - ``HTTPHandler`` → ``http-handler``
     """
 
     # Class-level configuration (override in subclasses)
@@ -624,7 +628,7 @@ class App(ABC):
             **kwargs: Keyword arguments for func.
 
         Returns:
-            Result of func(*args, **kwargs).
+            Result of ``func(*args, **kwargs)``.
 
         Raises:
             RuntimeError: If called outside a @task method.
@@ -1006,6 +1010,7 @@ class App(ABC):
         """Framework task: clean up local files after a workflow run.
 
         Removes two categories of local files:
+
         1. ``FileReference`` local paths tracked during the run (auto-materialised
            or persisted files, including their ``.sha256`` sidecars).
         2. Convention-based temp directories: ``input.extra_paths`` if provided,

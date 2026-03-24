@@ -24,6 +24,7 @@ sidecar is checked:
 * **Sidecar mismatch** — file is corrupt or partially written; re-download.
 
 This ensures that:
+
 1. A Temporal retry on a different worker (stale ``local_path``) always
    triggers a fresh download.
 2. A crash mid-download (partial file, no sidecar) is detected and recovered.
@@ -210,6 +211,7 @@ async def materialize_file_refs(store: "ObjectStore", data: Any) -> Any:
     """Download all durable FileReferences in *data* to local temp files.
 
     Handles:
+
     * Normal case: ``local_path`` is ``None`` → download + write sidecar.
     * Retry on different worker: ``local_path`` set but file gone → download.
     * Missing sidecar: file exists but no ``.sha256`` sidecar → validate

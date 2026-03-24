@@ -64,6 +64,7 @@ class BaseMetadataExtractor(App):
     """Base App for non-SQL metadata extraction connectors.
 
     Provides:
+
     - Class attributes for plugging in a client, handler, and transformer.
     - A concrete upload_to_atlan task that migrates output files from the
       deployment object store to the upstream (Atlan) object store.

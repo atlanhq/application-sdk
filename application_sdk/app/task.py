@@ -248,7 +248,8 @@ def task(
         For blocking operations (requests.get, file I/O, pandas operations),
         use self.task_context.run_in_thread() to keep heartbeats alive.
 
-    Example:
+    Example::
+
         @dataclass
         class FetchInput(Input):
             endpoint: str

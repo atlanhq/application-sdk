@@ -282,6 +282,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 new_marker = str(int(timestamp.timestamp() * 1000))
 
                 if last_marker == new_marker:
+                    # TODO(signal-over-noise): [L6] INFO inside loop over DB rows — consider DEBUG. See reference/logging-patterns.md#L6
                     logger.info("Skipping duplicate start time")
                     record_count += 1
                     continue

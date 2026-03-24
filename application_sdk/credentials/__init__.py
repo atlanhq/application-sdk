@@ -1,6 +1,6 @@
 """Typed credential system for the Application SDK.
 
-Public API:
+Public API::
 
     from application_sdk.credentials import (
         # Core ref

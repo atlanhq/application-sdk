@@ -405,7 +405,8 @@ class TaskExecutionContext:
     This context is only available inside @task methods, not in run().
     Access via self.task_context in your task methods.
 
-    Example:
+    Example::
+
         @task(timeout_seconds=3600)
         async def process_large_dataset(self, input: ProcessInput) -> ProcessOutput:
             # Resume from last heartbeat on retry
@@ -444,7 +445,8 @@ class TaskExecutionContext:
                 These are stored by Temporal and available via
                 get_last_heartbeat_details() if the activity is retried.
 
-        Example:
+        Example::
+
             for i, record in enumerate(records):
                 process(record)
                 if i % 100 == 0:
@@ -462,7 +464,8 @@ class TaskExecutionContext:
         Returns:
             Tuple of details from last heartbeat, or empty tuple if none.
 
-        Example:
+        Example::
+
             last = self.task_context.get_last_heartbeat_details()
             start_index = last[0] if last else 0
             for i, record in enumerate(records[start_index:], start=start_index):
@@ -490,7 +493,8 @@ class TaskExecutionContext:
             An instance of cls with values from the last heartbeat,
             or None if no heartbeat was recorded.
 
-        Example:
+        Example::
+
             last = self.task_context.get_heartbeat_details(LoadTypeHeartbeat)
             start_chunk = last.chunk_idx if last else 0
         """
@@ -526,9 +530,10 @@ class TaskExecutionContext:
             **kwargs: Keyword arguments for func.
 
         Returns:
-            Result of func(*args, **kwargs).
+            Result of ``func(*args, **kwargs)``.
 
-        Example:
+        Example::
+
             # Instead of: response = requests.get(url)  # BLOCKS!
             response = await self.task_context.run_in_thread(
                 requests.get, url, timeout=30
