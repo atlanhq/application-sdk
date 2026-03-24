@@ -16,8 +16,8 @@ RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser
 RUN mkdir -p /app /home/appuser/.local/bin && \
     chown -R appuser:appuser /app /home/appuser
 
-# Clean apk cache
-RUN rm -rf /var/cache/apk/*
+# Remove curl and bash (not needed at runtime) and clean apk cache
+RUN apk del curl bash && rm -rf /var/cache/apk/*
 
 # Switch to appuser before venv creation
 USER appuser
