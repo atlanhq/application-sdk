@@ -34,7 +34,7 @@ RelationalAssets App            Snowflake App
 │   POST /preflight             │   POST /preflight
 │   POST /metadata              │   POST /metadata
 │   GET /health                 │   GET /health
-└── (pipeline-handler:8080)     └── (snowflake-handler:8080)
+└── (pipeline-handler:8000)     └── (snowflake-handler:8000)
 ```
 
 **Pros:**

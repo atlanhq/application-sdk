@@ -159,6 +159,8 @@ class TestAppConfigFromArgsAndEnv:
         monkeypatch.setenv("ATLAN_APP_MODE", "worker")
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
         monkeypatch.delenv("ATLAN_TEMPORAL_HOST", raising=False)
+        monkeypatch.delenv("ATLAN_WORKFLOW_HOST", raising=False)
+        monkeypatch.delenv("ATLAN_WORKFLOW_PORT", raising=False)
         args = self._make_args()
         config = AppConfig.from_args_and_env(args)
         assert config.temporal_host == "localhost:7233"
@@ -167,9 +169,103 @@ class TestAppConfigFromArgsAndEnv:
         monkeypatch.setenv("ATLAN_APP_MODE", "handler")
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
         monkeypatch.delenv("ATLAN_HANDLER_PORT", raising=False)
+        monkeypatch.delenv("ATLAN_APP_HTTP_PORT", raising=False)
         args = self._make_args()
         config = AppConfig.from_args_and_env(args)
-        assert config.handler_port == 8080
+        assert config.handler_port == 8000
+
+    # --- v2 environment variable fallback tests ---
+
+    def test_v2_temporal_host_and_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.delenv("ATLAN_TEMPORAL_HOST", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_HOST", "temporal-internal.svc")
+        monkeypatch.setenv("ATLAN_WORKFLOW_PORT", "7236")
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.temporal_host == "temporal-internal.svc:7236"
+
+    def test_v2_temporal_host_default_port(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.delenv("ATLAN_TEMPORAL_HOST", raising=False)
+        monkeypatch.delenv("ATLAN_WORKFLOW_PORT", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_HOST", "temporal-internal.svc")
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.temporal_host == "temporal-internal.svc:7233"
+
+    def test_v3_temporal_host_takes_precedence_over_v2(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.setenv("ATLAN_TEMPORAL_HOST", "v3-host:7233")
+        monkeypatch.setenv("ATLAN_WORKFLOW_HOST", "v2-host")
+        monkeypatch.setenv("ATLAN_WORKFLOW_PORT", "7236")
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.temporal_host == "v3-host:7233"
+
+    def test_v2_temporal_namespace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.delenv("ATLAN_TEMPORAL_NAMESPACE", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_NAMESPACE", "production")
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.temporal_namespace == "production"
+
+    def test_v2_handler_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.delenv("ATLAN_HANDLER_HOST", raising=False)
+        monkeypatch.setenv("ATLAN_APP_HTTP_HOST", "1.2.3.4")
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.handler_host == "1.2.3.4"
+
+    def test_v2_handler_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.delenv("ATLAN_HANDLER_PORT", raising=False)
+        monkeypatch.setenv("ATLAN_APP_HTTP_PORT", "9000")
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.handler_port == 9000
+
+    def test_v2_log_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
+        monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.log_level == "DEBUG"
+
+    def test_v3_log_level_takes_precedence_over_v2(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        monkeypatch.setenv("ATLAN_LOG_LEVEL", "WARNING")
+        monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.log_level == "WARNING"
+
+    def test_task_queue_derived_from_app_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:MyConnector")
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.task_queue == "my-connector-queue"
+
+    def test_task_queue_explicit_overrides_derived(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:MyConnector")
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "custom-queue")
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.task_queue == "custom-queue"
 
 
 class TestRunMain:

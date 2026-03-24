@@ -25,6 +25,6 @@ class AppConfig:
     namespace: str
     image: str
     helm_values: dict[str, str] = field(default_factory=dict)
-    handler_port: int = 8080
+    handler_port: int = 8000
     worker_health_port: int = 8081
     timeout: int = 300

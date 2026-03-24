@@ -129,7 +129,7 @@ Every app deployment consists of two components with different lifecycles:
 
 ```
 Handler Deployment (always-on, min 1 replica)
-├── FastAPI on :8080
+├── FastAPI on :8000
 ├── /auth, /preflight, /metadata, /health
 └── Handles synchronous HTTP requests from the UI
 

@@ -37,9 +37,13 @@ APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
 DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
 #: Host address for the application's HTTP server
-APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0"))
+APP_HOST = str(
+    os.getenv("ATLAN_HANDLER_HOST") or os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0")
+)
 #: Port number for the application's HTTP server
-APP_PORT = int(os.getenv("ATLAN_APP_HTTP_PORT", "8000"))
+APP_PORT = int(
+    os.getenv("ATLAN_HANDLER_PORT") or os.getenv("ATLAN_APP_HTTP_PORT", "8000")
+)
 #: Tenant ID for multi-tenant applications
 APP_TENANT_ID = os.getenv("ATLAN_TENANT_ID", "default")
 # Domain Name of the tenant
@@ -105,11 +109,22 @@ ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING: bool = (
 
 # Workflow Client Constants
 #: Host address for the Temporal server
-WORKFLOW_HOST = os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
+#: Prefers ATLAN_TEMPORAL_HOST (v3 combined host:port) then ATLAN_WORKFLOW_HOST (v2).
+_temporal_host_parts = os.getenv("ATLAN_TEMPORAL_HOST", "").split(":")
+WORKFLOW_HOST = (
+    _temporal_host_parts[0] if _temporal_host_parts[0] else None
+) or os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
 #: Port number for the Temporal server
-WORKFLOW_PORT = os.getenv("ATLAN_WORKFLOW_PORT", "7233")
+#: Extracted from ATLAN_TEMPORAL_HOST if set, else falls back to ATLAN_WORKFLOW_PORT (v2).
+WORKFLOW_PORT = (
+    _temporal_host_parts[1]
+    if len(_temporal_host_parts) == 2 and _temporal_host_parts[1]
+    else None
+) or os.getenv("ATLAN_WORKFLOW_PORT", "7233")
 #: Namespace for Temporal workflows
-WORKFLOW_NAMESPACE = os.getenv("ATLAN_WORKFLOW_NAMESPACE", "default")
+WORKFLOW_NAMESPACE = os.getenv("ATLAN_TEMPORAL_NAMESPACE") or os.getenv(
+    "ATLAN_WORKFLOW_NAMESPACE", "default"
+)
 #: Host address for the Temporal UI
 WORKFLOW_UI_HOST = os.getenv("ATLAN_WORKFLOW_UI_HOST", "localhost")
 #: Port number for the Temporal UI
@@ -228,7 +243,7 @@ DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
 
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = (os.getenv("ATLAN_LOG_LEVEL") or os.getenv("LOG_LEVEL", "INFO")).upper()
 #: Service name for OpenTelemetry
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "atlan-application-sdk")
 #: Service version for OpenTelemetry
