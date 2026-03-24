@@ -150,6 +150,11 @@ class SecretStore:
     ) -> Dict[str, Any]:
         """Fetch secrets in single-key mode by looking up each field individually.
 
+        Iterates over all string values in the credential config and attempts to
+        resolve each one from the secret store. Failures are collected and only
+        logged if no secrets were resolved at all — this avoids log pollution
+        since literal config values (hostnames, "yes", etc.) are expected to fail.
+
         Args:
             credential_config: The credential configuration dictionary
 
@@ -158,8 +163,12 @@ class SecretStore:
         """
         logger.debug("Single-key mode: fetching secrets per field")
         collected = {}
+        failed_lookups = []
+
         for field, value in credential_config.items():
             if isinstance(value, str):
+                if not value.strip():
+                    continue
                 try:
                     single_secret = cls.get_secret(value)
                     if single_secret:
@@ -171,11 +180,13 @@ class SecretStore:
                                 continue
                             collected[k] = v
                 except Exception as e:
-                    logger.debug(f"Skipping '{field}' → '{value}' ({e})")
+                    failed_lookups.append(f"  '{field}' → '{value}': {e}")
             elif field == "extra" and isinstance(value, dict):
                 # Recursively process string values in the extra dictionary
                 for extra_key, extra_value in value.items():
                     if isinstance(extra_value, str):
+                        if not extra_value.strip():
+                            continue
                         try:
                             single_secret = cls.get_secret(extra_value)
                             if single_secret:
@@ -184,9 +195,25 @@ class SecretStore:
                                         continue
                                     collected[k] = v
                         except Exception as e:
-                            logger.debug(
-                                f"Skipping 'extra.{extra_key}' → '{extra_value}' ({e})"
+                            failed_lookups.append(
+                                f"  'extra.{extra_key}' → '{extra_value}': {e}"
                             )
+
+        # If at least one secret resolved, failures are expected (literal values)
+        # and not worth logging. If nothing resolved, log all failures so the user
+        # can diagnose why secret resolution failed entirely.
+        if not collected and failed_lookups:
+            logger.error(
+                "Single-key secret resolution failed: no secrets could be resolved. "
+                f"Attempted {len(failed_lookups)} lookups, all failed:\n"
+                + "\n".join(failed_lookups)
+            )
+        elif failed_lookups:
+            logger.debug(
+                f"Single-key mode: resolved {len(collected)} secrets, "
+                f"skipped {len(failed_lookups)} non-secret fields"
+            )
+
         return collected
 
     @classmethod
@@ -333,7 +360,7 @@ class SecretStore:
                 )
                 return cls._process_secret_data(dapr_secret_object.secret)
         except Exception as e:
-            logger.error(
+            logger.debug(
                 f"Failed to fetch secret using component '{component_name}': {str(e)}"
             )
             raise
