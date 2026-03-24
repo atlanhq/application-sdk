@@ -1,12 +1,12 @@
-# RFC: `entity_raw` Namespace — Per-Application Raw Data Tables
+# RFC: `int_entity_raw` Namespace — Per-Application Raw Data Tables
 
 **PRs**:
 - MDLH: [atlanhq/mdlh#270](https://github.com/atlanhq/mdlh/pull/270)
 - Application SDK: [atlanhq/application-sdk#1134](https://github.com/atlanhq/application-sdk/pull/1134)
 - Redshift App (reference impl): [atlanhq/atlan-redshift-app#184](https://github.com/atlanhq/atlan-redshift-app/pull/184)
 
-**Author**: Mrunmayi Tripathi            
-**Date**: 2026-03-23   
+**Author**: Mrunmayi Tripathi
+**Date**: 2026-03-23
 **Status**: In Review
 
 ---
@@ -25,7 +25,7 @@ Today, the metadata lakehouse only stores **transformed/enriched** data in `enti
 
 ## Proposal
 
-Introduce a new Iceberg namespace **`entity_raw`** with **one table per registered Application** (e.g. `entity_raw.snowflake`, `entity_raw.redshift`).
+Introduce a new Iceberg namespace **`int_entity_raw`** with **one table per registered Application** (e.g. `int_entity_raw.snowflake`, `int_entity_raw.redshift`).
 
 Each table stores the **full raw record as a JSON string** (`raw_record` column) alongside common metadata columns (`typename`, `connection_qualified_name`, `workflow_run_id`, `extracted_at`, `tenant_id`). These metadata columns are intentionally aligned with `entity_metadata` fields so that raw and transformed data can be correlated with a simple equi-join — enabling debugging, diffing, and lineage across the two layers.
 
@@ -34,8 +34,8 @@ Table names are **not arbitrary** — they must match a registered `Application`
 The feature is **opt-in per connector** via a single environment variable (`ENABLE_LAKEHOUSE_LOAD=true`). When disabled, behavior is unchanged — no raw data is written, no new API calls are made.
 
 This is a coordinated change across three repos:
-- **MDLH** — creates and manages the `entity_raw` tables in Iceberg, validates `/load` requests against the Atlas application registry
-- **Application SDK** — new Temporal activities that convert raw parquet files into the common `entity_raw` schema and submit load jobs to MDLH via the `/load` REST API
+- **MDLH** — creates and manages the `int_entity_raw` tables in Iceberg, validates `/load` requests against the Atlas application registry
+- **Application SDK** — new Temporal activities that convert raw parquet files into the common `int_entity_raw` schema and submit load jobs to MDLH via the `/load` REST API
 - **Connector apps** (e.g. Redshift) — register the new SDK activities in their workflow and configure env vars. No extraction logic changes needed.
 
 
@@ -45,7 +45,7 @@ This is a coordinated change across three repos:
 
 ### Schema
 
-**Namespace**: `entity_raw` | **Table name**: application name (e.g. `snowflake`, `redshift`)
+**Namespace**: `int_entity_raw` | **Table name**: application name (e.g. `snowflake`, `redshift`)
 
 | Column | Type | Required | Purpose |
 |--------|------|----------|---------|
@@ -61,7 +61,7 @@ This is a coordinated change across three repos:
 Raw and transformed data can be correlated via:
 ```sql
 SELECT r.raw_record, em.*
-FROM   entity_raw.snowflake r
+FROM   int_entity_raw.snowflake r
 JOIN   entity_metadata.table em
   ON   r.connection_qualified_name = em.connectionqualifiedname
  AND   r.workflow_run_id           = em.lastsyncrun
@@ -74,7 +74,7 @@ Tables are named after registered **Application** entities in Atlas.
 
 **Proactive (startup + every 10 min)** — MDLH queries Atlas for all ACTIVE `Application` entities and pre-creates a table for each. This runs during MDLH init (first install) and on every Notification Processor cycle (`*/10 * * * *`). Any new Application registered in Atlas gets its table within 10 minutes.
 
-**Reactive (on `/load` request, guarded)** — if a `/load` request targets a non-existent table in `entity_raw`, MDLH checks whether the table name matches a registered Application. If yes, it auto-creates. If not, it rejects with a clear error listing valid applications. This handles race conditions where a new app sends data before the 10-minute scheduler catches up, while preventing arbitrary table names from polluting the namespace.
+**Reactive (on `/load` request, guarded)** — if a `/load` request targets a non-existent table in `int_entity_raw`, MDLH checks whether the table name matches a registered Application. If yes, it auto-creates. If not, it rejects with a clear error listing valid applications. This handles race conditions where a new app sends data before the 10-minute scheduler catches up, while preventing arbitrary table names from polluting the namespace.
 
 
 
@@ -92,7 +92,7 @@ Tables are named after registered **Application** entities in Atlas.
           ┌────────────────────────────────────────────────────────────┐
           │                      Iceberg Catalog                       │
           │                                                            │
-          │   entity_raw/                    entity_metadata/           │
+          │   int_entity_raw/                 entity_metadata/           │
           │   ├─ redshift  (raw JSON)        ├─ database               │
           │   ├─ snowflake                   ├─ schema                 │
           │   └─ bigquery                    ├─ table                  │
@@ -122,7 +122,7 @@ POST /load ──▶ Validator
 
 The SDK adds two new Temporal activities available to all connectors:
 
-1. **`prepare_raw_for_lakehouse`** — reads raw parquet files produced during extraction and wraps each row into the `entity_raw` schema as JSONL, adding metadata columns (`typename`, `connection_qualified_name`, `workflow_run_id`, `extracted_at`, `tenant_id`) alongside the original row as a `raw_record` JSON string.
+1. **`prepare_raw_for_lakehouse`** — reads raw parquet files produced during extraction and wraps each row into the `int_entity_raw` schema as JSONL, adding metadata columns (`typename`, `connection_qualified_name`, `workflow_run_id`, `extracted_at`, `tenant_id`) alongside the original row as a `raw_record` JSON string.
 
 2. **`load_to_lakehouse`** — submits a load job to the MDLH `/load` API with an S3 glob pattern, then polls the status endpoint until completion or terminal failure.
 
@@ -134,7 +134,7 @@ preflight_check → get_workflow_args
 asyncio.gather(fetch_databases, fetch_schemas, fetch_tables, fetch_columns, ...)
   ↓
 prepare_raw_for_lakehouse        ← NEW: raw parquet → common-schema JSONL
-load_to_lakehouse (raw)          ← NEW: JSONL → entity_raw.{app_name}
+load_to_lakehouse (raw)          ← NEW: JSONL → int_entity_raw.{app_name}
   ↓
 upload_to_atlan                  (existing)
 load_to_lakehouse (transformed)  ← NEW: JSONL → entity_metadata.{typename}
@@ -148,7 +148,7 @@ All lakehouse loading is controlled by environment variables — **no code chang
 |----------|---------|---------|
 | `ENABLE_LAKEHOUSE_LOAD` | `false` | Master switch |
 | `MDLH_BASE_URL` | `http://lakehouse.atlas.svc.cluster.local:4541` | MDLH service URL |
-| `LH_LOAD_RAW_NAMESPACE` | `entity_raw` | Raw table namespace |
+| `LH_LOAD_RAW_NAMESPACE` | `int_entity_raw` | Raw table namespace |
 | `LH_LOAD_RAW_TABLE_NAME` | `APPLICATION_NAME` | Raw table name (e.g. `redshift`) |
 | `LH_LOAD_RAW_MODE` | `APPEND` | Write mode for raw data |
 | `LH_LOAD_TRANSFORMED_NAMESPACE` | `entity_metadata` | Transformed table namespace |

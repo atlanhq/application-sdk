@@ -17,7 +17,7 @@ Required environment variables for lakehouse load:
   MDLH_BASE_URL=http://lakehouse.atlas.svc.cluster.local:4541  (default)
 
   # Raw table (loaded after extraction)
-  LH_LOAD_RAW_NAMESPACE=entity_raw
+  LH_LOAD_RAW_NAMESPACE=int_entity_raw
   LH_LOAD_RAW_TABLE_NAME=postgres_raw
   LH_LOAD_RAW_MODE=APPEND                 (default; or UPSERT)
 
@@ -190,7 +190,7 @@ async def application_sql_with_lakehouse_load(daemon: bool = True) -> Dict[str, 
 if __name__ == "__main__":
     # To enable lakehouse load, set these env vars before running:
     #   export ENABLE_LAKEHOUSE_LOAD=true
-    #   export LH_LOAD_RAW_NAMESPACE=entity_raw
+    #   export LH_LOAD_RAW_NAMESPACE=int_entity_raw
     #   export LH_LOAD_RAW_TABLE_NAME=postgres_raw
     #   export LH_LOAD_TRANSFORMED_NAMESPACE=entity_metadata
     asyncio.run(application_sql_with_lakehouse_load(daemon=False))

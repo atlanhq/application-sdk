@@ -392,10 +392,10 @@ LH_LOAD_POLL_INTERVAL_SECONDS = int(os.getenv("LH_LOAD_POLL_INTERVAL_SECONDS", "
 LH_LOAD_MAX_POLL_ATTEMPTS = int(os.getenv("LH_LOAD_MAX_POLL_ATTEMPTS", "360"))
 
 # Raw table config (after extract)
-# Raw data is loaded into a per-connector table in entity_raw namespace
-# (e.g. entity_raw.redshift, entity_raw.snowflake). Table name defaults
+# Raw data is loaded into a per-connector table in int_entity_raw namespace
+# (e.g. int_entity_raw.redshift, int_entity_raw.snowflake). Table name defaults
 # to APPLICATION_NAME. Each row has common metadata + raw_record as JSON.
-LH_LOAD_RAW_NAMESPACE = os.getenv("LH_LOAD_RAW_NAMESPACE", "entity_raw")
+LH_LOAD_RAW_NAMESPACE = os.getenv("LH_LOAD_RAW_NAMESPACE", "int_entity_raw")
 LH_LOAD_RAW_TABLE_NAME = os.getenv("LH_LOAD_RAW_TABLE_NAME", APPLICATION_NAME)
 LH_LOAD_RAW_MODE = os.getenv("LH_LOAD_RAW_MODE", "APPEND")
 

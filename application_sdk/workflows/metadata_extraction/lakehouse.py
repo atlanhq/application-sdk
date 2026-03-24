@@ -57,12 +57,12 @@ class LakehouseLoadMixin:
 
         Converts raw parquet files into common-schema JSONL (with metadata
         columns + raw_record as JSON string), then loads into
-        entity_raw.{APPLICATION_NAME} via MDLH /load API.
+        int_entity_raw.{APPLICATION_NAME} via MDLH /load API.
 
         No-op if lakehouse loading is disabled or no typenames were extracted.
         """
         if not (
-        ENABLE_LAKEHOUSE_LOAD
+            ENABLE_LAKEHOUSE_LOAD
             and LH_LOAD_RAW_NAMESPACE
             and LH_LOAD_RAW_TABLE_NAME
             and extracted_typenames
@@ -82,7 +82,7 @@ class LakehouseLoadMixin:
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
 
-        # Step 2: Load JSONL into entity_raw.{connector}
+        # Step 2: Load JSONL into int_entity_raw.{connector}
         logger.info(
             f"Loading raw data into {LH_LOAD_RAW_NAMESPACE}.{LH_LOAD_RAW_TABLE_NAME}"
         )

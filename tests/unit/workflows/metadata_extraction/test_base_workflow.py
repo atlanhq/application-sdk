@@ -240,7 +240,7 @@ class TestLoadRawToLakehouse:
     )
     @patch(
         "application_sdk.workflows.metadata_extraction.lakehouse.LH_LOAD_RAW_NAMESPACE",
-        "entity_raw",
+        "int_entity_raw",
     )
     @patch(
         "application_sdk.workflows.metadata_extraction.lakehouse.LH_LOAD_RAW_TABLE_NAME",
@@ -275,7 +275,7 @@ class TestLoadRawToLakehouse:
         second_call = mock_execute_activity.call_args_list[1]
         assert second_call[0][0] == BaseMetadataExtractionActivities.load_to_lakehouse
         lh_config = second_call[1]["args"][0]["lh_load_config"]
-        assert lh_config["namespace"] == "entity_raw"
+        assert lh_config["namespace"] == "int_entity_raw"
         assert lh_config["table_name"] == "postgres"
         assert lh_config["mode"] == "APPEND"
         assert lh_config["file_extension"] == ".jsonl"
@@ -302,7 +302,7 @@ class TestLoadRawToLakehouse:
     )
     @patch(
         "application_sdk.workflows.metadata_extraction.lakehouse.LH_LOAD_RAW_NAMESPACE",
-        "entity_raw",
+        "int_entity_raw",
     )
     @patch(
         "application_sdk.workflows.metadata_extraction.lakehouse.LH_LOAD_RAW_TABLE_NAME",
