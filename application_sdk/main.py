@@ -157,7 +157,7 @@ class AppConfig:
             # WORKER→worker, SERVER→handler, unset→combined
             _legacy_mode = _env("APPLICATION_MODE").upper()
             mode = {"WORKER": "worker", "SERVER": "handler"}.get(
-                _legacy_mode, "combined" if not _legacy_mode else ""
+                _legacy_mode, "combined"
             )
         if not mode:
             raise ValueError(

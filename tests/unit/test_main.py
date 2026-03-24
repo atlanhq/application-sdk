@@ -83,13 +83,14 @@ class TestAppConfigFromArgsAndEnv:
         config = AppConfig.from_args_and_env(args)
         assert config.app_module == "env_pkg:EnvApp"
 
-    def test_invalid_legacy_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_legacy_application_mode_local_defaults_combined(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("ATLAN_APP_MODE", raising=False)
-        monkeypatch.setenv("APPLICATION_MODE", "LOCAL")  # not a mappable value
+        monkeypatch.setenv("APPLICATION_MODE", "LOCAL")
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
-        args = self._make_args(app="pkg:App")
-        with pytest.raises(ValueError, match="Mode is required"):
-            AppConfig.from_args_and_env(args)
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.mode == "combined"
 
     def test_legacy_application_mode_worker(
         self, monkeypatch: pytest.MonkeyPatch
