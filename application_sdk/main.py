@@ -107,7 +107,7 @@ class AppConfig:
     # Worker
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"
-    task_queue: str = "app-framework"
+    task_queue: str = ""  # derived from app_module in __post_init__ if not set
 
     # Handler
     handler_host: str = "0.0.0.0"
@@ -132,6 +132,11 @@ class AppConfig:
     auth_token_url: str = ""
     auth_base_url: str = ""
     auth_scopes: str = ""
+
+    def __post_init__(self) -> None:
+        """Derive task_queue from app_module when not explicitly set."""
+        if not self.task_queue and self.app_module:
+            self.task_queue = f"{_derive_service_name(self.app_module)}-queue"
 
     @classmethod
     def from_args_and_env(cls, args: argparse.Namespace) -> AppConfig:
