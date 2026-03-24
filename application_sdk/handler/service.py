@@ -1122,9 +1122,11 @@ def create_app_handler_service(
     # ------------------------------------------------------------------
 
     @app.get("/health")
+    @app.get("/server/health")
     async def health() -> dict[str, str]:
         return {"status": "healthy"}
 
+    @app.get("/ready")
     @app.get("/server/ready")
     async def ready() -> dict[str, str]:
         return {"status": "ok"}

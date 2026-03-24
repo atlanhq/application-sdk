@@ -18,16 +18,6 @@ from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.server.fastapi.models import FileUploadResponse
 from application_sdk.services.objectstore import ObjectStore
 
-# Paths to exclude from logging and metrics (health checks and event ingress)
-EXCLUDED_LOG_PATHS: frozenset[str] = frozenset(
-    {
-        "/server/health",
-        "/server/ready",
-        "/api/eventingress/",
-        "/api/eventingress",
-    }
-)
-
 
 def internal_server_error_handler(_, exc: Exception) -> JSONResponse:
     """Handle internal server errors in FastAPI applications.
