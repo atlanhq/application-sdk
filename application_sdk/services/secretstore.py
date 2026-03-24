@@ -170,7 +170,7 @@ class SecretStore:
                 if not value.strip():
                     continue
                 try:
-                    single_secret = cls.get_secret(value, _suppress_error_log=True)
+                    single_secret = cls.get_secret(value)
                     if single_secret:
                         for k, v in single_secret.items():
                             # Only filter out None and empty strings, not all falsy values.
@@ -188,9 +188,7 @@ class SecretStore:
                         if not extra_value.strip():
                             continue
                         try:
-                            single_secret = cls.get_secret(
-                                extra_value, _suppress_error_log=True
-                            )
+                            single_secret = cls.get_secret(extra_value)
                             if single_secret:
                                 for k, v in single_secret.items():
                                     if v is None or v == "":
@@ -320,10 +318,7 @@ class SecretStore:
 
     @classmethod
     def get_secret(
-        cls,
-        secret_key: str,
-        component_name: str = SECRET_STORE_NAME,
-        _suppress_error_log: bool = False,
+        cls, secret_key: str, component_name: str = SECRET_STORE_NAME
     ) -> Dict[str, Any]:
         """Get secret from the Dapr secret store component.
 
@@ -334,9 +329,6 @@ class SecretStore:
             secret_key (str): Key of the secret to fetch from the secret store.
             component_name (str): Name of the Dapr component to fetch from.
                 Defaults to SECRET_STORE_NAME.
-            _suppress_error_log (bool): If True, suppress error logging on failure.
-                Used by single-key mode where failures are expected and logged
-                in aggregate by the caller. Defaults to False.
 
         Returns:
             Dict[str, Any]: Processed secret data as a dictionary.
@@ -368,10 +360,9 @@ class SecretStore:
                 )
                 return cls._process_secret_data(dapr_secret_object.secret)
         except Exception as e:
-            if not _suppress_error_log:
-                logger.error(
-                    f"Failed to fetch secret using component '{component_name}': {str(e)}"
-                )
+            logger.debug(
+                f"Failed to fetch secret using component '{component_name}': {str(e)}"
+            )
             raise
 
     @classmethod
