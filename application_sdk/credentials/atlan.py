@@ -91,7 +91,8 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
         """Build the token request payload.
 
         Returns:
-            A ``(data_dict, use_json)`` tuple.
+            A ``(data_dict, use_json)`` tuple:
+
             - Keycloak endpoint: form-encoded (use_json=False)
             - Heracles endpoint: JSON with camelCase fields (use_json=True)
         """

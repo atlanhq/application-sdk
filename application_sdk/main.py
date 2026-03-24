@@ -63,7 +63,8 @@ def _debug_dump_handler(signum: int, frame: object) -> None:  # noqa: ARG001
     print(f"Debug dump written to {dump_path}", file=sys.stderr, flush=True)
 
 
-signal.signal(signal.SIGUSR1, _debug_dump_handler)
+if hasattr(signal, "SIGUSR1"):
+    signal.signal(signal.SIGUSR1, _debug_dump_handler)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
