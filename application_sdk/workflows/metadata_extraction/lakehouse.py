@@ -64,6 +64,11 @@ class LakehouseLoadMixin:
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
 
+        # Empty string means MDLH is not available — skip load entirely
+        if not raw_lh_dir:
+            logger.info("Lakehouse load (raw) skipped — MDLH not available")
+            return
+
         # Step 2: Load parquet into int_entity_raw.{connector}
         logger.info(
             f"Loading raw data into {LH_LOAD_RAW_NAMESPACE}.{LH_LOAD_RAW_TABLE_NAME}"

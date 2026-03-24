@@ -6,6 +6,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.activities.metadata_extraction.lakehouse import (
+    check_lakehouse_enabled,
     convert_raw_parquet_to_parquet,
     submit_and_poll_mdlh_load,
 )
@@ -186,9 +187,17 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
     async def prepare_raw_for_lakehouse(self, workflow_args: Dict[str, Any]) -> str:
         """Enrich raw parquet files with metadata columns for lakehouse ingestion.
 
+        First checks if MDLH is available on this tenant. If not, returns
+        empty string to signal the workflow to skip all lakehouse loading.
+
         Reads output_path, workflow_id, workflow_run_id, connection info
         directly from workflow_args. typenames is passed via
         workflow_args["_extracted_typenames"].
         """
+        if not await check_lakehouse_enabled():
+            logger.info(
+                "MDLH not available on this tenant, skipping raw lakehouse preparation"
+            )
+            return ""
         typenames = workflow_args.get("_extracted_typenames", [])
         return await convert_raw_parquet_to_parquet(workflow_args, typenames)

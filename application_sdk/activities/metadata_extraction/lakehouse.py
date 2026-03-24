@@ -138,11 +138,6 @@ async def submit_and_poll_mdlh_load(
             "Missing required fields in lh_load_config (namespace, table_name, output_path, file_extension)"
         )
 
-    # Pre-flight: verify MDLH is deployed on this tenant
-    if not await check_lakehouse_enabled():
-        logger.info("Lakehouse load skipped — MDLH not available on this tenant")
-        return ActivityStatistics(typename="lakehouse-load-skipped")
-
     s3_prefix = get_object_store_prefix(output_path)
     pattern = f"{s3_prefix}/**/*{file_extension}"
 
