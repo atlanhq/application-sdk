@@ -28,14 +28,14 @@ Handler Deployment (always-on)           Worker Deployment (scale 0→N)
 │ minReplicas: 1               │         │ minReplicas: 0 (KEDA)        │
 │                              │         │ maxReplicas: 10 (KEDA)       │
 │   --mode handler             │         │   --mode worker              │
-│   FastAPI on :8080           │         │   Temporal worker            │
+│   FastAPI on :8000           │         │   Temporal worker            │
 │   /auth, /preflight, etc.    │         │   Health on :8081            │
 └──────────────────────────────┘         └──────────────────────────────┘
               │                                        │
               ▼                                        ▼
 ┌──────────────────────────────┐         ┌──────────────────────────────┐
 │ Service: my-app-handler      │         │ KEDA ScaledObject            │
-│ port: 80 → 8080              │         │ Scales on Temporal queue depth│
+│ port: 80 → 8000              │         │ Scales on Temporal queue depth│
 └──────────────────────────────┘         └──────────────────────────────┘
 ```
 
@@ -86,7 +86,7 @@ With sidecar approach: 50+ pods minimum (can't scale to zero).
 | `ATLAN_TEMPORAL_NAMESPACE` | Temporal namespace | `default` |
 | `ATLAN_TASK_QUEUE` | Task queue for workers | `my-app-queue` |
 | `ATLAN_HANDLER_HOST` | Handler bind address | `0.0.0.0` |
-| `ATLAN_HANDLER_PORT` | Handler HTTP port | `8080` |
+| `ATLAN_HANDLER_PORT` | Handler HTTP port | `8000` |
 | `ATLAN_HEALTH_PORT` | Worker health port | `8081` |
 | `ATLAN_LOG_LEVEL` | Log verbosity | `INFO` |
 | `ATLAN_SERVICE_NAME` | Service identifier | `my-app` |
@@ -123,7 +123,7 @@ python -m application_sdk.main --mode worker
 ```
 
 Health endpoints:
-- **Handler** (`--mode handler`): FastAPI on `:8080` with `/health`, `/ready`
+- **Handler** (`--mode handler`): FastAPI on `:8000` with `/health`, `/ready`
 - **Worker** (`--mode worker`): lightweight HTTP server on `:8081` with `/health`, `/ready`
 
 KEDA ScaledObject per worker, targeting its Temporal task queue:

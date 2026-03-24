@@ -111,7 +111,7 @@ class AppConfig:
 
     # Handler
     handler_host: str = "0.0.0.0"
-    handler_port: int = 8080
+    handler_port: int = 8000
 
     # Common
     log_level: str = "INFO"
@@ -173,6 +173,17 @@ class AppConfig:
             or _derive_service_name(app_module)
         )
 
+        # v2 fallback: combine ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT into host:port
+        _v2_workflow_host = _env("ATLAN_WORKFLOW_HOST")
+        _v2_temporal_host = (
+            f"{_v2_workflow_host}:{_env('ATLAN_WORKFLOW_PORT', '7233')}"
+            if _v2_workflow_host
+            else ""
+        )
+
+        # Task queue: derive from app module (v2 behaviour) when not explicitly set
+        _default_task_queue = f"{_derive_service_name(app_module)}-queue"
+
         return cls(
             mode=mode,
             app_module=app_module,
@@ -180,17 +191,25 @@ class AppConfig:
             or _env("ATLAN_HANDLER_MODULE")
             or None,
             temporal_host=getattr(args, "temporal_host", None)
-            or _env("ATLAN_TEMPORAL_HOST", "localhost:7233"),
+            or _env("ATLAN_TEMPORAL_HOST")
+            or _v2_temporal_host
+            or "localhost:7233",
             temporal_namespace=getattr(args, "temporal_namespace", None)
-            or _env("ATLAN_TEMPORAL_NAMESPACE", "default"),
+            or _env("ATLAN_TEMPORAL_NAMESPACE")
+            or _env("ATLAN_WORKFLOW_NAMESPACE", "default"),
             task_queue=getattr(args, "task_queue", None)
-            or _env("ATLAN_TASK_QUEUE", "app-framework"),
+            or _env("ATLAN_TASK_QUEUE")
+            or _default_task_queue,
             handler_host=getattr(args, "handler_host", None)
-            or _env("ATLAN_HANDLER_HOST", "0.0.0.0"),
+            or _env("ATLAN_HANDLER_HOST")
+            or _env("ATLAN_APP_HTTP_HOST", "0.0.0.0"),
             handler_port=getattr(args, "handler_port", None)
-            or _env_int("ATLAN_HANDLER_PORT", 8080),
+            or _env_int("ATLAN_HANDLER_PORT", 0)
+            or _env_int("ATLAN_APP_HTTP_PORT", 0)
+            or 8000,
             log_level=getattr(args, "log_level", None)
-            or _env("ATLAN_LOG_LEVEL", "INFO"),
+            or _env("ATLAN_LOG_LEVEL")
+            or _env("LOG_LEVEL", "INFO"),
             health_port=getattr(args, "health_port", None)
             or _env_int("ATLAN_HEALTH_PORT", 8081),
             service_name=service_name,
@@ -953,12 +972,17 @@ Environment Variables:
   ATLAN_APP_MODULE         App class path (e.g., my_package.apps:MyApp)
   ATLAN_HANDLER_MODULE     Optional custom handler module path
   ATLAN_TEMPORAL_HOST      Temporal server address (default: localhost:7233)
+                           Falls back to ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT (v2)
   ATLAN_TEMPORAL_NAMESPACE Temporal namespace (default: default)
-  ATLAN_TASK_QUEUE         Task queue name (default: app-framework)
+                           Falls back to ATLAN_WORKFLOW_NAMESPACE (v2)
+  ATLAN_TASK_QUEUE         Task queue name (default: {service-name}-queue)
   ATLAN_HANDLER_HOST       Handler bind host (default: 0.0.0.0)
-  ATLAN_HANDLER_PORT       Handler bind port (default: 8080)
+                           Falls back to ATLAN_APP_HTTP_HOST (v2)
+  ATLAN_HANDLER_PORT       Handler bind port (default: 8000)
+                           Falls back to ATLAN_APP_HTTP_PORT (v2)
   ATLAN_HEALTH_PORT        Worker health check port (default: 8081)
   ATLAN_LOG_LEVEL          Log level (default: INFO)
+                           Falls back to LOG_LEVEL (v2)
 
 Examples:
   python -m application_sdk.main --mode worker --app my_package.apps:MyApp
@@ -993,7 +1017,7 @@ Examples:
         "--handler-host", "--host", help="Handler bind host (default: 0.0.0.0)"
     )
     handler_group.add_argument(
-        "--handler-port", "--port", type=int, help="Handler bind port (default: 8080)"
+        "--handler-port", "--port", type=int, help="Handler bind port (default: 8000)"
     )
     handler_group.add_argument(
         "--health-port", type=int, help="Worker health check port (default: 8081)"
