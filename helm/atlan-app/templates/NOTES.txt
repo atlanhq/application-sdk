@@ -11,5 +11,5 @@ View logs:
   kubectl logs -n {{ include "atlan-app.namespace" . }} -l app={{ include "atlan-app.appName" . }},component=worker
 
 Test health:
-  kubectl port-forward -n {{ include "atlan-app.namespace" . }} svc/{{ include "atlan-app.handlerName" . }} 8080:80
-  curl http://localhost:8080/health
+  kubectl port-forward -n {{ include "atlan-app.namespace" . }} svc/{{ include "atlan-app.handlerName" . }} 8000:80
+  curl http://localhost:8000/health

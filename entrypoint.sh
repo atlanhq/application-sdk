@@ -13,7 +13,7 @@
 #
 # Environment variables (all optional, with sensible defaults):
 #   DAPR_APP_ID          - DAPR application ID (default: $ATLAN_SERVICE_NAME or "app")
-#   DAPR_APP_PORT        - Application port DAPR connects to (default: 8080)
+#   DAPR_APP_PORT        - Application port DAPR connects to (default: 8000)
 #   DAPR_HTTP_PORT       - DAPR HTTP API port (default: 3500)
 #   DAPR_GRPC_PORT       - DAPR gRPC API port (default: 50001)
 #   DAPR_COMPONENTS_PATH - Path to DAPR component YAML files (default: /app/components)
@@ -32,7 +32,7 @@ set -eu
 # Configuration with defaults — exported so Python child process can read them
 # ---------------------------------------------------------------------------
 export DAPR_APP_ID="${DAPR_APP_ID:-${ATLAN_SERVICE_NAME:-app}}"
-export DAPR_APP_PORT="${DAPR_APP_PORT:-8080}"
+export DAPR_APP_PORT="${DAPR_APP_PORT:-8000}"
 export DAPR_HTTP_PORT="${DAPR_HTTP_PORT:-3500}"
 export DAPR_GRPC_PORT="${DAPR_GRPC_PORT:-50001}"
 export DAPR_COMPONENTS_PATH="${DAPR_COMPONENTS_PATH:-/app/components}"

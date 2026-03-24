@@ -21,7 +21,7 @@ Usage::
 
     handler = MyHandler()
     app = create_app_handler_service(handler, app_name="my-app")
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 """
 
 from __future__ import annotations
@@ -1136,7 +1136,7 @@ def run_app_handler_service(
     handler: Handler,
     *,
     host: str = "0.0.0.0",
-    port: int = 8080,
+    port: int = 8000,
     log_level: str = "info",
     **kwargs: Any,
 ) -> None:
@@ -1149,7 +1149,7 @@ def run_app_handler_service(
     Args:
         handler: The Handler instance to serve.
         host: Bind host (default: "0.0.0.0").
-        port: Bind port (default: 8080).
+        port: Bind port (default: 8000).
         log_level: Uvicorn log level (default: "info").
         **kwargs: Additional keyword arguments forwarded to
             ``create_app_handler_service()``.
