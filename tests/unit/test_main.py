@@ -159,6 +159,8 @@ class TestAppConfigFromArgsAndEnv:
         monkeypatch.setenv("ATLAN_APP_MODE", "worker")
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
         monkeypatch.delenv("ATLAN_TEMPORAL_HOST", raising=False)
+        monkeypatch.delenv("ATLAN_WORKFLOW_HOST", raising=False)
+        monkeypatch.delenv("ATLAN_WORKFLOW_PORT", raising=False)
         args = self._make_args()
         config = AppConfig.from_args_and_env(args)
         assert config.temporal_host == "localhost:7233"
