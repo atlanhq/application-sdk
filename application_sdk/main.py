@@ -874,7 +874,7 @@ async def run_dev_combined(
     credential_stores: Mapping[str, SecretStore] | None = None,
     example_input: dict[str, Any] | None = None,
     host: str = "127.0.0.1",
-    port: int = 8080,
+    port: int = 8000,
     temporal_host: str = "localhost:7233",
     temporal_namespace: str = "default",
     task_queue: str = "",

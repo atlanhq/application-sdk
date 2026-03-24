@@ -224,10 +224,10 @@ class TestAppConfigFromArgsAndEnv:
     def test_v2_handler_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
         monkeypatch.delenv("ATLAN_HANDLER_PORT", raising=False)
-        monkeypatch.setenv("ATLAN_APP_HTTP_PORT", "8000")
+        monkeypatch.setenv("ATLAN_APP_HTTP_PORT", "9000")
         args = self._make_args()
         config = AppConfig.from_args_and_env(args)
-        assert config.handler_port == 8000
+        assert config.handler_port == 9000
 
     def test_v2_log_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
