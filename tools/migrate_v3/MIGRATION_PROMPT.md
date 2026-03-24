@@ -328,15 +328,27 @@ asyncio.run(run_dev_combined(MyExtractor, handler_class=MyHandler))
 
 ### After (v3) — CLI / Dockerfile CMD
 
+**`ATLAN_APP_MODULE` is mandatory.** The entrypoint hard-fails if it is not set.
+Set it as a Dockerfile `ENV` so the value is locked to the image:
+
 ```dockerfile
-CMD ["application-sdk", "--mode", "combined", "--app", "my_package.apps:MyExtractor"]
+ENV ATLAN_APP_MODULE=app.app:MyExtractor
+CMD ["application-sdk", "--mode", "combined"]
+```
+
+Alternatively, pass it inline via `--app` (takes precedence over the env var):
+
+```dockerfile
+CMD ["application-sdk", "--mode", "combined", "--app", "app.app:MyExtractor"]
 ```
 
 ### Checklist
 
 - [ ] Replace the `BaseXxxApplication(...)` instantiation with `run_dev_combined(...)`.
-- [ ] Update `pyproject.toml` scripts entry or `Dockerfile CMD` to use the
-      `application-sdk` CLI.
+- [ ] Add `ENV ATLAN_APP_MODULE=<module.path:ClassName>` to the app's `Dockerfile`.
+      **This is required** — the process will not start without it.
+- [ ] Set `CMD ["application-sdk", "--mode", "combined"]` (or `worker`/`handler`) in
+      the `Dockerfile`.
 - [ ] If the connector used `app.setup_workflow(...)` / `app.start_workflow(...)` for
       integration tests, replace with direct `await connector.run(input)` calls
       (the framework handles Temporal wiring automatically).

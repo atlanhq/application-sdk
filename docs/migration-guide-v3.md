@@ -217,20 +217,28 @@ await app.start()
 
 ### v3
 
-```python
-# pyproject.toml or Dockerfile CMD
-# application-sdk --mode combined --app my_package.apps:MyMetadataExtractor
+**`ATLAN_APP_MODULE` is mandatory in production.** The entrypoint hard-fails at startup if it
+is not set. Set it in your app's `Dockerfile` — it should never be left to Helm values or
+runtime defaults:
 
-# Or programmatically (e.g., for local dev):
+```dockerfile
+ENV ATLAN_APP_MODULE=app.app:MyMetadataExtractor
+CMD ["application-sdk", "--mode", "combined"]
+```
+
+The `--app` CLI flag is an alternative (takes precedence over the env var), but `ENV` in the
+Dockerfile is the recommended approach so the value is locked to the image:
+
+```dockerfile
+CMD ["application-sdk", "--mode", "combined", "--app", "app.app:MyMetadataExtractor"]
+```
+
+For local dev, pass the class directly — `run_dev_combined` derives the module path automatically:
+
+```python
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(MyMetadataExtractor, handler_class=MyHandler))
-```
-
-Or run via CLI:
-
-```bash
-application-sdk --mode combined --app my_package.apps:MyMetadataExtractor
 ```
 
 Three modes are available:
