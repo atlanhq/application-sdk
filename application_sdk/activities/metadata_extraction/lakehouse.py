@@ -63,19 +63,25 @@ async def check_lakehouse_enabled() -> bool:
     gracefully skip lakehouse loading on tenants where MDLH is not deployed
     (i.e. lakehouse-secrets / lakehouse-config are not mounted).
 
-    Results are cached for 60 seconds to avoid redundant health checks
-    when multiple load calls happen within the same workflow run.
+    Positive results are cached for 60 seconds to avoid redundant health
+    checks when multiple load calls happen within the same workflow run.
+    Negative results are never cached so transient outages (deploys, network
+    blips) don't cause a 60-second window of silently skipped loads.
     """
     now = time()
     if (
-        _lakehouse_enabled_cache["value"] is not None
+        _lakehouse_enabled_cache["value"] is True
         and now < _lakehouse_enabled_cache["expires_at"]
     ):
-        return _lakehouse_enabled_cache["value"]
+        return True
 
     result = await _fetch_lakehouse_health()
-    _lakehouse_enabled_cache["value"] = result
-    _lakehouse_enabled_cache["expires_at"] = now + _HEALTH_CHECK_TTL_SECONDS
+    if result:
+        _lakehouse_enabled_cache["value"] = True
+        _lakehouse_enabled_cache["expires_at"] = now + _HEALTH_CHECK_TTL_SECONDS
+    else:
+        # Clear cache so next call retries immediately
+        _lakehouse_enabled_cache["value"] = None
     return result
 
 
@@ -168,14 +174,16 @@ async def submit_and_poll_mdlh_load(
         job_id = load_response.job_id
         logger.info(f"Lakehouse load job submitted: job_id={job_id}")
 
-    # Poll for completion — reuse a single session across all poll iterations
+    # Poll for completion — reuse a single session; timeout is per-request, not session-wide
     status_url = f"{base_url}/{job_id}/status"
     poll_headers = {**headers, "X-Lakehouse-Job-Id": job_id}
-    async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as poll_session:
+    async with aiohttp.ClientSession() as poll_session:
         for attempt in range(LH_LOAD_MAX_POLL_ATTEMPTS):
             await asyncio.sleep(LH_LOAD_POLL_INTERVAL_SECONDS)
             try:
-                async with poll_session.get(status_url, headers=poll_headers) as resp:
+                async with poll_session.get(
+                    status_url, headers=poll_headers, timeout=_HTTP_TIMEOUT
+                ) as resp:
                     if resp.status in _NON_RETRYABLE_STATUS_CODES:
                         body = await resp.text()
                         raise ActivityError(
@@ -245,7 +253,9 @@ async def convert_raw_parquet_to_parquet(
 
     Returns the root output directory.
     """
-    import json
+    import duckdb
+    import pyarrow as pa
+    import pyarrow.parquet as pq
 
     output_path = workflow_args.get("output_path", "")
     raw_output_path = os.path.join(output_path, "raw")
@@ -261,6 +271,7 @@ async def convert_raw_parquet_to_parquet(
         return os.path.normpath(os.path.join(raw_output_path, "..", "raw_lakehouse"))
 
     base_dir = os.path.normpath(os.path.join(raw_output_path, "..", "raw_lakehouse"))
+    SafeFileOps.makedirs(base_dir, exist_ok=True)
 
     for typename in typenames:
         src_dir = os.path.join(raw_output_path, typename)
@@ -275,54 +286,73 @@ async def convert_raw_parquet_to_parquet(
 
         entity_name_field = _RAW_ENTITY_NAME_FIELDS.get(typename)
         chunk_idx = 0
+        total_rows = 0
 
+        # Process each parquet file independently to bound memory usage.
+        # DuckDB's to_json() + struct literal is vectorized and avoids
+        # Python-level row loops entirely.
         for pq_file in parquet_files:
             try:
-                import daft
-
-                df = daft.read_parquet(pq_file)
-                rows = df.to_pydict()
-                col_names = list(rows.keys())
-                n_rows = len(rows[col_names[0]]) if col_names else 0
+                raw_table = pq.read_table(pq_file)
             except Exception as e:
                 logger.warning(f"Failed to read parquet {pq_file}: {e}, skipping")
                 continue
 
+            n_rows = raw_table.num_rows
             if n_rows == 0:
                 continue
 
-            # Build raw_record and entity_name lists vectorized over rows
-            raw_records = []
-            entity_names = []
-            for i in range(n_rows):
-                raw_row = {col: rows[col][i] for col in col_names}
-                raw_records.append(json.dumps(raw_row, default=str))
-                entity_names.append(
-                    str(raw_row.get(entity_name_field, "")) if entity_name_field else ""
+            conn = duckdb.connect()
+            conn.register("raw_input", raw_table)
+
+            struct_fields = ", ".join(
+                f"'{col}': \"{col}\"" for col in raw_table.column_names
+            )
+
+            if entity_name_field and entity_name_field in raw_table.column_names:
+                entity_name_sql = (
+                    f"COALESCE(CAST(\"{entity_name_field}\" AS VARCHAR), '')"
                 )
+            else:
+                entity_name_sql = "''"
 
-            enriched = {
-                "typename": [typename] * n_rows,
-                "connection_qualified_name": [connection_qualified_name] * n_rows,
-                "workflow_id": [workflow_id] * n_rows,
-                "workflow_run_id": [workflow_run_id] * n_rows,
-                "extracted_at": [extracted_at] * n_rows,
-                "tenant_id": [APP_TENANT_ID] * n_rows,
-                "entity_name": entity_names,
-                "raw_record": raw_records,
-            }
+            derived = (
+                conn.sql(
+                    f"SELECT {entity_name_sql} as entity_name, "
+                    f"to_json({{{struct_fields}}})::VARCHAR as raw_record "
+                    f"FROM raw_input"
+                )
+                .arrow()
+                .read_all()
+            )
+            conn.close()
 
-            import pyarrow as pa
-            import pyarrow.parquet as pq
+            enriched = pa.table(
+                {
+                    "typename": pa.array([typename] * n_rows, type=pa.string()),
+                    "connection_qualified_name": pa.array(
+                        [connection_qualified_name] * n_rows, type=pa.string()
+                    ),
+                    "workflow_id": pa.array([workflow_id] * n_rows, type=pa.string()),
+                    "workflow_run_id": pa.array(
+                        [workflow_run_id] * n_rows, type=pa.string()
+                    ),
+                    "extracted_at": pa.array([extracted_at] * n_rows, type=pa.int64()),
+                    "tenant_id": pa.array([APP_TENANT_ID] * n_rows, type=pa.string()),
+                    "entity_name": derived.column("entity_name"),
+                    "raw_record": derived.column("raw_record"),
+                }
+            )
 
-            table = pa.table(enriched)
             out_file = os.path.join(out_dir, f"chunk-{chunk_idx}.parquet")
-            pq.write_table(table, out_file)
-
+            pq.write_table(enriched, out_file, compression="snappy")
             chunk_idx += 1
+            total_rows += n_rows
+
+        if total_rows > 0:
             logger.info(
-                f"Prepared {n_rows} raw rows for lakehouse: "
-                f"typename={typename}, file={out_file}"
+                f"Prepared {total_rows} raw rows for lakehouse: "
+                f"typename={typename}, chunks={chunk_idx}"
             )
 
     # Upload parquet files to object store so MDLH can read them from S3

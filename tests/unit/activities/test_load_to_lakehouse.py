@@ -2,8 +2,10 @@
 
 import json
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
+import pyarrow as pa
+import pyarrow.parquet as pq_lib
 import pytest
 
 from application_sdk.activities.common.models import (
@@ -13,13 +15,20 @@ from application_sdk.activities.common.models import (
     LhTableWriteMode,
 )
 from application_sdk.activities.metadata_extraction.lakehouse import (
-    convert_raw_parquet_to_jsonl,
+    convert_raw_parquet_to_parquet,
     submit_and_poll_mdlh_load,
 )
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.workflows.metadata_extraction.lakehouse import (
     resolve_iceberg_table,
 )
+
+
+def _write_test_parquet(path: str, data: dict) -> str:
+    """Write a dict of columns to a parquet file and return the path."""
+    table = pa.table(data)
+    pq_lib.write_table(table, path)
+    return path
 
 
 def _make_workflow_args(
@@ -75,7 +84,7 @@ class _MockSession:
     def post(self, url, json=None, headers=None):
         return self._post_response
 
-    def get(self, url, headers=None):
+    def get(self, url, headers=None, timeout=None):
         return next(self._get_responses)
 
     async def __aenter__(self):
@@ -354,7 +363,7 @@ class TestResolveIcebergTable:
         assert resolve_iceberg_table("snowflakedynamictable") == "snowflakedynamictable"
 
 
-class TestConvertRawParquetToJsonl:
+class TestConvertRawParquetToParquet:
     @patch(
         "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID", "t1"
     )
@@ -363,7 +372,7 @@ class TestConvertRawParquetToJsonl:
     async def test_empty_typenames_returns_base_dir(self, mock_fileops, mock_download):
         """Empty typenames list returns base_dir without processing."""
         args = {"output_path": "/tmp/out", "workflow_id": "w1", "workflow_run_id": "r1"}
-        result = await convert_raw_parquet_to_jsonl(args, [])
+        result = await convert_raw_parquet_to_parquet(args, [])
         assert result.endswith("raw_lakehouse")
         mock_download.assert_not_called()
 
@@ -380,7 +389,7 @@ class TestConvertRawParquetToJsonl:
         mock_download.return_value = []
         mock_objectstore.upload_prefix = AsyncMock()
         args = {"output_path": "/tmp/out", "workflow_id": "w1", "workflow_run_id": "r1"}
-        result = await convert_raw_parquet_to_jsonl(args, ["database"])
+        result = await convert_raw_parquet_to_parquet(args, ["database"])
         assert result.endswith("raw_lakehouse")
         mock_download.assert_called_once()
 
@@ -389,53 +398,46 @@ class TestConvertRawParquetToJsonl:
     )
     @patch("application_sdk.activities.metadata_extraction.lakehouse.ObjectStore")
     @patch("application_sdk.activities.metadata_extraction.lakehouse.download_files")
-    async def test_writes_jsonl_with_correct_schema(
+    async def test_writes_parquet_with_correct_schema(
         self, mock_download, mock_objectstore, tmp_path
     ):
-        """Parquet rows are wrapped with metadata columns in output JSONL."""
-        mock_download.return_value = [str(tmp_path / "fake.parquet")]
+        """Parquet rows are enriched with metadata columns in output parquet."""
+        src_file = _write_test_parquet(
+            str(tmp_path / "src.parquet"),
+            {"database_name": ["mydb"], "extra_col": ["val1"]},
+        )
+        mock_download.return_value = [src_file]
         mock_objectstore.upload_prefix = AsyncMock()
 
-        mock_df = MagicMock()
-        mock_df.to_pydict.return_value = {
-            "database_name": ["mydb"],
-            "extra_col": ["val1"],
+        out_base = str(tmp_path / "output")
+        os.makedirs(os.path.join(out_base, "raw", "database"), exist_ok=True)
+
+        args = {
+            "output_path": out_base,
+            "workflow_id": "wf-1",
+            "workflow_run_id": "run-1",
+            "connection": {"connection_qualified_name": "default/pg/123"},
         }
 
-        with patch.dict("sys.modules", {"daft": MagicMock()}):
-            import sys
+        result = await convert_raw_parquet_to_parquet(args, ["database"])
 
-            sys.modules["daft"].read_parquet.return_value = mock_df
+        assert result.endswith("raw_lakehouse")
 
-            out_base = str(tmp_path / "output")
-            os.makedirs(os.path.join(out_base, "raw", "database"), exist_ok=True)
+        out_file = os.path.join(result, "database", "chunk-0.parquet")
+        assert os.path.exists(out_file)
 
-            args = {
-                "output_path": out_base,
-                "workflow_id": "wf-1",
-                "workflow_run_id": "run-1",
-                "connection": {"connection_qualified_name": "default/pg/123"},
-            }
+        table = pq_lib.read_table(out_file)
+        record = table.to_pydict()
 
-            result = await convert_raw_parquet_to_jsonl(args, ["database"])
-
-            assert result.endswith("raw_lakehouse")
-
-            out_file = os.path.join(result, "database", "chunk-0.jsonl")
-            assert os.path.exists(out_file)
-
-            with open(out_file, "r") as f:
-                record = json.loads(f.readline())
-
-            assert record["typename"] == "database"
-            assert record["connection_qualified_name"] == "default/pg/123"
-            assert record["workflow_id"] == "wf-1"
-            assert record["workflow_run_id"] == "run-1"
-            assert record["tenant_id"] == "t1"
-            assert record["entity_name"] == "mydb"
-            raw = json.loads(record["raw_record"])
-            assert raw["database_name"] == "mydb"
-            assert raw["extra_col"] == "val1"
+        assert record["typename"] == ["database"]
+        assert record["connection_qualified_name"] == ["default/pg/123"]
+        assert record["workflow_id"] == ["wf-1"]
+        assert record["workflow_run_id"] == ["run-1"]
+        assert record["tenant_id"] == ["t1"]
+        assert record["entity_name"] == ["mydb"]
+        raw = json.loads(record["raw_record"][0])
+        assert raw["database_name"] == "mydb"
+        assert raw["extra_col"] == "val1"
 
     @patch(
         "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID", "t1"
@@ -446,34 +448,29 @@ class TestConvertRawParquetToJsonl:
         self, mock_download, mock_objectstore, tmp_path
     ):
         """Typename not in _RAW_ENTITY_NAME_FIELDS → entity_name is empty."""
-        mock_download.return_value = [str(tmp_path / "fake.parquet")]
+        src_file = _write_test_parquet(
+            str(tmp_path / "src.parquet"), {"some_col": ["val"]}
+        )
+        mock_download.return_value = [src_file]
         mock_objectstore.upload_prefix = AsyncMock()
 
-        mock_df = MagicMock()
-        mock_df.to_pydict.return_value = {"some_col": ["val"]}
+        out_base = str(tmp_path / "output")
+        os.makedirs(os.path.join(out_base, "raw", "custom_type"), exist_ok=True)
 
-        with patch.dict("sys.modules", {"daft": MagicMock()}):
-            import sys
+        args = {
+            "output_path": out_base,
+            "workflow_id": "wf-1",
+            "workflow_run_id": "run-1",
+            "connection": {"connection_qualified_name": "conn/1"},
+        }
 
-            sys.modules["daft"].read_parquet.return_value = mock_df
+        result = await convert_raw_parquet_to_parquet(args, ["custom_type"])
 
-            out_base = str(tmp_path / "output")
-            os.makedirs(os.path.join(out_base, "raw", "custom_type"), exist_ok=True)
+        out_file = os.path.join(result, "custom_type", "chunk-0.parquet")
+        table = pq_lib.read_table(out_file)
+        record = table.to_pydict()
 
-            args = {
-                "output_path": out_base,
-                "workflow_id": "wf-1",
-                "workflow_run_id": "run-1",
-                "connection": {"connection_qualified_name": "conn/1"},
-            }
-
-            result = await convert_raw_parquet_to_jsonl(args, ["custom_type"])
-
-            out_file = os.path.join(result, "custom_type", "chunk-0.jsonl")
-            with open(out_file, "r") as f:
-                record = json.loads(f.readline())
-
-            assert record["entity_name"] == ""
+        assert record["entity_name"] == [""]
 
     @patch(
         "application_sdk.activities.metadata_extraction.lakehouse.APP_TENANT_ID", "t1"
@@ -481,25 +478,24 @@ class TestConvertRawParquetToJsonl:
     @patch("application_sdk.activities.metadata_extraction.lakehouse.download_files")
     async def test_parquet_read_failure_skips_file(self, mock_download, tmp_path):
         """Failed parquet read is skipped, doesn't crash the whole conversion."""
-        mock_download.return_value = [str(tmp_path / "bad.parquet")]
+        # Write a corrupt file (not valid parquet)
+        bad_file = str(tmp_path / "bad.parquet")
+        with open(bad_file, "w") as f:
+            f.write("not a parquet file")
+        mock_download.return_value = [bad_file]
 
-        with patch.dict("sys.modules", {"daft": MagicMock()}):
-            import sys
+        out_base = str(tmp_path / "output")
+        os.makedirs(os.path.join(out_base, "raw", "table"), exist_ok=True)
 
-            sys.modules["daft"].read_parquet.side_effect = Exception("corrupt file")
+        args = {
+            "output_path": out_base,
+            "workflow_id": "wf-1",
+            "workflow_run_id": "run-1",
+        }
 
-            out_base = str(tmp_path / "output")
-            os.makedirs(os.path.join(out_base, "raw", "table"), exist_ok=True)
+        result = await convert_raw_parquet_to_parquet(args, ["table"])
 
-            args = {
-                "output_path": out_base,
-                "workflow_id": "wf-1",
-                "workflow_run_id": "run-1",
-            }
-
-            result = await convert_raw_parquet_to_jsonl(args, ["table"])
-
-            # No output file should be written
-            out_dir = os.path.join(result, "table")
-            if os.path.exists(out_dir):
-                assert len(os.listdir(out_dir)) == 0
+        # No output file should be written
+        out_dir = os.path.join(result, "table")
+        if os.path.exists(out_dir):
+            assert len(os.listdir(out_dir)) == 0

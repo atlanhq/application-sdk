@@ -55,9 +55,9 @@ class LakehouseLoadMixin:
     ) -> None:
         """Prepare raw parquet and load into the per-connector raw table.
 
-        Converts raw parquet files into common-schema JSONL (with metadata
-        columns + raw_record as JSON string), then loads into
-        int_entity_raw.{APPLICATION_NAME} via MDLH /load API.
+        Enriches raw parquet files with metadata columns (+ raw_record as
+        JSON string), then loads into int_entity_raw.{APPLICATION_NAME}
+        via MDLH /load API.
 
         No-op if lakehouse loading is disabled or no typenames were extracted.
         """
@@ -70,19 +70,20 @@ class LakehouseLoadMixin:
             logger.info("Lakehouse load (raw) skipped")
             return
 
-        # Step 1: Prepare raw parquet -> common-schema JSONL
+        # Step 1: Enrich raw parquet with metadata columns
         # The activity reads output_path, workflow_id, workflow_run_id,
         # connection info directly from workflow_args.
-        workflow_args["_extracted_typenames"] = extracted_typenames
+        # Shallow copy to avoid mutating the shared workflow_args dict.
+        prepare_args = {**workflow_args, "_extracted_typenames": extracted_typenames}
         raw_lh_dir = await workflow.execute_activity_method(
             self.activities_cls.prepare_raw_for_lakehouse,
-            args=[workflow_args],
+            args=[prepare_args],
             retry_policy=RetryPolicy(maximum_attempts=6, backoff_coefficient=2),
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
 
-        # Step 2: Load JSONL into int_entity_raw.{connector}
+        # Step 2: Load parquet into int_entity_raw.{connector}
         logger.info(
             f"Loading raw data into {LH_LOAD_RAW_NAMESPACE}.{LH_LOAD_RAW_TABLE_NAME}"
         )
@@ -91,7 +92,7 @@ class LakehouseLoadMixin:
             namespace=LH_LOAD_RAW_NAMESPACE,
             table_name=LH_LOAD_RAW_TABLE_NAME,
             mode=LH_LOAD_RAW_MODE,
-            file_extension=".jsonl",
+            file_extension=".parquet",
         )
 
     async def load_transformed_to_lakehouse(
@@ -116,19 +117,27 @@ class LakehouseLoadMixin:
 
         output_path = workflow_args.get("output_path", "")
 
+        load_tasks = []
         for typename in typenames:
             iceberg_table = resolve_iceberg_table(typename)
             logger.info(
                 f"Loading transformed data for typename={typename} "
                 f"into {LH_LOAD_TRANSFORMED_NAMESPACE}.{iceberg_table}"
             )
-            await self._submit_lakehouse_load(
-                output_path=f"{output_path}/transformed/{typename}",
-                namespace=LH_LOAD_TRANSFORMED_NAMESPACE,
-                table_name=iceberg_table,
-                mode=LH_LOAD_TRANSFORMED_MODE,
-                file_extension=".jsonl",
+            load_tasks.append(
+                self._submit_lakehouse_load(
+                    output_path=f"{output_path}/transformed/{typename}",
+                    namespace=LH_LOAD_TRANSFORMED_NAMESPACE,
+                    table_name=iceberg_table,
+                    mode=LH_LOAD_TRANSFORMED_MODE,
+                    file_extension=".jsonl",
+                )
             )
+
+        # Load all typenames concurrently — each is an independent MDLH /load job
+        import asyncio
+
+        await asyncio.gather(*load_tasks)
 
     async def _submit_lakehouse_load(
         self,
