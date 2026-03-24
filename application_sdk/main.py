@@ -153,7 +153,17 @@ class AppConfig:
 
         mode = args.mode or _env("ATLAN_APP_MODE")
         if not mode:
-            raise ValueError("Mode is required. Use --mode or set ATLAN_APP_MODE.")
+            # Fall back to APPLICATION_MODE with value mapping for backwards-compat.
+            # WORKER→worker, SERVER→handler, unset→combined
+            _legacy_mode = _env("APPLICATION_MODE").upper()
+            mode = {"WORKER": "worker", "SERVER": "handler"}.get(
+                _legacy_mode, "combined" if not _legacy_mode else ""
+            )
+        if not mode:
+            raise ValueError(
+                "Mode is required. Use --mode, set ATLAN_APP_MODE, "
+                "or set APPLICATION_MODE (legacy)."
+            )
 
         app_module = args.app or _env("ATLAN_APP_MODULE")
         if not app_module:
