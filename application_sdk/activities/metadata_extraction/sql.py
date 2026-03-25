@@ -21,8 +21,8 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.activities.metadata_extraction.lakehouse import (
     convert_raw_parquet_to_parquet,
-    submit_and_poll_mdlh_load,
 )
+from application_sdk.clients.mdlh import MdlhClient
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.common.utils import prepare_query, read_sql_files
@@ -763,7 +763,18 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             - mode: str — "APPEND" or "UPSERT"
             - file_extension: str — ".parquet" or ".jsonl"
         """
-        return await submit_and_poll_mdlh_load(workflow_args)
+        lh_config = workflow_args.get("lh_load_config")
+        if not lh_config:
+            raise ActivityError(
+                f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: "
+                "Missing lh_load_config in workflow_args"
+            )
+        client = MdlhClient()
+        await client.load()
+        try:
+            return await client.submit_and_poll(lh_config)
+        finally:
+            await client.close()
 
     @activity.defn
     @auto_heartbeater

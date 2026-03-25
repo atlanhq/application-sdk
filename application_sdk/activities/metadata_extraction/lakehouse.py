@@ -1,8 +1,9 @@
-"""Lakehouse loading activities — submit MDLH /load jobs and prepare raw data.
+"""Lakehouse loading activities — prepare raw data for MDLH ingestion.
 
-This module contains the core implementation for:
-- submit_and_poll_mdlh_load: POST to MDLH /load, poll until completion
+This module contains the parquet enrichment logic:
 - convert_raw_parquet_to_parquet: enrich raw parquet with metadata columns
+
+HTTP interactions with MDLH live in ``application_sdk.clients.mdlh.MdlhClient``.
 """
 
 import asyncio
@@ -10,32 +11,13 @@ import os
 from time import time
 from typing import Any, Dict, List
 
-import aiohttp
-
-from application_sdk.activities.common.models import (
-    ActivityStatistics,
-    LhLoadRequest,
-    LhLoadResponse,
-    LhLoadStatusResponse,
-)
-from application_sdk.activities.common.utils import get_object_store_prefix
-from application_sdk.common.error_codes import ActivityError
 from application_sdk.common.file_ops import SafeFileOps
-from application_sdk.constants import (
-    APP_TENANT_ID,
-    LH_LOAD_MAX_POLL_ATTEMPTS,
-    LH_LOAD_POLL_INTERVAL_SECONDS,
-    MDLH_BASE_URL,
-)
+from application_sdk.constants import APP_TENANT_ID
 from application_sdk.io.utils import download_files
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
-
-_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
-_NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404, 405, 422}
-_TERMINAL_FAILURE_STATES = {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}
 
 # Maps SDK typename to the raw column that holds the entity name.
 _RAW_ENTITY_NAME_FIELDS: Dict[str, str] = {
@@ -44,180 +26,6 @@ _RAW_ENTITY_NAME_FIELDS: Dict[str, str] = {
     "table": "table_name",
     "column": "column_name",
 }
-
-
-# ---------------------------------------------------------------------------
-# Tenant-level lakehouse availability check
-# ---------------------------------------------------------------------------
-
-
-_lakehouse_enabled_cache: Dict[str, Any] = {"value": None, "expires_at": 0.0}
-_HEALTH_CHECK_TTL_SECONDS = 60
-
-
-async def check_lakehouse_enabled() -> bool:
-    """Check whether the lakehouse service is available on this tenant.
-
-    Hits the MDLH Spring Boot actuator health endpoint.  Returns True if
-    MDLH is reachable and healthy, False otherwise.  This lets the SDK
-    gracefully skip lakehouse loading on tenants where MDLH is not deployed
-    (i.e. lakehouse-secrets / lakehouse-config are not mounted).
-
-    Positive results are cached for 60 seconds to avoid redundant health
-    checks when multiple load calls happen within the same workflow run.
-    Negative results are never cached so transient outages (deploys, network
-    blips) don't cause a 60-second window of silently skipped loads.
-    """
-    now = time()
-    if (
-        _lakehouse_enabled_cache["value"] is True
-        and now < _lakehouse_enabled_cache["expires_at"]
-    ):
-        return True
-
-    result = await _fetch_lakehouse_health()
-    if result:
-        _lakehouse_enabled_cache["value"] = True
-        _lakehouse_enabled_cache["expires_at"] = now + _HEALTH_CHECK_TTL_SECONDS
-    else:
-        # Clear cache so next call retries immediately
-        _lakehouse_enabled_cache["value"] = None
-    return result
-
-
-async def _fetch_lakehouse_health() -> bool:
-    """Hit the MDLH actuator health endpoint and return availability."""
-    health_url = f"{MDLH_BASE_URL}/actuator/health"
-    try:
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=5)
-        ) as session:
-            async with session.get(health_url) as resp:
-                if resp.status == 200:
-                    return True
-                logger.info(
-                    f"MDLH health check returned {resp.status}, "
-                    "lakehouse not available on this tenant"
-                )
-                return False
-    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
-        logger.info(f"MDLH not reachable ({e}), lakehouse not available on this tenant")
-        return False
-
-
-# ---------------------------------------------------------------------------
-# MDLH /load: submit + poll
-# ---------------------------------------------------------------------------
-
-
-async def submit_and_poll_mdlh_load(
-    workflow_args: Dict[str, Any],
-) -> ActivityStatistics:
-    """Submit a load job to MDLH and poll until completion.
-
-    Reads ``lh_load_config`` from *workflow_args* containing output_path,
-    namespace, table_name, mode, and file_extension.  Builds an S3 glob
-    pattern, POSTs to ``/atlan/lh/v1/{tenant}/load``, then polls the
-    status endpoint until COMPLETED or a terminal failure state.
-    """
-    lh_config = workflow_args.get("lh_load_config")
-    if not lh_config:
-        raise ActivityError(
-            f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: Missing lh_load_config in workflow_args"
-        )
-
-    output_path = lh_config.get("output_path", "")
-    namespace = lh_config.get("namespace", "")
-    table_name = lh_config.get("table_name", "")
-    mode = lh_config.get("mode", "APPEND")
-    file_extension = lh_config.get("file_extension", "")
-
-    if not namespace or not table_name or not output_path or not file_extension:
-        raise ActivityError(
-            f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: "
-            "Missing required fields in lh_load_config (namespace, table_name, output_path, file_extension)"
-        )
-
-    s3_prefix = get_object_store_prefix(output_path)
-    pattern = f"{s3_prefix}/**/*{file_extension}"
-
-    request = LhLoadRequest(
-        file_keys=[],
-        patterns=[pattern],
-        namespace=namespace,
-        table_name=table_name,
-        mode=mode,
-    )
-    request_payload = request.model_dump(by_alias=True, exclude_none=True)
-
-    base_url = f"{MDLH_BASE_URL}/atlan/lh/v1/{APP_TENANT_ID}/load"
-    headers = {"X-Atlan-Tenant-Id": APP_TENANT_ID}
-
-    async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
-        async with session.post(
-            base_url, json=request_payload, headers=headers
-        ) as resp:
-            if resp.status != 202:
-                body = await resp.text()
-                raise ActivityError(
-                    f"{ActivityError.LAKEHOUSE_LOAD_API_ERROR}: "
-                    f"MDLH load API returned {resp.status}: {body}"
-                )
-            response_data = await resp.json()
-
-        load_response = LhLoadResponse.model_validate(response_data)
-        job_id = load_response.job_id
-        logger.info(f"Lakehouse load job submitted: job_id={job_id}")
-
-    # Poll for completion — reuse a single session; timeout is per-request, not session-wide
-    status_url = f"{base_url}/{job_id}/status"
-    poll_headers = {**headers, "X-Lakehouse-Job-Id": job_id}
-    async with aiohttp.ClientSession() as poll_session:
-        for attempt in range(LH_LOAD_MAX_POLL_ATTEMPTS):
-            await asyncio.sleep(LH_LOAD_POLL_INTERVAL_SECONDS)
-            try:
-                async with poll_session.get(
-                    status_url, headers=poll_headers, timeout=_HTTP_TIMEOUT
-                ) as resp:
-                    if resp.status in _NON_RETRYABLE_STATUS_CODES:
-                        body = await resp.text()
-                        raise ActivityError(
-                            f"{ActivityError.LAKEHOUSE_LOAD_API_ERROR}: "
-                            f"MDLH status poll returned non-retryable {resp.status}: {body}"
-                        )
-                    if resp.status != 200:
-                        logger.warning(
-                            f"Lakehouse load status poll returned {resp.status} "
-                            f"(attempt {attempt + 1}/{LH_LOAD_MAX_POLL_ATTEMPTS}), retrying..."
-                        )
-                        continue
-                    status_data = await resp.json()
-            except ActivityError:
-                raise
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logger.warning(
-                    f"Lakehouse load status poll error (attempt {attempt + 1}/{LH_LOAD_MAX_POLL_ATTEMPTS}): {e}, retrying..."
-                )
-                continue
-
-            status_response = LhLoadStatusResponse.model_validate(status_data)
-            current_status = status_response.status.upper()
-
-            if current_status == "COMPLETED":
-                logger.info(f"Lakehouse load job completed: job_id={job_id}")
-                return ActivityStatistics(typename="lakehouse-load-completed")
-
-            if current_status in _TERMINAL_FAILURE_STATES:
-                raise ActivityError(
-                    f"{ActivityError.LAKEHOUSE_LOAD_ERROR}: "
-                    f"Lakehouse load job {job_id} ended with status: {current_status}"
-                )
-
-    raise ActivityError(
-        f"{ActivityError.LAKEHOUSE_LOAD_TIMEOUT_ERROR}: "
-        f"Lakehouse load job {job_id} did not complete within "
-        f"{LH_LOAD_MAX_POLL_ATTEMPTS * LH_LOAD_POLL_INTERVAL_SECONDS}s"
-    )
 
 
 # ---------------------------------------------------------------------------
