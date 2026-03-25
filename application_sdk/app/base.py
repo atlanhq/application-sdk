@@ -1335,7 +1335,7 @@ def _apply_app_registration(
         # Try to get correlation ID from context, fallback to run_id
         try:
             with workflow.unsafe.imports_passed_through():
-                from application_sdk.observability.context import (
+                from application_sdk.observability.correlation import (
                     get_correlation_context,
                 )
             _corr_ctx = get_correlation_context()
