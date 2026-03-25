@@ -1119,6 +1119,28 @@ def create_app_handler_service(
         raise HTTPException(status_code=404, detail="No manifest available")
 
     # ------------------------------------------------------------------
+    # Backwards-compatibility alias — TACTICAL, remove once Heracles /
+    # Automation Engine is updated to call /workflows/v1/manifest instead.
+    # v2 exposed an unversioned /manifest endpoint; v3 moved it to the
+    # canonical versioned path above.  Until the orchestrator is patched,
+    # this alias keeps existing deployments working.
+    # TODO(v3-cleanup): delete this route after Heracles/AE migration.
+    # ------------------------------------------------------------------
+
+    @app.get("/manifest", include_in_schema=False)
+    async def get_manifest_legacy() -> Response:
+        """Unversioned alias for ``GET /workflows/v1/manifest``.
+
+        .. deprecated::
+            This route exists **only** for backwards-compatibility with
+            Heracles / Automation Engine, which still calls the v2-era
+            unversioned ``/manifest`` path.  It will be removed once those
+            orchestrators have been updated to use ``/workflows/v1/manifest``.
+            Do **not** add new callers of this endpoint.
+        """
+        return await get_manifest()
+
+    # ------------------------------------------------------------------
     # Health probes
     # ------------------------------------------------------------------
 
