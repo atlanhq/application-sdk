@@ -7,6 +7,7 @@ The Application SDK uses environment variables for configuration. These can be s
 | Environment Variable | Description | Default Value | Use Case |
 |---------------------|-------------|---------------|----------|
 | `ATLAN_APP_MODULE` | **REQUIRED.** App class to load, in `module:ClassName` form | _(none — startup fails if unset)_ | Set in your app's `Dockerfile` as `ENV ATLAN_APP_MODULE=app.app:MyApp`; also accepted via `--app` CLI flag |
+| `ATLAN_CONTRACT_GENERATED_DIR` | Directory where generated contract JSON files (configmaps, manifest) are stored | `/app/contract/generated` (base image default) | Override in your app's `Dockerfile` if generated files land in a non-standard location |
 | `ATLAN_APP_MODE` | Run mode: `worker`, `handler`, or `combined` | `combined` | Determines which subsystems start; override via `--mode` CLI flag |
 | `ATLAN_APPLICATION_NAME` | Name of the application, used for identification and path generation | `default` | Used in object store paths, logging, and workflow identification |
 | `ATLAN_DEPLOYMENT_NAME` | Name of the deployment, distinguishes between different deployments of the same application | `local` | Used to isolate resources between environments (dev, staging, prod) |

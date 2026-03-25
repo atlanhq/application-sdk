@@ -47,7 +47,8 @@ ENV UV_NO_CACHE=1 \
     DAPR_GRACEFUL_SHUTDOWN_SECONDS=3600 \
     DO_NOT_TRACK=true \
     SCARF_NO_ANALYTICS=true \
-    DAFT_ANALYTICS_ENABLED=0
+    DAFT_ANALYTICS_ENABLED=0 \
+    ATLAN_CONTRACT_GENERATED_DIR=/app/contract/generated
 
 # Copy entrypoint script for graceful shutdown handling
 COPY --chown=appuser:appuser entrypoint.sh /usr/local/bin/entrypoint.sh

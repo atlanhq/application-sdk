@@ -29,6 +29,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import mimetypes
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -158,7 +159,11 @@ _state_store: StateStore | None = None
 _storage: ObjectStore | None = None
 
 # Directory where generated contract JSON files are stored
-CONTRACT_GENERATED_DIR = Path.cwd() / "contract" / "generated"
+CONTRACT_GENERATED_DIR = Path(
+    os.environ.get(
+        "ATLAN_CONTRACT_GENERATED_DIR", Path.cwd() / "contract" / "generated"
+    )
+)
 
 
 async def _get_temporal_client() -> Client:
@@ -866,7 +871,6 @@ def create_app_handler_service(
             raise HTTPException(status_code=503, detail="Storage not configured")
 
         import asyncio
-        import os
         import shutil
         import tempfile
         from pathlib import PurePosixPath

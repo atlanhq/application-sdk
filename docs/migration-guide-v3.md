@@ -222,9 +222,14 @@ is not set. Set it in your app's `Dockerfile` — it should never be left to Hel
 runtime defaults:
 
 ```dockerfile
-ENV ATLAN_APP_MODULE=app.app:MyMetadataExtractor
+ENV ATLAN_APP_MODULE=app.app:MyMetadataExtractor \
+    ATLAN_CONTRACT_GENERATED_DIR=/app/contract/generated
 CMD ["application-sdk", "--mode", "combined"]
 ```
+
+`ATLAN_CONTRACT_GENERATED_DIR` tells the SDK where to find the generated contract JSON files
+(configmaps, manifest). The base image sets this to `/app/contract/generated`; override it in
+your app's `Dockerfile` if your generated files land elsewhere.
 
 The `--app` CLI flag is an alternative (takes precedence over the env var), but `ENV` in the
 Dockerfile is the recommended approach so the value is locked to the image:
