@@ -827,19 +827,24 @@ def create_app_handler_service(
 
     @app.get("/workflows/v1/config/{config_id}")
     async def get_workflow_config(config_id: str) -> JSONResponse:
-        if _state_store is not None:
-            
-        if _state_store is not None:
-            config = await _state_store.load(f"workflows/{config_id}")
-        else:
-            from application_sdk.services.statestore import StateStore, StateType
-            config = await StateStore.get_state(config_id, StateType.CREDENTIALS)
-        
+        config = None
         if _state_store is not None:
             config = await _state_store.load(f"workflows/{config_id}")
+        elif _storage is not None:
+            import json as _json
+            from application_sdk.storage.ops import download_file as _dl
+            import tempfile, os
+            key = f"config/credentials/{config_id}.json"
+            try:
+                tmp = tempfile.mktemp(suffix=".json")
+                await _dl(key, tmp, _storage)
+                with open(tmp) as _f:
+                    config = _json.load(_f)
+                os.unlink(tmp)
+            except Exception:
+                config = None
         else:
-            from application_sdk.services.statestore import StateStore, StateType
-            config = await StateStore.get_state(config_id, StateType.CREDENTIALS)
+            raise HTTPException(status_code=503, detail="No state store or object store configured")
         if config is None:
             raise HTTPException(
                 status_code=404, detail=f"Config not found: {config_id}"
