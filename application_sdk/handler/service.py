@@ -870,8 +870,12 @@ def create_app_handler_service(
     async def get_workflow_config(config_id: str) -> JSONResponse:
         config = None
         if _state_store is not None:
-            config = await _state_store.load(f"workflows/{config_id}")
-        elif _storage is not None:
+            try:
+                config = await _state_store.load(f"workflows/{config_id}")
+            except Exception:
+                logger.warning("State store load failed, trying object store fallback")
+                config = None
+        if config is None and _storage is not None:
             import json as _json
             from application_sdk.storage.ops import download_file as _dl
             import tempfile, os
@@ -884,7 +888,7 @@ def create_app_handler_service(
                 os.unlink(tmp)
             except Exception:
                 config = None
-        else:
+        if config is None and _state_store is None and _storage is None:
             raise HTTPException(status_code=503, detail="No state store or object store configured")
         if config is None:
             raise HTTPException(
@@ -900,10 +904,14 @@ def create_app_handler_service(
     @app.post("/workflows/v1/config/{config_id}")
     async def update_workflow_config(config_id: str, request: Request) -> JSONResponse:
         body = await request.json()
+        saved = False
         if _state_store is not None:
-            await _state_store.save(f"workflows/{config_id}", body)
-        elif _storage is not None:
-            # Fallback: use object store when Dapr statestore unavailable
+            try:
+                await _state_store.save(f"workflows/{config_id}", body)
+                saved = True
+            except Exception:
+                logger.warning("State store save failed, trying object store fallback")
+        if not saved and _storage is not None:
             import json as _json
             from application_sdk.storage.ops import upload_file as _ul
             import tempfile, os
@@ -913,7 +921,8 @@ def create_app_handler_service(
                 _json.dump(body, _f)
             await _ul(key, tmp, _storage)
             os.unlink(tmp)
-        else:
+            saved = True
+        if not saved:
             raise HTTPException(status_code=503, detail="No state store or object store configured")
         return JSONResponse(
             content=_wrap_response(
