@@ -100,8 +100,9 @@ jobs:
         env:
           APP_PUBLISH_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN }}
         run: |
-          atlan config set atlan_base_url "${{ inputs.base_url }}"
-          atlan config set atlan_api_key "$APP_PUBLISH_TOKEN"
+          set -euo pipefail
+          atlan config atlan_base_url "${{ inputs.base_url }}"
+          atlan config atlan_api_key "$APP_PUBLISH_TOKEN"
 
       - name: Publish
         env:
