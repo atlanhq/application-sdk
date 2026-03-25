@@ -136,7 +136,7 @@ class AppConfig:
     def __post_init__(self) -> None:
         """Derive task_queue from app_module when not explicitly set."""
         if not self.task_queue and self.app_module:
-            self.task_queue = f"{_derive_service_name(self.app_module)}-queue"
+            self.task_queue = _derive_task_queue(self.app_module)
 
     @classmethod
     def from_args_and_env(cls, args: argparse.Namespace) -> AppConfig:
@@ -186,8 +186,9 @@ class AppConfig:
             else ""
         )
 
-        # Task queue: derive from app module (v2 behaviour) when not explicitly set
-        _default_task_queue = f"{_derive_service_name(app_module)}-queue"
+        # Task queue: prefer ATLAN_APPLICATION_NAME+ATLAN_DEPLOYMENT_NAME (matches v2
+        # TemporalWorkflowClient.get_worker_task_queue()), fall back to class-name derivation.
+        _default_task_queue = _derive_task_queue(app_module)
 
         return cls(
             mode=mode,
@@ -434,14 +435,27 @@ def _create_infrastructure(
 def _derive_service_name(app_module: str) -> str:
     """Convert "my_package.apps:MyApp" to "my-app" (kebab-case)."""
     if ":" in app_module:
-        class_name = app_module.split(":")[1]
-        result = ""
-        for i, char in enumerate(class_name):
-            if char.isupper() and i > 0:
-                result += "-"
-            result += char.lower()
-        return result
+        from application_sdk.app.base import _pascal_to_kebab
+
+        return _pascal_to_kebab(app_module.split(":")[1])
     return "application-sdk"
+
+
+def _derive_task_queue(app_module: str) -> str:
+    """Derive the default task queue name.
+
+    Mirrors v2 TemporalWorkflowClient.get_worker_task_queue():
+    - If ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME are set → atlan-{app}-{deployment}
+    - If only ATLAN_APPLICATION_NAME is set → {app}
+    - Otherwise fall back to class-name derivation → {ClassName}-queue
+    """
+    app_name = os.environ.get("ATLAN_APPLICATION_NAME", "")
+    deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", "")
+    if app_name and deployment_name:
+        return f"atlan-{app_name}-{deployment_name}"
+    if app_name:
+        return app_name
+    return f"{_derive_service_name(app_module)}-queue"
 
 
 async def _flush_observability() -> None:

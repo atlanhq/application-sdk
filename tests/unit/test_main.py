@@ -27,9 +27,11 @@ class TestDeriveServiceName:
 
     def test_consecutive_uppercase(self) -> None:
         result = _derive_service_name("pkg:SQLExtractor")
-        # _derive_service_name processes each uppercase char, not _pascal_to_kebab
-        # "SQLExtractor" → "s-q-l-extractor" (simple char-by-char lowering)
-        assert result == "s-q-l-extractor"
+        assert result == "sql-extractor"
+
+    def test_openapi_consecutive_uppercase(self) -> None:
+        result = _derive_service_name("app.connector:OpenAPIConnector")
+        assert result == "open-api-connector"
 
     def test_empty_string_returns_fallback(self) -> None:
         result = _derive_service_name("")
@@ -254,9 +256,33 @@ class TestAppConfigFromArgsAndEnv:
     ) -> None:
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:MyConnector")
         monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
         args = self._make_args()
         config = AppConfig.from_args_and_env(args)
         assert config.task_queue == "my-connector-queue"
+
+    def test_task_queue_from_application_and_deployment_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app.connector:OpenAPIConnector")
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "production")
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.task_queue == "atlan-openapi-production"
+
+    def test_task_queue_from_application_name_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app.connector:OpenAPIConnector")
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        args = self._make_args()
+        config = AppConfig.from_args_and_env(args)
+        assert config.task_queue == "openapi"
 
     def test_task_queue_explicit_overrides_derived(
         self, monkeypatch: pytest.MonkeyPatch

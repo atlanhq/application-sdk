@@ -246,10 +246,12 @@ class TestAppWorker:
         mock_inner.run.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_emit_worker_start_event_suppresses_eventstore_failure(
+    async def test_emit_worker_start_event_suppresses_binding_error(
         self,
     ) -> None:
-        """Verify that EventStore failures are suppressed inside _emit_worker_start_event."""
+        """BindingError from missing eventstore binding is suppressed; worker starts normally."""
+        from application_sdk.infrastructure.bindings import BindingError
+
         mock_inner = mock.AsyncMock()
         mock_inner.run = mock.AsyncMock(return_value=None)
 
@@ -266,13 +268,41 @@ class TestAppWorker:
             },
         )
 
-        # Mock EventStore inside _emit_worker_start_event to raise
-        # The function itself has a try/except that suppresses failures
         with mock.patch(
-            "application_sdk.services.eventstore.EventStore.publish_event",
-            new=mock.AsyncMock(side_effect=Exception("event store down")),
+            "application_sdk.execution._temporal.interceptors.events._publish_event_via_binding",
+            new=mock.AsyncMock(side_effect=BindingError("binding not found")),
         ):
-            # Should NOT raise — failures are caught inside _emit_worker_start_event
+            # Should NOT raise — BindingError is caught inside _emit_worker_start_event
+            await app_worker.run()
+
+        mock_inner.run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_emit_worker_start_event_suppresses_unexpected_errors(
+        self,
+    ) -> None:
+        """All exceptions from event emission are suppressed; worker starts normally."""
+        mock_inner = mock.AsyncMock()
+        mock_inner.run = mock.AsyncMock(return_value=None)
+
+        app_worker = AppWorker(
+            mock_inner,
+            start_event_params={
+                "task_queue": "test-queue",
+                "app_name": "test-app",
+                "workflow_count": 1,
+                "activity_count": 2,
+                "max_concurrent_activities": 100,
+                "host": "localhost:7233",
+                "namespace": "default",
+            },
+        )
+
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.events._publish_event_via_binding",
+            new=mock.AsyncMock(side_effect=RuntimeError("unexpected")),
+        ):
+            # Should NOT raise — event emission is never on the critical path
             await app_worker.run()
 
         mock_inner.run.assert_called_once()
