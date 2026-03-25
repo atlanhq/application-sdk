@@ -151,7 +151,13 @@ class Input(BaseModel):
 
     model_config = ConfigDict()
 
-    _config_hash_exclude: ClassVar[set[str]] = set()
+    workflow_id: str = ""
+    """Temporal workflow ID for the current run. Populated by the framework at dispatch time."""
+
+    correlation_id: str = ""
+    """Caller-supplied correlation ID for tracing across systems."""
+
+    _config_hash_exclude: ClassVar[set[str]] = {"workflow_id", "correlation_id"}
     """Fields to exclude from config_hash(). Override in subclasses to list
     volatile/per-run fields that shouldn't affect checkpoint identity."""
 
