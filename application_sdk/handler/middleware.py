@@ -27,8 +27,13 @@ class CredentialFormatMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
+        logger.info(
+            f"CredentialFormatMiddleware processing: {request.url.path} {request.method}"
+        )
+
         # Only process auth endpoint POST requests
         if request.url.path == "/workflows/v1/auth" and request.method == "POST":
+            logger.info("Auth endpoint detected - checking credential format")
             try:
                 body = await request.body()
                 data = json.loads(body) if body else {}
