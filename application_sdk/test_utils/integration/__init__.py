@@ -103,6 +103,12 @@ from .comparison import (
 from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
 from .models import APIType, Scenario, ScenarioResult
 from .runner import BaseIntegrationTest, generate_test_methods, parametrize_scenarios
+from .validation import (
+    format_validation_report,
+    get_normalised_dataframe,
+    get_schema_file_paths,
+    validate_with_pandera,
+)
 
 # =============================================================================
 # Public API
@@ -165,4 +171,9 @@ __all__ = [
     "BaseIntegrationTest",
     "generate_test_methods",
     "parametrize_scenarios",
+    # Data Validation (Pandera)
+    "validate_with_pandera",
+    "format_validation_report",
+    "get_normalised_dataframe",
+    "get_schema_file_paths",
 ]

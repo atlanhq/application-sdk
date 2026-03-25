@@ -44,6 +44,7 @@ from .client import IntegrationTestClient
 from .comparison import compare_metadata, load_actual_output, load_expected_data
 from .lazy import evaluate_if_lazy
 from .models import APIType, Scenario, ScenarioResult
+from .validation import format_validation_report, validate_with_pandera
 
 logger = get_logger(__name__)
 
@@ -234,6 +235,9 @@ class BaseIntegrationTest:
 
     # Base path for extracted output (used by metadata output validation)
     extracted_output_base_path: str = ""
+
+    # Base path for pandera YAML schemas (used by data validation)
+    schema_base_path: str = ""
 
     # Internal state
     client: IntegrationTestClient
@@ -541,6 +545,11 @@ class BaseIntegrationTest:
             if scenario.expected_data and scenario.api_type == APIType.WORKFLOW:
                 self._validate_workflow_output(scenario, response)
 
+            # Step 5: Validate data with pandera if schema_base_path is set
+            schema_path = scenario.schema_base_path or self.schema_base_path
+            if schema_path and scenario.api_type == APIType.WORKFLOW:
+                self._validate_pandera_schemas(scenario, response, schema_path)
+
             logger.info(f"Scenario {scenario.name} passed")
 
         except Exception as e:
@@ -697,6 +706,74 @@ class BaseIntegrationTest:
         logger.info(
             f"Metadata validation passed for scenario '{scenario.name}': "
             f"{len(actual)} assets match expected baseline"
+        )
+
+    def _validate_pandera_schemas(
+        self,
+        scenario: Scenario,
+        response: Dict[str, Any],
+        schema_base_path: str,
+    ) -> None:
+        """Validate extracted workflow output against pandera YAML schemas.
+
+        This runs after the workflow completes and validates the actual
+        extracted data against pandera schemas for column types, value
+        ranges, and record counts.
+
+        Args:
+            scenario: The scenario with schema_base_path set.
+            response: The workflow start API response containing workflow_id/run_id.
+            schema_base_path: Path to directory containing pandera YAML schemas.
+
+        Raises:
+            AssertionError: If pandera validation fails.
+        """
+        data = response.get("data", {})
+        workflow_id = data.get("workflow_id")
+        run_id = data.get("run_id")
+
+        if not workflow_id or not run_id:
+            raise AssertionError(
+                f"Cannot validate pandera schemas for scenario '{scenario.name}': "
+                f"response missing workflow_id or run_id"
+            )
+
+        # Build the extracted output path
+        base_path = (
+            scenario.extracted_output_base_path or self.extracted_output_base_path
+        )
+        if not base_path:
+            raise AssertionError(
+                f"Cannot validate pandera schemas for scenario '{scenario.name}': "
+                f"extracted_output_base_path not set on scenario or test class"
+            )
+
+        extracted_output_path = f"{base_path}/{workflow_id}/{run_id}"
+
+        logger.info(
+            f"Running pandera validation for scenario '{scenario.name}' "
+            f"using schemas from {schema_base_path}"
+        )
+
+        results = validate_with_pandera(
+            schema_base_path=schema_base_path,
+            extracted_output_path=extracted_output_path,
+            subdirectory=scenario.output_subdirectory,
+        )
+
+        # Check if any validations failed
+        failures = [r for r in results if not r["success"]]
+        if failures:
+            report = format_validation_report(results)
+            raise AssertionError(
+                f"Pandera validation failed for scenario '{scenario.name}':\n\n"
+                + report
+            )
+
+        total_records = sum(r["record_count"] for r in results)
+        logger.info(
+            f"Pandera validation passed for scenario '{scenario.name}': "
+            f"{len(results)} schemas, {total_records} total records validated"
         )
 
     def _poll_workflow_completion(
