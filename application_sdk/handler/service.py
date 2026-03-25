@@ -38,6 +38,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel as PydanticBaseModel
 
+from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
@@ -158,7 +159,7 @@ _state_store: StateStore | None = None
 _storage: ObjectStore | None = None
 
 # Directory where generated contract JSON files are stored
-CONTRACT_GENERATED_DIR = Path.cwd() / "contract" / "generated"
+CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
 
 async def _get_temporal_client() -> Client:

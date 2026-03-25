@@ -267,9 +267,17 @@ is not set. Set it in your app's `Dockerfile` — it should never be left to Hel
 runtime defaults:
 
 ```dockerfile
-ENV ATLAN_APP_MODULE=app.app:MyMetadataExtractor
+ENV ATLAN_APP_MODULE=app.app:MyMetadataExtractor \
+    ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
 CMD ["application-sdk", "--mode", "combined"]
 ```
+
+`ATLAN_CONTRACT_GENERATED_DIR` tells the SDK where to find the generated contract JSON files
+(configmaps, manifest). Place these files inside your repo's `app/generated/` directory — the
+Pkl contract source (`contract/app.pkl`) outputs there, and `COPY app/ app/` in your Dockerfile
+automatically includes it. This makes the generated Python module (`app.generated`) directly
+importable. The base image default (`/app/app/generated`) matches this convention when your app
+code is copied to `/app/app/` in the image.
 
 The `--app` CLI flag is an alternative (takes precedence over the env var), but `ENV` in the
 Dockerfile is the recommended approach so the value is locked to the image:

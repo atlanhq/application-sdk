@@ -18,24 +18,26 @@ class TestBaseApplicationGetManifest:
     """Tests for BaseApplication.get_manifest."""
 
     def test_returns_none_when_no_contract_file(self):
-        """When contract/generated/manifest.json doesn't exist, returns None."""
+        """When app/generated/manifest.json doesn't exist, returns None."""
         app = BaseApplication("test-app")
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("pathlib.Path.cwd", return_value=Path(tmpdir)):
+            with patch("application_sdk.constants.CONTRACT_GENERATED_DIR", tmpdir):
                 result = app.get_manifest()
         assert result is None
 
     def test_returns_manifest_from_contract_file(self):
-        """When contract/generated/manifest.json exists, it's loaded and returned."""
+        """When app/generated/manifest.json exists, it's loaded and returned."""
         app = BaseApplication("test-app")
         manifest = {"execution_mode": "automation-engine", "dag": {"extract": {}}}
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            gen_dir = Path(tmpdir) / "contract" / "generated"
+            gen_dir = Path(tmpdir) / "app" / "generated"
             gen_dir.mkdir(parents=True)
             (gen_dir / "manifest.json").write_text(json.dumps(manifest))
 
-            with patch("pathlib.Path.cwd", return_value=Path(tmpdir)):
+            with patch(
+                "application_sdk.constants.CONTRACT_GENERATED_DIR", str(gen_dir)
+            ):
                 result = app.get_manifest()
 
         assert result is not None
@@ -47,12 +49,12 @@ class TestBaseApplicationGetManifest:
         manifest = {"task_queue": "atlan-myapp-{deployment_name}"}
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            gen_dir = Path(tmpdir) / "contract" / "generated"
+            gen_dir = Path(tmpdir) / "app" / "generated"
             gen_dir.mkdir(parents=True)
             (gen_dir / "manifest.json").write_text(json.dumps(manifest))
 
             with (
-                patch("pathlib.Path.cwd", return_value=Path(tmpdir)),
+                patch("application_sdk.constants.CONTRACT_GENERATED_DIR", str(gen_dir)),
                 patch("application_sdk.constants.DEPLOYMENT_NAME", "my-tenant"),
             ):
                 result = app.get_manifest()
@@ -65,12 +67,12 @@ class TestBaseApplicationGetManifest:
         manifest = {"task_queue": "app-{deployment_name}"}
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            gen_dir = Path(tmpdir) / "contract" / "generated"
+            gen_dir = Path(tmpdir) / "app" / "generated"
             gen_dir.mkdir(parents=True)
             (gen_dir / "manifest.json").write_text(json.dumps(manifest))
 
             with (
-                patch("pathlib.Path.cwd", return_value=Path(tmpdir)),
+                patch("application_sdk.constants.CONTRACT_GENERATED_DIR", str(gen_dir)),
                 patch("application_sdk.constants.DEPLOYMENT_NAME", None),
             ):
                 result = app.get_manifest()
@@ -113,7 +115,7 @@ class TestSQLAppGetManifest:
         """When _primary_workflow_class is not set, returns None (no contract file either)."""
         app = BaseSQLMetadataExtractionApplication("test-app")
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("pathlib.Path.cwd", return_value=Path(tmpdir)):
+            with patch("application_sdk.constants.CONTRACT_GENERATED_DIR", tmpdir):
                 result = app.get_manifest()
         assert result is None
 
@@ -124,7 +126,7 @@ class TestSQLAppGetManifest:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
-                patch("pathlib.Path.cwd", return_value=Path(tmpdir)),
+                patch("application_sdk.constants.CONTRACT_GENERATED_DIR", tmpdir),
                 patch(
                     "application_sdk.application.metadata_extraction.sql.DEPLOYMENT_NAME",
                     "my-tenant",
@@ -151,18 +153,20 @@ class TestSQLAppGetManifest:
         assert publish["depends_on"]["node_id"] == "extract"
 
     def test_contract_file_takes_priority_over_hardcoded_dag(self):
-        """When contract/generated/manifest.json exists, it wins over the hardcoded DAG."""
+        """When app/generated/manifest.json exists, it wins over the hardcoded DAG."""
         app = BaseSQLMetadataExtractionApplication("test-app")
         app._primary_workflow_class = BaseSQLMetadataExtractionWorkflow
 
         contract_manifest = {"execution_mode": "custom", "dag": {"custom-node": {}}}
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            gen_dir = Path(tmpdir) / "contract" / "generated"
+            gen_dir = Path(tmpdir) / "app" / "generated"
             gen_dir.mkdir(parents=True)
             (gen_dir / "manifest.json").write_text(json.dumps(contract_manifest))
 
-            with patch("pathlib.Path.cwd", return_value=Path(tmpdir)):
+            with patch(
+                "application_sdk.constants.CONTRACT_GENERATED_DIR", str(gen_dir)
+            ):
                 result = app.get_manifest()
 
         assert result["execution_mode"] == "custom"
@@ -175,7 +179,7 @@ class TestSQLAppGetManifest:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
-                patch("pathlib.Path.cwd", return_value=Path(tmpdir)),
+                patch("application_sdk.constants.CONTRACT_GENERATED_DIR", tmpdir),
                 patch(
                     "application_sdk.application.metadata_extraction.sql.DEPLOYMENT_NAME",
                     "t",
