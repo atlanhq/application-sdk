@@ -83,6 +83,7 @@ async def _emit_worker_start_event(
     from application_sdk.execution._temporal.interceptors.events import (
         _publish_event_via_binding,
     )
+    from application_sdk.infrastructure.bindings import BindingError
 
     deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
     host_part, _, port_part = host.partition(":")
@@ -109,6 +110,10 @@ async def _emit_worker_start_event(
 
     try:
         await _publish_event_via_binding(event)
+    except BindingError:
+        logger.warning(
+            "eventstore binding unavailable — worker_start event not emitted"
+        )
     except Exception:
         logger.warning("Failed to emit worker_start event", exc_info=True)
 
