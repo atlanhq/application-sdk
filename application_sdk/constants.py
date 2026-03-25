@@ -68,6 +68,11 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
+# Directory where contract-toolkit generated files (configmaps, manifest, Python types) live.
+# Convention: app/generated/ inside the repo (importable as app.generated).
+# In Docker (WORKDIR=/app, app code at /app/app/) this resolves to /app/app/generated.
+CONTRACT_GENERATED_DIR = os.environ.get("ATLAN_CONTRACT_GENERATED_DIR", "app/generated")
+
 # Cleanup Paths (custom paths for cleanup operations, supports multiple paths separated by comma)
 # If empty, cleanup activities will default to workflow-specific paths at runtime
 CLEANUP_BASE_PATHS = [

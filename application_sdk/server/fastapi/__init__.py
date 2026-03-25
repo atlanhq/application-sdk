@@ -766,7 +766,7 @@ class APIServer(ServerInterface):
             )
 
     async def list_configmaps(self):
-        """List available configmap IDs from contract/generated/.
+        """List available configmap IDs from app/generated/ (ATLAN_CONTRACT_GENERATED_DIR).
 
         Returns a JSON array of configmap IDs (filenames without .json)
         that are available for fetching via GET /configmap/{id}.

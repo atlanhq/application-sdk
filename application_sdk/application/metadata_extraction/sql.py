@@ -91,7 +91,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         """Return the manifest for SQL extraction apps.
 
         Priority:
-        1. contract/generated/manifest.json (if exists)
+        1. app/generated/manifest.json (if exists, via ATLAN_CONTRACT_GENERATED_DIR)
         2. Default hardcoded extract + publish DAG
         3. None (if no workflow class set)
         """

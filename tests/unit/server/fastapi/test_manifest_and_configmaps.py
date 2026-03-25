@@ -94,7 +94,7 @@ class TestListConfigmaps:
     """Tests for the /workflows/v1/configmaps endpoint."""
 
     async def test_list_configmaps_returns_empty_when_no_dir(self):
-        """When contract/generated doesn't exist, returns empty list."""
+        """When app/generated doesn't exist, returns empty list."""
         server = _make_server()
 
         with patch(
@@ -138,7 +138,7 @@ class TestListConfigmaps:
         assert "other-config" in ids
 
     async def test_list_configmaps_empty_dir(self):
-        """Empty contract/generated returns empty list."""
+        """Empty app/generated returns empty list."""
         with tempfile.TemporaryDirectory() as tmpdir:
             gen_dir = Path(tmpdir) / "contract" / "generated"
             gen_dir.mkdir(parents=True)
