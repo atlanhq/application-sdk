@@ -48,7 +48,7 @@ ENV UV_NO_CACHE=1 \
     DO_NOT_TRACK=true \
     SCARF_NO_ANALYTICS=true \
     DAFT_ANALYTICS_ENABLED=0 \
-    ATLAN_CONTRACT_GENERATED_DIR=/app/app/contract/generated
+    ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
 
 # Copy entrypoint script for graceful shutdown handling
 COPY --chown=appuser:appuser entrypoint.sh /usr/local/bin/entrypoint.sh
