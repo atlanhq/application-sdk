@@ -115,7 +115,7 @@ class TestSQLAppGetManifest:
         """When _primary_workflow_class is not set, returns None (no contract file either)."""
         app = BaseSQLMetadataExtractionApplication("test-app")
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("pathlib.Path.cwd", return_value=Path(tmpdir)):
+            with patch("application_sdk.constants.CONTRACT_GENERATED_DIR", tmpdir):
                 result = app.get_manifest()
         assert result is None
 
@@ -126,7 +126,7 @@ class TestSQLAppGetManifest:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
-                patch("pathlib.Path.cwd", return_value=Path(tmpdir)),
+                patch("application_sdk.constants.CONTRACT_GENERATED_DIR", tmpdir),
                 patch(
                     "application_sdk.application.metadata_extraction.sql.DEPLOYMENT_NAME",
                     "my-tenant",
@@ -179,7 +179,7 @@ class TestSQLAppGetManifest:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
-                patch("pathlib.Path.cwd", return_value=Path(tmpdir)),
+                patch("application_sdk.constants.CONTRACT_GENERATED_DIR", tmpdir),
                 patch(
                     "application_sdk.application.metadata_extraction.sql.DEPLOYMENT_NAME",
                     "t",
