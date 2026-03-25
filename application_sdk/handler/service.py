@@ -868,9 +868,19 @@ def create_app_handler_service(
 
     @app.get("/workflows/v1/config/{config_id}")
     async def get_workflow_config(config_id: str) -> JSONResponse:
-        if _state_store is None:
-            raise HTTPException(status_code=503, detail="State store not configured")
-        config = await _state_store.load(f"workflows/{config_id}")
+        if _state_store is not None:
+            
+        if _state_store is not None:
+            config = await _state_store.load(f"workflows/{config_id}")
+        else:
+            from application_sdk.services.statestore import StateStore, StateType
+            config = await StateStore.get_state(config_id, StateType.CREDENTIALS)
+        
+        if _state_store is not None:
+            config = await _state_store.load(f"workflows/{config_id}")
+        else:
+            from application_sdk.services.statestore import StateStore, StateType
+            config = await StateStore.get_state(config_id, StateType.CREDENTIALS)
         if config is None:
             raise HTTPException(
                 status_code=404, detail=f"Config not found: {config_id}"
@@ -884,10 +894,22 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/config/{config_id}")
     async def update_workflow_config(config_id: str, request: Request) -> JSONResponse:
-        if _state_store is None:
-            raise HTTPException(status_code=503, detail="State store not configured")
         body = await request.json()
-        await _state_store.save(f"workflows/{config_id}", body)
+        if _state_store is not None:
+            await _state_store.save(f"workflows/{config_id}", body)
+        elif _storage is not None:
+            # Fallback: use object store when Dapr statestore unavailable
+            import json as _json
+            from application_sdk.storage.ops import upload_file as _ul
+            import tempfile, os
+            key = f"config/credentials/{config_id}.json"
+            tmp = tempfile.mktemp(suffix=".json")
+            with open(tmp, "w") as _f:
+                _json.dump(body, _f)
+            await _ul(key, tmp, _storage)
+            os.unlink(tmp)
+        else:
+            raise HTTPException(status_code=503, detail="No state store or object store configured")
         return JSONResponse(
             content=_wrap_response(
                 cast("dict[str, Any]", body),
