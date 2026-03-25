@@ -1124,7 +1124,7 @@ def create_app_handler_service(
     # v2 exposed an unversioned /manifest endpoint; v3 moved it to the
     # canonical versioned path above.  Until the orchestrator is patched,
     # this alias keeps existing deployments working.
-    # TODO(v3-cleanup): delete this route after Heracles/AE migration.
+    # TODO(v3-cleanup): delete this route after Heracles/AE migration (BLDX-804).
     # ------------------------------------------------------------------
 
     @app.get("/manifest", include_in_schema=False)
