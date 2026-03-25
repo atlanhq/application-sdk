@@ -145,15 +145,23 @@ class Input(BaseModel):
     Config Hash:
         The config_hash() method computes a stable hash of configuration fields,
         useful for identifying equivalent input configurations across runs
-        (e.g., for checkpoint storage keys). Override _config_hash_exclude in
-        subclasses to exclude volatile/per-run fields.
+        (e.g., for checkpoint storage keys). Extend _config_hash_exclude in
+        subclasses to exclude additional volatile/per-run fields.
     """
 
     model_config = ConfigDict()
 
-    _config_hash_exclude: ClassVar[set[str]] = set()
-    """Fields to exclude from config_hash(). Override in subclasses to list
-    volatile/per-run fields that shouldn't affect checkpoint identity."""
+    workflow_id: str = ""
+    """Temporal workflow ID for the current run. Populated by the framework at dispatch time."""
+
+    correlation_id: str = ""
+    """Caller-supplied correlation ID for tracing across systems."""
+
+    _config_hash_exclude: ClassVar[set[str]] = {"workflow_id", "correlation_id"}
+    """Fields to exclude from config_hash(). Extend in subclasses to add
+    volatile/per-run fields that shouldn't affect checkpoint identity.
+    config_hash() unions this set across the full MRO, so subclass entries
+    are merged with (not replaced by) base-class exclusions."""
 
     def _log_summary(self) -> dict[str, Any]:
         """Return a dict of field values safe for logging.
@@ -225,7 +233,9 @@ class Input(BaseModel):
         import hashlib
         import json
 
-        exclude = set(self.__class__._config_hash_exclude)
+        exclude: set[str] = set()
+        for cls in type(self).__mro__:
+            exclude |= getattr(cls, "_config_hash_exclude", set())
         if extra_exclude:
             exclude |= extra_exclude
 
