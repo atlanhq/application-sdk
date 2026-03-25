@@ -10,7 +10,7 @@ No DB Read/Writes
 
 Cover the following:
 
-Null values 
+Null values
 
 Empty values - str, dict, list, etc
 

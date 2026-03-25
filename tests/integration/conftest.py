@@ -5,7 +5,7 @@ integration tests in this directory.
 """
 
 import os
-from typing import Dict, Any
+from typing import Any, Dict
 
 import pytest
 
@@ -52,7 +52,7 @@ def load_credentials_from_env(prefix: str) -> Dict[str, Any]:
         # POSTGRES_HOST=localhost
         # POSTGRES_PORT=5432
         # POSTGRES_USER=test
-        
+
         >>> creds = load_credentials_from_env("POSTGRES")
         >>> creds
         {"host": "localhost", "port": "5432", "user": "test"}
@@ -63,7 +63,7 @@ def load_credentials_from_env(prefix: str) -> Dict[str, Any]:
     for key, value in os.environ.items():
         if key.startswith(f"{prefix_upper}_"):
             # Remove prefix and convert to lowercase
-            cred_key = key[len(prefix_upper) + 1:].lower()
+            cred_key = key[len(prefix_upper) + 1 :].lower()
             credentials[cred_key] = value
 
     return credentials

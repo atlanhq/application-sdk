@@ -5,7 +5,7 @@ example integration tests. Copy and modify for your connector.
 """
 
 import os
-from typing import Dict, Any
+from typing import Any, Dict
 
 import pytest
 

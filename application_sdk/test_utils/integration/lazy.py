@@ -9,10 +9,10 @@ the value is actually needed. This is useful for:
 
 Example:
     >>> from application_sdk.test_utils.integration import lazy
-    >>> 
+    >>>
     >>> # Value is not computed until evaluate() is called
     >>> creds = lazy(lambda: load_credentials_from_env("MY_APP"))
-    >>> 
+    >>>
     >>> # Later, when test runs:
     >>> actual_creds = creds.evaluate()  # Now it loads
     >>> actual_creds_again = creds.evaluate()  # Returns cached value
@@ -106,10 +106,10 @@ def lazy(fn: Callable[[], T]) -> Lazy[T]:
 
     Example:
         >>> from application_sdk.test_utils.integration import lazy
-        >>> 
+        >>>
         >>> def load_creds():
         ...     return {"username": "test", "password": "secret"}
-        >>> 
+        >>>
         >>> creds = lazy(load_creds)
         >>> # Or with lambda:
         >>> creds = lazy(lambda: {"username": "test", "password": "secret"})
@@ -128,7 +128,7 @@ def is_lazy(value: Any) -> bool:
 
     Example:
         >>> from application_sdk.test_utils.integration import lazy, is_lazy
-        >>> 
+        >>>
         >>> value = lazy(lambda: 42)
         >>> is_lazy(value)  # True
         >>> is_lazy(42)     # False
@@ -150,10 +150,10 @@ def evaluate_if_lazy(value: T) -> T:
 
     Example:
         >>> from application_sdk.test_utils.integration import lazy, evaluate_if_lazy
-        >>> 
+        >>>
         >>> lazy_value = lazy(lambda: 42)
         >>> regular_value = 42
-        >>> 
+        >>>
         >>> evaluate_if_lazy(lazy_value)   # Returns 42
         >>> evaluate_if_lazy(regular_value) # Returns 42
     """

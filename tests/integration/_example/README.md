@@ -136,7 +136,7 @@ scenarios = [
         }),
         assert_that={"success": equals(True)}
     ),
-    
+
     # Preflight with specific config
     Scenario(
         name="preflight_with_warehouse",
@@ -162,12 +162,12 @@ class MyConnectorIntegrationTest(BaseIntegrationTest):
     scenarios = scenarios
     server_host = os.getenv("APP_SERVER_URL", "http://localhost:8000")
     workflow_endpoint = "/extract"  # If different from /start
-    
+
     @classmethod
     def setup_test_environment(cls):
         # Create test data
         pass
-    
+
     @classmethod
     def cleanup_test_environment(cls):
         # Clean up test data
@@ -220,22 +220,22 @@ from application_sdk.test_utils.integration import (
 assert_that = {
     # Basic equality
     "success": equals(True),
-    
+
     # Check existence
     "data.workflow_id": exists(),
-    
+
     # Check in list
     "data.status": one_of(["RUNNING", "COMPLETED"]),
-    
+
     # String contains
     "message": contains("successful"),
-    
+
     # Numeric comparison
     "data.count": greater_than(0),
-    
+
     # Regex match
     "data.id": matches(r"^[a-f0-9-]+$"),
-    
+
     # Combined assertions
     "data.name": all_of(exists(), is_not_empty()),
 }

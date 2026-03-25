@@ -205,7 +205,7 @@ from application_sdk.test_utils.integration import all_of, any_of, none_of
 # All must pass
 "data.name": all_of(exists(), is_string(), is_not_empty())
 
-# At least one must pass  
+# At least one must pass
 "data.role": any_of(equals("admin"), equals("superuser"))
 
 # None should pass
@@ -241,7 +241,7 @@ auth_scenarios = [
         args=lazy(lambda: {"credentials": load_credentials()}),
         assert_that={"success": equals(True)}
     ),
-    
+
     # Invalid password
     Scenario(
         name="auth_invalid_password",
@@ -251,7 +251,7 @@ auth_scenarios = [
         }),
         assert_that={"success": equals(False)}
     ),
-    
+
     # Empty credentials
     Scenario(
         name="auth_empty",
@@ -278,7 +278,7 @@ preflight_scenarios = [
         }),
         assert_that={"success": equals(True)}
     ),
-    
+
     # Non-existent database
     Scenario(
         name="preflight_bad_database",
@@ -356,25 +356,25 @@ Scenario(
 ```python
 class MyConnectorTest(BaseIntegrationTest):
     scenarios = scenarios
-    
+
     @classmethod
     def setup_test_environment(cls):
         """Called before any tests run."""
         # Create test database, schema, etc.
         cls.db = create_database_connection()
         cls.db.execute("CREATE SCHEMA test_schema")
-    
+
     @classmethod
     def cleanup_test_environment(cls):
         """Called after all tests complete."""
         # Drop test database, clean up
         cls.db.execute("DROP SCHEMA test_schema CASCADE")
         cls.db.close()
-    
+
     def before_scenario(self, scenario):
         """Called before each scenario."""
         print(f"Running: {scenario.name}")
-    
+
     def after_scenario(self, scenario, result):
         """Called after each scenario."""
         status = "PASSED" if result.success else "FAILED"
@@ -438,7 +438,7 @@ Don't just test the happy path:
 scenarios = [
     # Happy path
     Scenario(name="auth_valid", ...),
-    
+
     # Negative cases
     Scenario(name="auth_invalid_password", ...),
     Scenario(name="auth_empty_credentials", ...),
@@ -480,7 +480,7 @@ Use hooks to manage test data:
 def setup_test_environment(cls):
     cls.test_data = create_test_data()
 
-@classmethod  
+@classmethod
 def cleanup_test_environment(cls):
     delete_test_data(cls.test_data)
 ```
