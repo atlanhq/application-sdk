@@ -1,0 +1,24 @@
+name: Security Review
+
+on:
+  pull_request:
+    branches: [main, master]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review manually'
+        required: true
+        type: number
+
+concurrency:
+  group: security-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  security-review:
+    uses: atlanhq/mothership/.github/workflows/security-review-reusable.yml@beta
+    with:
+      globalprotect-portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+      mothership-url: https://mothership-beta.atlan.dev
+    secrets: inherit
