@@ -9,21 +9,17 @@ warnings.warn(
 )
 
 import json
-import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict
 
+from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 # Convention: generated contract files live here
-CONTRACT_GENERATED_DIR = Path(
-    os.environ.get(
-        "ATLAN_CONTRACT_GENERATED_DIR", Path.cwd() / "app" / "contract" / "generated"
-    )
-)
+CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
 
 class HandlerInterface(ABC):

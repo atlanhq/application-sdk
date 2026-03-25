@@ -29,7 +29,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import mimetypes
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -39,6 +38,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel as PydanticBaseModel
 
+from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
@@ -159,11 +159,7 @@ _state_store: StateStore | None = None
 _storage: ObjectStore | None = None
 
 # Directory where generated contract JSON files are stored
-CONTRACT_GENERATED_DIR = Path(
-    os.environ.get(
-        "ATLAN_CONTRACT_GENERATED_DIR", Path.cwd() / "app" / "contract" / "generated"
-    )
-)
+CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
 
 async def _get_temporal_client() -> Client:
@@ -871,6 +867,7 @@ def create_app_handler_service(
             raise HTTPException(status_code=503, detail="Storage not configured")
 
         import asyncio
+        import os
         import shutil
         import tempfile
         from pathlib import PurePosixPath
