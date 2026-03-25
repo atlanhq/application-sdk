@@ -83,7 +83,7 @@ class HandlerInterface(ABC):
         """Return the K8s ConfigMap for the given config_map_id.
 
         Priority:
-        1. contract/generated/{config_map_id}.json (if exists)
+        1. app/generated/{config_map_id}.json (if exists, via ATLAN_CONTRACT_GENERATED_DIR)
         2. Subclass override (call _wrap_configmap to produce correct shape)
         3. Empty dict
         """

@@ -48,19 +48,19 @@ class TestWrapConfigmap:
 
 
 class TestGetConfigmap:
-    """Tests for HandlerInterface.get_configmap with contract/generated files."""
+    """Tests for HandlerInterface.get_configmap with app/generated files."""
 
     async def test_get_configmap_returns_empty_when_no_contract_dir(self):
-        """When contract/generated doesn't exist, returns empty dict."""
+        """When app/generated doesn't exist, returns empty dict."""
         with patch(
             "application_sdk.handlers.CONTRACT_GENERATED_DIR",
-            Path("/nonexistent/path/contract/generated"),
+            Path("/nonexistent/path/app/generated"),
         ):
             result = await HandlerInterface.get_configmap("some-config")
             assert result == {}
 
     async def test_get_configmap_from_contract_file(self):
-        """When contract/generated/{id}.json exists, it's loaded and wrapped."""
+        """When app/generated/{id}.json exists, it's loaded and wrapped."""
         with tempfile.TemporaryDirectory() as tmpdir:
             gen_dir = Path(tmpdir) / "contract" / "generated"
             gen_dir.mkdir(parents=True)

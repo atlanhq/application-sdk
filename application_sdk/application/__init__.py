@@ -88,7 +88,7 @@ class BaseApplication:
         """Return the manifest dict for the GET /manifest endpoint.
 
         Priority:
-        1. contract/generated/manifest.json (if exists)
+        1. app/generated/manifest.json (if exists, via ATLAN_CONTRACT_GENERATED_DIR)
         2. Subclass override (e.g., BaseSQLMetadataExtractionApplication)
         3. None (disables the /manifest endpoint)
 
@@ -98,9 +98,9 @@ class BaseApplication:
         import json
         from pathlib import Path
 
-        from application_sdk.constants import DEPLOYMENT_NAME
+        from application_sdk.constants import CONTRACT_GENERATED_DIR, DEPLOYMENT_NAME
 
-        manifest_path = Path.cwd() / "contract" / "generated" / "manifest.json"
+        manifest_path = Path(CONTRACT_GENERATED_DIR) / "manifest.json"
         if manifest_path.exists():
             logger.info(
                 "Serving manifest from contract", manifest_path=str(manifest_path)
