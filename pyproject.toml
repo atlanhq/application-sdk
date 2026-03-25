@@ -33,10 +33,10 @@ dependencies = [
     "python-dotenv>=1.1.0,<1.3.0",
     "pyyaml>=6.0.2,<6.1.0",
     "obstore>=0.9.1,<0.10.0",
-    "duckdb>=1.1.3,<1.5.0",
-    "duckdb-engine>=0.17.0,<0.18.0",
-    "pandas>=2.2.3,<2.4.0",
-    "pyarrow>=20.0.0,<23.0.0",
+    # Temporal runtime + Dapr HTTP client (httpx-based, replaces sync dapr library)
+    "temporalio>=1.7.1,<1.24.0",
+    "httpx-retries>=0.4.0",
+    "orjson>=3.11.6,<3.12.0",
 ]
 
 [project.scripts]
@@ -47,22 +47,36 @@ Repository = "https://github.com/atlanhq/application-sdk"
 Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 "Changelog" = "https://github.com/atlanhq/application-sdk/blob/main/CHANGELOG.md"
 
-# Optional dependencies for specific functionality - Install using: uv sync --extra workflows
+# Optional dependencies for specific functionality
 [project.optional-dependencies]
+# Backwards-compatibility shims (dapr/temporalio/orjson promoted to core in v3.1)
 workflows = [
     "temporalio>=1.7.1,<1.24.0",
     "orjson>=3.11.6,<3.12.0",
 ]
-pandas = [
+# SQL connectors: SqlMetadataExtractor, SqlQueryExtractor, and any SQL-based connector
+sql = [
     "pandas>=2.2.3,<2.4.0",
     "pyarrow>=20.0.0,<23.0.0",
+    "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
+    "duckdb>=1.1.3,<1.5.0",
+    "duckdb-engine>=0.17.0,<0.18.0",
 ]
+# Daft transformer engine
 daft = [
     "daft>=0.7.1,<0.8.0",
 ]
-sqlalchemy = [
+# Incremental extraction: sql + daft + RocksDB state store
+incremental = [
+    "pandas>=2.2.3,<2.4.0",
+    "pyarrow>=20.0.0,<23.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
+    "duckdb>=1.1.3,<1.5.0",
+    "duckdb-engine>=0.17.0,<0.18.0",
+    "daft>=0.7.1,<0.8.0",
+    "rocksdict>=0.3.0",
 ]
+# AWS IAM authentication for RDS/Redshift
 iam_auth = [
     "boto3>=1.38.6,<1.43.0",
 ]
@@ -70,6 +84,12 @@ azure = [
     "azure-identity>=1.15.0",
     "azure-storage-blob>=12.19.0",
     "azure-storage-file-datalake>=12.19.0",
+]
+distributed_lock = [
+    "redis[hiredis]>=5.2.0,<7.2.0",
+]
+mcp = [
+    "fastmcp>=2.12.3,<2.15.0",
 ]
 tests = [
     "pytest-order>=1.3.0,<1.4.0",
@@ -80,17 +100,9 @@ scale_data_generator = [
     "faker>=37.1.0,<39.1.0",
     "numpy>=1.23.5,<2.5.0",
 ]
-
-distributed_lock = [
-    "redis[hiredis]>=5.2.0,<7.2.0",
-]
-
-mcp = [
-    "fastmcp>=3.2.0",
-]
-
-incremental = [
-    "rocksdict>=0.3.0",
+# Removed in v3.1 — use sql extra instead
+sqlalchemy = [
+    "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
 ]
 
 # Development dependencies - Install using: uv sync --group dev
