@@ -317,9 +317,11 @@ def create_app_handler_service(
         app = FastAPI(title=title, description=description, version=version)
 
     from application_sdk.server.middleware import LogMiddleware, MetricsMiddleware
+    from application_sdk.handler.middleware import CredentialFormatMiddleware
 
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(LogMiddleware)
+    app.add_middleware(CredentialFormatMiddleware)  # V2 credential format compatibility
 
     def _create_context(credentials: list[Credential]) -> HandlerContext:
         from application_sdk.infrastructure.context import get_infrastructure
@@ -825,9 +827,28 @@ def create_app_handler_service(
 
     @app.get("/workflows/v1/config/{config_id}")
     async def get_workflow_config(config_id: str) -> JSONResponse:
-        if _state_store is None:
-            raise HTTPException(status_code=503, detail="State store not configured")
-        config = await _state_store.load(f"workflows/{config_id}")
+        config = None
+        if _state_store is not None:
+            try:
+                config = await _state_store.load(f"workflows/{config_id}")
+            except Exception:
+                logger.warning("State store load failed, trying object store fallback")
+                config = None
+        if config is None and _storage is not None:
+            import json as _json
+            from application_sdk.storage.ops import download_file as _dl
+            import tempfile, os
+            key = f"config/credentials/{config_id}.json"
+            try:
+                tmp = tempfile.mktemp(suffix=".json")
+                await _dl(key, tmp, _storage)
+                with open(tmp) as _f:
+                    config = _json.load(_f)
+                os.unlink(tmp)
+            except Exception:
+                config = None
+        if config is None and _state_store is None and _storage is None:
+            raise HTTPException(status_code=503, detail="No state store or object store configured")
         if config is None:
             raise HTTPException(
                 status_code=404, detail=f"Config not found: {config_id}"
@@ -841,10 +862,27 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/config/{config_id}")
     async def update_workflow_config(config_id: str, request: Request) -> JSONResponse:
-        if _state_store is None:
-            raise HTTPException(status_code=503, detail="State store not configured")
         body = await request.json()
-        await _state_store.save(f"workflows/{config_id}", body)
+        saved = False
+        if _state_store is not None:
+            try:
+                await _state_store.save(f"workflows/{config_id}", body)
+                saved = True
+            except Exception:
+                logger.warning("State store save failed, trying object store fallback")
+        if not saved and _storage is not None:
+            import json as _json
+            from application_sdk.storage.ops import upload_file as _ul
+            import tempfile, os
+            key = f"config/credentials/{config_id}.json"
+            tmp = tempfile.mktemp(suffix=".json")
+            with open(tmp, "w") as _f:
+                _json.dump(body, _f)
+            await _ul(key, tmp, _storage)
+            os.unlink(tmp)
+            saved = True
+        if not saved:
+            raise HTTPException(status_code=503, detail="No state store or object store configured")
         return JSONResponse(
             content=_wrap_response(
                 cast("dict[str, Any]", body),
