@@ -458,6 +458,17 @@ class BaseIntegrationTest:
                 connection = {**self.default_connection}
             args["connection"] = connection
 
+        # Config API — pass action, workflow_id, and optional payload
+        if scenario.api.lower() == "config":
+            workflow_id = scenario.config_workflow_id
+            # Support callable workflow_id (e.g., lambda reading shared state)
+            if callable(workflow_id):
+                workflow_id = workflow_id()
+            args["config_action"] = scenario.config_action
+            args["config_workflow_id"] = workflow_id
+            if scenario.config_payload is not None:
+                args["config_payload"] = scenario.config_payload
+
         return args
 
     def _execute_scenario(self, scenario: Scenario) -> ScenarioResult:

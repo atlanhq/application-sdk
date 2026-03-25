@@ -88,14 +88,18 @@ class IntegrationTestClient:
 
         if api_lower == "auth":
             return self._call_auth(args)
+        elif api_lower == "metadata":
+            return self._call_metadata(args)
         elif api_lower == "preflight":
             return self._call_preflight(args)
         elif api_lower == "workflow":
             return self._call_workflow(args, endpoint_override)
+        elif api_lower == "config":
+            return self._call_config(args)
         else:
             raise ValueError(
                 f"Unsupported API type: '{api}'. "
-                f"Must be one of: auth, preflight, workflow"
+                f"Must be one of: auth, metadata, preflight, workflow, config"
             )
 
     def _call_auth(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -109,6 +113,18 @@ class IntegrationTestClient:
         """
         credentials = args.get("credentials", args)
         return self._post("/auth", data=credentials)
+
+    def _call_metadata(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Call the metadata API.
+
+        Args:
+            args: Must contain "credentials" key.
+
+        Returns:
+            Dict[str, Any]: The API response.
+        """
+        credentials = args.get("credentials", args)
+        return self._post("/metadata", data=credentials)
 
     def _call_preflight(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Call the preflight check API.
@@ -141,6 +157,61 @@ class IntegrationTestClient:
         """
         endpoint = endpoint_override or self.workflow_endpoint
         return self._post(endpoint, data=args)
+
+    def _call_config(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Call the config GET or POST API.
+
+        Args:
+            args: Must contain "config_action" ("get" or "update"),
+                  "config_workflow_id", and optionally "config_payload".
+
+        Returns:
+            Dict[str, Any]: The API response.
+        """
+        action = args.get("config_action", "get")
+        workflow_id = args.get("config_workflow_id")
+
+        if not workflow_id:
+            return {
+                "success": False,
+                "error": "config_workflow_id is required for config API calls",
+            }
+
+        if action == "get":
+            return self.get_config(workflow_id)
+        elif action == "update":
+            payload = args.get("config_payload", {})
+            return self.update_config(workflow_id, payload)
+        else:
+            return {
+                "success": False,
+                "error": f"Invalid config_action: '{action}'. Must be 'get' or 'update'",
+            }
+
+    def get_config(self, workflow_id: str) -> Dict[str, Any]:
+        """Get the configuration for a workflow.
+
+        Args:
+            workflow_id: The workflow ID.
+
+        Returns:
+            Dict[str, Any]: The config response.
+        """
+        return self._get(f"/config/{workflow_id}")
+
+    def update_config(
+        self, workflow_id: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update the configuration for a workflow.
+
+        Args:
+            workflow_id: The workflow ID.
+            payload: The config update payload (connection, metadata).
+
+        Returns:
+            Dict[str, Any]: The config response.
+        """
+        return self._post(f"/config/{workflow_id}", data=payload)
 
     def get_workflow_status(
         self,
@@ -309,8 +380,10 @@ def create_api_method_map() -> Dict[str, APIMethod]:
     """
     return {
         "auth": lambda client, args: client._call_auth(args),
+        "metadata": lambda client, args: client._call_metadata(args),
         "preflight": lambda client, args: client._call_preflight(args),
         "workflow": lambda client, args: client._call_workflow(args),
+        "config": lambda client, args: client._call_config(args),
     }
 
 

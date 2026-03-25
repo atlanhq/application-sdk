@@ -12,12 +12,14 @@ from typing import Any, Callable, Dict, Optional, Set, Union
 class APIType(Enum):
     """Supported API types for integration testing.
 
-    These represent the Core 3 APIs that every connector must implement.
+    These represent the Core APIs that connectors implement.
     """
 
     AUTH = "auth"
+    METADATA = "metadata"
     PREFLIGHT = "preflight"
     WORKFLOW = "workflow"
+    CONFIG = "config"
 
     @classmethod
     def from_string(cls, value: str) -> "APIType":
@@ -82,7 +84,7 @@ class Scenario:
 
     Attributes:
         name: Unique identifier for the scenario.
-        api: The API type to test ("auth", "preflight", "workflow").
+        api: The API type to test ("auth", "metadata", "preflight", "workflow", "config").
         assert_that: Dictionary mapping response paths to assertion predicates.
         credentials: Optional credentials override. If not provided, auto-loaded from env.
         metadata: Optional metadata override. If not provided, uses class defaults.
@@ -108,6 +110,13 @@ class Scenario:
         ignored_fields: Set of attribute field names to skip during comparison
             (e.g., dynamic fields like qualifiedName that change between runs).
             If not provided, a default set of dynamic fields is used.
+        config_action: For config API scenarios, "get" or "update".
+        config_workflow_id: Workflow ID for config GET/POST. Can be a string
+            or a callable (e.g., lambda that reads from shared state).
+        config_payload: For config update, the payload to send.
+        schema_base_path: Base directory containing pandera YAML schemas for
+            data validation. When set, extracted output files are validated
+            against the pandera schemas after workflow completion.
     """
 
     name: str
@@ -128,6 +137,10 @@ class Scenario:
     workflow_timeout: int = 300
     polling_interval: int = 10
     ignored_fields: Optional[Set[str]] = None
+    config_action: Optional[str] = None
+    config_workflow_id: Optional[Any] = None
+    config_payload: Optional[Dict[str, Any]] = None
+    schema_base_path: Optional[str] = None
 
     def __post_init__(self):
         """Validate the scenario after initialization."""
@@ -152,6 +165,15 @@ class Scenario:
                 "expected_data can only be set for workflow scenarios, "
                 f"but api is '{self.api}'"
             )
+
+        if self.api.lower() == "config":
+            if self.config_action not in ("get", "update"):
+                raise ValueError(
+                    f"config_action must be 'get' or 'update' for config scenarios, "
+                    f"got: {self.config_action!r}"
+                )
+            if self.config_workflow_id is None:
+                raise ValueError("config_workflow_id is required for config scenarios")
 
     @property
     def api_type(self) -> APIType:

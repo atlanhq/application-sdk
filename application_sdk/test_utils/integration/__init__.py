@@ -48,8 +48,10 @@ Quick Start (zero boilerplate):
 
 Supported APIs:
 - auth: Test authentication (/workflows/v1/auth)
+- metadata: Fetch metadata (/workflows/v1/metadata)
 - preflight: Preflight checks (/workflows/v1/check)
 - workflow: Start workflow (/workflows/v1/{endpoint})
+- config: Get/update workflow config (/workflows/v1/config/{id})
 
 For detailed documentation, see:
     docs/docs/guides/integration-testing.md
