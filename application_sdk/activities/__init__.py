@@ -41,7 +41,6 @@ from application_sdk.activities.common.utils import (
 )
 from application_sdk.common.error_codes import OrchestratorError
 from application_sdk.common.exc_utils import rewrap
-from application_sdk.common.file_converter import FileType, convert_data_files
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
@@ -370,6 +369,11 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
         """
         converted_files = []
         if workflow_args.get("input_files") and workflow_args.get("output_file_type"):
+            from application_sdk.common.file_converter import (
+                FileType,
+                convert_data_files,
+            )
+
             converted_files = await convert_data_files(
                 workflow_args["input_files"],
                 FileType(workflow_args["output_file_type"]),
