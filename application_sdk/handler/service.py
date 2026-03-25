@@ -317,9 +317,11 @@ def create_app_handler_service(
         app = FastAPI(title=title, description=description, version=version)
 
     from application_sdk.server.middleware import LogMiddleware, MetricsMiddleware
+    from application_sdk.handler.middleware import CredentialFormatMiddleware
 
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(LogMiddleware)
+    app.add_middleware(CredentialFormatMiddleware)  # V2 credential format compatibility
 
     def _create_context(credentials: list[Credential]) -> HandlerContext:
         from application_sdk.infrastructure.context import get_infrastructure
