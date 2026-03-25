@@ -223,13 +223,16 @@ runtime defaults:
 
 ```dockerfile
 ENV ATLAN_APP_MODULE=app.app:MyMetadataExtractor \
-    ATLAN_CONTRACT_GENERATED_DIR=/app/contract/generated
+    ATLAN_CONTRACT_GENERATED_DIR=/app/app/contract/generated
 CMD ["application-sdk", "--mode", "combined"]
 ```
 
 `ATLAN_CONTRACT_GENERATED_DIR` tells the SDK where to find the generated contract JSON files
-(configmaps, manifest). The base image sets this to `/app/contract/generated`; override it in
-your app's `Dockerfile` if your generated files land elsewhere.
+(configmaps, manifest). Place these files inside your repo's `app/contract/generated/`
+directory — this keeps generated files co-located with your app code and makes the generated
+Python module (`app.contract.generated`) directly importable. The base image default
+(`/app/app/contract/generated`) matches this convention when your app code is copied to
+`/app/app/` in the image.
 
 The `--app` CLI flag is an alternative (takes precedence over the env var), but `ENV` in the
 Dockerfile is the recommended approach so the value is locked to the image:

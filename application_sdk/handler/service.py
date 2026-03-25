@@ -161,7 +161,7 @@ _storage: ObjectStore | None = None
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(
     os.environ.get(
-        "ATLAN_CONTRACT_GENERATED_DIR", Path.cwd() / "contract" / "generated"
+        "ATLAN_CONTRACT_GENERATED_DIR", Path.cwd() / "app" / "contract" / "generated"
     )
 )
 

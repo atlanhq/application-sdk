@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 # Convention: generated contract files live here
 CONTRACT_GENERATED_DIR = Path(
     os.environ.get(
-        "ATLAN_CONTRACT_GENERATED_DIR", Path.cwd() / "contract" / "generated"
+        "ATLAN_CONTRACT_GENERATED_DIR", Path.cwd() / "app" / "contract" / "generated"
     )
 )
 
