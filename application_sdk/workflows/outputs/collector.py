@@ -52,7 +52,9 @@ class OutputCollector:
                 existing.value, (int, float)
             ):
                 self._metrics[metric.name] = Metric(
-                    name=metric.name, value=existing.value + metric.value
+                    name=metric.name,
+                    value=existing.value + metric.value,
+                    display_name=metric.display_name or existing.display_name,
                 )
                 return
         self._metrics[metric.name] = metric
@@ -95,7 +97,15 @@ class OutputCollector:
         """
         result: Dict[str, Any] = {}
         if self._metrics:
-            result["metrics"] = {m.name: m.value for m in self._metrics.values()}
+            result["metrics"] = {}
+            for m in self._metrics.values():
+                if m.display_name:
+                    result["metrics"][m.name] = {
+                        "value": m.value,
+                        "display_name": m.display_name,
+                    }
+                else:
+                    result["metrics"][m.name] = m.value
         if self._artifacts:
             result["artifacts"] = {a.name: a.path for a in self._artifacts.values()}
         return result

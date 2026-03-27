@@ -5,7 +5,7 @@ that can be collected during workflow and activity execution for display
 in the Automation Engine UI.
 """
 
-from typing import Union
+from typing import Optional, Union
 
 from pydantic import BaseModel
 
@@ -21,16 +21,26 @@ class Metric(BaseModel):
         value: The metric value. Numeric values (int, float) are summed when
             multiple metrics with the same name are collected. String values
             use last-write-wins semantics.
+        display_name: Optional human-readable label for UI display. If provided,
+            the metric is serialized as {"value": ..., "display_name": ...}.
+            If omitted, the metric is serialized as a plain value for backward
+            compatibility.
 
     Example:
         >>> from application_sdk.workflows.outputs import get_outputs, Metric
         >>> outputs = get_outputs()
         >>> outputs.add_metric(Metric(name="tables-extracted", value=150))
         >>> outputs.add_metric(Metric(name="status", value="completed"))
+        >>> outputs.add_metric(Metric(
+        ...     name="qi-queries-parsed",
+        ...     value=42,
+        ...     display_name="QI Queries Parsed"
+        ... ))
     """
 
     name: str
     value: Union[int, float, str]
+    display_name: Optional[str] = None
 
 
 class Artifact(BaseModel):
