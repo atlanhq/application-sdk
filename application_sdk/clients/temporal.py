@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -146,12 +147,18 @@ class TemporalWorkflowClient(WorkflowClient):
     def get_worker_task_queue(self) -> str:
         """Get the worker task queue name.
 
-        The task queue name is derived from the application name and deployment name
-        and is used to route workflow tasks to appropriate workers.
+        Checks the ``TEMPORAL_TASK_QUEUE`` environment variable first so that
+        worker-group deployments (set up via the Helm ``workerGroups`` config)
+        can override the queue without code changes.  Falls back to the
+        conventional ``atlan-{app}-{deployment}`` name when the variable is not
+        set.
 
         Returns:
-            str: The task queue name in format "app_name-deployment_name".
+            str: The task queue name.
         """
+        explicit_queue = os.getenv("TEMPORAL_TASK_QUEUE")
+        if explicit_queue:
+            return explicit_queue
         if DEPLOYMENT_NAME:
             return f"atlan-{self.application_name}-{DEPLOYMENT_NAME}"
         else:
