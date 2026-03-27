@@ -4,6 +4,7 @@ FROM cgr.dev/atlan.com/app-framework-golden:3.13
 ARG DAPR_CLI_VERSION=1.17.0
 ARG DAPR_RUNTIME_PACKAGE=dapr-daprd-1.17
 
+
 # Switch to root for installation
 USER root
 
