@@ -8,6 +8,8 @@ import pytest
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.worker import Worker
 
+DRAIN_DELAY_PATCH = "application_sdk.worker.SHUTDOWN_DRAIN_DELAY_SECONDS"
+
 
 @pytest.fixture
 def mock_workflow_client():
@@ -189,6 +191,7 @@ class TestWorkerGracefulShutdown:
         # After start, should have reference to the created worker
         assert worker.workflow_worker is not None
 
+    @patch(DRAIN_DELAY_PATCH, 0)
     async def test_shutdown_worker_calls_worker_shutdown(
         self, mock_workflow_client: WorkflowClient
     ):
@@ -208,6 +211,7 @@ class TestWorkerGracefulShutdown:
 
         mock_temporal_worker.shutdown.assert_called_once()
 
+    @patch(DRAIN_DELAY_PATCH, 0)
     async def test_shutdown_worker_handles_exception(
         self, mock_workflow_client: WorkflowClient
     ):
@@ -246,6 +250,7 @@ class TestWorkerGracefulShutdown:
         sys.platform in ("win32", "cygwin"),
         reason="Signal handlers not supported on Windows",
     )
+    @patch(DRAIN_DELAY_PATCH, 0)
     async def test_signal_handler_triggers_shutdown_task(
         self, mock_workflow_client: WorkflowClient
     ):
@@ -294,6 +299,7 @@ class TestWorkerGracefulShutdown:
         sys.platform in ("win32", "cygwin"),
         reason="Signal handlers not supported on Windows",
     )
+    @patch(DRAIN_DELAY_PATCH, 0)
     async def test_multiple_signals_trigger_only_one_shutdown(
         self, mock_workflow_client: WorkflowClient
     ):
@@ -351,3 +357,174 @@ class TestWorkerGracefulShutdown:
         )
 
         assert worker._shutdown_initiated is False
+
+
+class TestShutdownDrainDelay:
+    """Tests for the drain delay that prevents SIGTERM from preempting
+    in-flight activity completion RPCs.
+
+    Reproduces the real-world deadlock observed on 2026-03-27: a
+    save_workflow_run_state activity failed (Atlas 100K char limit),
+    SIGTERM arrived 3 seconds later, and the shutdown task preempted
+    the SDK's _run_activity coroutine before it could call
+    complete_activity_task(). The worker then held a phantom "in-use"
+    task slot for the entire 12-hour graceful_shutdown_timeout.
+
+    The drain delay (asyncio.sleep before worker.shutdown()) yields the
+    event loop so the pending complete_activity_task() can flush.
+    """
+
+    @staticmethod
+    async def _run_shutdown_with_inflight_activity(
+        mock_workflow_client: WorkflowClient,
+        drain_delay_seconds: float,
+    ) -> tuple[bool, Mock]:
+        """Helper that simulates the SIGTERM-vs-activity-completion race.
+
+        Schedules a task that mimics the SDK's _run_activity coroutine:
+        it yields once (representing the await inside _run_activity between
+        catching the exception and calling complete_activity_task), then
+        records completion.
+
+        Then calls _shutdown_worker (the real method, not mocked) with
+        SHUTDOWN_DRAIN_DELAY_SECONDS patched to drain_delay_seconds.
+
+        Returns (activity_completed, mock_temporal_worker).
+        """
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+
+        mock_temporal_worker = Mock()
+        mock_temporal_worker.shutdown = AsyncMock()
+        worker.workflow_worker = mock_temporal_worker
+
+        # Simulate _run_activity coroutine that is between the exception
+        # handler and the complete_activity_task() call. In the Temporal
+        # SDK (_activity.py:376-392), after catching the activity exception
+        # and encoding the failure, it awaits complete_activity_task().
+        # The single yield (sleep(0)) represents that await point.
+        activity_completed = False
+
+        async def simulate_inflight_activity_completion():
+            nonlocal activity_completed
+            # Yield once — represents the await point in _run_activity
+            # between encode_failure() and complete_activity_task()
+            await asyncio.sleep(0)
+            # This line represents complete_activity_task() sending
+            # RespondActivityTaskFailed to the Temporal server
+            activity_completed = True
+
+        # Schedule the activity completion BEFORE calling shutdown,
+        # exactly as happens in production: _run_activity is already
+        # running when SIGTERM fires and creates the shutdown task.
+        asyncio.create_task(simulate_inflight_activity_completion())
+
+        # Call the REAL _shutdown_worker with the specified drain delay
+        with patch(DRAIN_DELAY_PATCH, drain_delay_seconds):
+            await worker._shutdown_worker()
+
+        return activity_completed, mock_temporal_worker
+
+    async def test_without_fix_activity_completion_is_preempted(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """WITHOUT the drain delay, shutdown preempts the activity
+        completion — reproducing the production deadlock.
+
+        drain_delay=0 simulates the original code (no sleep before
+        shutdown). The shutdown task runs to completion without yielding,
+        so the pending activity completion task never gets scheduled.
+
+        In production this meant:
+        - RespondActivityTaskFailed was never sent to Temporal
+        - temporal_worker_task_slots_used stayed at 1
+        - worker.shutdown() waited 12 hours for a slot that would never free
+        """
+        activity_completed, mock_worker = (
+            await self._run_shutdown_with_inflight_activity(
+                mock_workflow_client, drain_delay_seconds=0
+            )
+        )
+
+        # PROVES THE BUG: activity completion never ran
+        assert activity_completed is False
+        # shutdown() was still called, but in production it would block
+        # for 12 hours waiting for the phantom slot
+        mock_worker.shutdown.assert_called_once()
+
+    async def test_with_fix_activity_completion_runs_before_shutdown(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """WITH the drain delay, the activity completion runs before
+        shutdown — the fix works.
+
+        drain_delay=0.01 (any value > 0) yields the event loop via
+        asyncio.sleep(), giving the pending activity completion task
+        a chance to execute before worker.shutdown() is called.
+
+        In production this means:
+        - RespondActivityTaskFailed is sent to Temporal
+        - The task slot is released
+        - worker.shutdown() sees no in-flight work and returns immediately
+        """
+        activity_completed, mock_worker = (
+            await self._run_shutdown_with_inflight_activity(
+                mock_workflow_client, drain_delay_seconds=0.01
+            )
+        )
+
+        # PROVES THE FIX: activity completion ran before shutdown
+        assert activity_completed is True
+        mock_worker.shutdown.assert_called_once()
+
+    async def test_fix_flushes_multiple_pending_completions(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """The drain delay flushes multiple pending activity completions,
+        not just one."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+
+        mock_temporal_worker = Mock()
+        mock_temporal_worker.shutdown = AsyncMock()
+        worker.workflow_worker = mock_temporal_worker
+
+        completions = []
+
+        async def simulate_activity_completion(activity_id: str):
+            await asyncio.sleep(0)
+            completions.append(activity_id)
+
+        asyncio.create_task(simulate_activity_completion("activity_1"))
+        asyncio.create_task(simulate_activity_completion("activity_2"))
+        asyncio.create_task(simulate_activity_completion("activity_3"))
+
+        with patch(DRAIN_DELAY_PATCH, 0.01):
+            await worker._shutdown_worker()
+
+        assert set(completions) == {"activity_1", "activity_2", "activity_3"}
+
+    @patch(DRAIN_DELAY_PATCH, 0)
+    async def test_shutdown_completes_even_with_zero_delay(
+        self, mock_workflow_client: WorkflowClient
+    ):
+        """Shutdown doesn't hang even when drain delay is 0 and there are
+        no pending completions."""
+        worker = Worker(
+            workflow_client=mock_workflow_client,
+            workflow_activities=[],
+            workflow_classes=[],
+        )
+
+        mock_temporal_worker = Mock()
+        mock_temporal_worker.shutdown = AsyncMock()
+        worker.workflow_worker = mock_temporal_worker
+
+        await worker._shutdown_worker()
+        mock_temporal_worker.shutdown.assert_called_once()

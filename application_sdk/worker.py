@@ -18,6 +18,7 @@ from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     DEPLOYMENT_NAME,
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
+    SHUTDOWN_DRAIN_DELAY_SECONDS,
     MAX_CONCURRENT_ACTIVITIES,
 )
 from application_sdk.interceptors.models import (
@@ -147,11 +148,23 @@ class Worker:
         1. Stops polling for new tasks
         2. Waits for in-flight activities (up to graceful_shutdown_timeout)
         3. Returns when done or timeout reached
+
+        The brief sleep before shutdown() gives the event loop a chance to
+        flush any in-flight activity responses (RespondActivityTaskFailed/
+        Completed) that are already queued. Without this, a SIGTERM that
+        arrives right after an activity fails can preempt the response RPC,
+        leaving the SDK with a phantom "in-use" task slot that never drains
+        and blocking shutdown for the entire graceful_shutdown_timeout.
         """
         if not self.workflow_worker:
             return
 
         try:
+            # Yield to the event loop so in-flight activity result RPCs
+            # (e.g. RespondActivityTaskFailed) can complete before we stop
+            # the transport. Without this, a race between SIGTERM and
+            # activity completion can leave orphaned task slots.
+            await asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)
             logger.info("Stopping polling, waiting for in-flight activities...")
             await self.workflow_worker.shutdown()
             logger.info("Worker shutdown complete")

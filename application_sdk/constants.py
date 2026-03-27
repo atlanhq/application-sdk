@@ -158,6 +158,18 @@ GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = int(
     os.getenv("ATLAN_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", 12 * 60 * 60)  # 12 hours
 )
 
+#: Delay before initiating worker shutdown after receiving a termination signal.
+#: This gives the event loop time to flush in-flight activity completions
+#: (e.g. RespondActivityTaskFailed/Completed RPCs) that are already queued
+#: but haven't been sent yet. Without this, a SIGTERM that arrives right
+#: after an activity fails can preempt the _run_activity coroutine before
+#: it reaches complete_activity_task(), leaving the SDK with a phantom
+#: "in-use" task slot that blocks shutdown for the entire
+#: graceful_shutdown_timeout.
+SHUTDOWN_DRAIN_DELAY_SECONDS = int(
+    os.getenv("ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS", 5)
+)
+
 # SQL Client Constants
 #: Whether to use server-side cursors for SQL operations
 USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
