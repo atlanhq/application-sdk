@@ -34,7 +34,7 @@ def test_get_activities():
 
     activity_sequence = workflow.get_activities(activities)
 
-    assert len(activity_sequence) == 9
+    assert len(activity_sequence) == 11
     assert activity_sequence == [
         activities.preflight_check,
         activities.get_workflow_args,
@@ -45,6 +45,8 @@ def test_get_activities():
         activities.fetch_procedures,
         activities.transform_data,
         activities.upload_to_atlan,
+        activities.load_to_lakehouse,
+        activities.prepare_raw_for_lakehouse,
     ]
 
 

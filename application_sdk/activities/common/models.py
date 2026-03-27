@@ -4,9 +4,10 @@ This module contains Pydantic models used to represent various data structures
 needed by activities, such as statistics and configuration.
 """
 
+from enum import Enum
 from typing import Any, Dict, List, Optional, TypedDict
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class ActivityStatistics(BaseModel):
@@ -42,3 +43,45 @@ class ActivityResult(TypedDict):
     status: str
     message: str
     metadata: Dict[str, Any]
+
+
+class LhTableWriteMode(str, Enum):
+    """Write mode for lakehouse table load."""
+
+    APPEND = "APPEND"
+    UPSERT = "UPSERT"
+
+
+class LhLoadRequest(BaseModel):
+    """Request model for MDLH POST /load API."""
+
+    file_keys: Optional[List[str]] = Field(
+        default=None, serialization_alias="fileKeys", max_length=100
+    )
+    patterns: Optional[List[str]] = Field(default=None, max_length=10)
+    namespace: str
+    table_name: str = Field(serialization_alias="tableName")
+    mode: LhTableWriteMode = LhTableWriteMode.APPEND
+    catalog_name: Optional[str] = Field(default=None, serialization_alias="catalogName")
+    job_id: Optional[str] = Field(default=None, serialization_alias="jobId")
+
+    @model_validator(mode="after")
+    def _require_file_keys_or_patterns(self) -> "LhLoadRequest":
+        if not self.file_keys and not self.patterns:
+            raise ValueError("At least one of file_keys or patterns must be provided")
+        return self
+
+
+class LhLoadResponse(BaseModel):
+    """Response from MDLH load submit (HTTP 202)."""
+
+    job_id: str = Field(..., validation_alias="jobId")
+    workflow_id: str = Field(..., validation_alias="workflowId")
+    status: str
+
+
+class LhLoadStatusResponse(BaseModel):
+    """Response from MDLH load status poll."""
+
+    job_id: str = Field(..., validation_alias="jobId")
+    status: str

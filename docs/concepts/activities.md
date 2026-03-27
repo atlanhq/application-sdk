@@ -37,6 +37,7 @@ The SDK provides pre-built base activity classes for common tasks, primarily foc
 *   **`BaseMetadataExtractionActivities`** (in `application_sdk.activities.metadata_extraction.base`):
     *   **Purpose:** Provides a standard set of activities for extracting metadata from non-SQL data sources (e.g., REST APIs, file systems).
     *   **Activities:** Includes `preflight_check`, `fetch_metadata`, and `transform_data` from the parent class `ActivitiesInterface`. Adds credential handling in the set_state method along with the `handler` instances.
+    *   **Lakehouse Activities:** Also provides `load_to_lakehouse` and `prepare_raw_for_lakehouse` for loading data into the Iceberg lakehouse via the MDLH REST API. These are opt-in and controlled by the `ENABLE_LAKEHOUSE_LOAD` environment variable.
     *   **Extensibility:** Designed to be subclassed for specific non-SQL data sources with custom client, handler, and transformer implementations.
 
 ## Usage Patterns

@@ -34,8 +34,9 @@ The SDK includes base workflow implementations for common patterns:
 
 1.  **`BaseSQLMetadataExtractionWorkflow` (`workflows/metadata_extraction/sql.py`)**:
     *   **Purpose:** Orchestrates the extraction of metadata (databases, schemas, tables, columns, procedures) from SQL sources.
-    *   **Default Activities (`get_activities`)**: `preflight_check`, `fetch_databases`, `fetch_schemas`, `fetch_tables`, `fetch_columns`, `fetch_procedures`, `transform_data`.
-    *   **Orchestration (`run` method):** Executes preflight, then fetches and transforms metadata types concurrently using `asyncio.gather`.
+    *   **Default Activities (`get_activities`)**: `preflight_check`, `fetch_databases`, `fetch_schemas`, `fetch_tables`, `fetch_columns`, `fetch_procedures`, `transform_data`, `upload_to_atlan`, `load_to_lakehouse`, `prepare_raw_for_lakehouse`.
+    *   **Orchestration (`run` method):** Executes preflight, then fetches and transforms metadata types concurrently using `asyncio.gather`. When `ENABLE_LAKEHOUSE_LOAD=true`, loads raw data into `int_entity_raw.{app_name}` and transformed data into `entity_metadata.{typename}` via the MDLH REST API.
+    *   **Lakehouse Loading:** Provided by `LakehouseLoadMixin` (`workflows/metadata_extraction/lakehouse.py`). The mixin adds `load_raw_to_lakehouse` (converts raw parquet to enriched parquet, then loads) and `load_transformed_to_lakehouse` (loads per-entity-type data). A pre-flight health check against MDLH gracefully skips loading on tenants without lakehouse deployed.
 
 2.  **`SQLQueryExtractionWorkflow` (`workflows/query_extraction/sql.py`)**:
     *   **Purpose:** Orchestrates the extraction of query history/logs from SQL sources, often involving batching.
