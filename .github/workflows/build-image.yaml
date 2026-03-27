@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - chore-remove-dapr-cli
     paths:
       - 'Dockerfile'
       - 'pyproject.toml'
