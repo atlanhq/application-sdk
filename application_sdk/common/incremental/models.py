@@ -177,25 +177,45 @@ class IncrementalDiffResult(BaseModel):
 
     Tracks counts of changed assets written to incremental-diff folder.
     This folder contains only assets that changed in this specific run
-    (CREATED, UPDATED, or BACKFILL).
+    (CREATED, UPDATED, BACKFILL, or DELETED).
 
     Attributes:
         tables_created: Count of CREATED tables
         tables_updated: Count of UPDATED tables
         tables_backfill: Count of BACKFILL tables
+        tables_deleted: Count of DELETED tables (in previous but not in current)
         columns_total: Total columns for changed tables
+        columns_deleted: Total deleted columns (from deleted/updated tables)
         schemas_total: Total schemas in diff
         databases_total: Total databases in diff
         total_files: Total JSON files written
+        is_incremental: Whether this diff was produced from incremental extraction
     """
 
     tables_created: int = 0
     tables_updated: int = 0
     tables_backfill: int = 0
+    tables_deleted: int = 0
     columns_total: int = 0
+    columns_deleted: int = 0
     schemas_total: int = 0
     databases_total: int = 0
     total_files: int = 0
+    is_incremental: bool = True
+
+    @property
+    def total_changed_entities(self) -> int:
+        """Total number of changed entities (tables + columns, including deletes)."""
+        return (
+            self.tables_created
+            + self.tables_updated
+            + self.tables_backfill
+            + self.tables_deleted
+            + self.columns_total
+            + self.columns_deleted
+            + self.schemas_total
+            + self.databases_total
+        )
 
 
 class IncrementalWorkflowArgs(BaseModel):
