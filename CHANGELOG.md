@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.8.2 (March 27, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.1...v2.8.2
+
+### Bug Fixes
+
+- atlan cli config command correction (#1163) (by @adityachoudhury-cloud in [c3f07ef](https://github.com/atlanhq/application-sdk/commit/c3f07ef))
+- correct health check endpoint in BaseTest (#1170) (by @fyzanshaik-atlan in [6c329af](https://github.com/atlanhq/application-sdk/commit/6c329af))
+
+
 ## v2.8.1 (March 24, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.0...v2.8.1
