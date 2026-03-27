@@ -22,7 +22,7 @@ class BaseTest(TestInterface):
         """
         Check if the server is up and running and is responding to requests
         """
-        response = requests.get(self.client.host)
+        response = requests.get(f"{self.client.host}/server/health")
         self.assertEqual(response.status_code, 200)
 
     @pytest.mark.order(2)
