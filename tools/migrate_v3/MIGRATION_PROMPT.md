@@ -454,10 +454,12 @@ class MyOutput(Output):
 - `Any`, `bytes`, `bytearray`
 - Unbounded `list[T]` or `dict[K, V]`
 
-**Escape hatch — connector code must NOT use this.** `allow_unbounded_fields=True` is
-reserved for SDK-internal types only. The checker will FAIL if it appears in connector
-contracts. If you have an unbounded list, use `Annotated[list[T], MaxItems(N)]` or
-`FileReference` instead.
+**Escape hatch — use sparingly.** `allow_unbounded_fields=True` is needed on
+top-level `run()` input models that receive arbitrary dicts from AE/Heracles
+(e.g. `connection: dict[str, Any]`, `metadata: dict[str, Any]`). For inter-task
+contracts, prefer `Annotated[list[T], MaxItems(N)]` or `FileReference` instead.
+Do not use it on task-level Input/Output models unless the field genuinely
+receives arbitrary data from an external system.
 
 ---
 
