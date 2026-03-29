@@ -334,6 +334,224 @@ Remind the user:
 
 ---
 
+## Phase 6 — Live verification
+
+This phase starts the app locally and verifies handler endpoints and workflow execution against a v2 baseline. **Ask the user for confirmation before each major step.**
+
+### 6a — Establish v2 baseline
+
+Before starting the v3 app, check for an existing v2 workflow run:
+
+1. Look for output in `./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/`:
+   ```bash
+   find ./local/dapr/objectstore/artifacts -name "*.json" -path "*/transformed/*" | head -20
+   ```
+2. If output exists, ask the user:
+   > "Found existing workflow output at `<path>`. Was this from a v2 SDK run with full parity? Should I use it as the baseline for comparison?"
+3. If no output exists, ask:
+   > "No existing workflow output found. Have you run the v2 version of this connector locally? A v2 baseline is needed to verify parity after migration."
+4. If the user confirms a baseline exists, count entities per type:
+   ```bash
+   for f in ./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/<latest-run>/transformed/*/*.json; do
+     echo "$(basename $(dirname $f)): $(wc -l < "$f") entities"
+   done
+   ```
+   Record these counts — they are the parity target.
+
+### 6b — Run tests
+
+Run the full test suite before attempting a live run:
+
+```bash
+cd <target-path> && uv run pytest tests/unit/ --tb=short -q
+cd <target-path> && uv run pytest tests/e2e/ --tb=short -q
+```
+
+If any tests fail, fix production code issues before proceeding. Do not continue to 6c with failing tests.
+
+### 6c — Start the app
+
+Ask the user:
+> "Tests pass. Ready to start the app with `atlan app run`. This requires credentials in `.env`. Should I proceed?"
+
+If confirmed:
+
+```bash
+cd <target-path> && atlan app run -p .
+```
+
+Wait for the app to be ready (look for `Uvicorn running on http://127.0.0.1:8000`).
+
+### 6d — Test handler endpoints
+
+Read credentials from `.env` (look for `API_KEY_ID`, `API_SECRET`, and any workspace/extra fields). Then test all three handler endpoints:
+
+**Auth test:**
+```bash
+curl -s -X POST http://localhost:8000/workflows/v1/auth \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credentials": {
+      "host": "<host>",
+      "username": "<API_KEY_ID>",
+      "password": "<API_SECRET>",
+      "extra": {"workspace": "<workspace>"}
+    }
+  }'
+```
+Expected: `{"success": true, "data": {"status": "success"}}`
+
+**Preflight check:**
+```bash
+curl -s -X POST http://localhost:8000/workflows/v1/check \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credentials": { ... },
+    "metadata": {}
+  }'
+```
+Expected: `{"success": true, "data": {"status": "ready", "checks": [...]}}`
+
+**Metadata fetch:**
+```bash
+curl -s -X POST http://localhost:8000/workflows/v1/metadata \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credentials": { ... },
+    "metadata": {}
+  }'
+```
+Expected: `{"success": true, "data": {"objects": [...], "total_count": N}}`
+
+**Config endpoints:**
+```bash
+# List configmaps
+curl -s http://localhost:8000/workflows/v1/configmaps
+
+# Get specific configmap
+curl -s http://localhost:8000/workflows/v1/configmap/<id>
+
+# Get manifest
+curl -s http://localhost:8000/workflows/v1/manifest
+```
+
+If any endpoint returns 500, check the app terminal for the traceback. Common issues:
+- Handler not discovered → import the handler class in the App module
+- Credential format error → ensure `_normalize_credentials` is in the SDK version being used
+- Missing configmap files → verify `app/generated/` has the JSON files from `poe generate`
+
+### 6e — Start a workflow run
+
+Ask the user:
+> "Handler endpoints verified. Ready to trigger a workflow run. This will call external APIs and write output to `./local/dapr/objectstore/`. Should I proceed?"
+
+If confirmed:
+```bash
+curl -s -X POST http://localhost:8000/workflows/v1/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credentials": { ... },
+    "metadata": { <connector-specific metadata> },
+    "connection": {"connection": "dev"}
+  }'
+```
+
+Capture `workflow_id` and `run_id` from the response. Monitor status:
+```bash
+curl -s http://localhost:8000/workflows/v1/status/<workflow_id>/<run_id>
+```
+
+Poll until status is `COMPLETED` or `FAILED`. Also monitor Temporal UI at `http://localhost:8233`.
+
+### 6f — Parity comparison
+
+Once the workflow completes, locate the v3 output. The path follows this structure:
+```
+./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/<workflow_id>/<run_id>/transformed/
+```
+
+Use the `workflow_id` and `run_id` from the start response to find it:
+```bash
+V3_OUTPUT="./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/<workflow_id>/<run_id>/transformed"
+```
+
+Count entities per type in the v3 output:
+```bash
+for dir in "$V3_OUTPUT"/*/; do
+  typename=$(basename "$dir")
+  count=0
+  for f in "$dir"*.json; do
+    [ -f "$f" ] && count=$((count + $(wc -l < "$f")))
+  done
+  echo "$typename: $count"
+done
+```
+
+If a v2 baseline exists (from step 6a), compare:
+
+```
+Entity type      | v2 count | v3 count | Match
+-----------------|----------|----------|------
+workspace        |        1 |        1 | ✓
+collection       |       67 |       67 | ✓
+report           |       68 |       30 | ✗ (-38)
+```
+
+### 6g — Fix-and-retry loop
+
+If parity fails (counts differ, workflow errors, or endpoint failures):
+
+1. **Diagnose.** Read the app terminal logs and Temporal UI (`http://localhost:8233`) for errors. Common causes:
+   - HTTP errors during extraction → check client retry logic, rate limiting, auth
+   - Missing entities → check filtering logic, pagination, or API response parsing
+   - Transform errors → check Parquet round-trip issues (nested dicts become JSON strings)
+   - Empty output → check `output_path` computation and `output_prefix` defaults
+
+2. **Fix.** Apply the fix to production code only. Do not modify tests.
+
+3. **Re-run from 6b.** After fixing:
+   - Re-run tests (6b) to confirm the fix doesn't break anything
+   - Restart the app (6c) to pick up code changes
+   - Re-test handler endpoints (6d) to confirm they still work
+   - Trigger a new workflow run (6e)
+   - Re-compare parity (6f)
+
+4. **Repeat** until all entity counts match the v2 baseline and all endpoints return success.
+
+Do not proceed to the summary until:
+- All handler endpoints return success
+- Workflow completes without errors
+- Entity counts match the v2 baseline (or the user explicitly accepts the difference with an explanation)
+
+### 6h — Print verification summary
+
+Only print this after parity is achieved or the user accepts the result:
+
+```
+## Live Verification Summary
+
+### Handler Endpoints
+- POST /workflows/v1/auth:      ✓ success
+- POST /workflows/v1/check:     ✓ ready (N checks passed)
+- POST /workflows/v1/metadata:  ✓ N objects returned
+- GET  /workflows/v1/configmaps: ✓ N configmaps
+- GET  /workflows/v1/manifest:   ✓ served
+
+### Workflow Execution
+- Workflow ID: <id>
+- Run ID: <id>
+- Status: COMPLETED
+- Duration: Ns
+- Retry attempts: N (if fix-and-retry loop was needed)
+
+### Parity
+<entity count comparison table>
+- Parity: ACHIEVED
+- Fixes applied during retry loop: <list of fixes, or "none">
+```
+
+---
+
 ## Known Gotchas — learned from real migrations
 
 These are issues discovered during production migrations that are not covered by the automated checker or migration tooling. Read these before starting.
