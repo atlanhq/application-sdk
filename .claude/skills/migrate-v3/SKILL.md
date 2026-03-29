@@ -104,7 +104,8 @@ Examine the source files in the target path (exclude test files from this analys
 - Look for classes inheriting from `BaseSQLMetadataExtractionWorkflow` / `BaseSQLMetadataExtractionActivities` → SQL metadata extractor (§2a of MIGRATION_PROMPT.md)
 - Look for classes inheriting from `SQLQueryExtractionWorkflow` / `SQLQueryExtractionActivities` → SQL query extractor (§2b)
 - Look for classes inheriting from `IncrementalSQLMetadataExtractionWorkflow` → Incremental SQL extractor (§2c)
-- Look for any other `WorkflowInterface` / `ActivitiesInterface` subclasses → Custom App (§3)
+- Look for HTTP/REST client usage (`httpx`, `aiohttp`, `requests`, or custom `BaseClient` subclasses) with no SQL queries → REST/HTTP metadata extractor (§2d)
+- Look for any other `WorkflowInterface` / `ActivitiesInterface` subclasses that don't fit above → Custom App (§3)
 - In all cases: identify the handler class (§4) and the entry point (§5)
 
 > **Tip — auto-detect the connector type:**
