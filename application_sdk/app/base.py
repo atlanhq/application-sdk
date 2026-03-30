@@ -504,6 +504,13 @@ class App(ABC):
             output_type=output_type,
         )
 
+        # Register any @on_event handlers as dynamic workflow subclasses
+        _apply_event_registration(
+            parent_cls=cls,
+            parent_app_name=app_name,
+            parent_passthrough_modules=cls.passthrough_modules,
+        )
+
     @property
     def context(self) -> AppContext:
         """Get the current execution context.
@@ -1602,6 +1609,83 @@ def _create_task_activity_wrapper(
     return wrapper
 
 
+def _apply_event_registration(
+    parent_cls: "type[App]",
+    parent_app_name: str,
+    parent_passthrough_modules: set[str] | None,
+) -> None:
+    """Scan a parent App class for @on_event methods and register each as a dynamic workflow.
+
+    For each @on_event-decorated method found on parent_cls, this function:
+    1. Creates a dynamic subclass of parent_cls via type()
+    2. Sets the event handler method as _original_run on the dynamic class
+    3. Calls _apply_app_registration() so the dynamic class becomes a Temporal workflow
+    4. Registers the handler in EventRegistry
+
+    The dynamic subclass inherits all @task methods from the parent via normal
+    Python inheritance.
+
+    Args:
+        parent_cls: The App class that contains @on_event methods.
+        parent_app_name: The registered name of the parent App.
+        parent_passthrough_modules: Passthrough modules from the parent App.
+    """
+    from application_sdk.app.event import get_event_metadata, is_event_handler
+    from application_sdk.app.event_registry import EventRegistry
+
+    event_registry = EventRegistry.get_instance()
+
+    for attr_name in dir(parent_cls):
+        if attr_name.startswith("_"):
+            continue
+
+        attr = getattr(parent_cls, attr_name, None)
+        if attr is None:
+            continue
+
+        if not is_event_handler(attr):
+            continue
+
+        metadata = get_event_metadata(attr)
+        if metadata is None:
+            continue
+
+        # Convert method name to kebab-case: handle_anomaly -> handle-anomaly
+        method_kebab = attr_name.replace("_", "-")
+        workflow_name = f"{parent_app_name}.{method_kebab}"
+
+        # Create dynamic subclass with _app_registered = True so __init_subclass__ skips it.
+        # Set `run` to the event handler method so that _apply_app_registration
+        # picks it up as the original run (not the parent's already-wrapped run
+        # which carries __temporal_workflow_run and would confuse Temporal's
+        # workflow.defn validation).
+        dynamic_cls = type(
+            f"{parent_cls.__name__}__{attr_name}",
+            (parent_cls,),
+            {"_app_registered": True, "run": attr},
+        )
+        dynamic_cls.__module__ = parent_cls.__module__
+
+        # Apply registration: creates the Temporal workflow wrapper and registers in AppRegistry
+        _apply_app_registration(
+            cls=dynamic_cls,
+            name=workflow_name,
+            version=parent_cls.version,
+            description=metadata.description,
+            tags=parent_cls.tags,
+            passthrough_modules=parent_passthrough_modules,
+            input_type=metadata.input_type,
+            output_type=metadata.output_type,
+        )
+
+        # Register in EventRegistry
+        event_registry.register(
+            app_name=parent_app_name,
+            handler_metadata=metadata,
+            workflow_name=workflow_name,
+        )
+
+
 # Keep FileReference accessible via base module for convenience
 __all__ = [
     "App",
@@ -1617,6 +1701,7 @@ __all__ = [
     "_safe_now",
     "_safe_uuid",
     "_apply_app_registration",
+    "_apply_event_registration",
     "_create_task_activity_wrapper",
     "_register_tasks",
     "_wrap_instance_tasks",
