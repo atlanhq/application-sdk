@@ -37,7 +37,14 @@ class TestMetricModel:
         """Test metric serialization to dict."""
         metric = Metric(name="count", value=42)
         data = metric.model_dump()
-        assert data == {"name": "count", "value": 42}
+        assert data == {"name": "count", "value": 42, "display_name": None}
+
+    def test_metric_with_display_name(self):
+        """Test creating a metric with display_name."""
+        metric = Metric(name="qi-queries-parsed", value=100, display_name="QI Queries Parsed")
+        assert metric.name == "qi-queries-parsed"
+        assert metric.value == 100
+        assert metric.display_name == "QI Queries Parsed"
 
 
 class TestArtifactModel:
@@ -55,7 +62,18 @@ class TestArtifactModel:
         """Test artifact serialization to dict."""
         artifact = Artifact(name="report", path="artifacts/report.pdf")
         data = artifact.model_dump()
-        assert data == {"name": "report", "path": "artifacts/report.pdf"}
+        assert data == {"name": "report", "path": "artifacts/report.pdf", "display_name": None}
+
+    def test_artifact_with_display_name(self):
+        """Test creating an artifact with display_name."""
+        artifact = Artifact(
+            name="debug-logs",
+            path="argo-artifacts/workflow-123/debug.tgz",
+            display_name="Debug Logs"
+        )
+        assert artifact.name == "debug-logs"
+        assert artifact.path == "argo-artifacts/workflow-123/debug.tgz"
+        assert artifact.display_name == "Debug Logs"
 
 
 class TestOutputCollector:
@@ -72,6 +90,34 @@ class TestOutputCollector:
         collector.add_metric(metric)
         result = collector.to_dict()
         assert result == {"metrics": {"rows-processed": 1000}}
+
+    def test_add_metric_with_display_name_serializes_as_object(self, collector):
+        """Test that metrics with display_name serialize as objects."""
+        metric = Metric(name="qi-queries-parsed", value=42, display_name="QI Queries Parsed")
+        collector.add_metric(metric)
+        result = collector.to_dict()
+        assert result == {
+            "metrics": {
+                "qi-queries-parsed": {
+                    "value": 42,
+                    "display_name": "QI Queries Parsed",
+                }
+            }
+        }
+
+    def test_add_metric_sums_preserves_display_name(self, collector):
+        """Test that summing metrics preserves display_name."""
+        collector.add_metric(Metric(name="count", value=100, display_name="Total Count"))
+        collector.add_metric(Metric(name="count", value=50))
+        result = collector.to_dict()
+        assert result == {
+            "metrics": {
+                "count": {
+                    "value": 150,
+                    "display_name": "Total Count",
+                }
+            }
+        }
 
     def test_add_metric_sums_same_key_numerics_int(self, collector):
         """Test that numeric metrics with same key are summed (int)."""
@@ -116,6 +162,24 @@ class TestOutputCollector:
         collector.add_artifact(artifact)
         result = collector.to_dict()
         assert result == {"artifacts": {"debug-logs": "artifacts/debug.tgz"}}
+
+    def test_add_artifact_with_display_name_serializes_as_object(self, collector):
+        """Test that artifacts with display_name serialize as objects."""
+        artifact = Artifact(
+            name="debug-logs",
+            path="artifacts/debug.tgz",
+            display_name="Debug Logs"
+        )
+        collector.add_artifact(artifact)
+        result = collector.to_dict()
+        assert result == {
+            "artifacts": {
+                "debug-logs": {
+                    "path": "artifacts/debug.tgz",
+                    "display_name": "Debug Logs",
+                }
+            }
+        }
 
     def test_add_artifact_last_write_wins(self, collector):
         """Test that artifacts with same name use last-write-wins."""

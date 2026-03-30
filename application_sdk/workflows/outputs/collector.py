@@ -107,7 +107,15 @@ class OutputCollector:
                 else:
                     result["metrics"][m.name] = m.value
         if self._artifacts:
-            result["artifacts"] = {a.name: a.path for a in self._artifacts.values()}
+            result["artifacts"] = {}
+            for a in self._artifacts.values():
+                if a.display_name:
+                    result["artifacts"][a.name] = {
+                        "path": a.path,
+                        "display_name": a.display_name,
+                    }
+                else:
+                    result["artifacts"][a.name] = a.path
         return result
 
     def merge_with(self, base: Dict[str, Any]) -> Dict[str, Any]:

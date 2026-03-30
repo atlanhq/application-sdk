@@ -50,18 +50,24 @@ class Artifact(BaseModel):
     exposed as downloadable outputs from the workflow.
 
     Attributes:
-        name: Human-readable name for the artifact, e.g. "debug-logs".
+        name: Unique identifier for the artifact, e.g. "debug-logs".
         path: Object store path to the artifact file,
             e.g. "argo-artifacts/.../debug.tgz".
+        display_name: Optional human-readable label for UI display. If provided,
+            the artifact is serialized as {"path": ..., "display_name": ...}.
+            If omitted, the artifact is serialized as a plain path for backward
+            compatibility.
 
     Example:
         >>> from application_sdk.workflows.outputs import get_outputs, Artifact
         >>> outputs = get_outputs()
         >>> outputs.add_artifact(Artifact(
         ...     name="debug-logs",
-        ...     path="argo-artifacts/workflow-123/debug.tgz"
+        ...     path="argo-artifacts/workflow-123/debug.tgz",
+        ...     display_name="Debug Logs"
         ... ))
     """
 
     name: str
     path: str
+    display_name: Optional[str] = None
