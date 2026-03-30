@@ -70,20 +70,40 @@ Read ALL Python files in the connector's `app/` directory and `main.py`:
 
 Report: class hierarchy, method inventory, SQL queries, handler behavior, custom logic, contract input fields.
 
-### Agent 3: Understand the baseline (golden dataset + v2 output)
+### Agent 3: Understand the baseline and test infrastructure
 
-1. Check `golden-dataset/extract/` — What entity types? What fields per entity? Any enrichment fields (PARTITIONS, EXTRA_INFO)?
-2. Check `golden-dataset/expected-output/` — What attributes and customAttributes are expected?
-3. Check `./local/dapr/objectstore/artifacts/` — Any existing v2 workflow runs? Count entities per type.
+**Establish parity baseline** — check both sources, use whichever is available:
+
+1. **Golden dataset** (if present at `golden-dataset/`):
+   - Check `golden-dataset/extract/` — What entity types? What fields per entity? Any enrichment fields (PARTITIONS, EXTRA_INFO)?
+   - Check `golden-dataset/expected-output/` — What attributes and customAttributes are in the published output?
+   - Count entities per type. List all field names per entity.
+
+2. **Latest v2 workflow run** (check `./local/dapr/objectstore/artifacts/`):
+   - List workflow directories sorted by modification time.
+   - Find the most recent run with parquet files in `raw/`.
+   - Count entities per type (rows in each parquet file).
+   - List columns per entity type.
+   - This is the v2 output produced by the connector before migration.
+
+3. **If NEITHER exists**, note this — the user will need to run the v2 app once before migration to establish a baseline, or accept that parity verification will happen post-migration by comparing v3 output against live source data.
+
 4. Check `.env` — What credentials are available for live testing?
 5. Check `tests/unit/` — What do existing tests test? What v2 APIs do they reference?
 6. Check `tests/e2e/` — What e2e test patterns exist?
 
-Report: entity counts, field lists, v2 APIs used in tests, credentials available, baseline for parity.
+Report: baseline source (golden-dataset / v2-run / none), entity counts, field lists, v2 APIs used in tests, credentials available.
 
 ### After all agents complete
 
-Synthesize the research into a migration plan:
+**Ask the user to confirm the baseline** before proceeding:
+
+> "I found [golden dataset / v2 workflow run at `<path>` / no baseline].
+> Entity counts: database=N, schema=N, table=N, column=N, procedure=N.
+> Fields per entity: [list].
+> Should I use this as the parity target? If not, please run the v2 app first or point me to the correct baseline."
+
+Wait for confirmation. Then synthesize the research into a migration plan:
 
 1. **Connector type**: SQL metadata / SQL query / Incremental / REST / Custom
 2. **Template to use**: `SqlMetadataExtractor` / `SqlQueryExtractor` / etc.
@@ -91,7 +111,8 @@ Synthesize the research into a migration plan:
 4. **Handler work**: What did `BaseSQLHandler` provide that must be reimplemented?
 5. **Custom logic to preserve**: Multidb toggle, enrichment queries, filter handling
 6. **Test rewrite scope**: Which tests reference v2 APIs that won't exist?
-7. **Feature gaps to close**: What enrichment/attributes does the golden dataset show that the v2 app produced?
+7. **Feature gaps to close**: What enrichment/attributes does the baseline show that must be preserved?
+8. **Parity target**: Entity counts and field lists from the confirmed baseline.
 
 Print this plan and proceed.
 
@@ -409,15 +430,34 @@ Poll status until `COMPLETED` or `FAILED`.
 
 ### 4d — Verify parity
 
-Compare entity counts against the latest v2 run:
+Find the v3 output (usually at `./local/dapr/objectstore/artifacts/apps/default/workflows/local/raw/` or under the workflow ID). Count entities per type and compare against the baseline established in Phase R.
 
-```bash
-# Count entities in v3 output
-find ./local/dapr/objectstore/artifacts -name "*.parquet" -path "*/raw/*" | while read f; do
-  entity=$(echo "$f" | grep -o 'raw/[^/]*' | cut -d/ -f2)
-  echo "$entity"
-done | sort | uniq -c | sort -rn
+```python
+# Quick parity check script
+import pandas as pd, glob, os
+for entity in ['database', 'schema', 'table', 'column', 'extras-procedure']:
+    files = glob.glob(f'./local/dapr/objectstore/artifacts/apps/default/workflows/local/raw/{entity}/*.parquet')
+    if files:
+        df = pd.concat([pd.read_parquet(f) for f in files])
+        print(f'{entity}: {len(df)} rows, {len(df.columns)} cols')
+    else:
+        print(f'{entity}: 0 rows')
 ```
+
+If a baseline was confirmed in Phase R, compare side-by-side:
+
+```
+Entity        | Baseline | v3  | Match
+database      |        1 |   1 | ✓
+schema        |       12 |  12 | ✓
+table         |      193 | 193 | ✓
+column        |     1404 |1404 | ✓
+```
+
+If counts differ, ask the user:
+> "Entity counts differ for `<entity>`: baseline=N, v3=M. This could be due to source data changes since the baseline was captured. Should I investigate, or is this acceptable?"
+
+Also verify new columns (enrichment fields like `view_definition`, `is_partitioned`, `source_data_type`) are present in the v3 parquet even if NULL — they should be there for production catalogs that have views/partitions.
 
 ### 4e — Test filters
 
