@@ -54,7 +54,7 @@ on:
         description: "Atlan CLI version to install"
         required: false
         type: string
-        default: "latest"
+        default: "v0.1.12"
     secrets:
       ORG_PAT_GITHUB:
         required: true
