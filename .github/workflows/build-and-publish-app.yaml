@@ -1,14 +1,14 @@
-# Unified build-and-publish workflow for Atlan first-party app repos.
+# Unified reusable workflow for Atlan first-party app repos.
 #
-# Combines image build (build-apps-image.yaml) and marketplace publish (publish-app.yaml)
-# into a single workflow to eliminate double builds on push to main.
+# Builds the Docker image and optionally publishes to the Global Marketplace
+# in a single workflow run, eliminating double builds on push to main.
 #
 # Image tag:  {branch}-{sha7}  (e.g. main-abc1234) — immutable, used by deploy systems
 # Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{sha7}
 # Mutable:    ghcr.io/atlanhq/{repo}:{branch}         (always points to latest on branch)
 #
-# Build: parallel matrix (amd64 + arm64), merged into a multi-arch manifest.
-# Publish: after build succeeds, registers the version in the Global Marketplace via API.
+# Build: parallel amd64 + arm64, merged into a multi-arch manifest.
+# Publish: uses atlan CLI with --skip-build to register in marketplace after build completes.
 #
 # Usage in each app repo (.github/workflows/build-and-publish.yaml):
 #
@@ -16,7 +16,7 @@
 #     build-and-publish:
 #       uses: atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml@main
 #       with:
-#         publish: ${{ github.event.inputs.publish != 'false' }}
+#         publish: true
 #         channel: ${{ inputs.channel || 'all' }}
 #         tenants: ${{ inputs.tenants || '' }}
 #       secrets: inherit
@@ -50,6 +50,11 @@ on:
         required: false
         type: string
         default: "https://home.atlan.com"
+      cli_version:
+        description: "Atlan CLI version to install"
+        required: false
+        type: string
+        default: "latest"
     secrets:
       ORG_PAT_GITHUB:
         required: true
