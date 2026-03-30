@@ -56,6 +56,49 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
+
+def _serialize_credential_value(v: Any) -> str:
+    if isinstance(v, str):
+        return v
+    return json.dumps(v)
+
+
+def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
+    """Normalize v2 nested-dict credentials to v3 list[{key, value}] format.
+
+    v2 (Heracles) sends:
+        {"credentials": {"host": "...", "username": "...", "extra": {"workspace": "..."}}}
+
+    v3 expects:
+        {"credentials": [{"key": "host", "value": "..."}, {"key": "extra.workspace", "value": "..."}]}
+
+    If credentials is already a list (v3 format), the body is returned unchanged.
+    """
+    creds = body.get("credentials")
+    if not isinstance(creds, dict):
+        return body
+
+    logger.debug(
+        "Converting v2 nested-dict credentials to v3 list format, keys=%s",
+        list(creds.keys()),
+    )
+
+    creds_dict: dict[str, Any] = dict(creds)
+    pairs: list[dict[str, str]] = []
+    extra = creds_dict.pop("extra", None)
+    for k, v in creds_dict.items():
+        if v is not None:
+            pairs.append({"key": k, "value": _serialize_credential_value(v)})
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            if v is not None:
+                pairs.append(
+                    {"key": f"extra.{k}", "value": _serialize_credential_value(v)}
+                )
+
+    return {**body, "credentials": pairs}
+
+
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
     from temporalio.client import Client
@@ -340,7 +383,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
-        body = await request.json()
+        body = _normalize_credentials(await request.json())
         auth_input = AuthInput.model_validate(body)
         credentials = [
             Credential(key=c.key, value=c.value) for c in auth_input.credentials
@@ -394,7 +437,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
-        body = await request.json()
+        body = _normalize_credentials(await request.json())
         preflight_input = PreflightInput.model_validate(body)
         credentials = [
             Credential(key=c.key, value=c.value) for c in preflight_input.credentials
@@ -451,7 +494,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
-        body = await request.json()
+        body = _normalize_credentials(await request.json())
         metadata_input = MetadataInput.model_validate(body)
         credentials = [
             Credential(key=c.key, value=c.value) for c in metadata_input.credentials

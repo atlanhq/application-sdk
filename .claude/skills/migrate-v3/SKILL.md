@@ -104,7 +104,8 @@ Examine the source files in the target path (exclude test files from this analys
 - Look for classes inheriting from `BaseSQLMetadataExtractionWorkflow` / `BaseSQLMetadataExtractionActivities` → SQL metadata extractor (§2a of MIGRATION_PROMPT.md)
 - Look for classes inheriting from `SQLQueryExtractionWorkflow` / `SQLQueryExtractionActivities` → SQL query extractor (§2b)
 - Look for classes inheriting from `IncrementalSQLMetadataExtractionWorkflow` → Incremental SQL extractor (§2c)
-- Look for any other `WorkflowInterface` / `ActivitiesInterface` subclasses → Custom App (§3)
+- Look for HTTP/REST client usage (`httpx`, `aiohttp`, `requests`, or custom `BaseClient` subclasses) with no SQL queries → REST/HTTP metadata extractor (§2d)
+- Look for any other `WorkflowInterface` / `ActivitiesInterface` subclasses that don't fit above → Custom App (§3)
 - In all cases: identify the handler class (§4) and the entry point (§5)
 
 > **Tip — auto-detect the connector type:**
@@ -135,11 +136,11 @@ Follow the exact checklists in `tools/migrate_v3/MIGRATION_PROMPT.md` for the co
 - Forbidden: `async def test_auth(self, *args, **kwargs):`
 - The checker will FAIL if `*args`/`**kwargs` appear in a Handler subclass method.
 
-**Hard constraint — connector contracts must not use `allow_unbounded_fields=True`:**
+**Constraint — `allow_unbounded_fields=True` must be used sparingly:**
 
-- This escape hatch is reserved for SDK-internal types only.
-- If a connector contract has an unbounded list, use `Annotated[list[T], MaxItems(N)]` or `FileReference` instead.
-- The checker will FAIL if `allow_unbounded_fields=True` appears in connector code.
+- Needed on top-level `run()` input models that receive arbitrary dicts from AE/Heracles (e.g. `connection: dict[str, Any]`, `metadata: dict[str, Any]`).
+- Must NOT be used on inter-task Input/Output contracts — use `Annotated[list[T], MaxItems(N)]` or `FileReference` instead.
+- The checker will WARN if `allow_unbounded_fields=True` appears on task-level contracts.
 
 Apply changes in this order:
 
@@ -330,3 +331,329 @@ Remind the user:
 - Review all `# TODO(v3-migration)` comments — each one marks a location that needs human verification.
 - The typed `Input`/`Output` models for custom `@task` methods should be defined (see §7 of MIGRATION_PROMPT.md) — these were not auto-generated.
 - If an e2e test was generated in Phase 4b, validate that it is logically equivalent to the original before deleting the old file.
+
+---
+
+## Phase 6 — Live verification
+
+This phase starts the app locally and verifies handler endpoints and workflow execution against a v2 baseline. **Ask the user for confirmation before each major step.**
+
+### 6a — Establish v2 baseline
+
+Before starting the v3 app, check for an existing v2 workflow run:
+
+1. Look for output in `./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/`:
+   ```bash
+   find ./local/dapr/objectstore/artifacts -name "*.json" -path "*/transformed/*" | head -20
+   ```
+2. If output exists, ask the user:
+   > "Found existing workflow output at `<path>`. Was this from a v2 SDK run with full parity? Should I use it as the baseline for comparison?"
+3. If no output exists, ask:
+   > "No existing workflow output found. Have you run the v2 version of this connector locally? A v2 baseline is needed to verify parity after migration."
+4. If the user confirms a baseline exists, count entities per type:
+   ```bash
+   for f in ./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/<latest-run>/transformed/*/*.json; do
+     echo "$(basename $(dirname $f)): $(wc -l < "$f") entities"
+   done
+   ```
+   Record these counts — they are the parity target.
+
+### 6b — Run tests
+
+Run the full test suite before attempting a live run:
+
+```bash
+cd <target-path> && uv run pytest tests/unit/ --tb=short -q
+cd <target-path> && uv run pytest tests/e2e/ --tb=short -q
+```
+
+If any tests fail, fix production code issues before proceeding. Do not continue to 6c with failing tests.
+
+### 6c — Start the app
+
+Ask the user:
+> "Tests pass. Ready to start the app with `atlan app run`. This requires credentials in `.env`. Should I proceed?"
+
+If confirmed:
+
+```bash
+cd <target-path> && atlan app run -p .
+```
+
+Wait for the app to be ready (look for `Uvicorn running on http://127.0.0.1:8000`).
+
+### 6d — Test handler endpoints
+
+Read credentials from `.env` (look for `API_KEY_ID`, `API_SECRET`, and any workspace/extra fields). Then test all three handler endpoints:
+
+**Auth test:**
+```bash
+curl -s -X POST http://localhost:8000/workflows/v1/auth \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credentials": {
+      "host": "<host>",
+      "username": "<API_KEY_ID>",
+      "password": "<API_SECRET>",
+      "extra": {"workspace": "<workspace>"}
+    }
+  }'
+```
+Expected: `{"success": true, "data": {"status": "success"}}`
+
+**Preflight check:**
+```bash
+curl -s -X POST http://localhost:8000/workflows/v1/check \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credentials": { ... },
+    "metadata": {}
+  }'
+```
+Expected: `{"success": true, "data": {"status": "ready", "checks": [...]}}`
+
+**Metadata fetch:**
+```bash
+curl -s -X POST http://localhost:8000/workflows/v1/metadata \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credentials": { ... },
+    "metadata": {}
+  }'
+```
+Expected: `{"success": true, "data": {"objects": [...], "total_count": N}}`
+
+**Config endpoints:**
+```bash
+# List configmaps
+curl -s http://localhost:8000/workflows/v1/configmaps
+
+# Get specific configmap
+curl -s http://localhost:8000/workflows/v1/configmap/<id>
+
+# Get manifest
+curl -s http://localhost:8000/workflows/v1/manifest
+```
+
+If any endpoint returns 500, check the app terminal for the traceback. Common issues:
+- Handler not discovered → import the handler class in the App module
+- Credential format error → ensure `_normalize_credentials` is in the SDK version being used
+- Missing configmap files → verify `app/generated/` has the JSON files from `poe generate`
+
+### 6e — Start a workflow run
+
+Ask the user:
+> "Handler endpoints verified. Ready to trigger a workflow run. This will call external APIs and write output to `./local/dapr/objectstore/`. Should I proceed?"
+
+If confirmed:
+```bash
+curl -s -X POST http://localhost:8000/workflows/v1/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credentials": { ... },
+    "metadata": { <connector-specific metadata> },
+    "connection": {"connection": "dev"}
+  }'
+```
+
+Capture `workflow_id` and `run_id` from the response. Monitor status:
+```bash
+curl -s http://localhost:8000/workflows/v1/status/<workflow_id>/<run_id>
+```
+
+Poll until status is `COMPLETED` or `FAILED`. Also monitor Temporal UI at `http://localhost:8233`.
+
+### 6f — Parity comparison
+
+Once the workflow completes, locate the v3 output. The path follows this structure:
+```
+./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/<workflow_id>/<run_id>/transformed/
+```
+
+Use the `workflow_id` and `run_id` from the start response to find it:
+```bash
+V3_OUTPUT="./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/<workflow_id>/<run_id>/transformed"
+```
+
+Count entities per type in the v3 output:
+```bash
+for dir in "$V3_OUTPUT"/*/; do
+  typename=$(basename "$dir")
+  count=0
+  for f in "$dir"*.json; do
+    [ -f "$f" ] && count=$((count + $(wc -l < "$f")))
+  done
+  echo "$typename: $count"
+done
+```
+
+If a v2 baseline exists (from step 6a), compare:
+
+```
+Entity type      | v2 count | v3 count | Match
+-----------------|----------|----------|------
+workspace        |        1 |        1 | ✓
+collection       |       67 |       67 | ✓
+report           |       68 |       30 | ✗ (-38)
+```
+
+### 6g — Fix-and-retry loop
+
+If parity fails (counts differ, workflow errors, or endpoint failures):
+
+1. **Diagnose.** Read the app terminal logs and Temporal UI (`http://localhost:8233`) for errors. Common causes:
+   - HTTP errors during extraction → check client retry logic, rate limiting, auth
+   - Missing entities → check filtering logic, pagination, or API response parsing
+   - Transform errors → check Parquet round-trip issues (nested dicts become JSON strings)
+   - Empty output → check `output_path` computation and `output_prefix` defaults
+
+2. **Fix.** Apply the fix to production code only. Do not modify tests.
+
+3. **Re-run from 6b.** After fixing:
+   - Re-run tests (6b) to confirm the fix doesn't break anything
+   - Restart the app (6c) to pick up code changes
+   - Re-test handler endpoints (6d) to confirm they still work
+   - Trigger a new workflow run (6e)
+   - Re-compare parity (6f)
+
+4. **Repeat** until all entity counts match the v2 baseline and all endpoints return success.
+
+Do not proceed to the summary until:
+- All handler endpoints return success
+- Workflow completes without errors
+- Entity counts match the v2 baseline (or the user explicitly accepts the difference with an explanation)
+
+### 6h — Print verification summary
+
+Only print this after parity is achieved or the user accepts the result:
+
+```
+## Live Verification Summary
+
+### Handler Endpoints
+- POST /workflows/v1/auth:      ✓ success
+- POST /workflows/v1/check:     ✓ ready (N checks passed)
+- POST /workflows/v1/metadata:  ✓ N objects returned
+- GET  /workflows/v1/configmaps: ✓ N configmaps
+- GET  /workflows/v1/manifest:   ✓ served
+
+### Workflow Execution
+- Workflow ID: <id>
+- Run ID: <id>
+- Status: COMPLETED
+- Duration: Ns
+- Retry attempts: N (if fix-and-retry loop was needed)
+
+### Parity
+<entity count comparison table>
+- Parity: ACHIEVED
+- Fixes applied during retry loop: <list of fixes, or "none">
+```
+
+---
+
+## Known Gotchas — learned from real migrations
+
+These are issues discovered during production migrations that are not covered by the automated checker or migration tooling. Read these before starting.
+
+### Handler discovery
+
+v3 discovers the `Handler` subclass by looking in the same module as the `App` class. If your handler is in a different module (e.g. `app/handlers/handler.py` while the App is in `app/app.py`), the SDK will use `DefaultHandler` silently.
+
+**Fix:** Either import the handler in your App module:
+```python
+# app/app.py
+from app.handlers.handler import MyHandler  # noqa: F401 — registers handler
+```
+Or set the env var `ATLAN_HANDLER_MODULE=app.handlers.handler:MyHandler`.
+
+### Handler credentials — v2 nested dict vs v3 list format
+
+v3 handler endpoints receive credentials as `list[HandlerCredential]` (`[{key, value}]` pairs). Heracles and existing frontends send v2 nested dicts (`{host, username, password, extra: {workspace}}`). The SDK normalizes v2 format to v3 automatically in `service.py`, but your handler's `_build_client` helper must reconstruct the nested dict from `input.credentials`:
+
+```python
+async def _build_client(credentials: list[HandlerCredential]) -> MyClient:
+    cred_dict = {}
+    extra = {}
+    for cred in credentials:
+        if cred.key.startswith("extra."):
+            extra[cred.key[len("extra."):]] = cred.value
+        else:
+            cred_dict[cred.key] = cred.value
+    if extra:
+        cred_dict["extra"] = extra
+    client = MyClient()
+    await client.load(credentials=cred_dict)
+    return client
+```
+
+### Payload safety and `allow_unbounded_fields`
+
+v3 enforces strict types on `Input`/`Output` contracts. `dict[str, Any]` fields will raise `PayloadSafetyError` at import time. For top-level input models that receive arbitrary config from AE/Heracles (connection dicts, metadata dicts), use:
+
+```python
+class MyExtractionInput(Input, allow_unbounded_fields=True):
+    credential_guid: str = ""
+    credentials: dict[str, Any] = {}
+    connection: dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
+```
+
+For inter-task contracts, prefer typed fields with `MaxItems` or `FileReference`.
+
+### Dockerfile CMD must be empty
+
+Do NOT hardcode `CMD ["--mode", "combined"]`. In production, Helm sets `APPLICATION_MODE` env var to control whether the container runs as `WORKER` (Temporal only) or `SERVER` (HTTP only). The base image `entrypoint.sh` reads this. Hardcoding `--mode` overrides Helm's env var and causes worker pods to attempt starting uvicorn on port -1.
+
+```dockerfile
+# WRONG
+CMD ["--mode", "combined"]
+
+# CORRECT — let APPLICATION_MODE env var control mode
+CMD []
+```
+
+### output_path and output_prefix must be computed
+
+v3 does not auto-compute `output_path` like v2 did. If `input.output_path` is empty (which it is for local dev), compute it in your extract task:
+
+```python
+from application_sdk.constants import TEMPORARY_PATH
+from application_sdk.common.utils import build_output_path
+
+if not input.output_path:
+    output_path = os.path.join(TEMPORARY_PATH, build_output_path())
+```
+
+Similarly, `output_prefix` must default to `TEMPORARY_PATH` for the `transformed_data_prefix` stripping logic to work correctly in the output contract.
+
+### pre-commit must exclude app/generated/
+
+The contract toolkit generates `_input.py` and other files in `app/generated/`. These contain auto-generated code that will fail ruff and pyright checks. Exclude the directory in `.pre-commit-config.yaml`:
+
+```yaml
+- id: ruff
+  exclude: app/generated/
+- id: ruff-format
+  exclude: app/generated/
+- id: pyright
+  exclude: app/generated/
+```
+
+### Local dev — verify Dapr is actually being used
+
+The v3 SDK checks `DAPR_HTTP_PORT` (not `ATLAN_DAPR_HTTP_PORT`) to detect the Dapr sidecar. If running via `atlan app run`, the CLI sets this automatically. If running manually (`uv run python main.py`), Dapr will be skipped and the SDK falls back to InMemory + LocalStore silently. This means misconfigured Dapr components won't be caught until production.
+
+**Fix:** When running manually, export `DAPR_HTTP_PORT=3500` before starting the app, or use `atlan app run` which handles this.
+
+### run() return type must match AE JSONPath queries
+
+The output contract from `run()` is what AE reads via JSONPath to find transformed data. The field names must match exactly what AE expects:
+
+```python
+class MyExtractionOutput(Output):
+    transformed_data_prefix: str = ""          # AE reads this to find JSONL
+    connection_qualified_name: str = ""
+```
+
+If these fields are empty or named differently, AE won't find the output and the publish step fails silently.

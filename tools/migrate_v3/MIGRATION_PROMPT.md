@@ -43,7 +43,9 @@ Does the connector extract SQL database metadata?
 │         └── NO  → §2a  SqlMetadataExtractor
 ├── Does the connector extract SQL query logs?
 │   └── YES → §2b  SqlQueryExtractor
-└── Custom connector (non-SQL)?
+├── Does the connector call a REST/HTTP API (BI tool, SaaS platform)?
+│   └── YES → §2d  REST/HTTP Metadata Extractor (BaseMetadataExtractor)
+└── Custom connector (none of the above)?
     └── YES → §3   Custom App
 ```
 
@@ -212,9 +214,141 @@ class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
 
 ---
 
+## 2d. REST/HTTP Metadata Extractor
+
+For connectors that call a REST/HTTP API (BI tools like Mode, Tableau, Qlik;
+SaaS platforms like Hightouch, dbt Cloud) rather than executing SQL queries.
+
+### Before (v2)
+
+```python
+from application_sdk.workflows import WorkflowInterface
+from application_sdk.activities import ActivitiesInterface
+
+@workflow.defn
+class ModeWorkflow(WorkflowInterface):
+    activities_cls = ModeActivities
+
+    @workflow.run
+    async def run(self, workflow_args: Dict[str, Any]) -> None:
+        await self.execute_activity_method(ModeActivities.preflight_check, workflow_args)
+        await self.execute_activity_method(ModeActivities.extract_metadata, workflow_args)
+        await asyncio.gather(*[
+            self.execute_activity_method(ModeActivities.transform_data, {**workflow_args, "typename": t})
+            for t in ["workspace", "collection", "report", "query", "chart"]
+        ])
+
+class ModeActivities(ActivitiesInterface):
+    @activity.defn
+    async def extract_metadata(self, workflow_args: Dict[str, Any]):
+        client = ModeClient()
+        await client.load(credentials=workflow_args["credentials"])
+        # ... fetch all data, write to parquet
+```
+
+### After (v3)
+
+```python
+from application_sdk.templates import BaseMetadataExtractor
+from application_sdk.app import task
+from application_sdk.contracts.base import Input, Output
+
+class MyExtractionInput(Input, allow_unbounded_fields=True):
+    credential_guid: str = ""
+    credentials: dict[str, Any] = {}
+    connection: dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
+    output_prefix: str = ""
+    output_path: str = ""
+
+class MyExtractionOutput(Output):
+    transformed_data_prefix: str = ""
+    connection_qualified_name: str = ""
+
+class ModeExtractor(BaseMetadataExtractor):
+    @task(timeout_seconds=3600)
+    async def preflight_check(self, input: PreflightTaskInput) -> PreflightTaskOutput:
+        client = await self._get_or_create_client(input)
+        # ... validate connectivity
+        return PreflightTaskOutput(passed=True)
+
+    @task(timeout_seconds=7200)
+    async def extract_metadata(self, input: ExtractInput) -> ExtractOutput:
+        client = await self._get_or_create_client(input)
+        # ... fetch all API data, write to parquet
+        return ExtractOutput(output_path=output_path)
+
+    @task(timeout_seconds=3600)
+    async def transform_data(self, input: TransformInput) -> TransformOutput:
+        # ... read parquet, transform to Atlan entity JSON
+        return TransformOutput(record_count=count)
+
+    async def run(self, input: MyExtractionInput) -> MyExtractionOutput:  # type: ignore[override]
+        # Preflight
+        await self.preflight_check(preflight_input)
+        # Extract all API data
+        extract_result = await self.extract_metadata(extract_input)
+        # Transform each entity type in parallel
+        await asyncio.gather(*[
+            self.transform_data(TransformInput(typename=t, ...))
+            for t in ["workspace", "collection", "report", "query", "chart"]
+        ])
+        return MyExtractionOutput(transformed_data_prefix=prefix, ...)
+```
+
+### Key differences from SQL extractors
+
+- **No SQL class attributes.** REST connectors have no `fetch_database_sql` etc. All
+  data comes from HTTP client methods.
+- **Client construction.** Build the HTTP client from credentials in each task (or cache
+  it). Credentials arrive as `dict[str, Any]` from v2 callers or `credential_guid` from
+  production. Handle both:
+  ```python
+  async def _get_or_create_client(self, input) -> MyClient:
+      if hasattr(input, "credential_guid") and input.credential_guid:
+          creds = await self.task_context.get_secret(input.credential_guid)
+      else:
+          creds = input.credentials
+      client = MyClient()
+      await client.load(credentials=creds)
+      return client
+  ```
+- **`run()` orchestration is yours.** SQL templates provide a default `run()` that calls
+  fetch → transform → upload in order. REST connectors define their own `run()` since
+  the extraction shape varies (some have one API, some have five with dependencies).
+- **`allow_unbounded_fields=True` on the top-level Input.** The connection/metadata/credentials
+  dicts from AE/Heracles are arbitrary. Inter-task contracts should still use typed fields.
+- **`output_path` must be computed.** v3 does not auto-compute it. If `input.output_path`
+  is empty (local dev), build it:
+  ```python
+  from application_sdk.constants import TEMPORARY_PATH
+  from application_sdk.common.utils import build_output_path
+  output_path = os.path.join(TEMPORARY_PATH, build_output_path())
+  ```
+- **`output_prefix` must default to `TEMPORARY_PATH`.** This is needed for
+  `transformed_data_prefix` stripping to work correctly in the output contract.
+- **Parquet round-trip.** Nested dicts become JSON strings after writing to and reading
+  from Parquet. Use `json.loads()` when accessing nested fields in the transform step.
+  See "Known Gotchas" in SKILL.md §22–§23.
+
+### Checklist
+
+- [ ] Delete the `@workflow.defn` class and `activities_cls = …` line.
+- [ ] Merge Workflow + Activities into one `MyExtractor(BaseMetadataExtractor)`.
+- [ ] Define typed `Input`/`Output` for each `@task` method.
+- [ ] Define top-level `MyExtractionInput(Input, allow_unbounded_fields=True)` for `run()`.
+- [ ] Define `MyExtractionOutput(Output)` with fields AE needs (`transformed_data_prefix`, etc.).
+- [ ] Implement `run()` with the connector's specific orchestration flow.
+- [ ] Handle `credential_guid` (production) vs `credentials` dict (local dev) in client construction.
+- [ ] Compute `output_path` from `TEMPORARY_PATH + build_output_path()` when not provided.
+- [ ] Default `output_prefix` to `TEMPORARY_PATH` for prefix stripping.
+- [ ] Add `# type: ignore[override]` on `run()` if narrowing the Input type from the base class.
+
+---
+
 ## 3. Custom App (non-SQL connector)
 
-For connectors that do not fit the SQL templates, subclass `App` directly.
+For connectors that do not fit the SQL or REST templates, subclass `App` directly.
 
 ```python
 from application_sdk.app import App, task
@@ -454,10 +588,12 @@ class MyOutput(Output):
 - `Any`, `bytes`, `bytearray`
 - Unbounded `list[T]` or `dict[K, V]`
 
-**Escape hatch — connector code must NOT use this.** `allow_unbounded_fields=True` is
-reserved for SDK-internal types only. The checker will FAIL if it appears in connector
-contracts. If you have an unbounded list, use `Annotated[list[T], MaxItems(N)]` or
-`FileReference` instead.
+**Escape hatch — use sparingly.** `allow_unbounded_fields=True` is needed on
+top-level `run()` input models that receive arbitrary dicts from AE/Heracles
+(e.g. `connection: dict[str, Any]`, `metadata: dict[str, Any]`). For inter-task
+contracts, prefer `Annotated[list[T], MaxItems(N)]` or `FileReference` instead.
+Do not use it on task-level Input/Output models unless the field genuinely
+receives arbitrary data from an external system.
 
 ---
 
