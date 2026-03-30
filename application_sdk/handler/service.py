@@ -63,10 +63,18 @@ def _serialize_credential_value(v: Any) -> str:
     return json.dumps(v)
 
 
-_CREDENTIAL_KEYS = frozenset({
-    "host", "port", "authType", "username", "password",
-    "connectorType", "connectorConfigName", "extra",
-})
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "host",
+        "port",
+        "authType",
+        "username",
+        "password",
+        "connectorType",
+        "connectorConfigName",
+        "extra",
+    }
+)
 
 
 def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
