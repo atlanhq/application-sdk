@@ -147,6 +147,16 @@ jobs:
             exit 1
           fi
 
+      - name: Validate publish token
+        if: inputs.publish
+        env:
+          HAS_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN != '' && 'true' || 'false' }}
+        run: |
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::error::publish=true but APP_PUBLISH_TOKEN secret is not set in this repo."
+            exit 1
+          fi
+
       - name: Compute image tags
         id: tags
         env:
