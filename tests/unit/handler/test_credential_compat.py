@@ -100,10 +100,57 @@ class TestV2FlatConversion:
         assert creds["ssl"] == "true"
 
 
+class TestV2NestedDictConversion:
+    """V2 nested-dict format: {"credentials": {"host": "x", ...}}."""
+
+    def test_nested_dict_converted(self):
+        data = {
+            "credentials": {
+                "host": "app.mode.com",
+                "username": "user1",
+                "password": "secret",
+            }
+        }
+        result = _normalize_v2_credentials(data)
+        creds = {c["key"]: c["value"] for c in result["credentials"]}
+        assert creds["host"] == "app.mode.com"
+        assert creds["username"] == "user1"
+        assert creds["password"] == "secret"
+
+    def test_nested_dict_with_extra_flattened(self):
+        data = {
+            "credentials": {
+                "host": "app.mode.com",
+                "extra": {"workspace": "atlan", "region": "us"},
+            }
+        }
+        result = _normalize_v2_credentials(data)
+        creds = {c["key"]: c["value"] for c in result["credentials"]}
+        assert creds["host"] == "app.mode.com"
+        assert creds["workspace"] == "atlan"
+        assert creds["region"] == "us"
+
+    def test_nested_dict_none_values_excluded(self):
+        data = {"credentials": {"host": "localhost", "port": None}}
+        result = _normalize_v2_credentials(data)
+        keys = [c["key"] for c in result["credentials"]]
+        assert "host" in keys
+        assert "port" not in keys
+
+    def test_nested_dict_preserves_other_fields(self):
+        data = {
+            "credentials": {"host": "localhost"},
+            "connection_id": "conn-123",
+        }
+        result = _normalize_v2_credentials(data)
+        assert result["connection_id"] == "conn-123"
+        assert isinstance(result["credentials"], list)
+
+
 class TestModelValidators:
     """All three input models normalize v2 credentials via model_validator."""
 
-    V2_PAYLOAD = {
+    V2_FLAT_PAYLOAD = {
         "authType": "basic",
         "host": "myhost.example.com",
         "port": 5432,
@@ -112,21 +159,30 @@ class TestModelValidators:
         "extra": {"ssl": "true", "warehouse": "wh1"},
     }
 
+    V2_NESTED_PAYLOAD = {
+        "credentials": {
+            "host": "myhost.example.com",
+            "username": "admin",
+            "password": "secret",
+            "extra": {"ssl": "true", "warehouse": "wh1"},
+        }
+    }
+
     def test_auth_input_normalizes(self):
-        model = AuthInput.model_validate(self.V2_PAYLOAD)
+        model = AuthInput.model_validate(self.V2_FLAT_PAYLOAD)
         creds = {c.key: c.value for c in model.credentials}
         assert creds["host"] == "myhost.example.com"
         assert creds["username"] == "admin"
         assert creds["ssl"] == "true"
 
     def test_preflight_input_normalizes(self):
-        model = PreflightInput.model_validate(self.V2_PAYLOAD)
+        model = PreflightInput.model_validate(self.V2_FLAT_PAYLOAD)
         creds = {c.key: c.value for c in model.credentials}
         assert creds["host"] == "myhost.example.com"
         assert creds["password"] == "secret"
 
     def test_metadata_input_normalizes(self):
-        model = MetadataInput.model_validate(self.V2_PAYLOAD)
+        model = MetadataInput.model_validate(self.V2_FLAT_PAYLOAD)
         creds = {c.key: c.value for c in model.credentials}
         assert creds["host"] == "myhost.example.com"
         assert creds["warehouse"] == "wh1"
@@ -137,3 +193,11 @@ class TestModelValidators:
             model = cls.model_validate(v3)
             assert len(model.credentials) == 1
             assert model.credentials[0].key == "host"
+
+    def test_nested_dict_normalizes_all_models(self):
+        for cls in (AuthInput, PreflightInput, MetadataInput):
+            model = cls.model_validate(self.V2_NESTED_PAYLOAD)
+            creds = {c.key: c.value for c in model.credentials}
+            assert creds["host"] == "myhost.example.com"
+            assert creds["username"] == "admin"
+            assert creds["ssl"] == "true"

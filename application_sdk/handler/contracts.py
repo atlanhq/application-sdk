@@ -42,18 +42,62 @@ _V3_KNOWN_FIELDS: frozenset[str] = frozenset(
 
 
 def _normalize_v2_credentials(data: dict[str, Any]) -> dict[str, Any]:
-    """Convert v2 flat credential dict to v3 HandlerCredential list.
+    """Convert v2 credential formats to v3 HandlerCredential list.
+
+    Handles two v2 formats:
+
+    1. **Nested dict** — ``{"credentials": {"host": "x", "extra": {...}}}``
+       Heracles sends this shape. The dict is unpacked into key-value pairs.
+
+    2. **Flat keys** — ``{"host": "x", "username": "admin", "password": "..."}``
+       Top-level keys that aren't v3 model fields are treated as credentials.
 
     If ``credentials`` is already a list, the payload is v3-native and passes
-    through unchanged.  Otherwise every top-level key not in
-    ``_V3_KNOWN_FIELDS`` is extracted as a credential.  The ``extra`` dict
-    (common in v2) is flattened — each key inside becomes its own credential.
+    through unchanged.  The ``extra`` dict (common in v2) is flattened — each
+    key inside becomes its own credential.
     """
     creds = data.get("credentials")
     if isinstance(creds, list):
         return data  # Already v3
 
-    # v2 format detected — extract credentials from top-level keys
+    if isinstance(creds, dict):
+        # Format 1: nested dict — {"credentials": {"host": "x", ...}}
+        return _normalize_nested_dict_credentials(data, creds)
+
+    # Format 2: flat keys — {"host": "x", "username": "admin", ...}
+    return _normalize_flat_key_credentials(data)
+
+
+def _normalize_nested_dict_credentials(
+    data: dict[str, Any], creds: dict[str, Any]
+) -> dict[str, Any]:
+    """Convert ``{"credentials": {"host": "x", "extra": {...}}}`` to v3 list."""
+    credential_pairs: dict[str, str] = {}
+    creds_copy = dict(creds)
+    extra = creds_copy.pop("extra", None)
+
+    for k, v in creds_copy.items():
+        if v is not None:
+            credential_pairs[k] = _serialize_credential_value(v)
+
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            if v is not None:
+                credential_pairs[k] = _serialize_credential_value(v)
+
+    logger.info(
+        "Detected v2 nested-dict credential format, normalizing to v3: keys=%s",
+        list(credential_pairs.keys()),
+    )
+
+    return {
+        **data,
+        "credentials": [{"key": k, "value": v} for k, v in credential_pairs.items()],
+    }
+
+
+def _normalize_flat_key_credentials(data: dict[str, Any]) -> dict[str, Any]:
+    """Convert ``{"host": "x", "username": "admin"}`` to v3 list."""
     credential_pairs: dict[str, str] = {}
     keys_to_remove: list[str] = []
 
@@ -61,7 +105,6 @@ def _normalize_v2_credentials(data: dict[str, Any]) -> dict[str, Any]:
         if key in _V3_KNOWN_FIELDS:
             continue
         if key == "extra" and isinstance(value, dict):
-            # Flatten extra dict — each key becomes its own credential
             for ek, ev in value.items():
                 credential_pairs[ek] = _serialize_credential_value(ev)
         else:
@@ -76,7 +119,6 @@ def _normalize_v2_credentials(data: dict[str, Any]) -> dict[str, Any]:
         list(credential_pairs.keys()),
     )
 
-    # Build new data dict without the extracted keys
     normalized = {k: v for k, v in data.items() if k not in keys_to_remove}
     normalized["credentials"] = [
         {"key": k, "value": v} for k, v in credential_pairs.items()
