@@ -14,13 +14,85 @@ on ingress (``model_validate``), direct JSON serialization on egress
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
+
+logger = logging.getLogger(__name__)
+
+# Fields that belong to v3 input models — everything else in a v2 payload is a credential
+_V3_KNOWN_FIELDS: frozenset[str] = frozenset(
+    {
+        "credentials",
+        "connection_id",
+        "timeout_seconds",
+        "connection_config",
+        "checks_to_run",
+        "object_filter",
+        "include_fields",
+        "max_objects",
+    }
+)
+
+
+def _normalize_v2_credentials(data: dict[str, Any]) -> dict[str, Any]:
+    """Convert v2 flat credential dict to v3 HandlerCredential list.
+
+    If ``credentials`` is already a list, the payload is v3-native and passes
+    through unchanged.  Otherwise every top-level key not in
+    ``_V3_KNOWN_FIELDS`` is extracted as a credential.  The ``extra`` dict
+    (common in v2) is flattened — each key inside becomes its own credential.
+    """
+    creds = data.get("credentials")
+    if isinstance(creds, list):
+        return data  # Already v3
+
+    # v2 format detected — extract credentials from top-level keys
+    credential_pairs: dict[str, str] = {}
+    keys_to_remove: list[str] = []
+
+    for key, value in data.items():
+        if key in _V3_KNOWN_FIELDS:
+            continue
+        if key == "extra" and isinstance(value, dict):
+            # Flatten extra dict — each key becomes its own credential
+            for ek, ev in value.items():
+                credential_pairs[ek] = _serialize_credential_value(ev)
+        else:
+            credential_pairs[key] = _serialize_credential_value(value)
+        keys_to_remove.append(key)
+
+    if not credential_pairs:
+        return data
+
+    logger.info(
+        "Detected v2 flat credential format, normalizing to v3: keys=%s",
+        list(credential_pairs.keys()),
+    )
+
+    # Build new data dict without the extracted keys
+    normalized = {k: v for k, v in data.items() if k not in keys_to_remove}
+    normalized["credentials"] = [
+        {"key": k, "value": v} for k, v in credential_pairs.items()
+    ]
+    return normalized
+
+
+def _serialize_credential_value(value: Any) -> str:
+    """Serialize a v2 credential value to string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    return str(value)
 
 
 class HandlerCredential(BaseModel):
@@ -64,6 +136,13 @@ class AuthInput(BaseModel):
 
     timeout_seconds: int = 30
     """Maximum seconds to wait for auth response."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_v2(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return _normalize_v2_credentials(data)
+        return data
 
 
 class AuthOutput(BaseModel):
@@ -123,6 +202,13 @@ class PreflightInput(BaseModel):
 
     timeout_seconds: int = 60
     """Maximum seconds to wait for all checks."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_v2(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return _normalize_v2_credentials(data)
+        return data
 
 
 class PreflightOutput(BaseModel):
@@ -199,6 +285,13 @@ class MetadataInput(BaseModel):
 
     timeout_seconds: int = 120
     """Maximum seconds to wait for metadata fetch."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_v2(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return _normalize_v2_credentials(data)
+        return data
 
 
 class MetadataOutput(BaseModel):
