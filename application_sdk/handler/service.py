@@ -902,8 +902,17 @@ def create_app_handler_service(
     # Config (state store)
     # ------------------------------------------------------------------
 
+    def _config_objectstore_key(config_id: str, config_type: str = "workflows") -> str:
+        """Build S3 key matching v2 SDK statestore path convention.
+
+        Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json
+        """
+        from application_sdk.constants import APPLICATION_NAME
+
+        return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
+
     async def _config_load_from_objectstore(
-        config_id: str,
+        config_id: str, config_type: str = "workflows"
     ) -> "dict[str, Any] | None":
         """Load workflow config from object store (S3) fallback."""
         if _storage is None:
@@ -914,7 +923,7 @@ def create_app_handler_service(
 
         from application_sdk.storage.ops import download_file
 
-        key = f"config/credentials/{config_id}.json"
+        key = _config_objectstore_key(config_id, config_type)
         tmp = tempfile.mktemp(suffix=".json")
         try:
             await download_file(key, tmp, _storage)
@@ -927,7 +936,7 @@ def create_app_handler_service(
                 os.unlink(tmp)
 
     async def _config_save_to_objectstore(
-        config_id: str, body: "dict[str, Any]"
+        config_id: str, body: "dict[str, Any]", config_type: str = "workflows"
     ) -> bool:
         """Save workflow config to object store (S3) fallback."""
         if _storage is None:
@@ -938,7 +947,7 @@ def create_app_handler_service(
 
         from application_sdk.storage.ops import upload_file
 
-        key = f"config/credentials/{config_id}.json"
+        key = _config_objectstore_key(config_id, config_type)
         tmp = tempfile.mktemp(suffix=".json")
         try:
             with open(tmp, "w") as f:
