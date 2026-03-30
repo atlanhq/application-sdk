@@ -1,14 +1,14 @@
-# Unified build-and-publish workflow for Atlan first-party app repos.
+# Unified reusable workflow for Atlan first-party app repos.
 #
-# Combines image build (build-apps-image.yaml) and marketplace publish (publish-app.yaml)
-# into a single workflow to eliminate double builds on push to main.
+# Builds the Docker image and optionally publishes to the Global Marketplace
+# in a single workflow run, eliminating double builds on push to main.
 #
 # Image tag:  {branch}-{sha7}  (e.g. main-abc1234) — immutable, used by deploy systems
 # Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{sha7}
 # Mutable:    ghcr.io/atlanhq/{repo}:{branch}         (always points to latest on branch)
 #
-# Build: parallel matrix (amd64 + arm64), merged into a multi-arch manifest.
-# Publish: after build succeeds, registers the version in the Global Marketplace via API.
+# Build: parallel amd64 + arm64, merged into a multi-arch manifest.
+# Publish: uses atlan CLI with --skip-build to register in marketplace after build completes.
 #
 # Usage in each app repo (.github/workflows/build-and-publish.yaml):
 #
@@ -16,7 +16,7 @@
 #     build-and-publish:
 #       uses: atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml@main
 #       with:
-#         publish: ${{ github.event.inputs.publish != 'false' }}
+#         publish: true
 #         channel: ${{ inputs.channel || 'all' }}
 #         tenants: ${{ inputs.tenants || '' }}
 #       secrets: inherit
@@ -50,6 +50,11 @@ on:
         required: false
         type: string
         default: "https://home.atlan.com"
+      cli_version:
+        description: "Atlan CLI version to install"
+        required: false
+        type: string
+        default: "latest"
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -75,11 +80,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       app_name:         ${{ steps.manifest.outputs.app_name }}
-      app_id:           ${{ steps.manifest.outputs.app_id }}
       dockerfile:       ${{ steps.manifest.outputs.dockerfile }}
       enable_sdr:       ${{ steps.manifest.outputs.enable_sdr }}
-      deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
-      sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
       branch:           ${{ steps.tags.outputs.branch }}
       image_tag:        ${{ steps.tags.outputs.image_tag }}
       ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
@@ -102,7 +104,7 @@ jobs:
           fi
 
           python3 - <<'PYEOF'
-          import yaml, sys, os, json, re
+          import yaml, sys, os
 
           try:
               with open('atlan.yaml') as f:
@@ -112,7 +114,6 @@ jobs:
               sys.exit(1)
 
           app_name   = d.get('name', '')
-          app_id     = d.get('app_id', '')
           build_tag  = d.get('build_tag', 'v1')
           dockerfile = d.get('dockerfile', './Dockerfile')
           enable_sdr = 'true' if d.get('self_deployed_runtime', False) else 'false'
@@ -125,42 +126,15 @@ jobs:
               print(f"::error::Unsupported build_tag '{build_tag}'. Only 'v1' is supported by this template version.", file=sys.stderr)
               sys.exit(1)
 
-          # Serialize deploy config block (if present) for publish
-          deploy_config = ''
-          deploy_val = d.get('deploy')
-          if deploy_val is not None:
-              deploy_config = yaml.dump(deploy_val, default_flow_style=False)
-
-          # Read SDK version from pyproject.toml (non-fatal)
-          sdk_version = ''
-          try:
-              with open('pyproject.toml') as f:
-                  for line in f:
-                      m = re.search(r'atlan-application-sdk[^=]*==([0-9][^\s",]*)', line)
-                      if m:
-                          sdk_version = m.group(1)
-                          break
-          except FileNotFoundError:
-              pass
-
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write(f'app_name={app_name}\n')
-              out.write(f'app_id={app_id}\n')
               out.write(f'build_tag={build_tag}\n')
               out.write(f'dockerfile={dockerfile}\n')
               out.write(f'enable_sdr={enable_sdr}\n')
-              out.write(f'sdk_version={sdk_version}\n')
-              # deploy_config may be multiline — use delimiter syntax
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-              out.write(f'deploy_config<<DEPLOY_EOF\n')
-              out.write(f'{deploy_config}\n')
-              out.write(f'DEPLOY_EOF\n')
 
           print(f'App: {app_name}')
-          print(f'App ID: {app_id}')
           print(f'Dockerfile: {dockerfile}')
           print(f'SDR: {enable_sdr}')
-          print(f'SDK version: {sdk_version}')
           PYEOF
 
       - name: Validate SDR secrets
@@ -170,16 +144,6 @@ jobs:
         run: |
           if [ "$HAS_PAT" != "true" ]; then
             echo "::error::atlan.yaml sets self_deployed_runtime=true but DOCKER_HUB_PAT_RW secret is not set in this repo."
-            exit 1
-          fi
-
-      - name: Validate publish secrets
-        if: inputs.publish
-        env:
-          HAS_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN != '' && 'true' || 'false' }}
-        run: |
-          if [ "$HAS_TOKEN" != "true" ]; then
-            echo "::error::publish=true but APP_PUBLISH_TOKEN secret is not set in this repo."
             exit 1
           fi
 
@@ -409,7 +373,10 @@ jobs:
                 "image_name": "${{ needs.prepare.outputs.dockerhub_image }}"
             }
 
-  # ── Job 6: Publish to Global Marketplace ────────────────────────────────────
+  # ── Job 6: Publish to Global Marketplace via Atlan CLI ──────────────────────
+  # Uses --skip-build so the CLI goes straight to marketplace registration
+  # without trying to trigger/watch the build workflow (which is already
+  # running as part of this same workflow run).
   publish:
     name: Publish to Marketplace
     needs: [prepare, merge]
@@ -418,84 +385,61 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Publish version
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install Atlan CLI
         env:
-          BASE_URL: ${{ inputs.base_url }}
-          APP_PUBLISH_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN }}
-          GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr_image }}
-          IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
-          BRANCH: ${{ needs.prepare.outputs.branch }}
-          APP_ID: ${{ needs.prepare.outputs.app_id }}
-          APP_NAME: ${{ needs.prepare.outputs.app_name }}
-          DEPLOY_CONFIG: ${{ needs.prepare.outputs.deploy_config }}
-          SDK_VERSION: ${{ needs.prepare.outputs.sdk_version }}
-          CHANNEL: ${{ inputs.channel }}
-          TENANTS: ${{ inputs.tenants }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
           set -euo pipefail
 
-          # Build JSON payload matching the CLI's registerInMarketplace format
-          BODY=$(python3 - <<'PYEOF'
-          import json, os
+          VERSION="${{ inputs.cli_version }}"
+          REPO="atlanhq/atlan-cli-releases"
+          PATTERN="*Linux_amd64.tar.gz"
 
-          body = {
-              "app_id": os.environ["APP_ID"],
-              "image": os.environ["GHCR_IMAGE"],
-              "version": os.environ["IMAGE_TAG"],
-              "branch": os.environ["BRANCH"],
-              "repo": os.environ["REPO_URL"],
-              "source": "ci_publish",
-          }
+          if [ "$VERSION" = "latest" ]; then
+            gh release download --repo "$REPO" --pattern "$PATTERN" --output atlan-cli.tar.gz
+          else
+            gh release download "$VERSION" --repo "$REPO" --pattern "$PATTERN" --output atlan-cli.tar.gz
+          fi
 
-          config = os.environ.get("DEPLOY_CONFIG", "").strip()
-          if config:
-              body["config"] = config
+          tar -xzf atlan-cli.tar.gz
+          chmod +x atlan
+          sudo mv atlan /usr/local/bin/atlan
+          atlan --version
 
-          sdk = os.environ.get("SDK_VERSION", "").strip()
-          if sdk:
-              body["sdk_version"] = sdk
+      - name: Configure Atlan CLI
+        env:
+          APP_PUBLISH_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          atlan config atlan_base_url "${{ inputs.base_url }}"
+          atlan config atlan_api_key "$APP_PUBLISH_TOKEN"
 
-          tenants = os.environ.get("TENANTS", "").strip()
-          if tenants:
-              body["allowed_tenants"] = [t.strip() for t in tenants.split(",") if t.strip()]
-          else:
-              body["target_channel"] = os.environ.get("CHANNEL", "all") or "all"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          CHANNEL: ${{ inputs.channel }}
+          TENANTS: ${{ inputs.tenants }}
+          REF: ${{ inputs.ref || github.ref }}
+        run: |
+          set -euo pipefail
 
-          print(json.dumps(body))
-          PYEOF
-          )
+          ARGS=(--skip-build)
 
-          echo "Publishing ${APP_NAME} (${IMAGE_TAG}) to marketplace..."
+          if [ -n "$REF" ]; then
+            ARGS+=(--ref "$REF")
+          fi
 
-          RESPONSE=$(curl -sf -X POST \
-            "${BASE_URL}/api/service/marketplace/publish" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${APP_PUBLISH_TOKEN}" \
-            -d "$BODY")
-
-          echo "$RESPONSE" | python3 -c "
-          import json, sys
-          r = json.load(sys.stdin)
-          d = r.get('data', {})
-          vid = d.get('version_id', 'N/A')
-          rid = d.get('release_id', 'N/A')
-          aid = d.get('app_id', 'N/A')
-          print(f'Version: {vid}')
-          print(f'Release: {rid}')
-          print(f'App ID:  {aid}')
-          "
-
-          CHANNEL_USED="${CHANNEL:-all}"
+          # Tenants takes precedence over channel
           if [ -n "$TENANTS" ]; then
-            CHANNEL_USED="tenants: $TENANTS"
-          fi
-          if [ "$CHANNEL_USED" = "all" ]; then
-            echo "Channel 'all' creates a draft release — admin approval required"
+            ARGS+=(--tenants "$TENANTS")
+          elif [ -n "$CHANNEL" ]; then
+            ARGS+=(--channel "$CHANNEL")
           fi
 
-          echo "### Publish complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Published \`${APP_NAME}\` version \`${IMAGE_TAG}\` to \`${CHANNEL_USED}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Refer to [Global Marketplace](https://globalmarketplaceui.atlan.com/admin/) for approval." >> $GITHUB_STEP_SUMMARY
+          echo "Running: atlan app publish ${ARGS[*]}"
+          atlan app publish "${ARGS[@]}"
