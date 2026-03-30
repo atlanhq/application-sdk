@@ -1,659 +1,499 @@
 ---
 name: migrate-v3
-description: Migrate a connector repo from application-sdk v2 to v3 — runs the import rewriter, performs AI-assisted structural refactoring, and validates the result with the migration checker.
-argument-hint: "<path-to-connector-repo>"
+description: Migrate a connector repo from application-sdk v2 to v3 — runs automated tooling, performs AI-assisted structural refactoring, validates with tests and live workflow execution.
+argument-hint: "<path-to-connector-repo> [Use local sdk reference.]"
 ---
 
 # /migrate-v3
 
 Performs a complete v2 → v3 migration of an application-sdk connector.
 
-**Must be run from the application-sdk repo root** (so the migration tooling and docs are reachable).
-
-## Usage
+**Must be run from the application-sdk repo root.**
 
 ```
-/migrate-v3 ../my-connector/src
-/migrate-v3 /absolute/path/to/connector/
+/migrate-v3 ../my-connector
+/migrate-v3 ../my-connector Use local sdk reference.
 ```
 
 ---
 
-## Phase 0 — Setup and validation
+## Architecture overview
 
-1. Parse `$ARGUMENTS` to get the target path. If no argument is given, stop and ask the user for one.
-2. Confirm the target path exists. If it does not, stop and report the error.
-3. Confirm you are running from within the application-sdk repo by checking that `tools/migrate_v3/rewrite_imports.py` exists. If it does not, stop and tell the user to run this skill from the application-sdk repo root.
-4. **Check the connector's SDK dependency.** Read the connector's `pyproject.toml` and look for `atlan-application-sdk` in the dependencies. Until v3 is released on PyPI the connector must use the git source:
-   ```toml
-   [tool.uv.sources]
-   atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "refactor-v3" }
-   ```
-   If it still points to a v2 PyPI release (e.g. `atlan-application-sdk>=2.x`), add the `[tool.uv.sources]` block above and run `uv sync` in the connector repo before continuing. If it already has this source override or references a v3+ PyPI release, proceed.
+The migration has 4 stages:
 
-4b. **Check temporalio version.** The v3 SDK requires `temporalio` with `VersioningBehavior`. Run in the connector repo root (where `pyproject.toml` is):
-   ```bash
-   cd <connector-repo-root> && uv run python -c "from temporalio.common import VersioningBehavior"
-   ```
-   If this fails with `ImportError`, upgrade temporalio before continuing:
-   ```bash
-   cd <connector-repo-root> && uv add temporalio --upgrade && uv sync
-   ```
+```
+Stage 0: Research (understand BOTH codebases before touching anything)
+  Read v3 SDK templates → Read connector code → Read golden dataset → Plan
 
-5. Read `tools/migrate_v3/MIGRATION_PROMPT.md` in full. This is the authoritative reference for all structural changes you will make. Do not proceed to Phase 3 without having read it.
-6. Run an initial checker pass to establish the baseline — **do not fix anything yet**:
+Stage 1: Mechanical (fully automated, no judgment)
+  rewrite_imports → run_codemods → check_migration
+
+Stage 2: Structural (AI-assisted, guided by research + checker)
+  Merge classes → Implement handler → Update entry point → Fix credentials
+
+Stage 3: Validation (automated tests + live verification)
+  Unit tests → Live app → Handler endpoints → Workflow run → Parity check
+```
+
+---
+
+## Phase R — Research (do this BEFORE any code changes)
+
+Launch up to 3 Explore agents in parallel to understand both codebases. Do NOT proceed to Phase 0 until all agents complete.
+
+### Agent 1: Understand the v3 SDK target
+
+Read these files in the application-sdk repo:
+
+1. **`application_sdk/templates/sql_metadata_extractor.py`** — The base template. What methods exist? What do they take/return? Which are abstract?
+2. **`application_sdk/templates/contracts/sql_metadata.py`** — All typed Input/Output contracts. What fields do `ExtractionInput`, `FetchDatabasesInput`, etc. have?
+3. **`application_sdk/handler/base.py`** — The `Handler` ABC. What methods must be implemented?
+4. **`application_sdk/handler/contracts.py`** — `AuthInput/Output`, `PreflightInput/Output`, `MetadataInput/Output` — what fields?
+5. **`application_sdk/handler/service.py` lines 540-620** — How does `/start` create the input? How do credentials flow?
+6. **`application_sdk/main.py`** — Find `run_dev_combined()` signature. What params does it accept?
+7. **`application_sdk/app/base.py`** — Find `__init_subclass__`. How does app registration work? What is `_app_registered`?
+8. **`application_sdk/common/sql_utils.py`** — What standalone functions exist? `execute_multidb_flow`, `execute_single_db`, `prepare_database_query`?
+
+Report: template method signatures, contract field lists, handler interface, credential flow, registration mechanism.
+
+### Agent 2: Understand the connector being migrated
+
+Read ALL Python files in the connector's `app/` directory and `main.py`:
+
+1. What classes exist? What do they inherit from?
+2. What SQL queries are defined (class attributes or `app/sql/` files)?
+3. What does the handler do? Does it override any methods?
+4. What does `main.py` wire up?
+5. What's in `app/generated/_input.py` (contract-generated input)? What fields does it have?
+6. What YAML templates exist in `app/transformers/`?
+7. What custom logic exists beyond the SDK base (multidb toggle, enrichment, filter handling)?
+
+Report: class hierarchy, method inventory, SQL queries, handler behavior, custom logic, contract input fields.
+
+### Agent 3: Understand the baseline (golden dataset + v2 output)
+
+1. Check `golden-dataset/extract/` — What entity types? What fields per entity? Any enrichment fields (PARTITIONS, EXTRA_INFO)?
+2. Check `golden-dataset/expected-output/` — What attributes and customAttributes are expected?
+3. Check `./local/dapr/objectstore/artifacts/` — Any existing v2 workflow runs? Count entities per type.
+4. Check `.env` — What credentials are available for live testing?
+5. Check `tests/unit/` — What do existing tests test? What v2 APIs do they reference?
+6. Check `tests/e2e/` — What e2e test patterns exist?
+
+Report: entity counts, field lists, v2 APIs used in tests, credentials available, baseline for parity.
+
+### After all agents complete
+
+Synthesize the research into a migration plan:
+
+1. **Connector type**: SQL metadata / SQL query / Incremental / REST / Custom
+2. **Template to use**: `SqlMetadataExtractor` / `SqlQueryExtractor` / etc.
+3. **Contract input mismatch**: What fields does `app/generated/_input.py` have that `ExtractionInput` doesn't? (e.g. `output_dir` vs `output_path`, `trino_credential` vs `credential_ref`)
+4. **Handler work**: What did `BaseSQLHandler` provide that must be reimplemented?
+5. **Custom logic to preserve**: Multidb toggle, enrichment queries, filter handling
+6. **Test rewrite scope**: Which tests reference v2 APIs that won't exist?
+7. **Feature gaps to close**: What enrichment/attributes does the golden dataset show that the v2 app produced?
+
+Print this plan and proceed.
+
+---
+
+## Phase 0 — Setup
+
+1. Parse arguments. If `Use local sdk reference.` is present, use `path = "../application-sdk", editable = true` in `[tool.uv.sources]`. Otherwise use `git = "...", branch = "refactor-v3"`.
+2. Confirm target path exists and has `pyproject.toml`.
+3. Confirm `tools/migrate_v3/rewrite_imports.py` exists (we're in the SDK repo).
+4. Update the connector's `pyproject.toml` SDK dependency and run `uv sync`.
+5. Check temporalio version — v3 requires `VersioningBehavior`:
+```bash
+cd <connector-repo> && uv run python -c "from temporalio.common import VersioningBehavior"
+```
+If it fails, run `uv add temporalio --upgrade && uv sync`.
+6. Read `tools/migrate_v3/MIGRATION_PROMPT.md` — this is the structural migration reference.
+6. Run the initial checker:
 
 ```bash
-uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
+uv run python -m tools.migrate_v3.check_migration --classify --no-color <target-path>/app <target-path>/main.py
 ```
 
-Print a short summary: how many FAILs and WARNs were found. If zero FAILs, tell the user the connector may already be migrated and stop.
+If zero FAILs, the connector may already be migrated. Stop and tell the user.
 
 ---
 
-## Phase 1 — Mechanical import rewrites
+## Phase 1 — Automated transforms
 
-Run the import rewriter across the **entire** target directory tree, including test files. This step is purely mechanical — import paths are rewritten losslessly; no logic is touched.
+### 1a — Import rewrites
 
 ```bash
 uv run python -m tools.migrate_v3.rewrite_imports <target-path>
 ```
 
-Log every file that was changed. After the rewriter completes, tell the user which files were rewritten and how many import rewrites were applied.
+This rewrites all deprecated import paths (production + test files). Purely mechanical.
 
-**Test files are NOT exempt from this phase.** Deprecated import paths in tests must be updated just like production code — they are purely mechanical path changes. The constraint that applies to test files is that you must NEVER modify test logic, assertions, fixtures, or test data in any phase.
-
----
-
-## Phase 1b — Automated structural codemods
-
-Before any AI-assisted structural work, run the codemod pipeline. This eliminates the mechanical transforms (decorator removal, signature rewrites, activity call rewrites, activities plumbing cleanup, entry point rewrite) deterministically, so the AI only needs to handle what remains.
+### 1b — Structural codemods
 
 ```bash
 uv run python -m tools.migrate_v3.run_codemods <target-path>
 ```
 
-Review the output: files changed, any `SKIPPED` entries (dynamic dispatch or complex entry points that need manual attention), and errors.
+Removes `@activity.defn`/`@workflow.defn`/`@auto_heartbeater`, adds `@task`, rewrites signatures, rewrites activity calls, cleans up plumbing.
 
-Then re-run the checker to see what FAILs remain — those are the AI's work scope for Phase 2b:
-
-```bash
-uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
-```
-
-Log a short summary of what the codemods changed and what FAILs remain.
-
-**Extract structured context for Phase 2b** — before writing any AI-assisted structural changes, run the context extractor to get a compact summary of what needs to be done. Use this summary when prompting yourself for Phase 2b instead of re-reading raw source files:
+### 1c — Extract context
 
 ```bash
 uv run python -m tools.migrate_v3.extract_context <target-path>
 ```
 
-The output lists: connector type and confidence, difficulty estimate, classes with their roles and method inventories, infrastructure usage patterns, and any warnings about complex entry points or dynamic dispatch. Include this summary at the start of your Phase 2b analysis.
+Produces: connector type, difficulty score, class inventory, infrastructure patterns. Use this to guide Phase 2.
+
+### 1d — Check remaining work
+
+```bash
+uv run python -m tools.migrate_v3.check_migration --no-color <target-path>/app <target-path>/main.py
+```
+
+The remaining FAILs are the AI's scope for Phase 2.
 
 ---
 
 ## Phase 2 — Structural migration
 
-Read the checker output from Phase 0 and the structure of the connector code to determine what structural work is needed.
+Work through these in order. **Run `check_migration` after EACH step** — the checker output shows exactly what FAILs remain and guides the next step.
 
 ### 2a — Identify connector type
 
-Examine the source files in the target path (exclude test files from this analysis):
+The context extractor already classified this. Confirm by reading the code:
 
-- Look for classes inheriting from `BaseSQLMetadataExtractionWorkflow` / `BaseSQLMetadataExtractionActivities` → SQL metadata extractor (§2a of MIGRATION_PROMPT.md)
-- Look for classes inheriting from `SQLQueryExtractionWorkflow` / `SQLQueryExtractionActivities` → SQL query extractor (§2b)
-- Look for classes inheriting from `IncrementalSQLMetadataExtractionWorkflow` → Incremental SQL extractor (§2c)
-- Look for HTTP/REST client usage (`httpx`, `aiohttp`, `requests`, or custom `BaseClient` subclasses) with no SQL queries → REST/HTTP metadata extractor (§2d)
-- Look for any other `WorkflowInterface` / `ActivitiesInterface` subclasses that don't fit above → Custom App (§3)
-- In all cases: identify the handler class (§4) and the entry point (§5)
+| Pattern | Type | Template |
+|---------|------|----------|
+| `BaseSQLMetadataExtractionWorkflow` / `BaseSQLMetadataExtractionActivities` | SQL metadata | `SqlMetadataExtractor` |
+| `SQLQueryExtractionWorkflow` / `SQLQueryExtractionActivities` | SQL query | `SqlQueryExtractor` |
+| `IncrementalSQLMetadataExtractionWorkflow` | Incremental SQL | `IncrementalSqlMetadataExtractor` |
+| HTTP/REST client, no SQL | REST/HTTP | `BaseMetadataExtractor` |
+| Other | Custom | `App` |
 
-> **Tip — auto-detect the connector type:**
-> ```bash
-> uv run python -m tools.migrate_v3.check_migration --classify <target-path>
-> ```
-> This runs the F3 fingerprinter before the check pass and prints the detected
-> connector type with confidence score and evidence.
+### 2b — Create the App class
 
-### 2b — Apply structural changes
+Create `app/<connector_name>.py` with the merged App class. Follow §2a-2d of MIGRATION_PROMPT.md.
 
-> **Incremental validation**: Run `check_migration` after each sub-step below.
-> The checker output shows specific remaining FAILs — use it to guide the next step.
+**Critical patterns learned from production migrations:**
 
-Follow the exact checklists in `tools/migrate_v3/MIGRATION_PROMPT.md` for the connector type(s) identified above.
+#### App registration
 
-**Hard constraint — tests are completely out of bounds for structural changes:**
+The base template (e.g. `SqlMetadataExtractor`) sets `_app_registered = True` during `__init_subclass__`. Your subclass inherits this and **skips registration**. Temporal will create base class instances whose tasks all raise `NotImplementedError`.
 
-- You MUST NOT modify test method bodies, assertions, fixtures, mock setup, or test data in any file under any directory whose name contains `test` or starts with `test_`.
-- You MUST NOT add, remove, or rewrite test cases.
-- You MUST NOT change the logic of any existing test.
-- The only change permitted in test files is the mechanical import rewrite already performed in Phase 1. If a test file needs structural changes to compile (e.g. it directly instantiates a v2 class that no longer exists), add a `# TODO(v3-migration): update test to use v3 API` comment and leave the test body unchanged. The user will update tests manually after verifying the migration is correct.
-
-**Hard constraint — handler method signatures:**
-
-- Handler methods (`test_auth`, `preflight_check`, `fetch_metadata`) MUST use typed contract parameters. Do NOT use `*args` or `**kwargs`.
-- Correct: `async def test_auth(self, input: AuthInput) -> AuthOutput:`
-- Forbidden: `async def test_auth(self, *args, **kwargs):`
-- The checker will FAIL if `*args`/`**kwargs` appear in a Handler subclass method.
-
-**Constraint — `allow_unbounded_fields=True` must be used sparingly:**
-
-- Needed on top-level `run()` input models that receive arbitrary dicts from AE/Heracles (e.g. `connection: dict[str, Any]`, `metadata: dict[str, Any]`).
-- Must NOT be used on inter-task Input/Output contracts — use `Annotated[list[T], MaxItems(N)]` or `FileReference` instead.
-- The checker will WARN if `allow_unbounded_fields=True` appears on task-level contracts.
-
-Apply changes in this order:
-
-1. **App class** — merge Workflow + Activities into the appropriate template subclass with `@task` methods. Preserve all SQL query strings and business logic verbatim.
-
-   > After completing this step, run:
-   > ```bash
-   > uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
-   > ```
-   > Review any new/resolved FAILs (especially `no-v2-decorators`, `no-execute-activity-method`) before proceeding.
-
-2. **Handler** — update base class, method signatures (typed contracts, no `**kwargs`), remove `load()`.
-
-   > After completing this step, run:
-   > ```bash
-   > uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
-   > ```
-   > Review any new/resolved FAILs (especially `handler-typed-signatures`) before proceeding.
-
-3. **Entry point** — replace `BaseXxxApplication` instantiation with `run_dev_combined()` or CLI reference.
-
-   > After completing this step, run:
-   > ```bash
-   > uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
-   > ```
-   > Review any new/resolved FAILs (especially `no-base-application`) before proceeding.
-
-4. **Infrastructure calls** — replace `SecretStore`/`StateStore`/`ObjectStore` calls with `self.context.*` per §6 of MIGRATION_PROMPT.md.
-
-   > After completing this step, run:
-   > ```bash
-   > uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
-   > ```
-   > Review any new/resolved FAILs (especially `no-dapr-client`, `use-app-state`) before proceeding.
-
-Work through one section at a time. After completing each section, check your changes are self-consistent before moving on.
-
-### 2c — Directory consolidation
-
-After completing the structural migration in 2b, consolidate the v2 directory layout. v2 connectors split logic across `app/activities/` and `app/workflows/`; v3 uses a single flat file.
-
-1. Identify the main App class file (typically `app/activities/<name>.py`).
-2. Move it to `app/<app_name>.py` (derive the filename from the App class or connector name, snake_cased).
-3. If `app/workflows/<name>.py` exists and only re-exports from activities (e.g. `from app.activities.<name> import MyConnector`), delete it.
-4. Delete the now-empty `app/activities/` and `app/workflows/` directories.
-5. Update all **production-code** imports that referenced the old paths.
-6. For **test-file** imports pointing to the old paths:
-   a. Construct a JSON mapping of old module paths → new module paths from steps 1–4. For example, if `app/activities/metadata_extraction.py` moved to `app/metadata_extraction.py`, the mapping is `{"app.activities.metadata_extraction": "app.metadata_extraction"}`.
-   b. Run the internal import rewriter on the test directory:
-      ```bash
-      uv run python -m tools.migrate_v3.rewrite_imports \
-        --internal-map '{"app.activities.<name>": "app.<name>"}' \
-        <target-path>/tests/
-      ```
-   c. For any **symbol names** that also changed (e.g. `AnaplanMetadataExtractionActivities` → `AnaplanApp`), manually update the import line's symbol name in each affected test file AND add a comment at the top of that file: `# TODO(v3-migration): update references from OldClass to NewClass in test bodies`. Do NOT modify test bodies, assertions, fixtures, or mocks.
-7. Re-run the checker to confirm the `no-v2-directory-structure` advisory is gone.
-
-If the connector does not have an `activities/` or `workflows/` directory, skip this step.
-
----
-
-## Phase 2d — Post-processing cleanup
-
-After completing the structural changes in 2b and directory consolidation in 2c, run these cleanup steps to normalize imports and formatting before the validation loop:
-
-```bash
-# Remove unused imports and sort import order
-uv run ruff check --fix --select I,F401 <target-path>
-
-# Normalize formatting
-uv run ruff format <target-path>
-
-# Check migration status
-uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
-```
-
-All FAIL checks should pass at this point. If any remain, address them before moving to Phase 3.
-
----
-
-## Phase 3 — Validation loop
-
-Run the checker after completing Phase 2:
-
-```bash
-uv run python -m tools.migrate_v3.check_migration --no-color <target-path>
-```
-
-**If FAILs remain:**
-- Read each failing item and the relevant source file.
-- Fix the specific issue according to MIGRATION_PROMPT.md.
-- Re-run the checker.
-- Repeat until zero FAILs. Do not move to Phase 4 until the checker exits with code 0.
-
-**If only WARNs remain:**
-- Read each WARN item. If it is fixable without modifying test logic, fix it.
-- If a WARN requires modifying test logic, skip it and add it to the manual follow-up list.
-
----
-
-## Phase 4 — Test run
-
-Run the connector's test suite **without modifying any test files**:
-
-```bash
-cd <target-path> && uv run pytest --tb=short -q 2>&1 | head -80
-```
-
-If `uv` is not available in the connector repo, try `python -m pytest --tb=short -q` instead.
-
-Do **not** modify any test to make it pass. If tests fail:
-- Read the failing test and the code it exercises.
-- If the failure is due to a production code issue introduced during migration (e.g. wrong method signature, missing attribute), fix the production code.
-- If the failure requires understanding test intent or rewriting test logic, do NOT fix it. Add it to the manual follow-up list.
-
-### Phase 4b — E2E test generation
-
-After the test suite run, check whether the connector has e2e tests using the v2 `BaseTest` / `TestInterface` pattern:
-
-1. Search for files under `tests/e2e/` (or `tests/integration/`) that import `BaseTest` or `TestInterface`.
-2. If found, **read the original v2 e2e test file completely**. List every test method and what it asserts before writing a single line of the new file.
-3. Generate a **new** equivalent e2e test file using the v3 `application_sdk.testing.e2e` API (§9 of MIGRATION_PROMPT.md):
-   - For **each** test method in the original, generate a corresponding `async def test_xxx(deployed_app)` function. The generated file MUST have at least as many test functions as the original has test methods.
-   - Extract actual payload values from the original (hardcoded dicts, `default_payload()` bodies, connection IDs) — do **not** substitute placeholder values like `"test-connection"` if the original has real values.
-   - If an assertion checks response fields whose format changed (e.g. `result['authenticationCheck']`), keep the assertion but add `# TODO(v3-migration): response format changed — update field names`.
-   - Use the `AppConfig` fixture with real values derived from the connector's `pyproject.toml` (`name`, `tool.poetry.name`, or Helm chart values) — not generic placeholders.
-4. Place the new file alongside the original, named `tests/e2e/test_<connector_name>_v3.py`.
-5. Add `# TODO(v3-migration): human must validate this test is equivalent to the original` at the top of the new file.
-6. Do NOT delete or modify the original test file.
-7. Add the new test file to the manual follow-up list so the user knows to validate it.
-
-If the connector has no v2-style e2e tests, skip this step.
-
----
-
-## Phase 5 — Summary report
-
-Print a structured summary:
-
-```
-## v3 Migration Summary
-
-### Target
-<path>
-
-### Phase 1 — Import rewrites
-- Files modified: N
-- Imports rewritten: N
-- Files with structural TODO comments: N
-
-### Phase 2 — Structural changes
-<bullet per file changed: what was changed>
-
-### Phase 2c — Directory consolidation
-- Activities/workflows dirs found: yes/no
-- Files moved: <list>
-- Directories deleted: <list>
-- Import references updated: N files
-
-### Phase 3 — Checker result
-- FAIL items resolved: N
-- WARN items resolved: N
-- WARN items remaining (manual): <list>
-
-### Phase 4 — Test results
-- Tests passing: N/N
-- Tests failing (manual follow-up): <list of test names and reason>
-
-### Phase 4b — E2E test generation
-- v2 BaseTest files found: yes/no
-- New v3 e2e test file generated: <path or "N/A">
-- Original test method count: N
-- Generated test function count: N
-- Human validation required: yes/no
-
-### API Contract Changes (inform frontend consumers)
-<list any response-format-change WARNs from the checker — these indicate v3 handler
-methods that return a different response shape than v2, which may break frontends>
-- fetch_metadata: returns MetadataOutput (flat list) — was hierarchical [{value, title, children}]
-- preflight_check: returns PreflightOutput — was {authenticationCheck, hostCheck, permissionsCheck}
-
-### Manual follow-up required
-<bulleted list of anything the AI skipped due to the test constraint or ambiguity>
-```
-
-Remind the user:
-- Run `uv run pre-commit run --all-files` in the connector repo before committing.
-- Review all `# TODO(v3-migration)` comments — each one marks a location that needs human verification.
-- The typed `Input`/`Output` models for custom `@task` methods should be defined (see §7 of MIGRATION_PROMPT.md) — these were not auto-generated.
-- If an e2e test was generated in Phase 4b, validate that it is logically equivalent to the original before deleting the old file.
-
----
-
-## Phase 6 — Live verification
-
-This phase starts the app locally and verifies handler endpoints and workflow execution against a v2 baseline. **Ask the user for confirmation before each major step.**
-
-### 6a — Establish v2 baseline
-
-Before starting the v3 app, check for an existing v2 workflow run:
-
-1. Look for output in `./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/`:
-   ```bash
-   find ./local/dapr/objectstore/artifacts -name "*.json" -path "*/transformed/*" | head -20
-   ```
-2. If output exists, ask the user:
-   > "Found existing workflow output at `<path>`. Was this from a v2 SDK run with full parity? Should I use it as the baseline for comparison?"
-3. If no output exists, ask:
-   > "No existing workflow output found. Have you run the v2 version of this connector locally? A v2 baseline is needed to verify parity after migration."
-4. If the user confirms a baseline exists, count entities per type:
-   ```bash
-   for f in ./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/<latest-run>/transformed/*/*.json; do
-     echo "$(basename $(dirname $f)): $(wc -l < "$f") entities"
-   done
-   ```
-   Record these counts — they are the parity target.
-
-### 6b — Run tests
-
-Run the full test suite before attempting a live run:
-
-```bash
-cd <target-path> && uv run pytest tests/unit/ --tb=short -q
-cd <target-path> && uv run pytest tests/e2e/ --tb=short -q
-```
-
-If any tests fail, fix production code issues before proceeding. Do not continue to 6c with failing tests.
-
-### 6c — Start the app
-
-Ask the user:
-> "Tests pass. Ready to start the app with `atlan app run`. This requires credentials in `.env`. Should I proceed?"
-
-If confirmed:
-
-```bash
-cd <target-path> && atlan app run -p .
-```
-
-Wait for the app to be ready (look for `Uvicorn running on http://127.0.0.1:8000`).
-
-### 6d — Test handler endpoints
-
-Read credentials from `.env` (look for `API_KEY_ID`, `API_SECRET`, and any workspace/extra fields). Then test all three handler endpoints:
-
-**Auth test:**
-```bash
-curl -s -X POST http://localhost:8000/workflows/v1/auth \
-  -H "Content-Type: application/json" \
-  -d '{
-    "credentials": {
-      "host": "<host>",
-      "username": "<API_KEY_ID>",
-      "password": "<API_SECRET>",
-      "extra": {"workspace": "<workspace>"}
-    }
-  }'
-```
-Expected: `{"success": true, "data": {"status": "success"}}`
-
-**Preflight check:**
-```bash
-curl -s -X POST http://localhost:8000/workflows/v1/check \
-  -H "Content-Type: application/json" \
-  -d '{
-    "credentials": { ... },
-    "metadata": {}
-  }'
-```
-Expected: `{"success": true, "data": {"status": "ready", "checks": [...]}}`
-
-**Metadata fetch:**
-```bash
-curl -s -X POST http://localhost:8000/workflows/v1/metadata \
-  -H "Content-Type: application/json" \
-  -d '{
-    "credentials": { ... },
-    "metadata": {}
-  }'
-```
-Expected: `{"success": true, "data": {"objects": [...], "total_count": N}}`
-
-**Config endpoints:**
-```bash
-# List configmaps
-curl -s http://localhost:8000/workflows/v1/configmaps
-
-# Get specific configmap
-curl -s http://localhost:8000/workflows/v1/configmap/<id>
-
-# Get manifest
-curl -s http://localhost:8000/workflows/v1/manifest
-```
-
-If any endpoint returns 500, check the app terminal for the traceback. Common issues:
-- Handler not discovered → import the handler class in the App module
-- Credential format error → ensure `_normalize_credentials` is in the SDK version being used
-- Missing configmap files → verify `app/generated/` has the JSON files from `poe generate`
-
-### 6e — Start a workflow run
-
-Ask the user:
-> "Handler endpoints verified. Ready to trigger a workflow run. This will call external APIs and write output to `./local/dapr/objectstore/`. Should I proceed?"
-
-If confirmed:
-```bash
-curl -s -X POST http://localhost:8000/workflows/v1/start \
-  -H "Content-Type: application/json" \
-  -d '{
-    "credentials": { ... },
-    "metadata": { <connector-specific metadata> },
-    "connection": {"connection": "dev"}
-  }'
-```
-
-Capture `workflow_id` and `run_id` from the response. Monitor status:
-```bash
-curl -s http://localhost:8000/workflows/v1/status/<workflow_id>/<run_id>
-```
-
-Poll until status is `COMPLETED` or `FAILED`. Also monitor Temporal UI at `http://localhost:8233`.
-
-### 6f — Parity comparison
-
-Once the workflow completes, locate the v3 output. The path follows this structure:
-```
-./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/<workflow_id>/<run_id>/transformed/
-```
-
-Use the `workflow_id` and `run_id` from the start response to find it:
-```bash
-V3_OUTPUT="./local/dapr/objectstore/artifacts/apps/<app-name>/workflows/<workflow_id>/<run_id>/transformed"
-```
-
-Count entities per type in the v3 output:
-```bash
-for dir in "$V3_OUTPUT"/*/; do
-  typename=$(basename "$dir")
-  count=0
-  for f in "$dir"*.json; do
-    [ -f "$f" ] && count=$((count + $(wc -l < "$f")))
-  done
-  echo "$typename: $count"
-done
-```
-
-If a v2 baseline exists (from step 6a), compare:
-
-```
-Entity type      | v2 count | v3 count | Match
------------------|----------|----------|------
-workspace        |        1 |        1 | ✓
-collection       |       67 |       67 | ✓
-report           |       68 |       30 | ✗ (-38)
-```
-
-### 6g — Fix-and-retry loop
-
-If parity fails (counts differ, workflow errors, or endpoint failures):
-
-1. **Diagnose.** Read the app terminal logs and Temporal UI (`http://localhost:8233`) for errors. Common causes:
-   - HTTP errors during extraction → check client retry logic, rate limiting, auth
-   - Missing entities → check filtering logic, pagination, or API response parsing
-   - Transform errors → check Parquet round-trip issues (nested dicts become JSON strings)
-   - Empty output → check `output_path` computation and `output_prefix` defaults
-
-2. **Fix.** Apply the fix to production code only. Do not modify tests.
-
-3. **Re-run from 6b.** After fixing:
-   - Re-run tests (6b) to confirm the fix doesn't break anything
-   - Restart the app (6c) to pick up code changes
-   - Re-test handler endpoints (6d) to confirm they still work
-   - Trigger a new workflow run (6e)
-   - Re-compare parity (6f)
-
-4. **Repeat** until all entity counts match the v2 baseline and all endpoints return success.
-
-Do not proceed to the summary until:
-- All handler endpoints return success
-- Workflow completes without errors
-- Entity counts match the v2 baseline (or the user explicitly accepts the difference with an explanation)
-
-### 6h — Print verification summary
-
-Only print this after parity is achieved or the user accepts the result:
-
-```
-## Live Verification Summary
-
-### Handler Endpoints
-- POST /workflows/v1/auth:      ✓ success
-- POST /workflows/v1/check:     ✓ ready (N checks passed)
-- POST /workflows/v1/metadata:  ✓ N objects returned
-- GET  /workflows/v1/configmaps: ✓ N configmaps
-- GET  /workflows/v1/manifest:   ✓ served
-
-### Workflow Execution
-- Workflow ID: <id>
-- Run ID: <id>
-- Status: COMPLETED
-- Duration: Ns
-- Retry attempts: N (if fix-and-retry loop was needed)
-
-### Parity
-<entity count comparison table>
-- Parity: ACHIEVED
-- Fixes applied during retry loop: <list of fixes, or "none">
-```
-
----
-
-## Known Gotchas — learned from real migrations
-
-These are issues discovered during production migrations that are not covered by the automated checker or migration tooling. Read these before starting.
-
-### Handler discovery
-
-v3 discovers the `Handler` subclass by looking in the same module as the `App` class. If your handler is in a different module (e.g. `app/handlers/handler.py` while the App is in `app/app.py`), the SDK will use `DefaultHandler` silently.
-
-**Fix:** Either import the handler in your App module:
+**Fix:** Always set these on your App class:
 ```python
-# app/app.py
-from app.handlers.handler import MyHandler  # noqa: F401 — registers handler
+class MyApp(SqlMetadataExtractor):
+    name: ClassVar[str] = "my-connector-name"  # matches pyproject.toml name
+    _app_registered: ClassVar[bool] = False     # force re-registration
 ```
-Or set the env var `ATLAN_HANDLER_MODULE=app.handlers.handler:MyHandler`.
 
-### Handler credentials — v2 nested dict vs v3 list format
+#### Credential flow (SDK design gap — BLDX-832)
 
-v3 handler endpoints receive credentials as `list[HandlerCredential]` (`[{key, value}]` pairs). Heracles and existing frontends send v2 nested dicts (`{host, username, password, extra: {workspace}}`). The SDK normalizes v2 format to v3 automatically in `service.py`, but your handler's `_build_client` helper must reconstruct the nested dict from `input.credentials`:
+The SDK's `ExtractionInput` and `FetchXxxInput` use Pydantic `extra='ignore'` — inline credentials from `/start` are silently dropped. Additionally, Temporal creates fresh App instances for each `@task` activity, so instance variables set in `run()` don't carry to tasks.
+
+**Workaround:** Create custom input types that carry credentials:
+```python
+class MyExtractionInput(ExtractionInput, allow_unbounded_fields=True):
+    credentials: dict[str, Any] = Field(default_factory=dict)
+
+class MyTaskInput(ExtractionTaskInput, allow_unbounded_fields=True):
+    credentials: dict[str, Any] = Field(default_factory=dict)
+```
+
+Use `MyTaskInput` for all `@task` method signatures. This requires `# type: ignore[override]` on methods that override the base template — this is expected until BLDX-832 is resolved.
+
+#### Client creation pattern
 
 ```python
-async def _build_client(credentials: list[HandlerCredential]) -> MyClient:
-    cred_dict = {}
-    extra = {}
-    for cred in credentials:
-        if cred.key.startswith("extra."):
-            extra[cred.key[len("extra."):]] = cred.value
-        else:
-            cred_dict[cred.key] = cred.value
-    if extra:
-        cred_dict["extra"] = extra
+async def _create_client(self, input: Any) -> MyClient:
     client = MyClient()
-    await client.load(credentials=cred_dict)
+    if input.credential_ref:
+        creds = await self.context.resolve_credential_raw(input.credential_ref)
+        await client.load(creds)
+    elif input.credential_guid:
+        from application_sdk.infrastructure.secrets import SecretStore
+        creds = await SecretStore.get_credentials(input.credential_guid)  # type: ignore[attr-defined]
+        await client.load(creds)
+    elif hasattr(input, "credentials") and input.credentials:
+        await client.load(input.credentials)
+    else:
+        raise ValueError("No credential source provided")
     return client
 ```
 
-### Payload safety and `allow_unbounded_fields`
+#### SQL client per-instance config
 
-v3 enforces strict types on `Input`/`Output` contracts. `dict[str, Any]` fields will raise `PayloadSafetyError` at import time. For top-level input models that receive arbitrary config from AE/Heracles (connection dicts, metadata dicts), use:
+If the client has a class-level `DB_CONFIG`, create a **fresh instance** in `load()` to avoid shared mutable state across concurrent tasks:
 
 ```python
-class MyExtractionInput(Input, allow_unbounded_fields=True):
-    credential_guid: str = ""
-    credentials: dict[str, Any] = {}
-    connection: dict[str, Any] = {}
-    metadata: dict[str, Any] = {}
+async def load(self, credentials):
+    self.DB_CONFIG = DatabaseConfig(
+        template=self.DB_CONFIG.template,
+        required=list(self.DB_CONFIG.required),
+        defaults=dict(self.DB_CONFIG.defaults) if self.DB_CONFIG.defaults else {},
+        connect_args={},
+    )
+    credentials = dict(credentials)  # copy to avoid mutating caller's dict
+    ...
 ```
 
-For inter-task contracts, prefer typed fields with `MaxItems` or `FileReference`.
+#### Output path computation
 
-### Dockerfile CMD must be empty
+v3 does not auto-compute `output_path`. In `run()`:
+```python
+output_path = input.output_path  # or input.output_dir for contract-generated inputs
+if not output_path:
+    from application_sdk.constants import APPLICATION_NAME, TEMPORARY_PATH
+    output_path = os.path.join(
+        TEMPORARY_PATH,
+        f"artifacts/apps/{APPLICATION_NAME}/workflows/{workflow_id or 'local'}",
+    )
+```
 
-Do NOT hardcode `CMD ["--mode", "combined"]`. In production, Helm sets `APPLICATION_MODE` env var to control whether the container runs as `WORKER` (Temporal only) or `SERVER` (HTTP only). The base image `entrypoint.sh` reads this. Hardcoding `--mode` overrides Helm's env var and causes worker pods to attempt starting uvicorn on port -1.
+Do NOT call `build_output_path()` from `run()` — it requires Temporal activity context, and `run()` is a workflow.
+
+#### Handler import for discovery
+
+v3 discovers the Handler by inspecting the App's module. If the handler is in a separate file, import it in the App module:
+```python
+from app.handlers.my_handler import MyHandler  # noqa: F401
+```
+
+### 2c — Implement the Handler
+
+v3 `Handler` is abstract — you must implement `test_auth`, `preflight_check`, `fetch_metadata` from scratch. The v2 `BaseSQLHandler` provided these automatically; in v3 they don't exist.
+
+The SDK normalizes v2 nested dict credentials to v3 `list[HandlerCredential]` format automatically in `service.py`. Your handler receives the v3 format. To build a SQL client from it:
+
+```python
+async def _build_client(self, input: AuthInput | PreflightInput | MetadataInput) -> MyClient:
+    creds: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
+    for cred in input.credentials:
+        if cred.key.startswith("extra."):
+            extra[cred.key[len("extra."):]] = cred.value
+        else:
+            creds[cred.key] = cred.value
+    if extra:
+        creds["extra"] = extra
+    client = MyClient()
+    await client.load(credentials=creds)
+    return client
+```
+
+**Always use try/finally for client cleanup** in every handler method:
+```python
+async def test_auth(self, input: AuthInput) -> AuthOutput:
+    client: MyClient | None = None
+    try:
+        client = await self._build_client(input)
+        await client.get_results("SELECT 1")
+        return AuthOutput(status=AuthStatus.SUCCESS)
+    except Exception as e:
+        return AuthOutput(status=AuthStatus.FAILED, message=str(e))
+    finally:
+        if client:
+            await client.close()
+```
+
+### 2d — Update entry point
+
+```python
+# main.py
+import asyncio
+from application_sdk.main import run_dev_combined
+from app.my_app import MyApp
+
+async def main():
+    await run_dev_combined(MyApp)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**Note:** `run_dev_combined` does NOT accept `handler_class`. The handler is discovered automatically via module inspection.
+
+### 2e — Update Dockerfile
 
 ```dockerfile
-# WRONG
-CMD ["--mode", "combined"]
-
-# CORRECT — let APPLICATION_MODE env var control mode
-CMD []
+ENV ATLAN_APP_MODULE=app.my_app:MyApp
+CMD []  # Let APPLICATION_MODE env var control mode
 ```
 
-### output_path and output_prefix must be computed
+Do NOT hardcode `CMD ["--mode", "combined"]` — it breaks production Helm-controlled mode switching.
 
-v3 does not auto-compute `output_path` like v2 did. If `input.output_path` is empty (which it is for local dev), compute it in your extract task:
+### 2f — Directory consolidation
 
+Delete `app/activities/` and `app/workflows/` directories. Update all imports. For test files, use the import rewriter:
+
+```bash
+uv run python -m tools.migrate_v3.rewrite_imports \
+  --internal-map '{"app.activities.metadata_extraction.old_name": "app.new_name"}' \
+  <target-path>/tests/
+```
+
+### 2g — Post-processing
+
+```bash
+uv run ruff check --fix --select I,F401 <target-path>
+uv run ruff format <target-path>
+uv run python -m tools.migrate_v3.check_migration --no-color <target-path>/app <target-path>/main.py
+```
+
+All FAILs should be resolved. WARNs are advisory.
+
+---
+
+## Phase 3 — Tests
+
+### 3a — Rewrite unit tests
+
+v2 tests test v2 APIs (`sql_client_class`, `handler_class`, `multidb`, `get_workflow_args`) that no longer exist. **Rewrite tests to test the v3 API directly:**
+
+- App config: SQL queries loaded, class hierarchy, name
+- Input contracts: credentials field, default values
+- Helper methods: `_create_client` raises on no creds, exclude filter logic
+- Handler: inherits `Handler`, has required methods
+
+### 3b — Run tests
+
+```bash
+uv run pytest tests/unit/ -v --tb=short
+```
+
+Fix production code for any failures. Do not leave broken tests.
+
+### 3c — Suppress SSL warnings
+
+If the connector disables SSL verification, suppress urllib3 warnings in the client:
 ```python
-from application_sdk.constants import TEMPORARY_PATH
-from application_sdk.common.utils import build_output_path
-
-if not input.output_path:
-    output_path = os.path.join(TEMPORARY_PATH, build_output_path())
+if disable_ssl:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ```
 
-Similarly, `output_prefix` must default to `TEMPORARY_PATH` for the `transformed_data_prefix` stripping logic to work correctly in the output contract.
+---
+
+## Phase 4 — Live verification
+
+### 4a — Start the app
+
+```bash
+atlan app run -p <target-path>
+```
+
+Wait for `Uvicorn running on http://127.0.0.1:8000`. This handles Temporal + Dapr automatically.
+
+### 4b — Test all handler endpoints
+
+Read `.env` for credentials. Test in this order:
+
+1. `POST /workflows/v1/auth` — should return `status: success`
+2. `POST /workflows/v1/check` — should return `status: ready`
+3. `POST /workflows/v1/metadata` — should return objects
+4. `GET /workflows/v1/configmaps` — should list configmaps
+5. `GET /workflows/v1/manifest` — should return DAG
+
+If any fail, fix and restart before proceeding.
+
+### 4c — Run a workflow
+
+```bash
+curl -s -X POST http://localhost:8000/workflows/v1/start \
+  -H "Content-Type: application/json" \
+  -d '{"credentials":{...},"connection":{"connection_qualified_name":"..."}}'
+```
+
+Poll status until `COMPLETED` or `FAILED`.
+
+### 4d — Verify parity
+
+Compare entity counts against the latest v2 run:
+
+```bash
+# Count entities in v3 output
+find ./local/dapr/objectstore/artifacts -name "*.parquet" -path "*/raw/*" | while read f; do
+  entity=$(echo "$f" | grep -o 'raw/[^/]*' | cut -d/ -f2)
+  echo "$entity"
+done | sort | uniq -c | sort -rn
+```
+
+### 4e — Test filters
+
+Run with exclude filter to verify filtering works:
+```json
+{"exclude_filter": "{\"catalog_name\": [\"*\"]}", ...}
+```
+
+Should produce 0 entities for multidb tasks.
+
+---
+
+## Phase 5 — Feature parity (if applicable)
+
+After core extraction works, check for connector-specific features the v2 version had:
+
+### Enrichment (view definitions, partition metadata, etc.)
+
+For SQL connectors, check if the legacy extractor had per-row dynamic queries (SHOW CREATE VIEW, $partitions, etc.). If so:
+
+1. **Use bulk queries** — `information_schema.views` per catalog, not SHOW CREATE VIEW per view
+2. **Detect connector type** — `SELECT catalog_name, connector_name FROM system.metadata.catalogs`
+3. **Skip non-applicable catalogs** — PostgreSQL doesn't support `$partitions`, only hive/iceberg/delta do
+4. **Use bounded concurrency** — `asyncio.Semaphore(5)` for per-row queries that can't be batched
+
+### Preflight validation
+
+If the legacy had sage/preflight checks beyond SELECT 1 (like validating include-filter targets exist), implement those in the handler's `preflight_check`.
+
+### Custom attributes
+
+Check YAML templates for unmapped columns — data already in the SQL but not mapped to entity attributes.
+
+---
+
+## Known gotchas
+
+### Checker scans .venv
+
+Pass specific paths to the checker, not the repo root:
+```bash
+uv run python -m tools.migrate_v3.check_migration --no-color <target-path>/app <target-path>/main.py
+```
+
+### `ExtractionOutput` missing production fields
+
+The v3 `ExtractionOutput` has no `transformed_data_prefix` or `connection_qualified_name`. The publish app reads these via AE JSONPath. This is an SDK gap (BLDX-832). For now, the connector works for extraction but publish integration needs the SDK fix.
+
+### Contract-generated input vs SDK input
+
+`app/generated/_input.py` (from PKL contract) uses different field names than `ExtractionInput`:
+- `output_dir` vs `output_path`
+- `trino_credential` (CredentialRef) vs `credential_ref`
+- `include_filter` (dict) vs `include_filter` (str)
+
+The `run()` method must bridge these when using the contract-generated input as the run() type.
+
+### `atlan app run` vs `uv run python main.py`
+
+Always prefer `atlan app run -p .` — it sets `DAPR_HTTP_PORT` and starts Temporal automatically. Running `main.py` directly skips Dapr and the SDK falls back to InMemory silently.
 
 ### pre-commit must exclude app/generated/
 
-The contract toolkit generates `_input.py` and other files in `app/generated/`. These contain auto-generated code that will fail ruff and pyright checks. Exclude the directory in `.pre-commit-config.yaml`:
-
 ```yaml
-- id: ruff
-  exclude: app/generated/
-- id: ruff-format
-  exclude: app/generated/
-- id: pyright
-  exclude: app/generated/
+exclude: app/generated/
 ```
 
-### Local dev — verify Dapr is actually being used
+### Logging
 
-The v3 SDK checks `DAPR_HTTP_PORT` (not `ATLAN_DAPR_HTTP_PORT`) to detect the Dapr sidecar. If running via `atlan app run`, the CLI sets this automatically. If running manually (`uv run python main.py`), Dapr will be skipped and the SDK falls back to InMemory + LocalStore silently. This means misconfigured Dapr components won't be caught until production.
-
-**Fix:** When running manually, export `DAPR_HTTP_PORT=3500` before starting the app, or use `atlan app run` which handles this.
-
-### run() return type must match AE JSONPath queries
-
-The output contract from `run()` is what AE reads via JSONPath to find transformed data. The field names must match exactly what AE expects:
-
+Replace all `from loguru import logger` and `import logging; logger = logging.getLogger(...)` with the SDK's logger:
 ```python
-class MyExtractionOutput(Output):
-    transformed_data_prefix: str = ""          # AE reads this to find JSONL
-    connection_qualified_name: str = ""
+from application_sdk.observability.logger_adaptor import get_logger
+logger = get_logger(__name__)
 ```
+Use `%`-style formatting: `logger.info("Fetched %d rows", count)` — not f-strings or kwargs.
 
-If these fields are empty or named differently, AE won't find the output and the publish step fails silently.
+### Filter handling
+
+The SDK's `get_database_names()` only reads `include-filter`, not `exclude-filter`. Handle exclude filtering in the app by discovering all databases then removing excluded ones.
