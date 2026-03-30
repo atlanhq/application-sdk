@@ -57,6 +57,12 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
+def _serialize_credential_value(v: Any) -> str:
+    if isinstance(v, str):
+        return v
+    return json.dumps(v)
+
+
 def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize v2 nested-dict credentials to v3 list[{key, value}] format.
 
@@ -72,19 +78,23 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(creds, dict):
         return body
 
+    logger.debug(
+        "Converting v2 nested-dict credentials to v3 list format, keys=%s",
+        list(creds.keys()),
+    )
+
     creds_dict: dict[str, Any] = dict(creds)
     pairs: list[dict[str, str]] = []
     extra = creds_dict.pop("extra", None)
     for k, v in creds_dict.items():
         if v is not None:
-            pairs.append({"key": k, "value": str(v)})
+            pairs.append({"key": k, "value": _serialize_credential_value(v)})
     if isinstance(extra, dict):
         for k, v in extra.items():
             if v is not None:
-                pairs.append({"key": f"extra.{k}", "value": str(v)})
+                pairs.append({"key": f"extra.{k}", "value": _serialize_credential_value(v)})
 
-    body["credentials"] = pairs
-    return body
+    return {**body, "credentials": pairs}
 
 
 if TYPE_CHECKING:

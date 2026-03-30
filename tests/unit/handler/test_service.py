@@ -22,7 +22,11 @@ from application_sdk.handler.contracts import (
     PreflightStatus,
     SubscriptionConfig,
 )
-from application_sdk.handler.service import _wrap_response, create_app_handler_service
+from application_sdk.handler.service import (
+    _normalize_credentials,
+    _wrap_response,
+    create_app_handler_service,
+)
 
 # ---------------------------------------------------------------------------
 # Test Handler implementation
@@ -609,3 +613,124 @@ class TestManifestEndpoint:
             assert response.status_code == 404
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+
+class TestNormalizeCredentials:
+    """Tests for _normalize_credentials v2→v3 compat shim."""
+
+    def test_v3_list_passthrough(self) -> None:
+        body = {"credentials": [{"key": "host", "value": "localhost"}]}
+        result = _normalize_credentials(body)
+        assert result["credentials"] == [{"key": "host", "value": "localhost"}]
+
+    def test_v3_empty_list_passthrough(self) -> None:
+        body = {"credentials": []}
+        result = _normalize_credentials(body)
+        assert result["credentials"] == []
+
+    def test_missing_credentials_passthrough(self) -> None:
+        body = {"other_key": "value"}
+        result = _normalize_credentials(body)
+        assert result == {"other_key": "value"}
+
+    def test_null_credentials_passthrough(self) -> None:
+        body = {"credentials": None}
+        result = _normalize_credentials(body)
+        assert result["credentials"] is None
+
+    def test_v2_dict_conversion(self) -> None:
+        body = {
+            "credentials": {
+                "host": "app.mode.com",
+                "username": "user1",
+                "password": "secret",
+            }
+        }
+        result = _normalize_credentials(body)
+        creds = result["credentials"]
+        assert isinstance(creds, list)
+        keys = {c["key"]: c["value"] for c in creds}
+        assert keys["host"] == "app.mode.com"
+        assert keys["username"] == "user1"
+        assert keys["password"] == "secret"
+
+    def test_v2_extra_flattening(self) -> None:
+        body = {
+            "credentials": {
+                "host": "app.mode.com",
+                "extra": {"workspace": "atlan", "region": "us"},
+            }
+        }
+        result = _normalize_credentials(body)
+        keys = {c["key"]: c["value"] for c in result["credentials"]}
+        assert keys["host"] == "app.mode.com"
+        assert keys["extra.workspace"] == "atlan"
+        assert keys["extra.region"] == "us"
+        assert "extra" not in keys
+
+    def test_none_values_excluded(self) -> None:
+        body = {"credentials": {"host": "localhost", "port": None}}
+        result = _normalize_credentials(body)
+        keys = [c["key"] for c in result["credentials"]]
+        assert "host" in keys
+        assert "port" not in keys
+
+    def test_non_string_values_serialized_as_json(self) -> None:
+        body = {
+            "credentials": {
+                "host": "localhost",
+                "port": 5432,
+                "ssl": True,
+                "options": {"timeout": 30},
+            }
+        }
+        result = _normalize_credentials(body)
+        keys = {c["key"]: c["value"] for c in result["credentials"]}
+        assert keys["host"] == "localhost"
+        assert keys["port"] == "5432"
+        assert keys["ssl"] == "true"
+        assert keys["options"] == '{"timeout": 30}'
+
+    def test_non_dict_extra_ignored(self) -> None:
+        body = {"credentials": {"host": "localhost", "extra": "not-a-dict"}}
+        result = _normalize_credentials(body)
+        keys = {c["key"]: c["value"] for c in result["credentials"]}
+        assert keys["host"] == "localhost"
+        assert "extra" not in keys
+
+    def test_does_not_mutate_original_body(self) -> None:
+        body = {
+            "credentials": {"host": "localhost"},
+            "metadata": {"key": "value"},
+        }
+        original_meta = body["metadata"]
+        result = _normalize_credentials(body)
+        assert result is not body
+        assert result["metadata"] is original_meta
+        assert isinstance(body["credentials"], dict)
+
+    def test_preserves_other_body_fields(self) -> None:
+        body = {
+            "credentials": {"host": "localhost"},
+            "connection_id": "conn-123",
+            "timeout_seconds": 60,
+        }
+        result = _normalize_credentials(body)
+        assert result["connection_id"] == "conn-123"
+        assert result["timeout_seconds"] == 60
+
+    def test_v2_auth_integration(self) -> None:
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={
+                "credentials": {
+                    "host": "app.mode.com",
+                    "username": "user",
+                    "password": "pass",
+                    "extra": {"workspace": "ws"},
+                }
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["status"] == "success"
