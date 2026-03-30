@@ -92,7 +92,9 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     if isinstance(extra, dict):
         for k, v in extra.items():
             if v is not None:
-                pairs.append({"key": f"extra.{k}", "value": _serialize_credential_value(v)})
+                pairs.append(
+                    {"key": f"extra.{k}", "value": _serialize_credential_value(v)}
+                )
 
     return {**body, "credentials": pairs}
 
