@@ -99,7 +99,7 @@ Report: baseline source (golden-dataset / v2-run / none), entity counts, field l
 **Ask the user to confirm the baseline** before proceeding:
 
 > "I found [golden dataset / v2 workflow run at `<path>` / no baseline].
-> Entity counts: database=N, schema=N, table=N, column=N, procedure=N.
+> Entity counts: <entity_1>=N, <entity_2>=N, ... (discovered from parquet directories).
 > Fields per entity: [list].
 > Should I use this as the parity target? If not, please run the v2 app first or point me to the correct baseline."
 
@@ -107,7 +107,7 @@ Wait for confirmation. Then synthesize the research into a migration plan:
 
 1. **Connector type**: SQL metadata / SQL query / Incremental / REST / Custom
 2. **Template to use**: `SqlMetadataExtractor` / `SqlQueryExtractor` / etc.
-3. **Contract input mismatch**: What fields does `app/generated/_input.py` have that `ExtractionInput` doesn't? (e.g. `output_dir` vs `output_path`, `trino_credential` vs `credential_ref`)
+3. **Contract input mismatch**: What fields does `app/generated/_input.py` have that `ExtractionInput` doesn't? (e.g. `output_dir` vs `output_path`, `<connector>_credential` vs `credential_ref`)
 4. **Handler work**: What did `BaseSQLHandler` provide that must be reimplemented?
 5. **Custom logic to preserve**: Multidb toggle, enrichment queries, filter handling
 6. **Test rewrite scope**: Which tests reference v2 APIs that won't exist?
@@ -430,66 +430,73 @@ Poll status until `COMPLETED` or `FAILED`.
 
 ### 4d — Verify parity
 
-Find the v3 output (usually at `./local/dapr/objectstore/artifacts/apps/default/workflows/local/raw/` or under the workflow ID). Count entities per type and compare against the baseline established in Phase R.
+Find the v3 output. It lands in `./local/dapr/objectstore/artifacts/` — either under `workflows/local/raw/` or under the workflow ID. Discover entity types dynamically from the directory structure:
 
 ```python
-# Quick parity check script
 import pandas as pd, glob, os
-for entity in ['database', 'schema', 'table', 'column', 'extras-procedure']:
-    files = glob.glob(f'./local/dapr/objectstore/artifacts/apps/default/workflows/local/raw/{entity}/*.parquet')
+
+raw_base = './local/dapr/objectstore/artifacts/apps/default/workflows/local/raw'
+if not os.path.isdir(raw_base):
+    # Find the most recent run
+    wf_base = './local/dapr/objectstore/artifacts/apps/default/workflows'
+    for d in sorted(os.listdir(wf_base), key=lambda x: os.path.getmtime(os.path.join(wf_base, x)), reverse=True):
+        p = os.path.join(wf_base, d)
+        if os.path.isdir(p):
+            for r in os.listdir(p):
+                rp = os.path.join(p, r, 'raw')
+                if os.path.isdir(rp):
+                    raw_base = rp
+                    break
+            break
+
+for entity_dir in sorted(os.listdir(raw_base)):
+    files = glob.glob(os.path.join(raw_base, entity_dir, '*.parquet'))
     if files:
         df = pd.concat([pd.read_parquet(f) for f in files])
-        print(f'{entity}: {len(df)} rows, {len(df.columns)} cols')
-    else:
-        print(f'{entity}: 0 rows')
+        print(f'{entity_dir}: {len(df)} rows, {len(df.columns)} cols')
 ```
 
-If a baseline was confirmed in Phase R, compare side-by-side:
+Compare against the baseline from Phase R. Present a side-by-side table — entity types will vary per connector (SQL connectors produce database/schema/table/column; REST connectors produce workspace/collection/report/etc.):
 
 ```
 Entity        | Baseline | v3  | Match
-database      |        1 |   1 | ✓
-schema        |       12 |  12 | ✓
-table         |      193 | 193 | ✓
-column        |     1404 |1404 | ✓
+<entity_1>    |      N   |  N  | ✓
+<entity_2>    |      N   |  M  | ✗
 ```
 
 If counts differ, ask the user:
 > "Entity counts differ for `<entity>`: baseline=N, v3=M. This could be due to source data changes since the baseline was captured. Should I investigate, or is this acceptable?"
 
-Also verify new columns (enrichment fields like `view_definition`, `is_partitioned`, `source_data_type`) are present in the v3 parquet even if NULL — they should be there for production catalogs that have views/partitions.
+Also check that v3 output has any new columns the connector added (enrichment, custom attributes) — they may be NULL on the test instance but should be present in the parquet schema.
 
-### 4e — Test filters
+### 4e — Test filters (if applicable)
 
-Run with exclude filter to verify filtering works:
-```json
-{"exclude_filter": "{\"catalog_name\": [\"*\"]}", ...}
-```
-
-Should produce 0 entities for multidb tasks.
+If the connector supports include/exclude filters, test them:
+- Run with a filter that excludes all data → should produce 0 entities for filtered tasks
+- Run with a filter that includes only a subset → entity counts should be lower than the full run
 
 ---
 
 ## Phase 5 — Feature parity (if applicable)
 
-After core extraction works, check for connector-specific features the v2 version had:
+After core extraction works, compare against the baseline from Phase R. Look for features the v2 version produced that the v3 version doesn't yet:
 
-### Enrichment (view definitions, partition metadata, etc.)
+### Enrichment
 
-For SQL connectors, check if the legacy extractor had per-row dynamic queries (SHOW CREATE VIEW, $partitions, etc.). If so:
+If the baseline shows fields that aren't in the main extraction (e.g. view definitions, partition metadata, row counts, descriptions fetched from a separate API), implement an enrichment task:
 
-1. **Use bulk queries** — `information_schema.views` per catalog, not SHOW CREATE VIEW per view
-2. **Detect connector type** — `SELECT catalog_name, connector_name FROM system.metadata.catalogs`
-3. **Skip non-applicable catalogs** — PostgreSQL doesn't support `$partitions`, only hive/iceberg/delta do
-4. **Use bounded concurrency** — `asyncio.Semaphore(5)` for per-row queries that can't be batched
+1. **Prefer bulk queries over per-row N+1** — if a system table or API endpoint can return all data in one call per scope, use that instead of querying per entity
+2. **Detect applicability** — not all sources support all features. Check capabilities before querying (e.g. connector type, API version, feature flags)
+3. **Use bounded concurrency** — `asyncio.Semaphore(N)` for per-entity queries that can't be batched
+4. **Fail gracefully** — wrap enrichment queries in try/except. Missing enrichment data should not fail the workflow.
 
 ### Preflight validation
 
-If the legacy had sage/preflight checks beyond SELECT 1 (like validating include-filter targets exist), implement those in the handler's `preflight_check`.
+If the legacy had preflight checks beyond basic connectivity (like validating filter targets exist, checking permissions, verifying API versions), implement those in the handler's `preflight_check`.
 
-### Custom attributes
+### Custom attributes / unmapped fields
 
-Check YAML templates for unmapped columns — data already in the SQL but not mapped to entity attributes.
+Compare the baseline's entity attributes against the YAML template mappings. If the baseline has attributes that aren't mapped in the templates, add them — the raw data may already be extracted but just not wired through to the output.
 
 ---
 
@@ -510,7 +517,7 @@ The v3 `ExtractionOutput` has no `transformed_data_prefix` or `connection_qualif
 
 `app/generated/_input.py` (from PKL contract) uses different field names than `ExtractionInput`:
 - `output_dir` vs `output_path`
-- `trino_credential` (CredentialRef) vs `credential_ref`
+- `<connector>_credential` (CredentialRef) vs `credential_ref`
 - `include_filter` (dict) vs `include_filter` (str)
 
 The `run()` method must bridge these when using the contract-generated input as the run() type.
