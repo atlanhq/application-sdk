@@ -866,30 +866,80 @@ def create_app_handler_service(
     # Config (state store)
     # ------------------------------------------------------------------
 
+    async def _config_load_from_objectstore(
+        config_id: str,
+    ) -> "dict[str, Any] | None":
+        """Load workflow config from object store (S3) fallback."""
+        if _storage is None:
+            return None
+        import json as _json
+        import os
+        import tempfile
+
+        from application_sdk.storage.ops import download_file
+
+        key = f"config/credentials/{config_id}.json"
+        tmp = tempfile.mktemp(suffix=".json")
+        try:
+            await download_file(key, tmp, _storage)
+            with open(tmp) as f:
+                return _json.load(f)
+        except Exception:
+            return None
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    async def _config_save_to_objectstore(
+        config_id: str, body: "dict[str, Any]"
+    ) -> bool:
+        """Save workflow config to object store (S3) fallback."""
+        if _storage is None:
+            return False
+        import json as _json
+        import os
+        import tempfile
+
+        from application_sdk.storage.ops import upload_file
+
+        key = f"config/credentials/{config_id}.json"
+        tmp = tempfile.mktemp(suffix=".json")
+        try:
+            with open(tmp, "w") as f:
+                _json.dump(body, f)
+            await upload_file(key, tmp, _storage)
+            return True
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
     @app.get("/workflows/v1/config/{config_id}")
-    async def get_workflow_config(config_id: str) -> JSONResponse:
+    async def get_workflow_config(
+        config_id: str, type: str = "workflows"
+    ) -> JSONResponse:
+        """Fetch workflow config — tries statestore first, falls back to object store."""
         config = None
+
+        # Try statestore
         if _state_store is not None:
             try:
                 config = await _state_store.load(f"workflows/{config_id}")
             except Exception:
-                logger.warning("State store load failed, trying object store fallback")
-                config = None
-        if config is None and _storage is not None:
-            import json as _json
-            from application_sdk.storage.ops import download_file as _dl
-            import tempfile, os
-            key = f"config/credentials/{config_id}.json"
-            try:
-                tmp = tempfile.mktemp(suffix=".json")
-                await _dl(key, tmp, _storage)
-                with open(tmp) as _f:
-                    config = _json.load(_f)
-                os.unlink(tmp)
-            except Exception:
-                config = None
+                logger.warning(
+                    "State store load failed for config %s (type=%s), trying object store",
+                    config_id,
+                    type,
+                )
+
+        # Fallback to object store (S3) — only for non-credential types
+        if config is None and type != "credentials":
+            config = await _config_load_from_objectstore(config_id)
+
         if config is None and _state_store is None and _storage is None:
-            raise HTTPException(status_code=503, detail="No state store or object store configured")
+            raise HTTPException(
+                status_code=503,
+                detail="No state store or object store configured",
+            )
         if config is None:
             raise HTTPException(
                 status_code=404, detail=f"Config not found: {config_id}"
@@ -902,28 +952,45 @@ def create_app_handler_service(
         )
 
     @app.post("/workflows/v1/config/{config_id}")
-    async def update_workflow_config(config_id: str, request: Request) -> JSONResponse:
+    async def update_workflow_config(
+        config_id: str, request: Request, type: str = "workflows"
+    ) -> JSONResponse:
+        """Save workflow config — tries statestore first, falls back to object store.
+
+        Object store fallback is only used for non-credential config types
+        to avoid persisting sensitive credential data to S3.
+        """
         body = await request.json()
         saved = False
+
+        # Try statestore
         if _state_store is not None:
             try:
                 await _state_store.save(f"workflows/{config_id}", body)
                 saved = True
             except Exception:
-                logger.warning("State store save failed, trying object store fallback")
-        if not saved and _storage is not None:
-            import json as _json
-            from application_sdk.storage.ops import upload_file as _ul
-            import tempfile, os
-            key = f"config/credentials/{config_id}.json"
-            tmp = tempfile.mktemp(suffix=".json")
-            with open(tmp, "w") as _f:
-                _json.dump(body, _f)
-            await _ul(key, tmp, _storage)
-            os.unlink(tmp)
-            saved = True
+                logger.warning(
+                    "State store save failed for config %s (type=%s), trying object store",
+                    config_id,
+                    type,
+                )
+
+        # Fallback to object store (S3) — only for non-credential types
+        # to avoid persisting sensitive data unencrypted
+        if not saved and type != "credentials":
+            saved = await _config_save_to_objectstore(config_id, body)
+        elif not saved and type == "credentials":
+            logger.warning(
+                "Skipping object store fallback for credential config %s "
+                "— credentials must not be persisted to S3",
+                config_id,
+            )
+
         if not saved:
-            raise HTTPException(status_code=503, detail="No state store or object store configured")
+            raise HTTPException(
+                status_code=503,
+                detail="No state store or object store configured",
+            )
         return JSONResponse(
             content=_wrap_response(
                 cast("dict[str, Any]", body),
