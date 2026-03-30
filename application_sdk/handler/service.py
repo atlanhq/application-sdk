@@ -63,27 +63,14 @@ def _serialize_credential_value(v: Any) -> str:
     return json.dumps(v)
 
 
-def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
-    """Normalize v2 nested-dict credentials to v3 list[{key, value}] format.
+_CREDENTIAL_KEYS = frozenset({
+    "host", "port", "authType", "username", "password",
+    "connectorType", "connectorConfigName", "extra",
+})
 
-    v2 (Heracles) sends:
-        {"credentials": {"host": "...", "username": "...", "extra": {"workspace": "..."}}}
 
-    v3 expects:
-        {"credentials": [{"key": "host", "value": "..."}, {"key": "extra.workspace", "value": "..."}]}
-
-    If credentials is already a list (v3 format), the body is returned unchanged.
-    """
-    creds = body.get("credentials")
-    if not isinstance(creds, dict):
-        return body
-
-    logger.debug(
-        "Converting v2 nested-dict credentials to v3 list format, keys=%s",
-        list(creds.keys()),
-    )
-
-    creds_dict: dict[str, Any] = dict(creds)
+def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
+    """Convert a flat credential dict to v3 [{key, value}] pairs."""
     pairs: list[dict[str, str]] = []
     extra = creds_dict.pop("extra", None)
     for k, v in creds_dict.items():
@@ -95,8 +82,49 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
                 pairs.append(
                     {"key": f"extra.{k}", "value": _serialize_credential_value(v)}
                 )
+    return pairs
 
-    return {**body, "credentials": pairs}
+
+def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
+    """Normalize v2 credential formats to v3 list[{key, value}] format.
+
+    Handles three formats:
+
+    1. v3 array (already correct):
+        {"credentials": [{"key": "host", "value": "..."}]}
+
+    2. v2 nested dict (Heracles internal):
+        {"credentials": {"host": "...", "username": "...", "extra": {...}}}
+
+    3. v2 flat top-level (Heracles credential test):
+        {"host": "...", "authType": "basic", "password": "...", "extra": {...}}
+
+    Returns the body with credentials normalized to v3 array format.
+    """
+    creds = body.get("credentials")
+
+    # Already v3 array format — no conversion needed
+    if isinstance(creds, list):
+        return body
+
+    # Format 2: nested dict under "credentials" key
+    if isinstance(creds, dict):
+        logger.info(
+            "Converting v2 nested-dict credentials to v3 list, keys=%s",
+            list(creds.keys()),
+        )
+        return {**body, "credentials": _flatten_to_pairs(dict(creds))}
+
+    # Format 3: flat top-level keys (detect by presence of known credential keys)
+    if creds is None and _CREDENTIAL_KEYS & body.keys():
+        flat_creds = {k: body[k] for k in list(body.keys()) if k in _CREDENTIAL_KEYS}
+        logger.info(
+            "Converting v2 flat top-level credentials to v3 list, keys=%s",
+            list(flat_creds.keys()),
+        )
+        return {**body, "credentials": _flatten_to_pairs(flat_creds)}
+
+    return body
 
 
 if TYPE_CHECKING:
