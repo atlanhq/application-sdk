@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - gaurav/cue 
     paths:
       - 'Dockerfile'
       - 'pyproject.toml'

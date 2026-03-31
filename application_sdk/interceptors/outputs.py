@@ -59,13 +59,27 @@ class OutputActivityInboundInterceptor(ActivityInboundInterceptor):
         collector = OutputCollector()
         _current_outputs.set(collector)
 
-        result = await super().execute_activity(input)
+        try:
+            result = await super().execute_activity(input)
+        finally:
+            # Always reset so a failed/cancelled activity doesn't leak its
+            # collector into the next task that runs on this thread.
+            _current_outputs.set(None)
 
-        if collector.has_data():
-            workflow_run_id = activity.info().workflow_run_id
-            with _lock:
-                _collected_outputs[workflow_run_id].append(collector)
-            logger.debug(f"Stashed output collector for workflow run {workflow_run_id}")
+        try:
+            if collector.has_data():
+                workflow_run_id = activity.info().workflow_run_id
+                with _lock:
+                    _collected_outputs[workflow_run_id].append(collector)
+                logger.debug(
+                    f"Stashed output collector for workflow run {workflow_run_id}"
+                )
+        except Exception:
+            # Output collection is non-critical — never let it fail the activity.
+            logger.warning(
+                "Failed to stash output collector; outputs for this activity will be lost.",
+                exc_info=True,
+            )
 
         return result
 
@@ -89,21 +103,39 @@ class OutputWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         """
         collector = OutputCollector()
         _current_outputs.set(collector)
-
-        result = await super().execute_workflow(input)
-
         workflow_run_id = workflow.info().run_id
-        with _lock:
+        # Populated in finally so cleanup always happens; the list is reused
+        # on the success path below.
+        activity_collectors: list = []
+
+        try:
+            result = await super().execute_workflow(input)
+        finally:
+            # Always pop the per-run bucket (even on failure/cancellation) to
+            # prevent unbounded memory growth.
+            # No threading.Lock: dict.pop on a unique workflow_run_id is safe
+            # without a lock, and threading.Lock inside workflow context risks
+            # RestrictedWorkflowAccessError in sandboxed environments.
             activity_collectors = _collected_outputs.pop(workflow_run_id, [])
+            _current_outputs.set(None)
 
-        for activity_collector in activity_collectors:
-            collector.merge(activity_collector)
+        # Only reached when super().execute_workflow() returned without raising.
+        try:
+            for ac in activity_collectors:
+                collector.merge(ac)
 
-        if collector.has_data():
-            if isinstance(result, dict):
-                return collector.merge_with(result)
-            else:
-                return collector.to_dict()
+            if collector.has_data():
+                if isinstance(result, dict):
+                    return collector.merge_with(result)
+                else:
+                    return collector.to_dict()
+        except Exception:
+            # Output enrichment is non-critical — never let it fail the workflow.
+            logger.warning(
+                "Failed to enrich workflow result with collected outputs; "
+                "workflow result returned unchanged.",
+                exc_info=True,
+            )
 
         return result
 
