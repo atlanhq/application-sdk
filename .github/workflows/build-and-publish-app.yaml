@@ -69,8 +69,7 @@ on:
 permissions:
   contents: read
   packages: write
-  security-events: write  # For Trivy SARIF upload
-  actions: write           # For workflow dispatch
+  actions: write
 
 jobs:
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
@@ -359,9 +358,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     continue-on-error: true
-    permissions:
-      security-events: write
-      actions: read
 
     steps:
       - name: Log in to GHCR
@@ -389,20 +385,11 @@ jobs:
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
         run: |
           trivy image \
-            --format sarif \
-            --output trivy-results.sarif \
+            --format table \
             --severity CRITICAL,HIGH \
             --scanners vuln \
             --ignore-unfixed \
             ${{ needs.prepare.outputs.ghcr_image }}
-
-      - name: Upload Trivy SARIF to GitHub Security
-        if: always() && hashFiles('trivy-results.sarif') != ''
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy-container
 
   # ── Job 5: Snyk container scan — blocking, fails hard on high/critical vulns ──
   snyk:
