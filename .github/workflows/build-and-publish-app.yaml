@@ -50,6 +50,11 @@ on:
         required: false
         type: string
         default: "https://home.atlan.com"
+      snyk_monitor:
+        description: "Push scan results to Snyk UI dashboard via snyk container monitor (default: false)"
+        required: false
+        type: boolean
+        default: false
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -64,8 +69,7 @@ on:
 permissions:
   contents: read
   packages: write
-  security-events: write  # For Trivy SARIF upload
-  actions: write           # For workflow dispatch
+  actions: write
 
 jobs:
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
@@ -354,9 +358,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     continue-on-error: true
-    permissions:
-      security-events: write
-      actions: read
 
     steps:
       - name: Log in to GHCR
@@ -384,22 +385,51 @@ jobs:
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
         run: |
           trivy image \
-            --format sarif \
-            --output trivy-results.sarif \
+            --format table \
             --severity CRITICAL,HIGH \
             --scanners vuln \
             --ignore-unfixed \
             ${{ needs.prepare.outputs.ghcr_image }}
 
-      - name: Upload Trivy SARIF to GitHub Security
-        if: always() && hashFiles('trivy-results.sarif') != ''
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy-container
+  # ── Job 5: Snyk container scan — blocking, fails hard on high/critical vulns ──
+  snyk:
+    name: Snyk Container Scan
+    needs: [prepare, merge]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
 
-  # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Set up Snyk CLI
+        uses: snyk/actions/setup@master
+
+      - name: Run Snyk container scan
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_API: https://api.us.snyk.io
+        run: |
+          snyk container test ${{ needs.prepare.outputs.ghcr_image }} \
+            --severity-threshold=high \
+            --org=partner-images \
+            --json-file-output=snyk_results.json
+
+      - name: Monitor with Snyk (push results to Snyk UI)
+        if: inputs.snyk_monitor
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_API: https://api.us.snyk.io
+        run: |
+          snyk container monitor ${{ needs.prepare.outputs.ghcr_image }} \
+            --severity-threshold=high \
+            --org=partner-images
+
+  # ── Job 6: Dispatch deployment to atlan-apps-deployment (main only) ───────────
   app-deployment-dispatcher:
     name: Dispatch App Deployment
     needs: [prepare, merge]
@@ -421,7 +451,7 @@ jobs:
                 "image_name": "${{ needs.prepare.outputs.dockerhub_image }}"
             }
 
-  # ── Job 6: Publish to Global Marketplace ────────────────────────────────────
+  # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
   publish:
     name: Publish to Marketplace
     needs: [prepare, merge]
