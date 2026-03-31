@@ -87,7 +87,7 @@ jobs:
               print(f'::error::atlan.yaml is invalid YAML: {e}', file=sys.stderr)
               sys.exit(1)
 
-          app_name   = d.get('name', '')
+          app_name   = d.get('name', '').lower()
           build_tag  = d.get('build_tag', 'v1')
           dockerfile = d.get('dockerfile', './Dockerfile')
           # self_deployed_runtime: true → push image to shared external registry
@@ -356,6 +356,6 @@ jobs:
           event-type: dispatch_app_builder_workflow
           client-payload: |-
             {
-                "app_name": "${{ needs.prepare.outputs.app_name }}",
+                "": "${{ needs.prepare.outputs.app_name }}",
                 "image_name": "${{ needs.prepare.outputs.dockerhub_image }}"
             }
