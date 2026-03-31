@@ -464,7 +464,7 @@ jobs:
                 "image_name": "${{ needs.prepare.outputs.dockerhub_image }}"
             }
 
-  # ── Job 6: Publish to Global Marketplace ────────────────────────────────────
+  # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
   publish:
     name: Publish to Marketplace
     needs: [prepare, merge]
