@@ -91,7 +91,19 @@ class TestOutputActivityInboundInterceptor:
     async def test_creates_fresh_collector_for_activity(
         self, interceptor, mock_next_inbound
     ):
-        """Test that a fresh collector is created for each activity."""
+        """Test that a fresh collector is created for each activity.
+
+        The collector is set on _current_outputs during execution and reset
+        to None afterwards (try/finally cleanup). Verify it exists during
+        the activity via a side effect on the mock.
+        """
+        collector_during_activity: list = []
+
+        async def capture_collector(input):
+            collector_during_activity.append(_current_outputs.get())
+            return {"status": "success"}
+
+        mock_next_inbound.execute_activity.side_effect = capture_collector
         input_data = MockExecuteActivityInput()
 
         with mock.patch(
@@ -100,9 +112,12 @@ class TestOutputActivityInboundInterceptor:
             mock_activity.info.return_value = MockActivityInfo()
             await interceptor.execute_activity(input_data)
 
-        collector = _current_outputs.get()
-        assert collector is not None
-        assert isinstance(collector, OutputCollector)
+        # Collector was set during execution
+        assert len(collector_during_activity) == 1
+        assert collector_during_activity[0] is not None
+        assert isinstance(collector_during_activity[0], OutputCollector)
+        # Collector is reset to None after execution (try/finally cleanup)
+        assert _current_outputs.get() is None
 
     @pytest.mark.asyncio
     async def test_returns_original_activity_result(
