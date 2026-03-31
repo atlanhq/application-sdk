@@ -371,16 +371,31 @@ class ParquetFileReader(Reader):
                 "Reading parquet files as daft batches", file_count=len(parquet_files)
             )
 
-            # Read files individually to avoid daft's schema-merge bug where
-            # null-typed columns in early files cause data loss when merged
-            # with string-typed columns in later files. See BLDX-837.
-            for pq_file in parquet_files:
-                single_df = daft.read_parquet(pq_file)
-                file_rows = single_df.count_rows()
-                for offset in range(0, file_rows, self.buffer_size):
-                    chunk = single_df.offset(offset).limit(self.buffer_size)
-                    yield chunk
-                del single_df
+            # Unify parquet schemas before reading: when early files have
+            # null-typed columns and later files have string-typed columns,
+            # daft silently drops all data. We read each file's schema
+            # metadata (cheap), unify via pyarrow, and pass the result to
+            # daft so it reads all files with consistent types. See BLDX-837.
+            import pyarrow as pa
+            import pyarrow.parquet as pq_meta
+
+            pa_schemas = [pq_meta.read_schema(f) for f in parquet_files]
+            unified = pa.unify_schemas(pa_schemas, promote_options="permissive")
+            daft_schema = {
+                field.name: daft.DataType.from_arrow_type(
+                    pa.large_string() if pa.types.is_null(field.type) else field.type
+                )
+                for field in unified
+            }
+
+            lazy_df = daft.read_parquet(parquet_files, schema=daft_schema)
+            total_rows = lazy_df.count_rows()
+
+            for offset in range(0, total_rows, self.buffer_size):
+                chunk = lazy_df.offset(offset).limit(self.buffer_size)
+                yield chunk
+
+            del lazy_df
 
         except Exception:
             logger.error(
@@ -846,25 +861,21 @@ class ParquetFileWriter(Writer):
         type as ``null``. This causes silent data loss when daft reads multiple
         parquet files with mixed null/string column types — daft resolves the
         conflict by using ``null`` for ALL rows, dropping actual data from files
-        that had the column typed as ``string``.
+        that had the column typed as ``string``. See BLDX-837.
         """
+        # Fast path: no all-null columns → use original (faster) pandas method
+        if not any(chunk[col].isna().all() for col in chunk.columns):
+            chunk.to_parquet(file_name, index=False, compression="snappy")
+            return
+
+        # Slow path: cast null-typed columns to large_string before writing
         import pyarrow as pa
         import pyarrow.parquet as pq
 
         table = pa.Table.from_pandas(chunk, preserve_index=False)
-
-        null_cols = [
-            field.name for field in table.schema if pa.types.is_null(field.type)
-        ]
-        if null_cols:
-            new_schema = pa.schema([
-                pa.field(f.name, pa.large_string()) if pa.types.is_null(f.type) else f
-                for f in table.schema
-            ])
-            table = table.cast(new_schema)
-            logger.info(
-                "Cast %d null-typed columns to string before parquet write: %s",
-                len(null_cols), null_cols,
-            )
-
+        new_schema = pa.schema([
+            pa.field(f.name, pa.large_string()) if pa.types.is_null(f.type) else f
+            for f in table.schema
+        ])
+        table = table.cast(new_schema)
         pq.write_table(table, file_name, compression="snappy")
