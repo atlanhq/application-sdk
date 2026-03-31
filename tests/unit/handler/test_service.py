@@ -734,3 +734,71 @@ class TestNormalizeCredentials:
         )
         assert response.status_code == 200
         assert response.json()["data"]["status"] == "success"
+
+    # ── Flat top-level credential format (Heracles credential test) ──────
+
+    def test_flat_toplevel_conversion(self) -> None:
+        """Heracles sends flat top-level keys: {"host": ..., "authType": ...}."""
+        body = {
+            "host": "myns.servicebus.windows.net:9093",
+            "port": 9093,
+            "authType": "basic",
+            "username": "$ConnectionString",
+            "password": "Endpoint=sb://myns/;SharedAccessKeyName=key;SharedAccessKey=secret",
+            "extra": {"security_protocol": "SASL_SSL"},
+            "connectorConfigName": "atlan-connectors-azure-event-hub",
+        }
+        result = _normalize_credentials(body)
+        creds = result["credentials"]
+        assert isinstance(creds, list)
+        keys = {c["key"]: c["value"] for c in creds}
+        assert keys["host"] == "myns.servicebus.windows.net:9093"
+        assert keys["authType"] == "basic"
+        assert keys["username"] == "$ConnectionString"
+        assert "Endpoint=sb://" in keys["password"]
+        assert keys["extra.security_protocol"] == "SASL_SSL"
+        assert keys["port"] == "9093"
+
+    def test_flat_toplevel_no_extra(self) -> None:
+        body = {"host": "localhost", "authType": "basic", "password": "secret"}
+        result = _normalize_credentials(body)
+        creds = result["credentials"]
+        assert isinstance(creds, list)
+        keys = {c["key"]: c["value"] for c in creds}
+        assert keys["host"] == "localhost"
+        assert keys["authType"] == "basic"
+
+    def test_flat_toplevel_preserves_other_fields(self) -> None:
+        body = {
+            "host": "localhost",
+            "authType": "basic",
+            "connection_id": "conn-123",
+            "timeout_seconds": 30,
+        }
+        result = _normalize_credentials(body)
+        assert result["connection_id"] == "conn-123"
+        assert result["timeout_seconds"] == 30
+        assert isinstance(result["credentials"], list)
+
+    def test_no_credential_keys_passthrough(self) -> None:
+        """Body with no known credential keys should pass through unchanged."""
+        body = {"connection_id": "conn-123", "metadata": {"key": "value"}}
+        result = _normalize_credentials(body)
+        assert "credentials" not in result
+        assert result == body
+
+    def test_flat_toplevel_auth_integration(self) -> None:
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={
+                "host": "app.mode.com",
+                "authType": "basic",
+                "username": "user",
+                "password": "pass",
+                "extra": {"workspace": "ws"},
+                "connectorConfigName": "test-connector",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["status"] == "success"
