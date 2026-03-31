@@ -187,6 +187,7 @@ class AppContext:
 
     app_name: str
     app_version: str
+    workflow_id: str = field(default="")
     run_id: str = field(default_factory=lambda: str(uuid4()))
     correlation_id: str = field(default="")
     parent_run_id: str | None = None

@@ -934,7 +934,7 @@ class App(ABC):
                 "No object store configured. "
                 "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
             )
-        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
+        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.workflow_id}/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
         )
@@ -1329,7 +1329,8 @@ def _apply_app_registration(
         # Get deterministic time for Temporal replay
         start_time = _safe_now()
 
-        # Use Temporal's workflow run ID as the single source of truth.
+        # Use Temporal's workflow ID and run ID as the source of truth.
+        workflow_id = workflow.info().workflow_id
         run_id = workflow.info().run_id
 
         # Try to get correlation ID from context, fallback to run_id
@@ -1351,6 +1352,7 @@ def _apply_app_registration(
         context = AppContext(
             app_name=self._app_name,
             app_version=self._app_version,
+            workflow_id=workflow_id,
             run_id=run_id,
             correlation_id=correlation_id,
             started_at=start_time,
