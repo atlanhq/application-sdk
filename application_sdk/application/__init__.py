@@ -83,8 +83,8 @@ class BaseApplication:
         2. Subclass override (e.g., BaseSQLMetadataExtractionApplication)
         3. None (disables the /manifest endpoint)
 
-        Post-processes the manifest to substitute {deployment_name}
-        with the actual DEPLOYMENT_NAME at serve time.
+        Post-processes the manifest to substitute {deployment_name} and {app_name}
+        with actual values at serve time.
         """
         import json
         from pathlib import Path
@@ -97,6 +97,7 @@ class BaseApplication:
             with open(manifest_path) as f:
                 raw = f.read()
             raw = raw.replace("{deployment_name}", DEPLOYMENT_NAME or "default")
+            raw = raw.replace("{app_name}", self.application_name)
             return json.loads(raw)
         return None
 
