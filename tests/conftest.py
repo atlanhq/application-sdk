@@ -36,4 +36,10 @@ def mock_dapr_client():
         mock_instance.publish_event = Mock()
         mock_instance.invoke_binding = Mock()
 
+        # Configure get_metadata() so is_component_registered() can iterate
+        # registered_components without TypeError ("Mock is not iterable").
+        mock_metadata = Mock()
+        mock_metadata.registered_components = []
+        mock_instance.get_metadata.return_value = mock_metadata
+
         yield mock_dapr
