@@ -131,15 +131,29 @@ jobs:
           if deploy_val is not None:
               deploy_config = yaml.dump(deploy_val, default_flow_style=False)
 
-          # Read SDK version from pyproject.toml (non-fatal)
+          # Read SDK version from pyproject.toml (non-fatal).
+          # Handles three formats across app repos:
+          #   1. Pinned ==:  atlan-application-sdk[extras]==2.8.0  (or ==v2.8.0)
+          #   2. SDK_VERSION env var: SDK_VERSION = "v2.1.1"  (git-pinned repos)
+          #   3. >=, ~= etc: intentionally ignored — not a reliable pinned version
           sdk_version = ''
           try:
+              import re as _re
+              re_pinned = _re.compile(r'atlan-application-sdk[^=]*==v?([0-9][^\s",]*)')
+              re_envvar = _re.compile(r'SDK_VERSION\s*=\s*"v?([0-9][^\s"]*)"')
+              env_var_version = ''
               with open('pyproject.toml') as f:
                   for line in f:
-                      m = re.search(r'atlan-application-sdk[^=]*==([0-9][^\s",]*)', line)
+                      m = re_pinned.search(line)
                       if m:
                           sdk_version = m.group(1)
                           break
+                      if not env_var_version:
+                          m2 = re_envvar.search(line)
+                          if m2:
+                              env_var_version = m2.group(1)
+              if not sdk_version:
+                  sdk_version = env_var_version
           except FileNotFoundError:
               pass
 
