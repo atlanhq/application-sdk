@@ -131,15 +131,27 @@ jobs:
           if deploy_val is not None:
               deploy_config = yaml.dump(deploy_val, default_flow_style=False)
 
-          # Read SDK version from pyproject.toml (non-fatal)
+          # Read exact SDK version from uv.lock (non-fatal).
+          # uv.lock contains the precise locked version regardless of how the dep
+          # is specified in pyproject.toml (==, >=, git ref, etc.).
           sdk_version = ''
           try:
-              with open('pyproject.toml') as f:
+              import re as _re
+              re_ver = _re.compile(r'^version\s*=\s*"([^"]+)"')
+              in_sdk_block = False
+              with open('uv.lock') as f:
                   for line in f:
-                      m = re.search(r'atlan-application-sdk[^=]*==([0-9][^\s",]*)', line)
-                      if m:
-                          sdk_version = m.group(1)
-                          break
+                      line = line.rstrip()
+                      if line == 'name = "atlan-application-sdk"':
+                          in_sdk_block = True
+                          continue
+                      if in_sdk_block:
+                          m = re_ver.match(line)
+                          if m:
+                              sdk_version = m.group(1)
+                              break
+                          if line.startswith('name = ') or line.startswith('[['):
+                              break
           except FileNotFoundError:
               pass
 
