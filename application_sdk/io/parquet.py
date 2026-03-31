@@ -376,17 +376,28 @@ class ParquetFileReader(Reader):
             # daft silently drops all data. We read each file's schema
             # metadata (cheap), unify via pyarrow, and pass the result to
             # daft so it reads all files with consistent types. See BLDX-837.
-            import pyarrow as pa
-            import pyarrow.parquet as pq_meta
+            daft_schema = None
+            try:
+                import pyarrow as pa
+                import pyarrow.parquet as pq_meta
 
-            pa_schemas = [pq_meta.read_schema(f) for f in parquet_files]
-            unified = pa.unify_schemas(pa_schemas, promote_options="permissive")
-            daft_schema = {
-                field.name: daft.DataType.from_arrow_type(
-                    pa.large_string() if pa.types.is_null(field.type) else field.type
+                pa_schemas = [pq_meta.read_schema(f) for f in parquet_files]
+                unified = pa.unify_schemas(
+                    pa_schemas, promote_options="permissive"
                 )
-                for field in unified
-            }
+                daft_schema = {
+                    field.name: daft.DataType.from_arrow_type(
+                        pa.large_string()
+                        if pa.types.is_null(field.type)
+                        else field.type
+                    )
+                    for field in unified
+                }
+            except Exception:
+                logger.debug(
+                    "Could not unify parquet schemas; "
+                    "falling back to daft default schema inference"
+                )
 
             lazy_df = daft.read_parquet(parquet_files, schema=daft_schema)
             total_rows = lazy_df.count_rows()
