@@ -589,7 +589,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue, app_names=[app_name])
+    worker = create_worker(client, task_queue=config.task_queue, app_names=None)
 
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -790,7 +790,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue, app_names=[app_name])
+    worker = create_worker(client, task_queue=config.task_queue, app_names=None)
 
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
