@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.8.2 (March 31, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.1...v2.8.2
+
+### Features
+
+- expose app_name in workflow DAG manifest (#1188) (by @OnkarVO7 in [aa61a40](https://github.com/atlanhq/application-sdk/commit/aa61a40))
+
+### Bug Fixes
+
+- atlan cli config command correction (#1163) (by @adityachoudhury-cloud in [c3f07ef](https://github.com/atlanhq/application-sdk/commit/c3f07ef))
+- correct health check endpoint in BaseTest (#1170) (by @fyzanshaik-atlan in [6c329af](https://github.com/atlanhq/application-sdk/commit/6c329af))
+- Convert app_name to lowercase in workflow (#1185) (by @adityachoudhury-cloud in [afa7977](https://github.com/atlanhq/application-sdk/commit/afa7977))
+
+
 ## v2.8.1 (March 24, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.0...v2.8.1
