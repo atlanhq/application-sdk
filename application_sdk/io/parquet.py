@@ -371,18 +371,16 @@ class ParquetFileReader(Reader):
                 "Reading parquet files as daft batches", file_count=len(parquet_files)
             )
 
-            # Create a lazy dataframe without loading data into memory
-            lazy_df = daft.read_parquet(parquet_files)
-
-            # Get total count efficiently
-            total_rows = lazy_df.count_rows()
-
-            # Yield chunks without loading everything into memory
-            for offset in range(0, total_rows, self.buffer_size):
-                chunk = lazy_df.offset(offset).limit(self.buffer_size)
-                yield chunk
-
-            del lazy_df
+            # Read files individually to avoid daft's schema-merge bug where
+            # null-typed columns in early files cause data loss when merged
+            # with string-typed columns in later files. See BLDX-837.
+            for pq_file in parquet_files:
+                single_df = daft.read_parquet(pq_file)
+                file_rows = single_df.count_rows()
+                for offset in range(0, file_rows, self.buffer_size):
+                    chunk = single_df.offset(offset).limit(self.buffer_size)
+                    yield chunk
+                del single_df
 
         except Exception:
             logger.error(
@@ -842,8 +840,31 @@ class ParquetFileWriter(Writer):
             logger.warning("Error cleaning up temp folders", exc_info=True)
 
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
-        """Write a chunk to a Parquet file.
+        """Write a chunk to a Parquet file, casting null-typed columns to string.
 
-        This method writes a chunk to a Parquet file and uploads the file to the object store.
+        When a pandas DataFrame has an all-null column, pyarrow infers the parquet
+        type as ``null``. This causes silent data loss when daft reads multiple
+        parquet files with mixed null/string column types — daft resolves the
+        conflict by using ``null`` for ALL rows, dropping actual data from files
+        that had the column typed as ``string``.
         """
-        chunk.to_parquet(file_name, index=False, compression="snappy")
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        table = pa.Table.from_pandas(chunk, preserve_index=False)
+
+        null_cols = [
+            field.name for field in table.schema if pa.types.is_null(field.type)
+        ]
+        if null_cols:
+            new_schema = pa.schema([
+                pa.field(f.name, pa.large_string()) if pa.types.is_null(f.type) else f
+                for f in table.schema
+            ])
+            table = table.cast(new_schema)
+            logger.info(
+                "Cast %d null-typed columns to string before parquet write: %s",
+                len(null_cols), null_cols,
+            )
+
+        pq.write_table(table, file_name, compression="snappy")
