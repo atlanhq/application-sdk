@@ -356,6 +356,6 @@ jobs:
           event-type: dispatch_app_builder_workflow
           client-payload: |-
             {
-                "": "${{ needs.prepare.outputs.app_name }}",
+                "app_name": "${{ needs.prepare.outputs.app_name }}",
                 "image_name": "${{ needs.prepare.outputs.dockerhub_image }}"
             }
