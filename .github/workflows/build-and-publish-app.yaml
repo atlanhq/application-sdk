@@ -454,7 +454,7 @@ jobs:
   # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
   publish:
     name: Publish to Marketplace
-    needs: [prepare, merge]
+    needs: [prepare, merge, snyk]
     if: inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
