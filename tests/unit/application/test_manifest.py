@@ -59,6 +59,42 @@ class TestBaseApplicationGetManifest:
 
         assert result["task_queue"] == "atlan-myapp-my-tenant"
 
+    def test_app_name_substitution(self):
+        """Manifest with {app_name} placeholder in extract node gets substituted."""
+        app = BaseApplication("redshift")
+        manifest = {
+            "execution_mode": "automation-engine",
+            "dag": {
+                "extract": {
+                    "app_name": "{app_name}",
+                    "inputs": {
+                        "app_name": "{app_name}",
+                        "app_id": "",
+                        "argo_workflow_slug": "",
+                        "task_queue": "atlan-{app_name}-{deployment_name}",
+                    },
+                }
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gen_dir = Path(tmpdir) / "contract" / "generated"
+            gen_dir.mkdir(parents=True)
+            (gen_dir / "manifest.json").write_text(json.dumps(manifest))
+
+            with (
+                patch("pathlib.Path.cwd", return_value=Path(tmpdir)),
+                patch("application_sdk.constants.DEPLOYMENT_NAME", "my-tenant"),
+            ):
+                result = app.get_manifest()
+
+        extract = result["dag"]["extract"]
+        assert extract["app_name"] == "redshift"
+        assert extract["inputs"]["app_name"] == "redshift"
+        assert extract["inputs"]["app_id"] == ""
+        assert extract["inputs"]["argo_workflow_slug"] == ""
+        assert extract["inputs"]["task_queue"] == "atlan-redshift-my-tenant"
+
     def test_deployment_name_none_falls_back_to_default(self):
         """When DEPLOYMENT_NAME is None, substitution uses 'default'."""
         app = BaseApplication("test-app")
@@ -142,13 +178,18 @@ class TestSQLAppGetManifest:
         assert "publish" in result["dag"]
 
         extract = result["dag"]["extract"]
+        assert extract["app_name"] == "snowflake"
         assert extract["inputs"]["workflow_type"] == "BaseSQLMetadataExtractionWorkflow"
+        assert extract["inputs"]["app_name"] == "snowflake"
+        assert extract["inputs"]["app_id"] == ""
+        assert extract["inputs"]["argo_workflow_slug"] == ""
         assert extract["inputs"]["task_queue"] == "atlan-snowflake-my-tenant"
 
         publish = result["dag"]["publish"]
         assert publish["inputs"]["workflow_type"] == "PublishWorkflow"
         assert publish["inputs"]["task_queue"] == "atlan-publish-my-tenant"
         assert publish["depends_on"]["node_id"] == "extract"
+        assert publish["app_name"] == "publish"
 
     def test_contract_file_takes_priority_over_hardcoded_dag(self):
         """When contract/generated/manifest.json exists, it wins over the hardcoded DAG."""
