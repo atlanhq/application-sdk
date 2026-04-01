@@ -31,6 +31,51 @@ All v2 imports remain functional in v3.0.x with `DeprecationWarning`. They will 
 
 ---
 
+## Dependency Profiles
+
+Starting with v3.1.0, `duckdb`, `duckdb-engine`, `pandas`, and `pyarrow` (~300 MiB) are
+**removed from core** and moved to an optional `[sql]` extra. `dapr`, `temporalio`, and
+`orjson` are **promoted to core** (they were already eagerly imported by every app).
+
+The `[workflows]` extra is now an empty backwards-compatibility shim.
+
+### Install by app type
+
+| App type | Install command |
+|----------|----------------|
+| Custom `App` / `BaseMetadataExtractor` (API-based) | `pip install atlan-application-sdk` |
+| `SqlMetadataExtractor` / `SqlQueryExtractor` | `pip install atlan-application-sdk[sql]` |
+| `IncrementalSqlMetadataExtractor` | `pip install atlan-application-sdk[incremental]` |
+
+### Dockerfile examples
+
+**API-based connector (no SQL deps needed):**
+
+```dockerfile
+FROM cgr.dev/atlan.com/app-framework-golden:3.13
+# ... (see Dockerfile for full setup)
+RUN uv pip install atlan-application-sdk
+ENV ATLAN_APP_MODULE=app.app:MyOpenApiApp
+```
+
+**SQL connector:**
+
+```dockerfile
+FROM cgr.dev/atlan.com/app-framework-golden:3.13
+RUN uv pip install "atlan-application-sdk[sql]"
+ENV ATLAN_APP_MODULE=app.app:MyDatabaseConnector
+```
+
+**Incremental SQL connector:**
+
+```dockerfile
+FROM cgr.dev/atlan.com/app-framework-golden:3.13
+RUN uv pip install "atlan-application-sdk[incremental]"
+ENV ATLAN_APP_MODULE=app.app:MyIncrementalConnector
+```
+
+---
+
 ## Step 1: Migrate SQL Metadata Extraction
 
 ### v2
