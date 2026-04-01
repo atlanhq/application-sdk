@@ -203,9 +203,12 @@ jobs:
         id: tags
         env:
           REPO: ${{ github.event.repository.name }}
-          SHA: ${{ github.sha }}
           REF: ${{ inputs.ref || github.ref }}
         run: |
+          # Resolve SHA from the checked-out HEAD rather than github.sha.
+          # github.sha is always the trigger branch (main), not the ref input —
+          # so for workflow_dispatch with a custom ref, github.sha would be wrong.
+          SHA=$(git rev-parse HEAD)
           if ! [[ "$REF" =~ ^(refs/heads/|refs/tags/)?[a-zA-Z0-9/_.-]+$ ]]; then
             echo "::error::Invalid ref format: ${REF}"
             exit 1
