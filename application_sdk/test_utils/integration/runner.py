@@ -541,13 +541,22 @@ class BaseIntegrationTest:
                 logger.error(error_msg)
                 raise AssertionError(error_msg)
 
-            # Step 4: Validate metadata output if expected_data is set
-            if scenario.expected_data and scenario.api_type == APIType.WORKFLOW:
+            # Step 4: Poll for workflow completion if any output validation is needed
+            needs_metadata = (
+                scenario.expected_data and scenario.api_type == APIType.WORKFLOW
+            )
+            schema_path = scenario.schema_base_path or self.schema_base_path
+            needs_pandera = bool(schema_path) and scenario.api_type == APIType.WORKFLOW
+
+            if needs_metadata or needs_pandera:
+                self._ensure_workflow_completed(scenario, response)
+
+            # Step 5: Validate metadata output if expected_data is set
+            if needs_metadata:
                 self._validate_workflow_output(scenario, response)
 
-            # Step 5: Validate data with pandera if schema_base_path is set
-            schema_path = scenario.schema_base_path or self.schema_base_path
-            if schema_path and scenario.api_type == APIType.WORKFLOW:
+            # Step 6: Validate data with pandera if schema_base_path is set
+            if needs_pandera:
                 self._validate_pandera_schemas(scenario, response, schema_path)
 
             logger.info(f"Scenario {scenario.name} passed")
@@ -621,22 +630,18 @@ class BaseIntegrationTest:
 
         return results
 
-    def _validate_workflow_output(
+    def _ensure_workflow_completed(
         self, scenario: Scenario, response: Dict[str, Any]
     ) -> None:
-        """Validate workflow output against expected metadata baseline.
-
-        Polls for workflow completion, loads actual and expected output,
-        and compares them to produce a gap report.
+        """Poll for workflow completion. Called before any output validation.
 
         Args:
-            scenario: The scenario with expected_data set.
+            scenario: The scenario being executed.
             response: The workflow start API response containing workflow_id/run_id.
 
         Raises:
-            AssertionError: If metadata validation fails.
+            AssertionError: If workflow doesn't complete successfully.
         """
-        # Extract workflow_id and run_id from response
         data = response.get("data", {})
         workflow_id = data.get("workflow_id")
         run_id = data.get("run_id")
@@ -647,7 +652,6 @@ class BaseIntegrationTest:
                 f"response missing workflow_id or run_id"
             )
 
-        # Poll for workflow completion
         logger.info(
             f"Waiting for workflow completion: {workflow_id}/{run_id} "
             f"(timeout={scenario.workflow_timeout}s)"
@@ -664,6 +668,24 @@ class BaseIntegrationTest:
                 f"Workflow did not complete successfully for scenario "
                 f"'{scenario.name}': status={final_status}"
             )
+
+    def _validate_workflow_output(
+        self, scenario: Scenario, response: Dict[str, Any]
+    ) -> None:
+        """Validate workflow output against expected metadata baseline.
+
+        Assumes workflow has already completed (called after _ensure_workflow_completed).
+
+        Args:
+            scenario: The scenario with expected_data set.
+            response: The workflow start API response containing workflow_id/run_id.
+
+        Raises:
+            AssertionError: If metadata validation fails.
+        """
+        data = response.get("data", {})
+        workflow_id = data.get("workflow_id")
+        run_id = data.get("run_id")
 
         # Resolve extracted output base path
         base_path = (
@@ -851,21 +873,12 @@ class BaseIntegrationTest:
 
         return current
 
-    # Keep test_scenarios for backward compat but skip if individual tests exist
-    def test_scenarios(self) -> None:
-        """Execute all scenarios (backward compatibility).
+    def _run_all_scenarios(self) -> None:
+        """Execute all scenarios sequentially (backward compatibility).
 
-        When __init_subclass__ auto-generates individual test methods,
-        this method becomes a no-op to avoid running scenarios twice.
+        Not prefixed with test_ so pytest does not discover it.
+        Only used when __init_subclass__ did not generate individual tests.
         """
-        # If individual test methods were generated, skip this
-        has_individual = any(
-            hasattr(self.__class__, f"test_{s.name}") for s in self.scenarios
-        )
-        if has_individual:
-            return
-
-        # Backward compat: run all scenarios in one test
         if not self.scenarios:
             pytest.skip("No scenarios defined")
 

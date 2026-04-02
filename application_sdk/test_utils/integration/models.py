@@ -4,6 +4,7 @@ This module defines the data structures used to declare integration test scenari
 in a declarative, data-driven manner.
 """
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, Optional, Set, Union
@@ -164,6 +165,12 @@ class Scenario:
             raise ValueError(
                 "expected_data can only be set for workflow scenarios, "
                 f"but api is '{self.api}'"
+            )
+
+        if self.expected_data and not os.path.isfile(self.expected_data):
+            raise FileNotFoundError(
+                f"Scenario '{self.name}': expected_data file not found: "
+                f"{self.expected_data}"
             )
 
         if self.api.lower() == "config":
