@@ -428,6 +428,7 @@ class ParquetFileWriter(Writer):
         retain_local_copy: Optional[bool] = False,
         use_consolidation: Optional[bool] = False,
         dataframe_type: DataframeType = DataframeType.pandas,
+        compression: str = "snappy",
     ):
         """Initialize the Parquet output handler.
 
@@ -449,6 +450,13 @@ class ParquetFileWriter(Writer):
                 Defaults to False.
             dataframe_type (DataframeType, optional): Type of dataframe to write. Defaults to DataframeType.pandas.
         """
+        supported_compressions = {"snappy", "zstd", "gzip", "none"}
+        if compression not in supported_compressions:
+            raise ValueError(
+                f"Unsupported compression: {compression!r}. "
+                f"Must be one of {sorted(supported_compressions)}"
+            )
+        self.compression = compression
         self.extension = PARQUET_FILE_EXTENSION
         self.path = path
         self.typename = typename
@@ -584,23 +592,37 @@ class ParquetFileWriter(Writer):
             if isinstance(write_mode, str):
                 write_mode = WriteMode(write_mode)
 
-            row_count = dataframe.count_rows()
-            if row_count == 0:
+            if dataframe.limit(1).count_rows() == 0:
                 return
 
             file_paths = []
-            # Use Daft's execution context for temporary configuration
+            # Use Daft's execution context for temporary configuration.
+            #
+            # NOTE: Daft's native (Rust) parquet writer ignores the
+            # ``compression`` parameter passed to ``write_parquet()`` and
+            # silently hardcodes SNAPPY (as of Daft 0.7.3).  Setting
+            # ``native_parquet_writer=False`` forces the PyArrow-based
+            # writer which correctly honours the requested codec.
             with daft.execution_config_ctx(
                 parquet_target_filesize=self.max_file_size_bytes,
                 default_morsel_size=morsel_size,
+                native_parquet_writer=False,
             ):
                 # Daft automatically handles file splitting and naming
                 result = dataframe.write_parquet(
                     root_dir=self.path,
                     write_mode=write_mode.value,
                     partition_cols=partition_cols,
+                    compression=self.compression,
                 )
                 file_paths = result.to_pydict().get("path", [])
+
+            # Derive row count from written parquet file metadata to avoid
+            # re-materialising the (lazy) DataFrame which would double the
+            # page-cache pressure.
+            import pyarrow.parquet as pq
+
+            row_count = sum(pq.read_metadata(fp).num_rows for fp in file_paths)
 
             # Update counters
             self.chunk_count += 1
@@ -758,13 +780,18 @@ class ParquetFileWriter(Writer):
             daft_df = daft.read_parquet(pattern)
             partitions = 0
 
-            # Write consolidated file using Daft with size management
+            # Write consolidated file using Daft with size management.
+            # See note above re native_parquet_writer and compression.
             with daft.execution_config_ctx(
-                parquet_target_filesize=self.max_file_size_bytes
+                parquet_target_filesize=self.max_file_size_bytes,
+                native_parquet_writer=False,
             ):
                 # Write to a temp location first
                 temp_consolidated_dir = f"{self.current_temp_folder_path}_temp"
-                result = daft_df.write_parquet(root_dir=temp_consolidated_dir)
+                result = daft_df.write_parquet(
+                    root_dir=temp_consolidated_dir,
+                    compression=self.compression,
+                )
 
                 # Get the generated file path and rename to final location
                 result_dict = result.to_pydict()
@@ -844,4 +871,4 @@ class ParquetFileWriter(Writer):
 
         This method writes a chunk to a Parquet file and uploads the file to the object store.
         """
-        chunk.to_parquet(file_name, index=False, compression="snappy")
+        chunk.to_parquet(file_name, index=False, compression=self.compression)
