@@ -330,6 +330,7 @@ async def materialize_file_reference(
             local_path=out_path,
             is_durable=True,
             storage_path=ref.storage_path,
+            tier=ref.tier,
         )
 
     else:
@@ -355,4 +356,5 @@ async def materialize_file_reference(
             is_durable=True,
             storage_path=ref.storage_path,
             file_count=len(data_keys),
+            tier=ref.tier,
         )
