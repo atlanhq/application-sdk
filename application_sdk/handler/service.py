@@ -1020,17 +1020,11 @@ def create_app_handler_service(
                     type,
                 )
 
-        # Fallback to object store (S3) — only for non-credential types
-        # to avoid persisting sensitive data unencrypted
-        if not saved and type != "credentials":
+        # Fallback to object store (S3) for all config types.
+        # Credential configs only contain non-sensitive metadata (host, port,
+        # authType, extra) — actual secrets are managed by Heracles/Vault.
+        if not saved:
             saved = await _config_save_to_objectstore(config_id, body)
-        elif not saved and type == "credentials":
-            logger.warning(
-                "Credential config %s acknowledged (not persisted to S3) "
-                "— credentials are managed by Heracles/Vault, not the app",
-                config_id,
-            )
-            saved = True  # Acknowledge to Heracles — credentials stored in Vault
 
         if not saved:
             raise HTTPException(
