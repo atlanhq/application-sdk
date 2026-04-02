@@ -657,3 +657,54 @@ class MyExtractionOutput(Output):
 ```
 
 If these fields are empty or named differently, AE won't find the output and the publish step fails silently.
+
+### Multi-app connectors (multiple v2 workflows → multiple v3 Apps)
+
+When the v2 connector has multiple workflows (e.g. metadata extraction + lineage extraction), each becomes a separate `App` subclass in v3. All apps share the same Temporal worker and task queue.
+
+**Rules:**
+- ONE primary app — serves the HTTP handler (`/auth`, `/check`, `/start`, `/metadata`)
+- N secondary apps — registered on the worker, triggered only via Temporal by workflow name
+- ONE handler total — only the primary app needs a handler. Secondary apps have no handler.
+- Handler lives in its own module (e.g. `app/handlers/__init__.py`) and is declared via `ATLAN_HANDLER_MODULE`
+
+**Dockerfile pattern:**
+```dockerfile
+# Comma-separated: first is primary (HTTP), rest register on worker
+ENV ATLAN_APP_MODULE=app.primary_app:PrimaryApp,app.secondary_app:SecondaryApp
+ENV ATLAN_HANDLER_MODULE=app.handlers:MyHandler
+```
+
+The SDK parses `ATLAN_APP_MODULE`:
+1. First entry → loaded as primary app, serves HTTP via handler
+2. Remaining entries → loaded and registered on the worker (workflows + tasks)
+3. `app_names=None` on `create_worker` ensures all apps' tasks are registered
+
+**File structure:**
+```
+app/
+  primary_app.py         — PrimaryApp(App) with @task methods
+  secondary_app.py       — SecondaryApp(App) with @task methods
+  handlers/__init__.py   — MyHandler(Handler) — shared by primary app's HTTP endpoints
+  contracts.py           — Input/Output for all apps
+  clients/__init__.py    — Shared API client
+```
+
+**Do NOT:**
+- Import secondary apps inside the primary app module — use `ATLAN_APP_MODULE` comma syntax instead
+- Define handlers on secondary apps — only the primary app serves HTTP
+- Give each app its own handler — one handler per connector
+
+**Marketplace template:**
+Each app has a distinct `workflow-type` (kebab-case of the App class name). The Argo template triggers them by name:
+```yaml
+# Primary app
+- name: workflow-type
+  value: "primary-app"
+
+# Secondary app
+- name: workflow-type
+  value: "secondary-app"
+```
+
+Both run on the same task queue (derived from `ATLAN_APPLICATION_NAME` + `ATLAN_DEPLOYMENT_NAME`).
