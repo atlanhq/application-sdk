@@ -26,6 +26,7 @@ from temporalio import activity
 
 from application_sdk.clients import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
+from application_sdk.clients.utils import extract_column_name
 from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
@@ -381,8 +382,7 @@ class BaseSQLClient(ClientInterface):
                     if not cursor or not cursor.cursor:
                         raise ValueError("Cursor is not supported")
                     column_names: List[str] = [
-                        description.name.lower()
-                        for description in cursor.cursor.description
+                        extract_column_name(desc) for desc in cursor.cursor.description
                     ]
 
                     while True:
