@@ -1,0 +1,20 @@
+{
+  "files": [
+    {
+      "path": "docs/agents/project-structure.md",
+      "description": "Map of key SDK directories and modules"
+    },
+    {
+      "path": "docs/agents/coding-standards.md",
+      "description": "Formatting, logging, exceptions, and performance conventions"
+    },
+    {
+      "path": "docs/agents/review.md",
+      "description": "Code review checklist for SDK contributions"
+    },
+    {
+      "path": "CLAUDE.md",
+      "description": "Repository guidelines and path semantics"
+    }
+  ]
+}

@@ -13,7 +13,6 @@ from opentelemetry.sdk.resources import Resource
 
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
-    ENABLE_SEGMENT_METRICS,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
     METRICS_FILE_NAME,
@@ -85,9 +84,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         if ENABLE_OTLP_METRICS:
             self._setup_otel_metrics()
 
-        # Initialize Segment client (it handles enable/disable internally)
+        # Initialize Segment client (enabled automatically if write key is present)
         self.segment_client = SegmentClient(
-            enabled=ENABLE_SEGMENT_METRICS,
             write_key=SEGMENT_WRITE_KEY,
             api_url=SEGMENT_API_URL,
             default_user_id=SEGMENT_DEFAULT_USER_ID,

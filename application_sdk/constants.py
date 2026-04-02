@@ -84,6 +84,18 @@ STATE_STORE_PATH_TEMPLATE = (
 #: Directory for storing observability data
 OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observability"
 
+# Temporal Prometheus Metrics
+#: Bind address for the Temporal Prometheus metrics endpoint
+TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
+    "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "0.0.0.0:9464"
+)
+
+#: Enable structured failure logging for Temporal activities with context
+#: (tenant, retries, timeouts). Opt-in per application.
+ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING: bool = (
+    os.getenv("ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING", "false").lower() == "true"
+)
+
 # Workflow Client Constants
 #: Host address for the Temporal server
 WORKFLOW_HOST = os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
@@ -102,6 +114,16 @@ WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
 )
 #: Maximum number of activities that can run concurrently
 MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
+
+#: Temporal build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
+#: When set, workers identify themselves with this build ID so the Temporal server can
+#: route tasks to the correct version during versioned deployments.
+TEMPORAL_BUILD_ID = os.getenv("TEMPORAL_BUILD_ID", "")
+
+#: Temporal Worker Deployment name (injected by TWD controller).
+#: Format: "<namespace>/<twd-name>". When set together with TEMPORAL_BUILD_ID,
+#: workers register as a Worker Deployment version instead of using legacy Build ID versioning.
+TEMPORAL_DEPLOYMENT_NAME = os.getenv("TEMPORAL_DEPLOYMENT_NAME", "")
 
 
 #: Name of the deployment secrets in the secret store
@@ -194,8 +216,14 @@ OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
+#: Secondary endpoint for workflow logs (optional, for dual export to tenant-level collector)
+OTEL_WORKFLOW_LOGS_ENDPOINT: str = os.getenv("OTEL_WORKFLOW_LOGS_ENDPOINT", "")
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether to enable workflow logs export to secondary endpoint (for S3 archival + live streaming)
+ENABLE_OTLP_WORKFLOW_LOGS: bool = (
+    os.getenv("ENABLE_OTLP_WORKFLOW_LOGS", "false").lower() == "true"
+)
 
 # OTEL Constants
 #: Node name for workflow telemetry
@@ -208,7 +236,6 @@ OTEL_BATCH_DELAY_MS = int(os.getenv("OTEL_BATCH_DELAY_MS", "5000"))
 OTEL_BATCH_SIZE = int(os.getenv("OTEL_BATCH_SIZE", "512"))
 #: Maximum size of the export queue
 OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
-
 
 # AWS Constants
 #: AWS Session Name
@@ -244,12 +271,8 @@ METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
 # Segment Configuration
 #: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
 SEGMENT_API_URL = os.getenv("ATLAN_SEGMENT_API_URL", "https://api.segment.io/v1/batch")
-#: Segment write key for authentication
+#: Segment write key for authentication. If set, Segment metrics are automatically enabled.
 SEGMENT_WRITE_KEY = os.getenv("ATLAN_SEGMENT_WRITE_KEY", "")
-#: Whether to enable Segment metrics export
-ENABLE_SEGMENT_METRICS = (
-    os.getenv("ATLAN_ENABLE_SEGMENT_METRICS", "false").lower() == "true"
-)
 #: Default user ID for Segment events
 SEGMENT_DEFAULT_USER_ID = "atlan.automation"
 #: Maximum batch size for Segment events
@@ -307,6 +330,9 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
+#: Windows extended-length path prefix
+WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
+
 
 class ApplicationMode(str, Enum):
     """Application execution mode.
@@ -324,7 +350,41 @@ class ApplicationMode(str, Enum):
 
 APPLICATION_MODE = ApplicationMode(os.getenv("APPLICATION_MODE", "LOCAL").upper())
 
-# Disable Analytics Configuration for DAFT
-os.environ["DO_NOT_TRACK"] = "true"
-os.environ["SCARF_NO_ANALYTICS"] = "true"
-os.environ["DAFT_ANALYTICS_ENABLED"] = "0"
+# =============================================================================
+# Incremental Extraction Constants
+# =============================================================================
+
+#: Prefix for storing marker timestamp and current state of a connection in ObjectStore
+#: Example: persistent-artifacts/apps/oracle/connection/1764230875
+PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE = (
+    "persistent-artifacts/apps/{application_name}/connection/{connection_id}"
+)
+
+#: Maximum number of column extraction batch activities to execute in parallel
+#: Controls concurrency during incremental column extraction
+MAX_CONCURRENT_COLUMN_BATCHES = 3
+
+#: Subpath template for per-run incremental diff (under connection prefix)
+#: Full path: {PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE}/{INCREMENTAL_DIFF_SUBPATH_TEMPLATE}
+#: Example: persistent-artifacts/apps/oracle/connection/123456/runs/abc-def-ghi/incremental-diff
+INCREMENTAL_DIFF_SUBPATH_TEMPLATE = "runs/{run_id}/incremental-diff"
+
+#: Format for marker timestamp in incremental extraction
+#: Example: 2025-12-08T10:00:00Z
+MARKER_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+#: Default incremental state for first run (when incremental_state field doesn't exist)
+#: Required by coalesce function in DuckDB
+INCREMENTAL_DEFAULT_STATE = "NO CHANGE"
+
+#: Base folder for DuckDB temp files (each connection gets a unique UUID subfolder)
+DUCKDB_COMMON_TEMP_FOLDER = "/tmp/incremental_duckdb"
+
+#: Default memory limit for DuckDB (fixed for K8s pods)
+DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
+
+# Daft analytics are disabled via ENV vars in the Dockerfile (DO_NOT_TRACK,
+# SCARF_NO_ANALYTICS, DAFT_ANALYTICS_ENABLED). They must NOT be set here at
+# module level — os.environ assignments call os.putenv(), which Temporal's
+# workflow sandbox flags as non-deterministic, causing worker eviction loops.
+# See: https://github.com/atlanhq/application-sdk/pull/1129

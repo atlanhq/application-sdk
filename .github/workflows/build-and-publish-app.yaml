@@ -1,0 +1,546 @@
+# Unified build-and-publish workflow for Atlan first-party app repos.
+#
+# Combines image build (build-apps-image.yaml) and marketplace publish (publish-app.yaml)
+# into a single workflow to eliminate double builds on push to main.
+#
+# Image tag:  {branch}-{sha7}  (e.g. main-abc1234) — immutable, used by deploy systems
+# Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{sha7}
+# Mutable:    ghcr.io/atlanhq/{repo}:{branch}         (always points to latest on branch)
+#
+# Build: parallel matrix (amd64 + arm64), merged into a multi-arch manifest.
+# Publish: after build succeeds, registers the version in the Global Marketplace via API.
+#
+# Usage in each app repo (.github/workflows/build-and-publish.yaml):
+#
+#   jobs:
+#     build-and-publish:
+#       uses: atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml@main
+#       with:
+#         publish: ${{ github.event.inputs.publish != 'false' }}
+#         channel: ${{ inputs.channel || 'all' }}
+#         tenants: ${{ inputs.tenants || '' }}
+#       secrets: inherit
+#
+name: Build & Publish Atlan App
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Branch or SHA to checkout and build (default: caller's ref)"
+        required: false
+        type: string
+      publish:
+        description: "Whether to publish to marketplace after build (default: false)"
+        required: false
+        type: boolean
+        default: false
+      channel:
+        description: "Target channel (e.g. 'all' for draft release requiring approval). Ignored when tenants is set."
+        required: false
+        type: string
+        default: "all"
+      tenants:
+        description: "Comma-separated tenant IDs for targeted publish. Takes precedence over channel."
+        required: false
+        type: string
+        default: ""
+      base_url:
+        description: "Marketplace API base URL (Heracles gateway)"
+        required: false
+        type: string
+        default: "https://home.atlan.com"
+      snyk_monitor:
+        description: "Push scan results to Snyk UI dashboard via snyk container monitor (default: false)"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
+        description: "Org-level PAT for GHCR login and gh CLI auth"
+      DOCKER_HUB_PAT_RW:
+        required: false
+        description: "DockerHub PAT (read/write) — only needed when atlan.yaml self_deployed_runtime=true"
+      APP_PUBLISH_TOKEN:
+        required: false
+        description: "API token for marketplace publish — required when publish=true"
+
+permissions:
+  contents: read
+  packages: write
+  actions: write
+
+jobs:
+  # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app_name:         ${{ steps.manifest.outputs.app_name }}
+      app_id:           ${{ steps.manifest.outputs.app_id }}
+      dockerfile:       ${{ steps.manifest.outputs.dockerfile }}
+      enable_sdr:       ${{ steps.manifest.outputs.enable_sdr }}
+      deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
+      sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
+      branch:           ${{ steps.tags.outputs.branch }}
+      image_tag:        ${{ steps.tags.outputs.image_tag }}
+      ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
+      ghcr_image:       ${{ steps.tags.outputs.ghcr_image }}
+      ghcr_branch_tag:  ${{ steps.tags.outputs.ghcr_branch_tag }}
+      dockerhub_image:  ${{ steps.tags.outputs.dockerhub_image }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Read atlan.yaml
+        id: manifest
+        run: |
+          if [ ! -f atlan.yaml ]; then
+            echo "::error::atlan.yaml not found in repo root"
+            exit 1
+          fi
+
+          python3 - <<'PYEOF'
+          import yaml, sys, os, json, re
+
+          try:
+              with open('atlan.yaml') as f:
+                  d = yaml.safe_load(f) or {}
+          except yaml.YAMLError as e:
+              print(f'::error::atlan.yaml is invalid YAML: {e}', file=sys.stderr)
+              sys.exit(1)
+
+          app_name   = d.get('name', '')
+          app_id     = d.get('app_id', '')
+          build_tag  = d.get('build_tag', 'v1')
+          dockerfile = d.get('dockerfile', './Dockerfile')
+          enable_sdr = 'true' if d.get('self_deployed_runtime', False) else 'false'
+
+          if not app_name:
+              print('::error::atlan.yaml is missing required "name" field', file=sys.stderr)
+              sys.exit(1)
+
+          if build_tag != 'v1':
+              print(f"::error::Unsupported build_tag '{build_tag}'. Only 'v1' is supported by this template version.", file=sys.stderr)
+              sys.exit(1)
+
+          # Serialize deploy config block (if present) for publish
+          deploy_config = ''
+          deploy_val = d.get('deploy')
+          if deploy_val is not None:
+              deploy_config = yaml.dump(deploy_val, default_flow_style=False)
+
+          # Read exact SDK version from uv.lock (non-fatal).
+          # uv.lock contains the precise locked version regardless of how the dep
+          # is specified in pyproject.toml (==, >=, git ref, etc.).
+          sdk_version = ''
+          try:
+              import re as _re
+              re_ver = _re.compile(r'^version\s*=\s*"([^"]+)"')
+              in_sdk_block = False
+              with open('uv.lock') as f:
+                  for line in f:
+                      line = line.rstrip()
+                      if line == 'name = "atlan-application-sdk"':
+                          in_sdk_block = True
+                          continue
+                      if in_sdk_block:
+                          m = re_ver.match(line)
+                          if m:
+                              sdk_version = m.group(1)
+                              break
+                          if line.startswith('name = ') or line.startswith('[['):
+                              break
+          except FileNotFoundError:
+              pass
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'app_name={app_name}\n')
+              out.write(f'app_id={app_id}\n')
+              out.write(f'build_tag={build_tag}\n')
+              out.write(f'dockerfile={dockerfile}\n')
+              out.write(f'enable_sdr={enable_sdr}\n')
+              out.write(f'sdk_version={sdk_version}\n')
+              # deploy_config may be multiline — use delimiter syntax
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'deploy_config<<DEPLOY_EOF\n')
+              out.write(f'{deploy_config}\n')
+              out.write(f'DEPLOY_EOF\n')
+
+          print(f'App: {app_name}')
+          print(f'App ID: {app_id}')
+          print(f'Dockerfile: {dockerfile}')
+          print(f'SDR: {enable_sdr}')
+          print(f'SDK version: {sdk_version}')
+          PYEOF
+
+      - name: Validate SDR secrets
+        if: steps.manifest.outputs.enable_sdr == 'true'
+        env:
+          HAS_PAT: ${{ secrets.DOCKER_HUB_PAT_RW != '' && 'true' || 'false' }}
+        run: |
+          if [ "$HAS_PAT" != "true" ]; then
+            echo "::error::atlan.yaml sets self_deployed_runtime=true but DOCKER_HUB_PAT_RW secret is not set in this repo."
+            exit 1
+          fi
+
+      - name: Validate publish secrets
+        if: inputs.publish
+        env:
+          HAS_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN != '' && 'true' || 'false' }}
+        run: |
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::error::publish=true but APP_PUBLISH_TOKEN secret is not set in this repo."
+            exit 1
+          fi
+
+      - name: Compute image tags
+        id: tags
+        env:
+          REPO: ${{ github.event.repository.name }}
+          REF: ${{ inputs.ref || github.ref }}
+        run: |
+          # Resolve SHA from the checked-out HEAD rather than github.sha.
+          # github.sha is always the trigger branch (main), not the ref input —
+          # so for workflow_dispatch with a custom ref, github.sha would be wrong.
+          SHA=$(git rev-parse HEAD)
+          if ! [[ "$REF" =~ ^(refs/heads/|refs/tags/)?[a-zA-Z0-9/_.-]+$ ]]; then
+            echo "::error::Invalid ref format: ${REF}"
+            exit 1
+          fi
+
+          BRANCH=$(echo "$REF" | sed 's|refs/heads/||' | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')
+          IMAGE_TAG="${SHA:0:7}"
+
+          GHCR_BASE="ghcr.io/atlanhq/${REPO}"
+          GHCR_IMAGE="${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}"
+          GHCR_BRANCH_TAG="${GHCR_BASE}:${BRANCH}"
+
+          DOCKERHUB_BASE="atlanhq/${REPO}"
+          DOCKERHUB_IMAGE="${DOCKERHUB_BASE}:${BRANCH}-${IMAGE_TAG}"
+
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "ghcr_base=${GHCR_BASE}" >> "$GITHUB_OUTPUT"
+          echo "ghcr_image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "ghcr_branch_tag=${GHCR_BRANCH_TAG}" >> "$GITHUB_OUTPUT"
+          echo "dockerhub_image=${DOCKERHUB_IMAGE}" >> "$GITHUB_OUTPUT"
+
+          echo "Branch: ${BRANCH}"
+          echo "Immutable image: ${GHCR_IMAGE}"
+          echo "Mutable branch tag: ${GHCR_BRANCH_TAG}"
+          echo "DockerHub image: ${DOCKERHUB_IMAGE}"
+
+  # ── Job 2: Build — parallel per architecture ──────────────────────────────────
+  build:
+    name: Build (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Build and push arch image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ needs.prepare.outputs.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ needs.prepare.outputs.ghcr_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.image_tag }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          provenance: false
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            ACCESS_TOKEN_USR=${{ github.actor }}
+            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+
+  # ── Job 3: Merge arch digests into a single multi-arch manifest ───────────────
+  merge:
+    name: Merge & Push Manifest
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Log in to Docker Hub
+        if: needs.prepare.outputs.enable_sdr == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: atlanhq
+          password: ${{ secrets.DOCKER_HUB_PAT_RW }}
+
+      - name: Create and push multi-arch manifest
+        env:
+          GHCR_BASE:       ${{ needs.prepare.outputs.ghcr_base }}
+          GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
+          GHCR_BRANCH_TAG: ${{ needs.prepare.outputs.ghcr_branch_tag }}
+          BRANCH:          ${{ needs.prepare.outputs.branch }}
+          IMAGE_TAG:       ${{ needs.prepare.outputs.image_tag }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${GHCR_IMAGE}" \
+            --tag "${GHCR_BRANCH_TAG}" \
+            "${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}-amd64" \
+            "${GHCR_BASE}:${BRANCH}-${IMAGE_TAG}-arm64"
+
+          echo "Multi-arch manifest pushed:"
+          echo "  Immutable: ${GHCR_IMAGE}"
+          echo "  Branch:    ${GHCR_BRANCH_TAG}"
+
+      - name: Push to Docker Hub (re-tag, no rebuild)
+        if: needs.prepare.outputs.enable_sdr == 'true'
+        env:
+          GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
+          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${DOCKERHUB_IMAGE}" \
+            "${GHCR_IMAGE}"
+          echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
+
+      - name: Summary
+        run: |
+          echo "### Build complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Immutable image | \`${{ needs.prepare.outputs.ghcr_image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch tag (mutable) | \`${{ needs.prepare.outputs.ghcr_branch_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| DockerHub image | \`${{ needs.prepare.outputs.dockerhub_image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | \`${{ needs.prepare.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ needs.prepare.outputs.branch }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
+
+  # ── Job 4: Trivy scan — non-blocking, runs after manifest is available ──────
+  trivy:
+    name: Trivy Container Scan
+    needs: [prepare, merge]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Install Trivy
+        env:
+          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          TRIVY_VERSION=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            https://api.github.com/repos/aquasecurity/trivy/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+          curl -sL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            -o /tmp/trivy.tar.gz
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo mv /tmp/trivy /usr/local/bin/trivy
+
+      - name: Run Trivy container scan
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        run: |
+          trivy image \
+            --format table \
+            --severity CRITICAL,HIGH \
+            --scanners vuln \
+            --ignore-unfixed \
+            ${{ needs.prepare.outputs.ghcr_image }}
+
+  # ── Job 5: Snyk container scan — blocking, fails hard on high/critical vulns ──
+  snyk:
+    name: Snyk Container Scan
+    needs: [prepare, merge]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Set up Snyk CLI
+        uses: snyk/actions/setup@master
+
+      - name: Run Snyk container scan
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_API: https://api.us.snyk.io
+        run: |
+          snyk container test ${{ needs.prepare.outputs.ghcr_image }} \
+            --severity-threshold=high \
+            --org=partner-images \
+            --json-file-output=snyk_results.json
+
+      - name: Monitor with Snyk (push results to Snyk UI)
+        if: inputs.snyk_monitor
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_API: https://api.us.snyk.io
+        run: |
+          snyk container monitor ${{ needs.prepare.outputs.ghcr_image }} \
+            --severity-threshold=high \
+            --org=partner-images
+
+  # ── Job 6: Dispatch deployment to atlan-apps-deployment (main only) ───────────
+  app-deployment-dispatcher:
+    name: Dispatch App Deployment
+    needs: [prepare, merge]
+    if: github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repo: ['atlanhq/atlan-apps-deployment']
+    steps:
+      - name: Repository Dispatch
+        uses: peter-evans/repository-dispatch@v3.0.0
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+          repository: ${{ matrix.repo }}
+          event-type: dispatch_app_builder_workflow
+          client-payload: |-
+            {
+                "app_name": "${{ needs.prepare.outputs.app_name }}",
+                "image_name": "${{ needs.prepare.outputs.dockerhub_image }}"
+            }
+
+  # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
+  publish:
+    name: Publish to Marketplace
+    needs: [prepare, merge]
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Publish version
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          APP_PUBLISH_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN }}
+          GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr_image }}
+          IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+          APP_ID: ${{ needs.prepare.outputs.app_id }}
+          APP_NAME: ${{ needs.prepare.outputs.app_name }}
+          DEPLOY_CONFIG: ${{ needs.prepare.outputs.deploy_config }}
+          SDK_VERSION: ${{ needs.prepare.outputs.sdk_version }}
+          CHANNEL: ${{ inputs.channel }}
+          TENANTS: ${{ inputs.tenants }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Build JSON payload matching the CLI's registerInMarketplace format
+          BODY=$(python3 - <<'PYEOF'
+          import json, os
+
+          body = {
+              "app_id": os.environ["APP_ID"],
+              "image": os.environ["GHCR_IMAGE"],
+              "version": os.environ["IMAGE_TAG"],
+              "branch": os.environ["BRANCH"],
+              "repo": os.environ["REPO_URL"],
+              "source": "ci_publish",
+          }
+
+          config = os.environ.get("DEPLOY_CONFIG", "").strip()
+          if config:
+              body["config"] = config
+
+          sdk = os.environ.get("SDK_VERSION", "").strip()
+          if sdk:
+              body["sdk_version"] = sdk
+
+          tenants = os.environ.get("TENANTS", "").strip()
+          if tenants:
+              body["allowed_tenants"] = [t.strip() for t in tenants.split(",") if t.strip()]
+          else:
+              body["target_channel"] = os.environ.get("CHANNEL", "all") or "all"
+
+          print(json.dumps(body))
+          PYEOF
+          )
+
+          echo "Publishing ${APP_NAME} (${IMAGE_TAG}) to marketplace..."
+
+          RESPONSE=$(curl -sf -X POST \
+            "${BASE_URL}/api/service/marketplace/publish" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${APP_PUBLISH_TOKEN}" \
+            -d "$BODY")
+
+          echo "$RESPONSE" | python3 -c "
+          import json, sys
+          r = json.load(sys.stdin)
+          d = r.get('data', {})
+          vid = d.get('version_id', 'N/A')
+          rid = d.get('release_id', 'N/A')
+          aid = d.get('app_id', 'N/A')
+          print(f'Version: {vid}')
+          print(f'Release: {rid}')
+          print(f'App ID:  {aid}')
+          "
+
+          CHANNEL_USED="${CHANNEL:-all}"
+          if [ -n "$TENANTS" ]; then
+            CHANNEL_USED="tenants: $TENANTS"
+          fi
+          if [ "$CHANNEL_USED" = "all" ]; then
+            echo "Channel 'all' creates a draft release — admin approval required"
+          fi
+
+          echo "### Publish complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Published \`${APP_NAME}\` version \`${IMAGE_TAG}\` to \`${CHANNEL_USED}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Refer to [Global Marketplace](https://globalmarketplaceui.atlan.com/admin/) for approval." >> $GITHUB_STEP_SUMMARY

@@ -75,6 +75,32 @@ class BaseApplication:
 
             self.mcp_server = MCPServer(application_name=name)
 
+    def get_manifest(self) -> Optional[Dict[str, Any]]:
+        """Return the manifest dict for the GET /manifest endpoint.
+
+        Priority:
+        1. contract/generated/manifest.json (if exists)
+        2. Subclass override (e.g., BaseSQLMetadataExtractionApplication)
+        3. None (disables the /manifest endpoint)
+
+        Post-processes the manifest to substitute {deployment_name} and {app_name}
+        with actual values at serve time.
+        """
+        import json
+        from pathlib import Path
+
+        from application_sdk.constants import DEPLOYMENT_NAME
+
+        manifest_path = Path.cwd() / "contract" / "generated" / "manifest.json"
+        if manifest_path.exists():
+            logger.info(f"Serving manifest from contract: {manifest_path}")
+            with open(manifest_path) as f:
+                raw = f.read()
+            raw = raw.replace("{deployment_name}", DEPLOYMENT_NAME or "default")
+            raw = raw.replace("{app_name}", self.application_name)
+            return json.loads(raw)
+        return None
+
     def bootstrap_event_registration(self):
         self.event_subscriptions: Dict[str, EventWorkflowTrigger] = {}
         if self.application_manifest is None:
@@ -267,12 +293,16 @@ class BaseApplication:
             except Exception as e:
                 logger.warning(f"Failed to get MCP HTTP app: {e}")
 
+        # Store for use by get_manifest()
+        self._primary_workflow_class = workflow_class
+
         self.server = APIServer(
             lifespan=lifespan,
             workflow_client=self.workflow_client,
             ui_enabled=ui_enabled,
             handler=self.handler_class(client=self.client_class()),
             has_configmap=has_configmap,
+            manifest=self.get_manifest(),
         )
 
         # Mount MCP at root

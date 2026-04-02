@@ -7,6 +7,8 @@ on:
       - main
     paths:
       - 'Dockerfile'
+      - 'pyproject.toml'
+      - 'uv.lock'
       - 'entrypoint.sh'
 
 permissions:
@@ -23,7 +25,7 @@ jobs:
       lowercase_branch: ${{ steps.get_lowercase_branch.outputs.lowercase_branch }}
       repository_name: ${{ steps.get_repo_name.outputs.repository_name }}
     steps:
-      - uses: actions/checkout@v4.0.0
+      - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
 
@@ -52,7 +54,7 @@ jobs:
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4.0.0
+      - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
 
@@ -89,6 +91,8 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
+            ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:latest
+            ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:${{ needs.prepare.outputs.version }}
             ghcr.io/atlanhq/${{ github.event.repository.name }}-${{ needs.prepare.outputs.lowercase_branch }}:latest
             ghcr.io/atlanhq/${{ github.event.repository.name }}-${{ needs.prepare.outputs.lowercase_branch }}:${{ needs.prepare.outputs.version }}
           build-args: |

@@ -215,6 +215,9 @@ columns:
     auto_increment:
       source_query: COALESCE(auto_increment, '')
       source_columns: [auto_increment]
+    incremental_state:
+      source_query: COALESCE(incremental_state, '')
+      source_columns: [incremental_state]
   typeName:
     source_query: |
       CASE

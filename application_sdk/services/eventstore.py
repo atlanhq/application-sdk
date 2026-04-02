@@ -14,8 +14,8 @@ from temporalio import activity, workflow
 from application_sdk.constants import (
     APP_TENANT_ID,
     APPLICATION_NAME,
+    ATLAN_BASE_URL,
     DAPR_BINDING_OPERATION_CREATE,
-    DOMAIN_NAME,
     EVENT_STORE_NAME,
 )
 from application_sdk.interceptors.models import (
@@ -164,7 +164,8 @@ class EventStore:
                 labels["application_name"] = event.metadata.application_name
 
             labels["tenant_id"] = APP_TENANT_ID
-            labels["domain_name"] = DOMAIN_NAME
+            if ATLAN_BASE_URL:
+                labels["atlan_base_url"] = ATLAN_BASE_URL
 
             # Add any additional data from event.data
             if event.data:

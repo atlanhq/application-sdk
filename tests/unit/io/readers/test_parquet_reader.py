@@ -50,9 +50,12 @@ async def test_not_download_file_that_exists() -> None:
     path = "/data/test.parquet"  # Path with correct extension
     # Don't use file_names with single file path due to validation
 
-    with patch("os.path.isfile", return_value=True), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_file"
-    ) as mock_download:
+    with (
+        patch("os.path.isfile", return_value=True),
+        patch(
+            "application_sdk.services.objectstore.ObjectStore.download_file"
+        ) as mock_download,
+    ):
         parquet_input = ParquetFileReader(
             path=path,
             chunk_size=100000,  # No file_names
@@ -71,13 +74,13 @@ async def test_download_file_invoked_for_missing_files() -> None:
     """Ensure that a download is triggered when no parquet files exist locally."""
     path = "/local/test.parquet"
 
-    with patch("os.path.isfile", side_effect=[False, True]), patch(
-        "os.path.isdir", return_value=False
-    ), patch("glob.glob", return_value=[]), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_file"
-    ) as mock_download, patch(
-        "application_sdk.activities.common.utils.get_object_store_prefix",
-        return_value="local/test.parquet",
+    with (
+        patch("os.path.isfile", side_effect=[False, True]),
+        patch("os.path.isdir", return_value=False),
+        patch("glob.glob", return_value=[]),
+        patch(
+            "application_sdk.services.objectstore.ObjectStore.download_file"
+        ) as mock_download,
     ):
         parquet_input = ParquetFileReader(
             path=path, chunk_size=100000, dataframe_type=DataframeType.pandas
@@ -88,12 +91,13 @@ async def test_download_file_invoked_for_missing_files() -> None:
         )
 
         # Should attempt to download the file
+        # as_store_key strips leading "/" so destination uses normalized key
+        expected_destination = os.path.join("./local/tmp/", "local/test.parquet")
         mock_download.assert_called_once_with(
-            source="local/test.parquet", destination="./local/tmp/local/test.parquet"
+            source=path, destination=expected_destination
         )
         # Result should be the actual downloaded file path in temporary directory
-        expected_path = "./local/tmp/local/test.parquet"
-        assert result == [expected_path]
+        assert result == [expected_destination]
 
 
 # ---------------------------------------------------------------------------

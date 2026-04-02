@@ -2,11 +2,27 @@ from typing import Any, Dict, Generator
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from temporalio.runtime import Runtime
 
 from application_sdk.clients.temporal import TemporalWorkflowClient
 from application_sdk.interceptors.cleanup import cleanup
 from application_sdk.interceptors.events import publish_event
 from application_sdk.workflows import WorkflowInterface
+
+
+@pytest.fixture(autouse=True)
+def mock_runtime():
+    """Mock Runtime and reset the class-level singleton for each test.
+
+    Patches the Runtime class to avoid real port binding, and resets
+    TemporalWorkflowClient._prometheus_runtime so each test starts with
+    a fresh singleton state, preventing cross-test interference.
+    """
+    TemporalWorkflowClient._prometheus_runtime = None
+    with patch("application_sdk.clients.temporal.Runtime") as mock_cls:
+        mock_cls.return_value = MagicMock(spec=Runtime)
+        yield mock_cls
+    TemporalWorkflowClient._prometheus_runtime = None
 
 
 # Mock workflow class for testing
@@ -73,11 +89,12 @@ async def test_load(
     await temporal_client.load()
 
     # Verify that Client.connect was called with the correct parameters
-    mock_connect.assert_called_once_with(
-        target_host=temporal_client.get_connection_string(),
-        namespace=temporal_client.get_namespace(),
-        tls=False,
-    )
+    mock_connect.assert_called_once()
+    call_kwargs = mock_connect.call_args[1]
+    assert call_kwargs["target_host"] == temporal_client.get_connection_string()
+    assert call_kwargs["namespace"] == temporal_client.get_namespace()
+    assert call_kwargs["tls"] is False
+    assert isinstance(call_kwargs["runtime"], Runtime)
 
     # Check that client is set
     assert temporal_client.client == mock_client
@@ -247,6 +264,8 @@ async def test_create_worker_without_client(
         temporal_client.create_worker(activities, workflow_classes, passthrough_modules)
 
 
+@patch("application_sdk.clients.temporal.TEMPORAL_DEPLOYMENT_NAME", "")
+@patch("application_sdk.clients.temporal.TEMPORAL_BUILD_ID", "")
 @patch("application_sdk.clients.temporal.Worker")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
@@ -286,9 +305,82 @@ async def test_create_worker(
         activity_executor=ANY,
         max_concurrent_activities=ANY,
         graceful_shutdown_timeout=ANY,
+        deployment_config=None,
     )
 
     assert worker == mock_worker_class.return_value
+
+
+@patch("application_sdk.clients.temporal.TEMPORAL_DEPLOYMENT_NAME", "test-ns/test-twd")
+@patch("application_sdk.clients.temporal.TEMPORAL_BUILD_ID", "v1.2.3-abc123")
+@patch("application_sdk.clients.temporal.Worker")
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_create_worker_with_deployment_config(
+    mock_connect: AsyncMock,
+    mock_worker_class: MagicMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test creating a versioned worker with Worker Deployment config."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+    await temporal_client.load()
+
+    workflow_classes = [MagicMock()]
+    activities = [MagicMock()]
+    passthrough_modules = ["application_sdk"]
+
+    temporal_client.create_worker(activities, workflow_classes, passthrough_modules)
+
+    expected_activities = list(activities) + [publish_event, cleanup]
+    mock_worker_class.assert_called_once_with(
+        temporal_client.client,
+        task_queue=temporal_client.worker_task_queue,
+        workflows=workflow_classes,
+        activities=expected_activities,
+        workflow_runner=ANY,
+        interceptors=ANY,
+        activity_executor=ANY,
+        max_concurrent_activities=ANY,
+        graceful_shutdown_timeout=ANY,
+        deployment_config=ANY,
+    )
+    # Verify the deployment_config has the right values
+    call_kwargs = mock_worker_class.call_args[1]
+    dc = call_kwargs["deployment_config"]
+    assert dc.version.deployment_name == "test-ns/test-twd"
+    assert dc.version.build_id == "v1.2.3-abc123"
+
+
+@patch("application_sdk.clients.temporal.TEMPORAL_DEPLOYMENT_NAME", "")
+@patch("application_sdk.clients.temporal.TEMPORAL_BUILD_ID", "v1.2.3-abc123")
+@patch("application_sdk.clients.temporal.Worker")
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+async def test_create_worker_with_build_id_only(
+    mock_connect: AsyncMock,
+    mock_worker_class: MagicMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test creating a versioned worker with only build_id (no deployment name)."""
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+    await temporal_client.load()
+
+    workflow_classes = [MagicMock()]
+    activities = [MagicMock()]
+    passthrough_modules = ["application_sdk"]
+
+    temporal_client.create_worker(activities, workflow_classes, passthrough_modules)
+
+    call_kwargs = mock_worker_class.call_args[1]
+    dc = call_kwargs["deployment_config"]
+    assert dc.version.deployment_name == "v1.2.3-abc123"
+    assert dc.version.build_id == "v1.2.3-abc123"
 
 
 def test_get_worker_task_queue(temporal_client: TemporalWorkflowClient):
@@ -450,3 +542,26 @@ async def test_publish_token_refresh_event_exception_handling(
     mock_logger.warning.assert_called_once_with(
         "Failed to publish token refresh event: Event store connection failed"
     )
+
+
+@patch(
+    "application_sdk.clients.temporal.Client.connect",
+    new_callable=AsyncMock,
+)
+@patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
+async def test_load_with_prometheus_metrics(
+    mock_get_config: AsyncMock,
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    """Test that load always passes a Runtime with PrometheusConfig."""
+    mock_get_config.return_value = None
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    await temporal_client.load()
+
+    mock_connect.assert_called_once()
+    call_kwargs = mock_connect.call_args[1]
+    assert "runtime" in call_kwargs
+    assert isinstance(call_kwargs["runtime"], Runtime)

@@ -1,5 +1,208 @@
 # Changelog
 
+## v2.8.2 (March 31, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.1...v2.8.2
+
+### Features
+
+- expose app_name in workflow DAG manifest (#1188) (by @OnkarVO7 in [aa61a40](https://github.com/atlanhq/application-sdk/commit/aa61a40))
+
+### Bug Fixes
+
+- atlan cli config command correction (#1163) (by @adityachoudhury-cloud in [c3f07ef](https://github.com/atlanhq/application-sdk/commit/c3f07ef))
+- correct health check endpoint in BaseTest (#1170) (by @fyzanshaik-atlan in [6c329af](https://github.com/atlanhq/application-sdk/commit/6c329af))
+- Convert app_name to lowercase in workflow (#1185) (by @adityachoudhury-cloud in [afa7977](https://github.com/atlanhq/application-sdk/commit/afa7977))
+
+
+## v2.8.1 (March 24, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.0...v2.8.1
+
+### Features
+
+- add reusable publish-app workflow using atlan CLI (#1122) (by @adityachoudhury-cloud in [8e37fc0](https://github.com/atlanhq/application-sdk/commit/8e37fc0))
+- rename base image to app-runtime-base (#1139) (by @AtMrun in [bf84604](https://github.com/atlanhq/application-sdk/commit/bf84604))
+- add merge-and-push slash command for safe git workflows (#1141) (by @AtMrun in [fb53289](https://github.com/atlanhq/application-sdk/commit/fb53289))
+- add reusable publish-app workflow using atlan CLI (#1137) (by @adityachoudhury-cloud in [53f22e3](https://github.com/atlanhq/application-sdk/commit/53f22e3))
+
+### Bug Fixes
+
+- bump up atlan CLI version for publish-action (#1136) (by @adityachoudhury-cloud in [4bd8481](https://github.com/atlanhq/application-sdk/commit/4bd8481))
+- update trivy-action to 0.35.0 to address updated versions (#1142) (by @akshanshjaiswal-atlan in [f458c84](https://github.com/atlanhq/application-sdk/commit/f458c84))
+- use atlan --version flag instead of subcommand (#1146) (by @adityachoudhury-cloud in [7330e6c](https://github.com/atlanhq/application-sdk/commit/7330e6c))
+- suppress single-key secret store log pollution (#1149) (by @Garavitey in [3a5e72b](https://github.com/atlanhq/application-sdk/commit/3a5e72b))
+
+
+## v2.8.0 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.4...v2.8.0
+
+### Features
+
+- native orchestration support with contract toolkit integration (#1115) (by @fyzanshaik-atlan in [63bd8c7](https://github.com/atlanhq/application-sdk/commit/63bd8c7))
+
+
+## v2.7.4 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.3...v2.7.4
+
+### Features
+
+- add worker deployment versioning support (#1074) (by @anuj-atlan in [8a10fd2](https://github.com/atlanhq/application-sdk/commit/8a10fd2))
+
+
+## v2.7.3 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.2...v2.7.3
+
+### Features
+
+- centralized SDR path with json.gz format (#1111) (by @EuclidStellar in [41a98db](https://github.com/atlanhq/application-sdk/commit/41a98db))
+
+### Bug Fixes
+
+- pass github_token to trivy-action to avoid rate limit on binary download (#1127) (by @nishantmunjal7 in [3a2b410](https://github.com/atlanhq/application-sdk/commit/3a2b410))
+- replace Snyk with Trivy container scan — bypass broken trivy-action (#1130) (by @nishantmunjal7 in [4ecb9a6](https://github.com/atlanhq/application-sdk/commit/4ecb9a6))
+- disable daft analytics via Dockerfile ENV to avoid Temporal non-determinism (#1131) (by @vishalkatlan in [3bdff48](https://github.com/atlanhq/application-sdk/commit/3bdff48))
+
+
+## v2.7.2 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.1...v2.7.2
+
+### Bug Fixes
+
+- pre-pull GHCR image before Snyk scan to fix 404 auth failure (#1123) (by @nishantmunjal7 in [f8fa380](https://github.com/atlanhq/application-sdk/commit/f8fa380))
+- replace Snyk with Trivy for container scanning (#1126) (by @nishantmunjal7 in [80f4a3b](https://github.com/atlanhq/application-sdk/commit/80f4a3b))
+
+
+## v2.7.1 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.0...v2.7.1
+
+### Features
+
+- add app deployment dispatcher job in build workflow (#1121) (by @Lalit3716-atlan in [e5f524c](https://github.com/atlanhq/application-sdk/commit/e5f524c))
+
+### Bug Fixes
+
+- Crash the server if the worker crashes (#1118) (by @SanilK2108 in [0a7b2ad](https://github.com/atlanhq/application-sdk/commit/0a7b2ad))
+
+
+## v2.7.0 (March 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.2...v2.7.0
+
+### Features
+
+- dual OTLP export and correlation_id propagation for workflow logs (#1102) (by @saig214 in [fd7ae09](https://github.com/atlanhq/application-sdk/commit/fd7ae09))
+
+### Bug Fixes
+
+- normalize attempt logging and guard missing UI assets (BLDX-737 / BLDX-739) (#1108) (by @fyzanshaik-atlan in [81905af](https://github.com/atlanhq/application-sdk/commit/81905af))
+- bump Dapr CLI to 1.17.0 and widen temporalio bound to resolve CVEs (BLDX-744) (#1106) (by @praveenkmr in [3d6343e](https://github.com/atlanhq/application-sdk/commit/3d6343e))
+- align DockerHub image tag format with GHCR ({branch}-{sha7}abcd) (#1101) (by @nishantmunjal7 in [bbc3317](https://github.com/atlanhq/application-sdk/commit/bbc3317))
+
+### Performance
+
+- parallel multi-arch build — cut build time from ~3 min to <1 min (#1103) (by @nishantmunjal7 in [9d30a5a](https://github.com/atlanhq/application-sdk/commit/9d30a5a))
+
+
+## v2.6.2 (March 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.1...v2.6.2
+
+### Bug Fixes
+
+- enhanced auto_heartbeater to support sync activity functions (#1095) (by @louisnow in [1eb5a1c](https://github.com/atlanhq/application-sdk/commit/1eb5a1c))
+
+
+## v2.6.1 (March 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.0...v2.6.1
+
+### Bug Fixes
+
+- make release workflow idempotent for safe re-runs (#1090) (by @louisnow in [f4c4eaf](https://github.com/atlanhq/application-sdk/commit/f4c4eaf))
+- catch BaseException to log timeout-driven activity cancellations (#1094) (by @TechyMT in [046c5c4](https://github.com/atlanhq/application-sdk/commit/046c5c4))
+
+
+## v2.6.0 (March 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.5.0...v2.6.0
+
+### Features
+
+- reusable build-app.yml workflow for all first-party app repos (#1087) (by @nishantmunjal7 in [0801eeb](https://github.com/atlanhq/application-sdk/commit/0801eeb))
+- replace registries.dockerhub with push_for_sdr in build template (DISTR-213) (#1089) (by @nishantmunjal7 in [25499a2](https://github.com/atlanhq/application-sdk/commit/25499a2))
+- Temporal activities observability via interceptors using logs attributes (#1086) (by @euclidstellar in [9bea6f3](https://github.com/atlanhq/application-sdk/tree/9bea6f3))
+- Temporal failure exception in CH as log attribute of exception (#1063) (by @euclidstellar in [039c27d](https://github.com/atlanhq/application-sdk/tree/039c27d))
+
+
+## v2.5.0 (March 03, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.4.1...v2.5.0
+
+### Features
+
+- add temporal prometheus metrics (#1078) (by @anbarasantr in [6dbf1dd](https://github.com/atlanhq/application-sdk/commit/6dbf1dd))
+
+### Bug Fixes
+
+- make ObjectStore upload/download primitives file-type agnostic (#1056) (by @fyzanshaik-atlan in [ba28569](https://github.com/atlanhq/application-sdk/commit/ba28569d09fa14a01f5ab19dcd7802552b058982))
+
+
+## v2.4.1 (February 24, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.4.0...v2.4.1
+
+### Features
+
+- file upload/download support via FastAPI bindings | PART-255 (#1046) (by @prateek11rai in [326962d](https://github.com/atlanhq/application-sdk/commit/326962d))
+
+
+## v2.4.0 (February 17, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.3...v2.4.0
+
+### Features
+
+- add root_path parameter to APIServer.start() for reverse proxy support (#1058) (by @rashi-j in [edc99bc](https://github.com/atlanhq/application-sdk/commit/edc99bc))
+- add /review skill for structured Claude PR reviews (#1059) (by @fyzanshaik-atlan in [65e3903](https://github.com/atlanhq/application-sdk/commit/65e3903))
+
+### Bug Fixes
+
+- restore pandas extra compatibility (#1037) (by @fyzanshaik-atlan in [8425922](https://github.com/atlanhq/application-sdk/commit/8425922))
+- use --append-system-prompt for Claude review skill routing (#1060) (by @fyzanshaik-atlan in [f59f0f4](https://github.com/atlanhq/application-sdk/commit/f59f0f4))
+- add missing allowedTools for /review slash command (#1061) (by @fyzanshaik-atlan in [697f79c](https://github.com/atlanhq/application-sdk/commit/697f79c))
+- Standardized preflight check response format to use per-check success fields with consolidated error messages in failureMessage, removing top-level error field (#1052) (by @chaitanyaatlan in [d2bd860](https://github.com/atlanhq/application-sdk/commit/d2bd860))
+
+
+## v2.3.3 (February 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.2...v2.3.3
+
+### Improvements
+
+- refactor(segment): enable Segment based on write key presence (#1027) (by @janakiram-g in [d22e457](https://github.com/atlanhq/application-sdk/commit/d22e457))
+
+### Bug Fixes
+
+- improve dependabot config and skip tests for workflow-only PRs (#1026) (by @fyzanshaik-atlan in [3cf3830](https://github.com/atlanhq/application-sdk/commit/3cf3830))
+
+
+## v2.3.2 (February 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.1...v2.3.2
+
+### Bug Fixes
+
+- update codeowner (#954) (by @OnkarVO7 in [3a29977](https://github.com/atlanhq/application-sdk/commit/3a29977))
+- align daft writer behavior with pandas to prevent data loss (BLDX-305) (#953) (by @fyzanshaik-atlan in [1a73d02](https://github.com/atlanhq/application-sdk/commit/1a73d02))
+- tune dependabot settings to reduce noise (#1008) (by @fyzanshaik-atlan in [50e09ac](https://github.com/atlanhq/application-sdk/commit/50e09ac))
+
+
 ## v2.3.1 (January 28, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.3.0...v2.3.1
