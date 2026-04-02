@@ -254,12 +254,16 @@ def get_all_task_activities(
         List of Temporal activity functions.
     """
     activities: list[Callable[..., Any]] = []
+    seen_names: set[str] = set()
     task_registry = TaskRegistry.get_instance()
 
     for reg_app_name, task_list in task_registry.get_all_tasks().items():
         if app_names is not None and reg_app_name not in app_names:
             continue
         for task_meta in task_list:
+            if task_meta.name in seen_names:
+                continue
+            seen_names.add(task_meta.name)
             activity_fn = create_activity_from_task(task_meta)
             activities.append(activity_fn)
 
