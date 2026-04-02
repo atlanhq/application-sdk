@@ -670,6 +670,10 @@ def run_handler_mode(config: AppConfig) -> None:
 
     Loads the handler class (or DefaultHandler) and runs the FastAPI
     server via uvicorn. This is synchronous — uvicorn manages its own loop.
+
+    Note: extra_app_modules are intentionally NOT loaded here. Handler mode
+    only serves HTTP for the primary app — no Temporal worker, so secondary
+    apps don't need to register.
     """
     from application_sdk.execution._temporal.converter import (
         create_data_converter_for_app,
@@ -1023,7 +1027,9 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 Environment Variables:
   ATLAN_APP_MODE           Execution mode (worker, handler, or combined)
-  ATLAN_APP_MODULE         App class path (e.g., my_package.apps:MyApp)
+  ATLAN_APP_MODULE         App class path(s), comma-separated for multi-app
+                           First is primary (HTTP handler), rest register on worker
+                           (e.g., app.main:MainApp,app.secondary:SecondaryApp)
   ATLAN_HANDLER_MODULE     Optional custom handler module path
   ATLAN_TEMPORAL_HOST      Temporal server address (default: localhost:7233)
                            Falls back to ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT (v2)
@@ -1054,7 +1060,7 @@ Examples:
     parser.add_argument(
         "--app",
         "-a",
-        help="App module path (e.g., my_package.apps:MyApp)",
+        help="App module path(s), comma-separated for multi-app (e.g., app.main:MainApp,app.secondary:SecondaryApp). First is primary (HTTP handler), rest register on worker.",
     )
     parser.add_argument(
         "--handler",
