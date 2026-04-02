@@ -276,7 +276,26 @@ If the connector has no v2-style e2e tests, skip this step.
 
 ---
 
-## Phase 5 — Summary report
+## Phase 5 — Contract setup (PKL toolkit)
+
+After the code migration and test run are complete, set up or migrate the app's PKL contract. The contract generates workflow config, credential config, AE manifest, and a typed Input dataclass — replacing any manual JSON templates or handler overrides.
+
+**Read the full contract setup guide** in [APP_CONTRACT.md](APP_CONTRACT.md) (co-located in this skill directory) and follow it end-to-end. That file is the authoritative reference for:
+
+- Creating `contract/PklProject` and `contract/app.pkl`
+- Generating artifacts (`poe generate`)
+- Validating output against old templates
+- Verifying locally with endpoint checks and App Playground
+- Registering in GMP and verifying on-cluster
+- Post-migration verification checklist (workflow return types, relationship refs, extraction-method routing, etc.)
+
+**When to run this phase:**
+- Always, for connectors that serve configmaps or have handler `get_configmap`/`get_manifest` overrides
+- Skip only if the connector has no UI setup form (e.g. a pure background worker with no Heracles integration)
+
+---
+
+## Phase 6 — Summary report
 
 Print a structured summary:
 
@@ -316,6 +335,15 @@ Print a structured summary:
 - Generated test function count: N
 - Human validation required: yes/no
 
+### Phase 5 — Contract setup
+- Contract directory created: yes/no
+- `app.pkl` created or migrated: yes/no
+- Artifacts generated: <list of files in contract/generated/>
+- Old templates removed: yes/no/N/A
+- Endpoint validation: pass/fail
+- App Playground verified: yes/no/skipped
+- GMP registration: done/pending/N/A
+
 ### API Contract Changes (inform frontend consumers)
 <list any response-format-change WARNs from the checker — these indicate v3 handler
 methods that return a different response shape than v2, which may break frontends>
@@ -331,14 +359,15 @@ Remind the user:
 - Review all `# TODO(v3-migration)` comments — each one marks a location that needs human verification.
 - The typed `Input`/`Output` models for custom `@task` methods should be defined (see §7 of MIGRATION_PROMPT.md) — these were not auto-generated.
 - If an e2e test was generated in Phase 4b, validate that it is logically equivalent to the original before deleting the old file.
+- If a contract was set up in Phase 5, verify the generated configmaps and manifest match the legacy templates before deploying.
 
 ---
 
-## Phase 6 — Live verification
+## Phase 7 — Live verification
 
 This phase starts the app locally and verifies handler endpoints and workflow execution against a v2 baseline. **Ask the user for confirmation before each major step.**
 
-### 6a — Establish v2 baseline
+### 7a — Establish v2 baseline
 
 Before starting the v3 app, check for an existing v2 workflow run:
 
@@ -358,7 +387,7 @@ Before starting the v3 app, check for an existing v2 workflow run:
    ```
    Record these counts — they are the parity target.
 
-### 6b — Run tests
+### 7b — Run tests
 
 Run the full test suite before attempting a live run:
 
@@ -367,9 +396,9 @@ cd <target-path> && uv run pytest tests/unit/ --tb=short -q
 cd <target-path> && uv run pytest tests/e2e/ --tb=short -q
 ```
 
-If any tests fail, fix production code issues before proceeding. Do not continue to 6c with failing tests.
+If any tests fail, fix production code issues before proceeding. Do not continue to 7c with failing tests.
 
-### 6c — Start the app
+### 7c — Start the app
 
 Ask the user:
 > "Tests pass. Ready to start the app with `atlan app run`. This requires credentials in `.env`. Should I proceed?"
@@ -382,7 +411,7 @@ cd <target-path> && atlan app run -p .
 
 Wait for the app to be ready (look for `Uvicorn running on http://127.0.0.1:8000`).
 
-### 6d — Test handler endpoints
+### 7d — Test handler endpoints
 
 Read credentials from `.env` (look for `API_KEY_ID`, `API_SECRET`, and any workspace/extra fields). Then test all three handler endpoints:
 
@@ -440,7 +469,7 @@ If any endpoint returns 500, check the app terminal for the traceback. Common is
 - Credential format error → ensure `_normalize_credentials` is in the SDK version being used
 - Missing configmap files → verify `app/generated/` has the JSON files from `poe generate`
 
-### 6e — Start a workflow run
+### 7e — Start a workflow run
 
 Ask the user:
 > "Handler endpoints verified. Ready to trigger a workflow run. This will call external APIs and write output to `./local/dapr/objectstore/`. Should I proceed?"
@@ -463,7 +492,7 @@ curl -s http://localhost:8000/workflows/v1/status/<workflow_id>/<run_id>
 
 Poll until status is `COMPLETED` or `FAILED`. Also monitor Temporal UI at `http://localhost:8233`.
 
-### 6f — Parity comparison
+### 7f — Parity comparison
 
 Once the workflow completes, locate the v3 output. The path follows this structure:
 ```
@@ -487,7 +516,7 @@ for dir in "$V3_OUTPUT"/*/; do
 done
 ```
 
-If a v2 baseline exists (from step 6a), compare:
+If a v2 baseline exists (from step 7a), compare:
 
 ```
 Entity type      | v2 count | v3 count | Match
@@ -497,7 +526,7 @@ collection       |       67 |       67 | ✓
 report           |       68 |       30 | ✗ (-38)
 ```
 
-### 6g — Fix-and-retry loop
+### 7g — Fix-and-retry loop
 
 If parity fails (counts differ, workflow errors, or endpoint failures):
 
@@ -509,7 +538,7 @@ If parity fails (counts differ, workflow errors, or endpoint failures):
 
 2. **Fix.** Apply the fix to production code only. Do not modify tests.
 
-3. **Re-run from 6b.** After fixing:
+3. **Re-run from 7b.** After fixing:
    - Re-run tests (6b) to confirm the fix doesn't break anything
    - Restart the app (6c) to pick up code changes
    - Re-test handler endpoints (6d) to confirm they still work
@@ -523,7 +552,7 @@ Do not proceed to the summary until:
 - Workflow completes without errors
 - Entity counts match the v2 baseline (or the user explicitly accepts the difference with an explanation)
 
-### 6h — Print verification summary
+### 7h — Print verification summary
 
 Only print this after parity is achieved or the user accepts the result:
 
