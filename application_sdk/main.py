@@ -112,6 +112,7 @@ class AppConfig:
     # Handler
     handler_host: str = "0.0.0.0"
     handler_port: int = 8000
+    frontend_assets_path: str = "frontend/static"
 
     # Common
     log_level: str = "INFO"
@@ -232,6 +233,7 @@ class AppConfig:
             auth_token_url=_env("ATLAN_AUTH_TOKEN_URL"),
             auth_base_url=_env("ATLAN_AUTH_BASE_URL"),
             auth_scopes=_env("ATLAN_AUTH_SCOPES"),
+            frontend_assets_path=_env("ATLAN_FRONTEND_ASSETS_PATH", "frontend/static"),
         )
 
 
@@ -698,6 +700,7 @@ def run_handler_mode(config: AppConfig) -> None:
         auth_scopes=config.auth_scopes,
         state_store=infra.state_store,
         storage=infra.storage,
+        frontend_assets_path=config.frontend_assets_path,
     )
     asyncio.run(_flush_observability())
 
@@ -838,6 +841,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_scopes=config.auth_scopes,
         state_store=infra.state_store,
         storage=infra.storage,
+        frontend_assets_path=config.frontend_assets_path,
     )
 
     uvicorn_server = uvicorn.Server(

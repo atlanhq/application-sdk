@@ -16,6 +16,7 @@ Routes:
     POST /workflows/v1/file - Upload file to object storage
     GET  /health - Health check (k8s liveness probe)
     GET  /server/ready - Readiness probe
+    GET  / - Serve frontend UI (frontend/static/index.html)
 
 Usage::
 
@@ -35,7 +36,8 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
@@ -326,6 +328,7 @@ def create_app_handler_service(
     title: str = "Handler Service",
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
+    frontend_assets_path: str = "frontend/static",
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
 
@@ -342,6 +345,9 @@ def create_app_handler_service(
         title: OpenAPI title.
         description: OpenAPI description.
         version: API version string.
+        frontend_assets_path: Path to the directory containing frontend static assets.
+            Serves ``index.html`` at ``GET /`` and mounts remaining assets as static
+            files. Defaults to ``"frontend/static"``.
 
     Returns:
         Configured FastAPI application.
@@ -1232,6 +1238,32 @@ def create_app_handler_service(
     @app.get("/server/ready")
     async def ready() -> dict[str, str]:
         return {"status": "ok"}
+
+    # ------------------------------------------------------------------
+    # UI routes
+    # ------------------------------------------------------------------
+
+    @app.get("/")
+    async def frontend_home() -> HTMLResponse:
+        import os
+
+        frontend_html_path = os.path.join(frontend_assets_path, "index.html")
+        if os.path.exists(frontend_html_path):
+            with open(frontend_html_path, encoding="utf-8") as f:
+                return HTMLResponse(content=f.read())
+        return HTMLResponse(
+            content="<html><body><h1>UI not available</h1></body></html>",
+            status_code=404,
+        )
+
+    static_dir = Path(frontend_assets_path)
+    if static_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(static_dir)), name="static")
+    else:
+        logger.warning(
+            "Static UI assets not found at %s, skipping static mount",
+            static_dir,
+        )
 
     return app
 
