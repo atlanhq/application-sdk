@@ -85,7 +85,7 @@ distributed_lock = [
 ]
 
 mcp = [
-    "fastmcp>=2.12.3,<2.15.0",
+    "fastmcp>=3.2.0",
 ]
 
 incremental = [
