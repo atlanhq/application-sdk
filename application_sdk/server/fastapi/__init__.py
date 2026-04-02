@@ -539,34 +539,42 @@ class APIServer(ServerInterface):
             status=EventWorkflowResponse.Status.DROP,
         )
 
-    async def _close_handler_client(self) -> None:
-        """Close the handler's client to release database connections.
+    async def _close_client(self, client: Any) -> None:
+        """Close a client to release database connections.
 
-        Called after UI endpoint operations (test_auth, preflight_check,
-        fetch_metadata) to prevent idle connections from lingering on the
-        database server.
+        Closes the given client instance (captured per-request) to prevent
+        idle connections from lingering on the database server. The client's
+        close() method is expected to call engine.dispose() internally,
+        releasing all pooled connections.
+
+        Args:
+            client: The client instance to close. Must have a close() method.
         """
-        if (
-            self.handler
-            and hasattr(self.handler, "sql_client")
-            and self.handler.sql_client
-            and hasattr(self.handler.sql_client, "close")
-        ):
-            try:
-                await self.handler.sql_client.close()
-            except Exception:
-                pass
+        if client is None or not hasattr(client, "close"):
+            return
+        try:
+            import asyncio
+
+            close_fn = client.close
+            if asyncio.iscoroutinefunction(close_fn):
+                await close_fn()
+            else:
+                close_fn()
+        except Exception as e:
+            logger.warning(f"Failed to close client after endpoint call: {e}")
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
         """Test authentication credentials."""
         start_time = time.time()
         metrics = get_metrics()
+        client = None
 
         try:
             if not self.handler:
                 raise Exception("Handler not initialized")
 
             await self.handler.load(body.model_dump())
+            client = getattr(self.handler, "sql_client", None)
             await self.handler.test_auth()
 
             # Record successful auth
@@ -600,12 +608,13 @@ class APIServer(ServerInterface):
             )
             raise e
         finally:
-            await self._close_handler_client()
+            await self._close_client(client)
 
     async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:
         """Fetch metadata based on request parameters."""
         start_time = time.time()
         metrics = get_metrics()
+        client = None
 
         metadata_type = body.root.get("type", "all")
         database = body.root.get("database", "")
@@ -615,6 +624,7 @@ class APIServer(ServerInterface):
                 raise Exception("Handler not initialized")
 
             await self.handler.load(body.model_dump())
+            client = getattr(self.handler, "sql_client", None)
             metadata = await self.handler.fetch_metadata(
                 metadata_type=metadata_type, database=database
             )
@@ -658,7 +668,7 @@ class APIServer(ServerInterface):
             )
             raise e
         finally:
-            await self._close_handler_client()
+            await self._close_client(client)
 
     async def preflight_check(
         self, body: PreflightCheckRequest
@@ -666,12 +676,14 @@ class APIServer(ServerInterface):
         """Perform preflight checks with provided configuration."""
         start_time = time.time()
         metrics = get_metrics()
+        client = None
 
         try:
             if not self.handler:
                 raise Exception("Handler not initialized")
 
             await self.handler.load(body.credentials)
+            client = getattr(self.handler, "sql_client", None)
             preflight_check = await self.handler.preflight_check(body.model_dump())
 
             # Determine overall success based on individual check results (dynamic)
@@ -719,7 +731,7 @@ class APIServer(ServerInterface):
             )
             raise e
         finally:
-            await self._close_handler_client()
+            await self._close_client(client)
 
     async def upload_file(
         self,
