@@ -138,6 +138,54 @@ class TestAppConfigFromArgsAndEnv:
         with pytest.raises(ValueError, match="App module is required"):
             AppConfig.from_args_and_env(args)
 
+    def test_comma_separated_app_module_primary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODE", "worker")
+        monkeypatch.setenv(
+            "ATLAN_APP_MODULE", "app.primary:PrimaryApp,app.secondary:SecondaryApp"
+        )
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.app_module == "app.primary:PrimaryApp"
+
+    def test_comma_separated_app_module_extra(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODE", "worker")
+        monkeypatch.setenv(
+            "ATLAN_APP_MODULE",
+            "app.primary:PrimaryApp,app.secondary:SecondaryApp,app.third:ThirdApp",
+        )
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.extra_app_modules == [
+            "app.secondary:SecondaryApp",
+            "app.third:ThirdApp",
+        ]
+
+    def test_single_app_module_no_extras(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODE", "worker")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "app.main:MyApp")
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.app_module == "app.main:MyApp"
+        assert config.extra_app_modules is None
+
+    def test_comma_separated_with_whitespace(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODE", "worker")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "  app.a:A , app.b:B , app.c:C  ")
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.app_module == "app.a:A"
+        assert config.extra_app_modules == ["app.b:B", "app.c:C"]
+
+    def test_empty_comma_separated_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APP_MODE", "worker")
+        monkeypatch.setenv("ATLAN_APP_MODULE", " , , ")
+        with pytest.raises(ValueError, match="App module is required"):
+            AppConfig.from_args_and_env(self._make_args())
+
     def test_temporal_host_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ATLAN_APP_MODE", "worker")
         monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")

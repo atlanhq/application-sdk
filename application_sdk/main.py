@@ -176,6 +176,10 @@ class AppConfig:
 
         # Support comma-separated modules: first is primary, rest are extra
         app_module_parts = [m.strip() for m in app_module_raw.split(",") if m.strip()]
+        if not app_module_parts:
+            raise ValueError(
+                "App module is required. Use --app or set ATLAN_APP_MODULE."
+            )
         app_module = app_module_parts[0]
         extra_from_app_module = (
             app_module_parts[1:] if len(app_module_parts) > 1 else []
@@ -477,6 +481,7 @@ def _load_extra_app_modules(extra_app_modules: list[str] | None) -> None:
         return
     for module_path in extra_app_modules:
         app_cls = load_app_class(module_path)
+        validate_app_class(app_cls)
         logger.info(
             "Loaded extra app %s version %s",
             app_cls._app_name,  # type: ignore[attr-defined]
