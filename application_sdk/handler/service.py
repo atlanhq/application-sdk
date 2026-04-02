@@ -1233,6 +1233,27 @@ def create_app_handler_service(
     async def ready() -> dict[str, str]:
         return {"status": "ok"}
 
+    # ------------------------------------------------------------------
+    # Playground (local dev UI)
+    # ------------------------------------------------------------------
+    # Mount frontend/static if it exists — serves the app-playground UI
+    # that renders credential forms, workflow wizard, and manifest preview.
+    # Install via: npx @atlanhq/app-playground install-to frontend/static
+
+    _playground_dir = Path("frontend/static")
+    if _playground_dir.exists() and _playground_dir.is_dir():
+        from fastapi.staticfiles import StaticFiles
+        from starlette.responses import FileResponse
+
+        @app.get("/")
+        async def playground_index() -> FileResponse:
+            return FileResponse(str(_playground_dir / "index.html"))
+
+        # Mount static assets (JS, CSS, fonts) — must be after API routes
+        app.mount("/", StaticFiles(directory=str(_playground_dir), html=True), name="playground")
+
+        logger.info("Playground mounted from %s", _playground_dir)
+
     return app
 
 
