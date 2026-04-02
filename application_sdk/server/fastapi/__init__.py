@@ -539,6 +539,24 @@ class APIServer(ServerInterface):
             status=EventWorkflowResponse.Status.DROP,
         )
 
+    async def _close_handler_client(self) -> None:
+        """Close the handler's client to release database connections.
+
+        Called after UI endpoint operations (test_auth, preflight_check,
+        fetch_metadata) to prevent idle connections from lingering on the
+        database server.
+        """
+        if (
+            self.handler
+            and hasattr(self.handler, "sql_client")
+            and self.handler.sql_client
+            and hasattr(self.handler.sql_client, "close")
+        ):
+            try:
+                await self.handler.sql_client.close()
+            except Exception:
+                pass
+
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
         """Test authentication credentials."""
         start_time = time.time()
@@ -581,6 +599,8 @@ class APIServer(ServerInterface):
                 description="Total number of authentication requests",
             )
             raise e
+        finally:
+            await self._close_handler_client()
 
     async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:
         """Fetch metadata based on request parameters."""
@@ -637,6 +657,8 @@ class APIServer(ServerInterface):
                 description="Total number of metadata fetch requests",
             )
             raise e
+        finally:
+            await self._close_handler_client()
 
     async def preflight_check(
         self, body: PreflightCheckRequest
@@ -696,6 +718,8 @@ class APIServer(ServerInterface):
                 description="Total number of preflight checks",
             )
             raise e
+        finally:
+            await self._close_handler_client()
 
     async def upload_file(
         self,
