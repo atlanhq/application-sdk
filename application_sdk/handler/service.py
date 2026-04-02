@@ -976,9 +976,9 @@ def create_app_handler_service(
                     type,
                 )
 
-        # Fallback to object store (S3) — only for non-credential types
-        if config is None and type != "credentials":
-            config = await _config_load_from_objectstore(config_id)
+        # Fallback to object store (S3)
+        if config is None:
+            config = await _config_load_from_objectstore(config_id, config_type=type)
 
         if config is None and _state_store is None and _storage is None:
             raise HTTPException(
@@ -1024,7 +1024,7 @@ def create_app_handler_service(
         # Credential configs only contain non-sensitive metadata (host, port,
         # authType, extra) — actual secrets are managed by Heracles/Vault.
         if not saved:
-            saved = await _config_save_to_objectstore(config_id, body)
+            saved = await _config_save_to_objectstore(config_id, body, config_type=type)
 
         if not saved:
             raise HTTPException(
