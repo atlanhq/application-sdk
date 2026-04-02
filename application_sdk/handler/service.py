@@ -16,7 +16,7 @@ Routes:
     POST /workflows/v1/file - Upload file to object storage
     GET  /health - Health check (k8s liveness probe)
     GET  /server/ready - Readiness probe
-    GET  / - Serve frontend UI (frontend/static/index.html)
+    GET  / - Serve frontend UI (app/generated/frontend/static/index.html)
 
 Usage::
 
@@ -328,7 +328,7 @@ def create_app_handler_service(
     title: str = "Handler Service",
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
-    frontend_assets_path: str = "frontend/static",
+    frontend_assets_path: str = "app/generated/frontend/static",
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
 
@@ -347,7 +347,7 @@ def create_app_handler_service(
         version: API version string.
         frontend_assets_path: Path to the directory containing frontend static assets.
             Serves ``index.html`` at ``GET /`` and mounts remaining assets as static
-            files. Defaults to ``"frontend/static"``.
+            files. Defaults to ``"app/generated/frontend/static"``.
 
     Returns:
         Configured FastAPI application.

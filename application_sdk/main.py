@@ -112,7 +112,7 @@ class AppConfig:
     # Handler
     handler_host: str = "0.0.0.0"
     handler_port: int = 8000
-    frontend_assets_path: str = "frontend/static"
+    frontend_assets_path: str = "app/generated/frontend/static"
 
     # Common
     log_level: str = "INFO"
@@ -233,7 +233,9 @@ class AppConfig:
             auth_token_url=_env("ATLAN_AUTH_TOKEN_URL"),
             auth_base_url=_env("ATLAN_AUTH_BASE_URL"),
             auth_scopes=_env("ATLAN_AUTH_SCOPES"),
-            frontend_assets_path=_env("ATLAN_FRONTEND_ASSETS_PATH", "frontend/static"),
+            frontend_assets_path=_env(
+                "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
+            ),
         )
 
 
