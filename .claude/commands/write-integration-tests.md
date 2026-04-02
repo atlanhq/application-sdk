@@ -598,3 +598,30 @@ These are live, working pipelines you can copy from:
 - [ ] `default_metadata` uses a real database/schema from the `.env`
 - [ ] `default_connection` uses the correct `app_name` in `connection_qualified_name`
 - [ ] No hardcoded passwords or secrets in positive test scenarios (those use auto-discovery)
+
+## IMPORTANT: After Everything Is Done — Prompt the User
+
+After all tests pass and the CI workflow is deployed, you MUST ask the user:
+
+---
+
+**The integration tests are working and the CI workflow is deployed. There is one final critical step:**
+
+**You need to enable branch protection so that failing integration tests actually block merging.**
+
+Do you have admin access to this repo? If yes, go to:
+> **Settings → Branches → Add branch protection rule**
+> - Branch name pattern: `main`
+> - Check "Require status checks to pass before merging"
+> - Search for `integration-tests` and select it
+> - Save
+
+If you don't have admin access, ask your team lead or repo owner to do this. It takes 30 seconds.
+
+**Without this step, the tests run but don't block anything.** Since `publish.yaml` auto-deploys on merge to main, broken code would go straight to production. This is the single most important configuration step.
+
+Would you like me to help you verify the branch protection rule is set up correctly?
+
+---
+
+Do NOT skip this prompt. The entire value of the pipeline depends on merge blocking being enabled.
