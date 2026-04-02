@@ -23,6 +23,8 @@ Read all of the following files to understand the project's standards. These are
 
 Also use Glob to find any additional `CLAUDE.md` files in subdirectories that are relevant to the changed files.
 
+**BUGBOT.md files**: If changed files are in subdirectories with their own `.cursor/BUGBOT.md` (e.g., `application_sdk/workflows/.cursor/BUGBOT.md`), read those as well for module-specific review criteria.
+
 ## Step 2: Gather PR data
 
 Run these commands in parallel:
@@ -107,7 +109,6 @@ For each issue found across all passes, assign a confidence score from 0 to 100:
 - Pre-existing issues not introduced in this PR
 - Code that appears buggy but is actually correct in context
 - Pedantic nitpicks a senior engineer would not flag
-- Issues that linters (ruff, isort, pyright) will catch — do not run the linter to verify
 - General code quality concerns not explicitly required in CLAUDE.md or BUGBOT.md
 - Issues silenced in code via lint-ignore comments
 
