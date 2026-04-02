@@ -1026,10 +1026,11 @@ def create_app_handler_service(
             saved = await _config_save_to_objectstore(config_id, body)
         elif not saved and type == "credentials":
             logger.warning(
-                "Skipping object store fallback for credential config %s "
-                "— credentials must not be persisted to S3",
+                "Credential config %s acknowledged (not persisted to S3) "
+                "— credentials are managed by Heracles/Vault, not the app",
                 config_id,
             )
+            saved = True  # Acknowledge to Heracles — credentials stored in Vault
 
         if not saved:
             raise HTTPException(
