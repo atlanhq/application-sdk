@@ -346,6 +346,244 @@ uv run pytest tests/integration/ -v -k "auth_valid_credentials"
 uv run pytest tests/integration/ -v -s
 ```
 
+## CI/CD Deployment — Ready-to-Use Workflow Templates
+
+After the tests pass locally, deploy them to CI. Below are complete, copy-paste workflow templates.
+
+### Template 1: Standard Connector (Public Source — Postgres, Redshift, Snowflake)
+
+```yaml
+# .github/workflows/integration-tests.yaml
+name: Integration Tests
+
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+
+jobs:
+  integration-test:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'int-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: integration-test-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      pull-requests: write
+      contents: write
+      statuses: write
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4.0.0
+
+      - name: Install Dapr CLI
+        run: |
+          DAPR_VERSION="1.16.2"
+          wget -q https://github.com/dapr/cli/releases/download/v${DAPR_VERSION}/dapr_linux_amd64.tar.gz -O /tmp/dapr.tar.gz
+          tar -xzf /tmp/dapr.tar.gz -C /tmp
+          sudo mv /tmp/dapr /usr/local/bin/
+          chmod +x /usr/local/bin/dapr
+          dapr init --runtime-version ${DAPR_VERSION} --slim
+
+      - name: Install Temporal CLI
+        run: curl -sSf https://temporal.download/cli.sh | sh
+
+      - name: Add Dapr and Temporal to PATH
+        run: |
+          echo "$HOME/.dapr/bin" >> $GITHUB_PATH
+          echo "$HOME/.temporalio/bin" >> $GITHUB_PATH
+
+      - name: Setup Python, uv, and dependencies
+        uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+
+      - name: Download Dapr components
+        run: uv run poe download-components
+
+      - name: Start Dapr + Temporal
+        run: |
+          uv run poe start-deps
+          sleep 5
+
+      - name: Start app server
+        env:
+          ATLAN_LOCAL_DEVELOPMENT: "true"
+          ATLAN_APPLICATION_NAME: {APP_NAME}  # <-- CHANGE THIS
+        run: |
+          uv run python main.py &
+          echo "Waiting for app server on :8000..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8000/server/health > /dev/null 2>&1; then
+              echo "App server ready after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "::error::App server failed to start within 60s"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Run integration tests
+        id: tests
+        env:
+          # <-- CHANGE THESE to match your connector's secrets
+          E2E_{APP_NAME}_HOST: ${{ secrets.{APP_NAME}_HOST }}
+          E2E_{APP_NAME}_PORT: "5432"
+          E2E_{APP_NAME}_USERNAME: ${{ secrets.{APP_NAME}_USERNAME }}
+          E2E_{APP_NAME}_PASSWORD: ${{ secrets.{APP_NAME}_PASSWORD }}
+          E2E_{APP_NAME}_DATABASE: "default"
+          ATLAN_LOCAL_DEVELOPMENT: "true"
+          ATLAN_APPLICATION_NAME: {APP_NAME}
+        run: |
+          mkdir -p results
+          set +e
+          uv run pytest tests/integration/ -v \
+            --tb=short \
+            --junit-xml=results/test-results.xml \
+            2>&1 | tee results/test-output.txt
+          TEST_EXIT_CODE=${PIPESTATUS[0]}
+          set -e
+          SUMMARY=$(grep -E "^(FAILED|ERROR|=)" results/test-output.txt | tail -1)
+          echo "summary=$SUMMARY" >> "$GITHUB_OUTPUT"
+          exit $TEST_EXIT_CODE
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: results/
+          retention-days: 14
+
+      - name: Post PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc
+        with:
+          message-id: "integration_test_results"
+          message: |
+            ## Integration Test Results
+            **Status:** ${{ steps.tests.outcome == 'success' && 'Passed' || 'Failed' }}
+            **Summary:** `${{ steps.tests.outputs.summary || 'No summary available' }}`
+            **Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+        continue-on-error: true
+
+      - name: Set commit status
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const state = '${{ steps.tests.outcome }}' === 'success' ? 'success' : 'failure';
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.pull_request.head.sha,
+              state: state,
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: state === 'success' ? 'Integration tests passed' : 'Integration tests failed',
+              context: 'integration-tests'
+            });
+        continue-on-error: true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kill $(lsof -t -i :8000) 2>/dev/null || true
+          uv run poe stop-deps || true
+```
+
+### Template 2: VPN-Protected Source (ClickHouse, Oracle, on-prem)
+
+Add these two steps **before** "Start Dapr + Temporal":
+
+```yaml
+      # Requires: GLOBALPROTECT_USERNAME, GLOBALPROTECT_PASSWORD (secrets)
+      #           GLOBALPROTECT_PORTAL_URL (variable, e.g. vpn2.atlan.app)
+      - name: Connect to VPN (GlobalProtect)
+        uses: atlanhq/github-actions/globalprotect-connect-action@main
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Verify VPN connectivity
+        run: |
+          echo "Testing source connectivity through VPN..."
+          curl -sk --connect-timeout 10 https://{YOUR_SOURCE_HOST}:{PORT} \
+            && echo "Source reachable!" \
+            || echo "Warning: source not reachable — tests may fail"
+```
+
+### Template 3: REST/PAT Auth Connector (Tableau, Salesforce)
+
+For connectors with camelCase credential fields, put them in `default_credentials` on the test class (env var auto-discovery lowercases everything):
+
+```python
+class TestTableauIntegration(BaseIntegrationTest):
+    # CamelCase fields must be here, not in env vars
+    default_credentials = {
+        "authType": "personal_access_token",
+        "protocol": "https",
+        "defaultSite": os.environ.get("E2E_TABLEAU_DEFAULTSITE", ""),
+    }
+```
+
+And in the workflow YAML, only set the simple fields as env vars:
+```yaml
+        env:
+          E2E_TABLEAU_HOST: ${{ secrets.TABLEAU_HOST }}
+          E2E_TABLEAU_PORT: "443"
+          E2E_TABLEAU_USERNAME: ${{ secrets.TABLEAU_PAT_TOKEN_NAME }}
+          E2E_TABLEAU_PASSWORD: ${{ secrets.TABLEAU_PAT_TOKEN_VALUE }}
+          E2E_TABLEAU_DEFAULTSITE: ${{ secrets.TABLEAU_SITE }}
+```
+
+### GitHub Secrets Checklist
+
+For each connector repo, add these secrets in Settings → Secrets → Actions:
+
+| Secret | Example | Required |
+|--------|---------|----------|
+| `{APP}_HOST` | `my-db.rds.amazonaws.com` | Yes |
+| `{APP}_PORT` | `5432` | Only if non-standard |
+| `{APP}_USERNAME` | `admin` | Yes |
+| `{APP}_PASSWORD` | `secret123` | Yes |
+| `{APP}_DATABASE` | `default` | Only if needed |
+| `GLOBALPROTECT_USERNAME` | `john.doe` | Only for VPN sources |
+| `GLOBALPROTECT_PASSWORD` | (system password) | Only for VPN sources |
+
+And one **variable** (Settings → Variables → Actions):
+
+| Variable | Value | Required |
+|----------|-------|----------|
+| `GLOBALPROTECT_PORTAL_URL` | `vpn2.atlan.app` | Only for VPN sources |
+
+### Reference Implementations
+
+These are live, working pipelines you can copy from:
+
+| Connector | Workflow File | Source Type | Demo PRs |
+|-----------|--------------|-------------|----------|
+| **Postgres** | [integration-tests.yaml](https://github.com/atlanhq/atlan-postgres-app/blob/demo/integration-tests-passing/.github/workflows/integration-tests.yaml) | SQL, public RDS | [#319](https://github.com/atlanhq/atlan-postgres-app/pull/319) (pass), [#320](https://github.com/atlanhq/atlan-postgres-app/pull/320) (fail) |
+| **Tableau** | [integration-tests.yaml](https://github.com/atlanhq/atlan-tableau-app/blob/tests/integration-tests/.github/workflows/integration-tests.yaml) | REST, PAT auth | [#8](https://github.com/atlanhq/atlan-tableau-app/pull/8) (pass), [#9](https://github.com/atlanhq/atlan-tableau-app/pull/9) (fail) |
+| **ClickHouse** | [integration-tests.yaml](https://github.com/atlanhq/atlan-clickhouse-app/blob/tests/integration-tests/.github/workflows/integration-tests.yaml) | SQL, VPN | [#28](https://github.com/atlanhq/atlan-clickhouse-app/pull/28) (pass), [#29](https://github.com/atlanhq/atlan-clickhouse-app/pull/29) (fail) |
+
+## Enable Merge Blocking (CRITICAL — DO NOT SKIP)
+
+**This step is mandatory.** Without it, the integration tests run but don't actually prevent broken code from being merged.
+
+1. Go to the repo → **Settings** → **Branches** → **Add branch protection rule**
+2. Branch name pattern: `main`
+3. Check **"Require status checks to pass before merging"**
+4. Search for `integration-tests` and select it
+5. Click **Save changes**
+
+**Why this matters:** With the new `publish.yaml` pipeline, merging to `main` automatically builds a container image and creates a release on the Global Marketplace. Without merge blocking, a broken PR goes straight from merge to production. The integration test status check is the gate that prevents this.
+
 ## Checklist Before Finishing
 
 - [ ] `tests/integration/__init__.py` exists
