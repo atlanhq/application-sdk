@@ -168,8 +168,12 @@ class WorkflowFailureContextWorkflowInboundInterceptor(WorkflowInboundIntercepto
 
         try:
             return await super().execute_workflow(input)
-        except BaseException as e:
-            # Pop without lock — safe for unique key; see module docstring
+        except Exception as e:
+            # Only catch Exception (not BaseException) so that CancelledError and
+            # Temporal-internal BaseException subclasses (_WorkflowBeingEvictedError
+            # etc.) pass through unchanged.  Catching those would break Temporal's
+            # workflow eviction and graceful-shutdown mechanisms, causing worker.run()
+            # to crash during startup replay or shutdown.
             failure_ctx = _failure_contexts.pop(run_id, None)
 
             if failure_ctx:
