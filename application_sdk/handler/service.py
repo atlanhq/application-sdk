@@ -16,6 +16,7 @@ Routes:
     POST /workflows/v1/file - Upload file to object storage
     GET  /health - Health check (k8s liveness probe)
     GET  /server/ready - Readiness probe
+    GET  / - Serve frontend UI (app/generated/frontend/static/index.html)
 
 Usage::
 
@@ -35,7 +36,8 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
@@ -63,27 +65,22 @@ def _serialize_credential_value(v: Any) -> str:
     return json.dumps(v)
 
 
-def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
-    """Normalize v2 nested-dict credentials to v3 list[{key, value}] format.
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "host",
+        "port",
+        "authType",
+        "username",
+        "password",
+        "connectorType",
+        "connectorConfigName",
+        "extra",
+    }
+)
 
-    v2 (Heracles) sends:
-        {"credentials": {"host": "...", "username": "...", "extra": {"workspace": "..."}}}
 
-    v3 expects:
-        {"credentials": [{"key": "host", "value": "..."}, {"key": "extra.workspace", "value": "..."}]}
-
-    If credentials is already a list (v3 format), the body is returned unchanged.
-    """
-    creds = body.get("credentials")
-    if not isinstance(creds, dict):
-        return body
-
-    logger.debug(
-        "Converting v2 nested-dict credentials to v3 list format, keys=%s",
-        list(creds.keys()),
-    )
-
-    creds_dict: dict[str, Any] = dict(creds)
+def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
+    """Convert a flat credential dict to v3 [{key, value}] pairs."""
     pairs: list[dict[str, str]] = []
     extra = creds_dict.pop("extra", None)
     for k, v in creds_dict.items():
@@ -95,8 +92,49 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
                 pairs.append(
                     {"key": f"extra.{k}", "value": _serialize_credential_value(v)}
                 )
+    return pairs
 
-    return {**body, "credentials": pairs}
+
+def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
+    """Normalize v2 credential formats to v3 list[{key, value}] format.
+
+    Handles three formats:
+
+    1. v3 array (already correct):
+        {"credentials": [{"key": "host", "value": "..."}]}
+
+    2. v2 nested dict (Heracles internal):
+        {"credentials": {"host": "...", "username": "...", "extra": {...}}}
+
+    3. v2 flat top-level (Heracles credential test):
+        {"host": "...", "authType": "basic", "password": "...", "extra": {...}}
+
+    Returns the body with credentials normalized to v3 array format.
+    """
+    creds = body.get("credentials")
+
+    # Already v3 array format — no conversion needed
+    if isinstance(creds, list):
+        return body
+
+    # Format 2: nested dict under "credentials" key
+    if isinstance(creds, dict):
+        logger.info(
+            "Converting v2 nested-dict credentials to v3 list, keys=%s",
+            list(creds.keys()),
+        )
+        return {**body, "credentials": _flatten_to_pairs(dict(creds))}
+
+    # Format 3: flat top-level keys (detect by presence of known credential keys)
+    if creds is None and _CREDENTIAL_KEYS & body.keys():
+        flat_creds = {k: body[k] for k in list(body.keys()) if k in _CREDENTIAL_KEYS}
+        logger.info(
+            "Converting v2 flat top-level credentials to v3 list, keys=%s",
+            list(flat_creds.keys()),
+        )
+        return {**body, "credentials": _flatten_to_pairs(flat_creds)}
+
+    return body
 
 
 if TYPE_CHECKING:
@@ -290,6 +328,7 @@ def create_app_handler_service(
     title: str = "Handler Service",
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
+    frontend_assets_path: str = "app/generated/frontend/static",
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
 
@@ -306,6 +345,9 @@ def create_app_handler_service(
         title: OpenAPI title.
         description: OpenAPI description.
         version: API version string.
+        frontend_assets_path: Path to the directory containing frontend static assets.
+            Serves ``index.html`` at ``GET /`` and mounts remaining assets as static
+            files. Defaults to ``"app/generated/frontend/static"``.
 
     Returns:
         Configured FastAPI application.
@@ -583,7 +625,20 @@ def create_app_handler_service(
                 config_hash = input_data.config_hash()
                 workflow_id = f"{app_name}-{config_hash}-{uuid4().hex[:8]}"
 
-            correlation_id = str(uuid4())
+            # Populate framework-managed fields on input_data before Temporal dispatch.
+            # These fields are declared on Input (contracts/base.py) but the /start
+            # handler constructs input_data before generating them — so they must be
+            # injected after the fact.
+            #
+            # workflow_id: always set by the framework (caller value is popped at
+            #   line 607 and used only if explicitly provided).
+            # correlation_id: respect caller-supplied value if present (docstring:
+            #   "Caller-supplied correlation ID for tracing across systems"), only
+            #   generate a UUID when the caller didn't provide one.
+            input_data.workflow_id = workflow_id
+
+            correlation_id = input_data.correlation_id or str(uuid4())
+            input_data.correlation_id = correlation_id
             input_data._correlation_id = correlation_id
 
             from application_sdk.observability.correlation import (
@@ -866,11 +921,89 @@ def create_app_handler_service(
     # Config (state store)
     # ------------------------------------------------------------------
 
+    def _config_objectstore_key(config_id: str, config_type: str = "workflows") -> str:
+        """Build S3 key matching v2 SDK statestore path convention.
+
+        Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json
+        """
+        from application_sdk.constants import APPLICATION_NAME
+
+        return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
+
+    async def _config_load_from_objectstore(
+        config_id: str, config_type: str = "workflows"
+    ) -> "dict[str, Any] | None":
+        """Load workflow config from object store (S3) fallback."""
+        if _storage is None:
+            return None
+        import json as _json
+        import os
+        import tempfile
+
+        from application_sdk.storage.ops import download_file
+
+        key = _config_objectstore_key(config_id, config_type)
+        tmp = tempfile.mktemp(suffix=".json")
+        try:
+            await download_file(key, tmp, _storage)
+            with open(tmp) as f:
+                return _json.load(f)
+        except Exception:
+            return None
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    async def _config_save_to_objectstore(
+        config_id: str, body: "dict[str, Any]", config_type: str = "workflows"
+    ) -> bool:
+        """Save workflow config to object store (S3) fallback."""
+        if _storage is None:
+            return False
+        import json as _json
+        import os
+        import tempfile
+
+        from application_sdk.storage.ops import upload_file
+
+        key = _config_objectstore_key(config_id, config_type)
+        tmp = tempfile.mktemp(suffix=".json")
+        try:
+            with open(tmp, "w") as f:
+                _json.dump(body, f)
+            await upload_file(key, tmp, _storage)
+            return True
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
     @app.get("/workflows/v1/config/{config_id}")
-    async def get_workflow_config(config_id: str) -> JSONResponse:
-        if _state_store is None:
-            raise HTTPException(status_code=503, detail="State store not configured")
-        config = await _state_store.load(f"workflows/{config_id}")
+    async def get_workflow_config(
+        config_id: str, type: str = "workflows"
+    ) -> JSONResponse:
+        """Fetch workflow config — tries statestore first, falls back to object store."""
+        config = None
+
+        # Try statestore
+        if _state_store is not None:
+            try:
+                config = await _state_store.load(f"workflows/{config_id}")
+            except Exception:
+                logger.warning(
+                    "State store load failed for config %s (type=%s), trying object store",
+                    config_id,
+                    type,
+                )
+
+        # Fallback to object store (S3)
+        if config is None:
+            config = await _config_load_from_objectstore(config_id, config_type=type)
+
+        if config is None and _state_store is None and _storage is None:
+            raise HTTPException(
+                status_code=503,
+                detail="No state store or object store configured",
+            )
         if config is None:
             raise HTTPException(
                 status_code=404, detail=f"Config not found: {config_id}"
@@ -883,11 +1016,40 @@ def create_app_handler_service(
         )
 
     @app.post("/workflows/v1/config/{config_id}")
-    async def update_workflow_config(config_id: str, request: Request) -> JSONResponse:
-        if _state_store is None:
-            raise HTTPException(status_code=503, detail="State store not configured")
+    async def update_workflow_config(
+        config_id: str, request: Request, type: str = "workflows"
+    ) -> JSONResponse:
+        """Save workflow config — tries statestore first, falls back to object store.
+
+        Object store fallback is only used for non-credential config types
+        to avoid persisting sensitive credential data to S3.
+        """
         body = await request.json()
-        await _state_store.save(f"workflows/{config_id}", body)
+        saved = False
+
+        # Try statestore
+        if _state_store is not None:
+            try:
+                await _state_store.save(f"workflows/{config_id}", body)
+                saved = True
+            except Exception:
+                logger.warning(
+                    "State store save failed for config %s (type=%s), trying object store",
+                    config_id,
+                    type,
+                )
+
+        # Fallback to object store (S3) for all config types.
+        # Credential configs only contain non-sensitive metadata (host, port,
+        # authType, extra) — actual secrets are managed by Heracles/Vault.
+        if not saved:
+            saved = await _config_save_to_objectstore(config_id, body, config_type=type)
+
+        if not saved:
+            raise HTTPException(
+                status_code=503,
+                detail="No state store or object store configured",
+            )
         return JSONResponse(
             content=_wrap_response(
                 cast("dict[str, Any]", body),
@@ -1069,6 +1231,9 @@ def create_app_handler_service(
 
             workflow_id = f"{app_name}-event-{event_id}-{uuid4().hex[:8]}"
 
+            # Inject workflow_id so run() can access it via input.workflow_id
+            input_data.workflow_id = workflow_id
+
             handle = await client.start_workflow(
                 app_cls._app_name,  # type: ignore[attr-defined]
                 args=[input_data],
@@ -1196,6 +1361,32 @@ def create_app_handler_service(
     @app.get("/server/ready")
     async def ready() -> dict[str, str]:
         return {"status": "ok"}
+
+    # ------------------------------------------------------------------
+    # UI routes
+    # ------------------------------------------------------------------
+
+    @app.get("/")
+    async def frontend_home() -> HTMLResponse:
+        import os
+
+        frontend_html_path = os.path.join(frontend_assets_path, "index.html")
+        if os.path.exists(frontend_html_path):
+            with open(frontend_html_path, encoding="utf-8") as f:
+                return HTMLResponse(content=f.read())
+        return HTMLResponse(
+            content="<html><body><h1>UI not available</h1></body></html>",
+            status_code=404,
+        )
+
+    static_dir = Path(frontend_assets_path)
+    if static_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(static_dir)), name="static")
+    else:
+        logger.warning(
+            "Static UI assets not found at %s, skipping static mount",
+            static_dir,
+        )
 
     return app
 
