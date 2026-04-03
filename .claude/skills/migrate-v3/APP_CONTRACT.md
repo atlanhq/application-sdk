@@ -25,8 +25,9 @@ your-app/
 │       ├── manifest.json                   # AE DAG (extract → publish)
 │       └── input.py                        # Python typed Input class
 ├── app/
+│   ├── generated -> ../contract/generated  # Symlink — SDK serves configs from app/generated/
 │   ├── contracts/
-│   │   └── _input.py                       # Generated typed dataclass (moved from contract/generated/)
+│   │   └── _input.py                       # Generated typed dataclass (copied from contract/generated/)
 │   ├── handlers/                           # No get_configmap/get_manifest overrides needed
 │   └── workflows/                          # Contains the workflow class referenced by workflowType
 ├── frontend/
@@ -650,12 +651,23 @@ exclude = [
 If `[tool.pyright]` already has an `exclude` list, just append `"app/contracts/_input.py"` to it.
 If `[tool.ruff]` already exists, append to its `exclude` list.
 
+**Create the `app/generated` symlink.** The SDK serves configs from `app/generated/` at runtime (defined by `CONTRACT_GENERATED_DIR` in the SDK constants). PKL outputs to `contract/generated/`. Create a symlink so the SDK can find them without copying:
+
+```bash
+ln -s ../contract/generated app/generated
+```
+
+Verify it resolves:
+```bash
+ls app/generated/  # Should show the JSON files after generation
+```
+
 **Add the generate task.** Try the standard command first:
 
 ```toml
 [tool.poe.tasks]
 # Contract generation
-generate.shell = "cd contract && pkl eval -m generated app.pkl && mkdir -p ../app/contracts && mv generated/input.py ../app/contracts/_input.py"
+generate.shell = "cd contract && pkl eval -m generated app.pkl && mkdir -p ../app/contracts && cp generated/_input.py ../app/contracts/_input.py"
 ```
 
 Then test it:
@@ -664,12 +676,21 @@ Then test it:
 uv run poe generate
 ```
 
-If it fails with an **SSL handshake error** (common on corporate VPNs), switch to the CA-certificate variant:
+If it fails with an **SSL handshake error** (common on corporate VPNs behind Netskope), switch to the CA-certificate variant:
 
 ```toml
 [tool.poe.tasks]
 # Contract generation (with CA cert for VPN/corporate proxy environments)
-generate.shell = "cd contract && pkl eval --ca-certificates ~/.pkl-ca-bundle.pem -m generated app.pkl && mkdir -p ../app/contracts && mv generated/input.py ../app/contracts/_input.py"
+generate.shell = "cd contract && pkl eval --ca-certificates ~/.pkl-ca-bundle.pem -m generated app.pkl && mkdir -p ../app/contracts && cp generated/_input.py ../app/contracts/_input.py"
+```
+
+To build the CA bundle (includes Netskope proxy certs):
+```bash
+security export -t certs -o /tmp/system-cas.pem -p /System/Library/Keychains/SystemRootCertificates.keychain
+security export -t certs -o /tmp/custom-cas.pem -p /Library/Keychains/System.keychain
+echo | openssl s_client -connect atlanhq.github.io:443 -servername atlanhq.github.io -showcerts 2>/dev/null \
+  | awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/{ print }' > /tmp/netskope-chain.pem
+cat /tmp/system-cas.pem /tmp/custom-cas.pem /tmp/netskope-chain.pem > ~/.pkl-ca-bundle.pem
 ```
 
 To create the CA bundle if it doesn't exist:
@@ -746,7 +767,7 @@ If the generated output matches or improves on the old templates, remove:
 If there are differences, investigate whether the contract `app.pkl` is missing fields or
 widgets that the old template had (e.g., preflight checks, extra form fields, anyOf rules).
 
-The SDK auto-serves from `contract/generated/` — no handler code needed.
+The SDK auto-serves from `app/generated/` (which is a symlink to `contract/generated/`) — no handler code needed.
 
 ### 6. Clean Up Stale Generated Files
 
