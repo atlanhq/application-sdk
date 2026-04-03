@@ -170,6 +170,32 @@ class TestPreflightEndpoint:
         assert response.status_code == 500
 
 
+class _ListMetadataHandler(Handler):
+    """Handler that returns a raw list (apitree / BI connector format)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.SUCCESS)
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY)
+
+    async def fetch_metadata(self, input: MetadataInput) -> list:  # type: ignore[override]
+        return [{"value": "token123", "title": "My Collection", "children": []}]
+
+
+class _DictMetadataHandler(Handler):
+    """Handler that returns a raw dict (pass-through format)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.SUCCESS)
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY)
+
+    async def fetch_metadata(self, input: MetadataInput) -> dict:  # type: ignore[override]
+        return {"items": [{"value": "tok", "title": "Title"}]}
+
+
 class TestMetadataEndpoint:
     """Tests for POST /workflows/v1/metadata."""
 
@@ -191,6 +217,33 @@ class TestMetadataEndpoint:
             json={"credentials": []},
         )
         assert response.status_code == 500
+
+    def test_metadata_list_passthrough(self) -> None:
+        """BI connector returning a raw list is passed through as-is."""
+        client = _make_client(handler=_ListMetadataHandler())
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["message"] == "Metadata fetched"
+        assert body["data"] == [
+            {"value": "token123", "title": "My Collection", "children": []}
+        ]
+
+    def test_metadata_dict_passthrough(self) -> None:
+        """Handler returning a raw dict is passed through as-is."""
+        client = _make_client(handler=_DictMetadataHandler())
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"] == {"items": [{"value": "tok", "title": "Title"}]}
 
 
 class TestStartWorkflowEndpoint:

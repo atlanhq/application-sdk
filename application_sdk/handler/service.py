@@ -51,6 +51,7 @@ from application_sdk.handler.contracts import (
     EventTriggerConfig,
     FileUploadResponse,
     MetadataInput,
+    MetadataOutput,
     PreflightInput,
     SubscriptionConfig,
 )
@@ -554,19 +555,36 @@ def create_app_handler_service(
                 context.request_id_str,
             )
             result = await handler.fetch_metadata(metadata_input)
-            logger.info(
-                "Metadata fetch completed: app=%s request=%s objects=%d truncated=%s",
-                app_name,
-                context.request_id_str,
-                len(result.objects),
-                result.truncated,
-            )
-            return JSONResponse(
-                content=_wrap_response(
-                    result.model_dump(),
-                    message=f"Fetched {result.total_count} objects",
+            if isinstance(result, MetadataOutput):
+                logger.info(
+                    "Metadata fetch completed: app=%s request=%s objects=%d truncated=%s",
+                    app_name,
+                    context.request_id_str,
+                    len(result.objects),
+                    result.truncated,
                 )
-            )
+                return JSONResponse(
+                    content=_wrap_response(
+                        result.model_dump(),
+                        message=f"Fetched {result.total_count} objects",
+                    )
+                )
+            elif isinstance(result, (list, dict)):
+                count = len(result) if isinstance(result, list) else 1
+                logger.info(
+                    "Metadata fetch completed (pass-through): app=%s request=%s items=%d",
+                    app_name,
+                    context.request_id_str,
+                    count,
+                )
+                return JSONResponse(
+                    content=_wrap_response(result, message="Metadata fetched")
+                )
+            else:
+                logger.warning("Unexpected metadata return type: %s", type(result))
+                return JSONResponse(
+                    content=_wrap_response({}, message="No metadata returned")
+                )
         except HandlerError as e:
             logger.error(
                 "Metadata fetch failed for app %s (request %s): %s",
