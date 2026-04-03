@@ -990,6 +990,7 @@ async def run_dev_combined(
     config = AppConfig(
         mode="combined",
         app_module=app_module,
+        handler_module=os.environ.get("ATLAN_HANDLER_MODULE") or None,
         temporal_host=temporal_host,
         temporal_namespace=temporal_namespace,
         task_queue=effective_task_queue,
@@ -997,6 +998,9 @@ async def run_dev_combined(
         handler_port=port,
         log_level="DEBUG",
         service_name=_derive_service_name(app_module),
+        frontend_assets_path=os.environ.get(
+            "ATLAN_FRONTEND_ASSETS_PATH", "app/generated/frontend/static"
+        ),
     )
 
     # Create infrastructure early so run_combined_mode uses it directly
