@@ -1282,10 +1282,11 @@ def create_app_handler_service(
                 if json_file.stem != "manifest":
                     configmap_ids.append(json_file.stem)
         return JSONResponse(
-            content=_wrap_response(
-                cast("dict[str, Any]", {"configmaps": configmap_ids}),
-                message="ConfigMaps listed successfully",
-            )
+            content={
+                "success": True,
+                "message": "ConfigMaps listed successfully",
+                "data": configmap_ids,
+            }
         )
 
     # ------------------------------------------------------------------
@@ -1365,7 +1366,7 @@ def create_app_handler_service(
 
     static_dir = Path(frontend_assets_path)
     if static_dir.is_dir():
-        app.mount("/", StaticFiles(directory=str(static_dir)), name="static")
+        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
     else:
         logger.warning(
             "Static UI assets not found at %s, skipping static mount",
