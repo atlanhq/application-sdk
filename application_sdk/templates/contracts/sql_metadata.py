@@ -50,7 +50,13 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
 
 
 class ExtractionOutput(Output):
-    """Top-level output from a SQL metadata extraction run."""
+    """Top-level output from a SQL metadata extraction run.
+
+    The ``transformed_data_prefix``, ``connection_qualified_name``,
+    ``publish_state_prefix``, and ``current_state_prefix`` fields are read by
+    the Automation Engine via JSONPath (``$.extract.outputs.*``) to feed the
+    publish app.  They must be populated by the ``run()`` method.
+    """
 
     workflow_id: str = ""
     success: bool = False
@@ -63,6 +69,29 @@ class ExtractionOutput(Output):
     processes_extracted: int = 0
     records_uploaded: int = 0
     error: str = ""
+
+    # ── Fields required by Automation Engine / publish app ───
+    transformed_data_prefix: str = ""
+    """Object-store-relative path to transformed JSONL files.
+
+    Computed by stripping ``output_prefix`` from ``output_path`` and appending
+    ``/transformed``.  Example: ``artifacts/apps/trino/workflows/{wf_id}/{run_id}/transformed``
+    """
+
+    connection_qualified_name: str = ""
+    """Qualified name of the Atlan connection (e.g., ``default/trino/1234``)."""
+
+    publish_state_prefix: str = ""
+    """Object-store path where the publish app tracks publish state.
+
+    Convention: ``persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}/publish-state``
+    """
+
+    current_state_prefix: str = ""
+    """Object-store path for the current extraction state.
+
+    Convention: ``argo-artifacts/{connection_qn}/current-state``
+    """
 
 
 class ExtractionTaskInput(Input, allow_unbounded_fields=True):

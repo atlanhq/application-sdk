@@ -236,6 +236,21 @@ class SqlMetadataExtractor(App):
                 columns=column_result.total_record_count,
             )
 
+            # Compute object-store-relative paths for AE / publish app
+            transformed_data_prefix = ""
+            if input.output_path and input.output_prefix:
+                relative_path = input.output_path
+                if relative_path.startswith(input.output_prefix):
+                    relative_path = relative_path[len(input.output_prefix) :]
+                    relative_path = relative_path.lstrip("/")
+                transformed_data_prefix = f"{relative_path}/transformed"
+            elif input.output_path:
+                transformed_data_prefix = f"{input.output_path}/transformed"
+
+            connection_qn = (
+                input.connection.attributes.qualified_name if input.connection else ""
+            )
+
             return ExtractionOutput(
                 workflow_id=workflow_id,
                 success=True,
@@ -243,6 +258,18 @@ class SqlMetadataExtractor(App):
                 schemas_extracted=schema_result.total_record_count,
                 tables_extracted=table_result.total_record_count,
                 columns_extracted=column_result.total_record_count,
+                transformed_data_prefix=transformed_data_prefix,
+                connection_qualified_name=connection_qn,
+                publish_state_prefix=(
+                    f"persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}/publish-state"
+                    if connection_qn
+                    else ""
+                ),
+                current_state_prefix=(
+                    f"argo-artifacts/{connection_qn}/current-state"
+                    if connection_qn
+                    else ""
+                ),
             )
 
         except Exception as e:
