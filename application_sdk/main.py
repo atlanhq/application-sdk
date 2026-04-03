@@ -475,18 +475,25 @@ def _derive_task_queue(app_module: str) -> str:
     return f"{_derive_service_name(app_module)}-queue"
 
 
-def _load_extra_app_modules(extra_app_modules: list[str] | None) -> None:
-    """Load additional app modules so they register with AppRegistry."""
+def _load_extra_app_modules(extra_app_modules: list[str] | None) -> list[str]:
+    """Load additional app modules so they register with AppRegistry.
+
+    Returns:
+        List of loaded app names.
+    """
+    names: list[str] = []
     if not extra_app_modules:
-        return
+        return names
     for module_path in extra_app_modules:
         app_cls = load_app_class(module_path)
         validate_app_class(app_cls)
+        names.append(app_cls._app_name)  # type: ignore[attr-defined]
         logger.info(
             "Loaded extra app %s version %s",
             app_cls._app_name,  # type: ignore[attr-defined]
             app_cls._app_version,  # type: ignore[attr-defined]
         )
+    return names
 
 
 async def _flush_observability() -> None:
@@ -581,7 +588,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         app_class._app_version,  # type: ignore[attr-defined]
     )
 
-    _load_extra_app_modules(config.extra_app_modules)
+    extra_names = _load_extra_app_modules(config.extra_app_modules)
 
     data_converter = create_data_converter_for_app(app_class)
 
@@ -622,7 +629,13 @@ async def run_worker_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue, app_names=None)
+    # Only register tasks for explicitly loaded apps (primary + extras from ATLAN_APP_MODULE).
+    # app_names=None would include transitive imports (e.g. template base classes like
+    # SqlMetadataExtractor) whose base task implementations shadow connector overrides.
+    registered_app_names = [app_name] + extra_names
+    worker = create_worker(
+        client, task_queue=config.task_queue, app_names=registered_app_names
+    )
 
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -789,7 +802,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         app_class._app_version,  # type: ignore[attr-defined]
     )
 
-    _load_extra_app_modules(config.extra_app_modules)
+    extra_names = _load_extra_app_modules(config.extra_app_modules)
 
     data_converter = create_data_converter_for_app(app_class)
 
@@ -829,7 +842,10 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue, app_names=None)
+    registered_app_names = [app_name] + extra_names
+    worker = create_worker(
+        client, task_queue=config.task_queue, app_names=registered_app_names
+    )
 
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
