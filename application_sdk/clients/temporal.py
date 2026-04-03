@@ -57,6 +57,7 @@ from application_sdk.interceptors.models import (
     EventTypes,
     WorkerTokenRefreshEventData,
 )
+from application_sdk.interceptors.outputs import OutputInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.eventstore import EventStore
 from application_sdk.services.secretstore import SecretStore
@@ -511,6 +512,7 @@ class TemporalWorkflowClient(WorkflowClient):
         # Build interceptors list
         interceptors = [
             CorrelationContextInterceptor(),
+            OutputInterceptor(),
             EventInterceptor(),
             CleanupInterceptor(),
             RedisLockInterceptor(activities_dict),

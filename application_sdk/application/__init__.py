@@ -108,6 +108,7 @@ class BaseApplication:
             with open(manifest_path) as f:
                 raw = f.read()
             raw = raw.replace("{deployment_name}", DEPLOYMENT_NAME or "default")
+            raw = raw.replace("{app_name}", self.application_name)
             return json.loads(raw)
         return None
 

@@ -18,7 +18,10 @@ def is_component_registered(component_name: str) -> bool:
         with clients.DaprClient() as client:
             metadata = client.get_metadata()
             # Each registered component has fields: name, type (e.g., "eventstore")
-            for component in getattr(metadata, "registered_components", []):
+            components = getattr(metadata, "registered_components", None) or []
+            if not hasattr(components, "__iter__"):
+                return False
+            for component in components:
                 if component.name == component_name:
                     return True
             return False

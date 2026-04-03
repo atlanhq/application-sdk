@@ -111,9 +111,12 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
                 extract_node_id: {
                     "activity_name": "execute_workflow",
                     "activity_display_name": f"Extract {APPLICATION_NAME.title()} Metadata",
-                    "app_name": "automation-engine",
+                    "app_name": APPLICATION_NAME,
                     "inputs": {
                         "workflow_type": workflow_class.__name__,
+                        "app_name": APPLICATION_NAME,
+                        "app_id": "",
+                        "argo_workflow_slug": "",
                         "task_queue": self._task_queue(APPLICATION_NAME),
                         "args": {
                             "credential_guid": "{{credential-guid}}",
@@ -136,9 +139,10 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
                 "publish": {
                     "activity_name": "execute_workflow",
                     "activity_display_name": "Publish to Atlas",
-                    "app_name": "automation-engine",
+                    "app_name": "publish",
                     "inputs": {
                         "workflow_type": "PublishWorkflow",
+                        "app_name": "publish",
                         "task_queue": self._task_queue("publish"),
                         "args": {
                             "connection_qualified_name": f"$.{extract_node_id}.outputs.connection_qualified_name",
