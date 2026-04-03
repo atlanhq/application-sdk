@@ -22,6 +22,8 @@ from typing import Any, Dict, Generic, Optional, TypeVar
 from pydantic import BaseModel
 from temporalio import activity
 
+from temporalio.exceptions import ApplicationError
+
 from application_sdk.activities.common.models import ActivityResult
 from application_sdk.activities.common.utils import (
     auto_heartbeater,
@@ -336,8 +338,15 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                     check_entries[key].get("failureMessage", "Unknown failure")
                     for key in failed_checks
                 ]
-                raise ValueError(
-                    f"Preflight check failed: {'; '.join(failure_messages)}"
+                raise ApplicationError(
+                    f"Preflight check failed: {'; '.join(failure_messages)}",
+                    {
+                        "config_failure": True,
+                        "config_failure_reason": "preflight_check_failed",
+                        "failed_checks": failed_checks,
+                    },
+                    type="PREFLIGHT_FAILURE",
+                    non_retryable=True,
                 )
 
             logger.info("Preflight check completed successfully")
