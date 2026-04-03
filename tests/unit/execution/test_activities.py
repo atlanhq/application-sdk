@@ -67,6 +67,36 @@ class _Out2(Output, allow_unbounded_fields=True):
     y: str = ""
 
 
+@dataclass
+class _PrimaryIn(Input, allow_unbounded_fields=True):
+    x: str = ""
+
+
+@dataclass
+class _PrimaryOut(Output, allow_unbounded_fields=True):
+    y: str = ""
+
+
+@dataclass
+class _SecondaryIn(Input, allow_unbounded_fields=True):
+    x: str = ""
+
+
+@dataclass
+class _SecondaryOut(Output, allow_unbounded_fields=True):
+    y: str = ""
+
+
+@dataclass
+class _UnrelatedIn(Input, allow_unbounded_fields=True):
+    x: str = ""
+
+
+@dataclass
+class _UnrelatedOut(Output, allow_unbounded_fields=True):
+    y: str = ""
+
+
 class TestCreateActivityFromTask:
     """Tests for create_activity_from_task()."""
 
@@ -222,6 +252,145 @@ class TestGetAllTaskActivities:
         # Framework tasks appear once (deduped)
         assert activity_names.count("cleanup_files") == 1
         assert activity_names.count("upload") == 1
+
+
+class TestExplicitAppNamesFiltering:
+    """Tests for explicit app_names filtering — ensures only declared apps' tasks register."""
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def test_explicit_app_names_excludes_other_apps(self) -> None:
+        """Only tasks from explicitly named apps should be registered."""
+
+        class _PrimaryApp(App):
+            @task(timeout_seconds=60)
+            async def primary_task(self, input: _PrimaryIn) -> _PrimaryOut:
+                return _PrimaryOut()
+
+            async def run(self, input: _PrimaryIn) -> _PrimaryOut:
+                return _PrimaryOut()
+
+        class _UnrelatedApp(App):
+            @task(timeout_seconds=60)
+            async def unrelated_task(self, input: _UnrelatedIn) -> _UnrelatedOut:
+                return _UnrelatedOut()
+
+            async def run(self, input: _UnrelatedIn) -> _UnrelatedOut:
+                return _UnrelatedOut()
+
+        # Only register primary app's tasks
+        activities = get_all_task_activities(app_names=["_primary-app"])
+        activity_names = [
+            a._task_metadata.name  # type: ignore[attr-defined]
+            for a in activities
+            if hasattr(a, "_task_metadata")
+        ]
+        assert "primary_task" in activity_names
+        assert "unrelated_task" not in activity_names
+
+    def test_explicit_multi_app_names_includes_both(self) -> None:
+        """Tasks from all explicitly named apps should be registered."""
+
+        class _AppPrimary(App):
+            @task(timeout_seconds=60)
+            async def extract(self, input: _PrimaryIn) -> _PrimaryOut:
+                return _PrimaryOut()
+
+            async def run(self, input: _PrimaryIn) -> _PrimaryOut:
+                return _PrimaryOut()
+
+        class _AppSecondary(App):
+            @task(timeout_seconds=60)
+            async def lineage(self, input: _SecondaryIn) -> _SecondaryOut:
+                return _SecondaryOut()
+
+            async def run(self, input: _SecondaryIn) -> _SecondaryOut:
+                return _SecondaryOut()
+
+        class _AppUnwanted(App):
+            @task(timeout_seconds=60)
+            async def unwanted(self, input: _UnrelatedIn) -> _UnrelatedOut:
+                return _UnrelatedOut()
+
+            async def run(self, input: _UnrelatedIn) -> _UnrelatedOut:
+                return _UnrelatedOut()
+
+        activities = get_all_task_activities(
+            app_names=["_app-primary", "_app-secondary"]
+        )
+        activity_names = [
+            a._task_metadata.name  # type: ignore[attr-defined]
+            for a in activities
+            if hasattr(a, "_task_metadata")
+        ]
+        assert "extract" in activity_names
+        assert "lineage" in activity_names
+        assert "unwanted" not in activity_names
+
+    def test_dedup_across_explicit_apps(self) -> None:
+        """Framework tasks (cleanup_files, upload, etc.) should be deduped across explicit apps."""
+
+        class _DedupPrimary(App):
+            @task(timeout_seconds=60)
+            async def task_p(self, input: _PrimaryIn) -> _PrimaryOut:
+                return _PrimaryOut()
+
+            async def run(self, input: _PrimaryIn) -> _PrimaryOut:
+                return _PrimaryOut()
+
+        class _DedupSecondary(App):
+            @task(timeout_seconds=60)
+            async def task_s(self, input: _SecondaryIn) -> _SecondaryOut:
+                return _SecondaryOut()
+
+            async def run(self, input: _SecondaryIn) -> _SecondaryOut:
+                return _SecondaryOut()
+
+        activities = get_all_task_activities(
+            app_names=["_dedup-primary", "_dedup-secondary"]
+        )
+        activity_names = [
+            a._task_metadata.name  # type: ignore[attr-defined]
+            for a in activities
+            if hasattr(a, "_task_metadata")
+        ]
+        # Both user tasks present
+        assert "task_p" in activity_names
+        assert "task_s" in activity_names
+        # Framework tasks deduped (appear once, not twice)
+        assert activity_names.count("cleanup_files") == 1
+        assert activity_names.count("upload") == 1
+        assert activity_names.count("download") == 1
+
+
+class TestLoadExtraAppModules:
+    """Tests for _load_extra_app_modules return value."""
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def test_returns_empty_list_when_none(self) -> None:
+        from application_sdk.main import _load_extra_app_modules
+
+        result = _load_extra_app_modules(None)
+        assert result == []
+
+    def test_returns_empty_list_when_empty(self) -> None:
+        from application_sdk.main import _load_extra_app_modules
+
+        result = _load_extra_app_modules([])
+        assert result == []
 
 
 class TestGetActivityOptions:
