@@ -560,12 +560,12 @@ These are issues discovered during production migrations that are not covered by
 
 v3 discovers the `Handler` subclass by looking in the same module as the `App` class. If your handler is in a different module (e.g. `app/handlers/handler.py` while the App is in `app/app.py`), the SDK will use `DefaultHandler` silently.
 
-**Fix:** Either import the handler in your App module:
+**Fix (default approach):** Import the handler in your primary App module:
 ```python
-# app/app.py
-from app.handlers.handler import MyHandler  # noqa: F401 — registers handler
+# app/my_app.py
+from app.handlers import MyHandler  # noqa: F401 — registers handler
 ```
-Or set the env var `ATLAN_HANDLER_MODULE=app.handlers.handler:MyHandler`.
+This is the recommended approach. Alternatively, set `ATLAN_HANDLER_MODULE=app.handlers:MyHandler` in the Dockerfile.
 
 ### Handler credentials — v2 nested dict vs v3 list format
 
@@ -601,17 +601,44 @@ class MyExtractionInput(Input, allow_unbounded_fields=True):
 
 For inter-task contracts, prefer typed fields with `MaxItems` or `FileReference`.
 
-### Dockerfile CMD must be empty
+### Dockerfile must use v3 base image and pattern
 
-Do NOT hardcode `CMD ["--mode", "combined"]`. In production, Helm sets `APPLICATION_MODE` env var to control whether the container runs as `WORKER` (Temporal only) or `SERVER` (HTTP only). The base image `entrypoint.sh` reads this. Hardcoding `--mode` overrides Helm's env var and causes worker pods to attempt starting uvicorn on port -1.
+The Dockerfile MUST follow this exact pattern. Do NOT deviate from the base image, layer order, or env vars:
 
 ```dockerfile
-# WRONG
-CMD ["--mode", "combined"]
+# syntax=docker/dockerfile:1
+FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
 
-# CORRECT — let APPLICATION_MODE env var control mode
-CMD []
+# git is required for uv to fetch git-sourced dependencies (atlan-application-sdk)
+USER root
+RUN apk add --no-cache git
+USER appuser
+
+WORKDIR /app
+
+# Copy lock files first for dependency caching
+COPY --chown=appuser:appuser pyproject.toml uv.lock ./
+
+# Install dependencies (excluding the project itself) into a new venv
+RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
+    uv venv .venv && \
+    uv sync --locked --no-install-project --no-dev
+
+# Copy application code only
+COPY --chown=appuser:appuser app/ app/
+
+# Comma-separated: first is primary (HTTP handler), rest register on worker
+ENV ATLAN_APP_MODULE=app.my_app:MyApp
+ENV ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
+ENV APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR=false
 ```
+
+Key rules:
+- Base image: `registry.atlan.com/public/app-runtime-base:refactor-v3-latest` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
+- `COPY app/ app/` — only app code, NOT the entire repo
+- `ATLAN_APP_MODULE` — hardcoded, comma-separated for multi-app
+- No `CMD` — the base image handles mode via `APPLICATION_MODE` env var set by Helm
+- No `entrypoint.sh`, `supervisord.conf`, `otel-config.yaml` — v3 base image handles all of these
 
 ### output_path and output_prefix must be computed
 
@@ -657,3 +684,174 @@ class MyExtractionOutput(Output):
 ```
 
 If these fields are empty or named differently, AE won't find the output and the publish step fails silently.
+
+### Multi-app connectors (multiple v2 workflows → multiple v3 Apps)
+
+When the v2 connector has multiple workflows (e.g. metadata extraction + lineage extraction), each becomes a separate `App` subclass in v3. All apps share the same Temporal worker and task queue.
+
+**Rules:**
+- ONE primary app — serves the HTTP handler (`/auth`, `/check`, `/start`, `/metadata`)
+- N secondary apps — registered on the worker, triggered only via Temporal by workflow name
+- ONE handler total — imported in the primary app module. Secondary apps have no handler.
+
+**Dockerfile pattern:**
+```dockerfile
+# Comma-separated: first is primary (HTTP), rest register on worker
+ENV ATLAN_APP_MODULE=app.primary_app:PrimaryApp,app.secondary_app:SecondaryApp
+```
+
+**Handler registration** — import in the primary app module (recommended approach):
+```python
+# app/primary_app.py
+from app.handlers import MyHandler  # noqa: F401 — registers handler
+```
+
+The SDK parses `ATLAN_APP_MODULE`:
+1. First entry → loaded as primary app, serves HTTP via handler
+2. Remaining entries → loaded and registered on the worker (workflows + tasks)
+3. Only explicitly declared apps' tasks are registered — template base classes imported transitively are excluded
+
+**File structure:**
+```
+app/
+  primary_app.py         — PrimaryApp(App) with @task methods
+  secondary_app.py       — SecondaryApp(App) with @task methods
+  handlers/__init__.py   — MyHandler(Handler) — shared by primary app's HTTP endpoints
+  contracts.py           — Input/Output for all apps
+  clients/__init__.py    — Shared API client
+```
+
+**Do NOT:**
+- Import secondary apps inside the primary app module — use `ATLAN_APP_MODULE` comma syntax instead
+- Define handlers on secondary apps — only the primary app serves HTTP
+- Give each app its own handler — one handler per connector
+
+**Marketplace template:**
+Each app has a distinct `workflow-type` (kebab-case of the App class name). The Argo template triggers them by name:
+```yaml
+# Primary app
+- name: workflow-type
+  value: "primary-app"
+
+# Secondary app
+- name: workflow-type
+  value: "secondary-app"
+```
+
+Both run on the same task queue (derived from `ATLAN_APPLICATION_NAME` + `ATLAN_DEPLOYMENT_NAME`).
+
+### self.context vs self.task_context
+
+Use `self.context` (returns `AppContext`) inside `@task` methods. It has `get_secret()`, `storage`, `run_id`, etc. `self.task_context` returns `TaskExecutionContext` which does NOT have `get_secret`. Using `task_context.get_secret()` will crash with `AttributeError`.
+
+### app_state only inside @task methods
+
+`self.get_app_state()` and `self.set_app_state()` can only be called inside `@task` methods. Calling from `run()` crashes with "Cannot access app state outside of task context". Pass data to tasks via their typed Input contracts instead.
+
+### build_output_path() cannot be called from run()
+
+`build_output_path()` uses `activity.info().workflow_id` internally which is not available in the workflow context (`run()`). Use `self.run_id` directly:
+```python
+output_path = str(Path(tempfile.gettempdir()) / "my-app" / self.run_id)
+```
+
+### Write to local disk, not ParquetFileWriter/JsonFileWriter
+
+`ParquetFileWriter` and `JsonFileWriter` internally call `ObjectStore` → `DaprClient()` → Dapr health check (60s timeout). This fails locally and adds unnecessary coupling. Write directly to local disk:
+```python
+# Parquet
+pandas_df.to_parquet(str(output_file))
+
+# JSONL
+with output_file.open("wb") as f:
+    f.write(json.dumps(entity).encode() + b"\n")
+```
+
+### workflows extra is required
+
+`orjson`, `temporalio`, and `dapr` are in the `[workflows]` optional extra, not core dependencies. Without it the container fails with `ModuleNotFoundError: No module named 'orjson'`.
+```toml
+"atlan-application-sdk[daft,iam-auth,pandas,workflows]"
+```
+
+### InMemorySecretStore for local dev
+
+For local testing with credentials, use `run_dev_combined()` with `InMemorySecretStore`:
+```python
+from application_sdk.infrastructure.secrets import InMemorySecretStore
+
+secrets = {"my-cred": json.dumps({"host": "...", "password": "..."})}
+credential_stores = {"default": InMemorySecretStore(secrets)}
+
+await run_dev_combined(MyApp, credential_stores=credential_stores)
+```
+
+### Credential resolution only via credential_guid
+
+No `credentials` dict fallback. Always resolve from secret store inside `@task` methods:
+```python
+creds_json = await self.context.get_secret(credential_guid)
+creds = json.loads(creds_json) if isinstance(creds_json, str) else creds_json
+```
+
+### QueryBasedTransformer needs workflow_id and workflow_run_id
+
+`transform_metadata()` requires `workflow_id` and `workflow_run_id` as kwargs. Use `self.context.run_id` for both:
+```python
+transform_kwargs = {
+    "workflow_id": self.context.run_id,
+    "workflow_run_id": self.context.run_id,
+    ...
+}
+```
+
+### Transformer output format
+
+`QueryBasedTransformer.transform_metadata()` returns a Daft DataFrame with columns `typeName`, `status`, `attributes` — NOT `entity`. Write JSONL by iterating these:
+```python
+result_dict = transformed.to_pydict()
+for i in range(len(result_dict["typeName"])):
+    entity = {
+        "typeName": result_dict["typeName"][i],
+        "status": result_dict["status"][i],
+        "attributes": result_dict["attributes"][i],
+    }
+    f.write(json.dumps(entity).encode() + b"\n")
+```
+
+### Output paths computed internally
+
+Do not pass `output_path` or `output_prefix` via the run() Input contract. Compute them inside `run()` and pass to tasks:
+```python
+output_path = str(Path(tempfile.gettempdir()) / "my-app" / self.run_id)
+output_prefix = str(Path(tempfile.gettempdir()))
+```
+The interim-apps framework handles S3 mapping in production.
+
+### auto_heartbeat_seconds triggers Dapr health check
+
+The auto-heartbeater creates a `DaprClient` which blocks on Dapr health check (60s timeout). For tasks that don't need fine-grained heartbeating, omit `auto_heartbeat_seconds`:
+```python
+@task(timeout_seconds=3600)  # no auto_heartbeat_seconds
+async def my_long_task(self, input: MyInput) -> MyOutput:
+    ...
+```
+
+### Template base classes auto-register and can shadow task overrides
+
+When you `from application_sdk.templates import SqlMetadataExtractor`, Python imports all templates from `__init__.py`. Each has a concrete `run()`, so `__init_subclass__` registers them all in `AppRegistry`. If the worker uses `app_names=None`, base class tasks like `fetch_databases` register first and shadow your connector's overrides.
+
+The SDK handles this by only registering tasks for apps explicitly declared in `ATLAN_APP_MODULE`. Template base classes register in `AppRegistry` (harmless) but their tasks are excluded from the worker. You don't need to do anything — just make sure all your apps are listed in `ATLAN_APP_MODULE`.
+
+### os.environ is blocked inside Temporal workflow sandbox
+
+`os.environ.get()` cannot be called from `run()` — Temporal's sandbox blocks it as non-deterministic. Read env vars at module level:
+```python
+# Module level — runs at import time, before sandbox
+_MY_CONFIG = os.environ.get("MY_CONFIG", "default")
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> MyOutput:
+        # Use _MY_CONFIG here, not os.environ.get()
+        ...
+```

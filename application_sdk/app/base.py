@@ -4,6 +4,7 @@ import importlib.metadata
 import inspect
 import os
 import re
+import shutil
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -1022,7 +1023,6 @@ class App(ABC):
         Call this from ``on_complete()`` (the default implementation does so
         automatically).  Do not call it directly from ``run()``.
         """
-        import shutil
 
         from application_sdk.constants import (
             CLEANUP_BASE_PATHS,
@@ -1041,7 +1041,10 @@ class App(ABC):
                     for p in (ref.local_path, ref.local_path + ".sha256"):
                         try:
                             if os.path.exists(p):
-                                os.remove(p)
+                                if os.path.isdir(p):
+                                    shutil.rmtree(p)
+                                else:
+                                    os.remove(p)
                             path_results[p] = True
                         except Exception:
                             _safe_log(
