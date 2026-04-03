@@ -57,7 +57,9 @@ class ExtractionOutput(Output):
     databases_extracted: int = 0
     schemas_extracted: int = 0
     tables_extracted: int = 0
+    views_extracted: int = 0
     columns_extracted: int = 0
+    procedures_extracted: int = 0
     records_uploaded: int = 0
     error: str = ""
 
