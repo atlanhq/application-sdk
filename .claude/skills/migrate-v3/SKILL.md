@@ -601,17 +601,44 @@ class MyExtractionInput(Input, allow_unbounded_fields=True):
 
 For inter-task contracts, prefer typed fields with `MaxItems` or `FileReference`.
 
-### Dockerfile CMD must be empty
+### Dockerfile must use v3 base image and pattern
 
-Do NOT hardcode `CMD ["--mode", "combined"]`. In production, Helm sets `APPLICATION_MODE` env var to control whether the container runs as `WORKER` (Temporal only) or `SERVER` (HTTP only). The base image `entrypoint.sh` reads this. Hardcoding `--mode` overrides Helm's env var and causes worker pods to attempt starting uvicorn on port -1.
+The Dockerfile MUST follow this exact pattern. Do NOT deviate from the base image, layer order, or env vars:
 
 ```dockerfile
-# WRONG
-CMD ["--mode", "combined"]
+# syntax=docker/dockerfile:1
+FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
 
-# CORRECT — let APPLICATION_MODE env var control mode
-CMD []
+# git is required for uv to fetch git-sourced dependencies (atlan-application-sdk)
+USER root
+RUN apk add --no-cache git
+USER appuser
+
+WORKDIR /app
+
+# Copy lock files first for dependency caching
+COPY --chown=appuser:appuser pyproject.toml uv.lock ./
+
+# Install dependencies (excluding the project itself) into a new venv
+RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
+    uv venv .venv && \
+    uv sync --locked --no-install-project --no-dev
+
+# Copy application code only
+COPY --chown=appuser:appuser app/ app/
+
+# Comma-separated: first is primary (HTTP handler), rest register on worker
+ENV ATLAN_APP_MODULE=app.my_app:MyApp
+ENV ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
+ENV APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR=false
 ```
+
+Key rules:
+- Base image: `registry.atlan.com/public/app-runtime-base:refactor-v3-latest` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
+- `COPY app/ app/` — only app code, NOT the entire repo
+- `ATLAN_APP_MODULE` — hardcoded, comma-separated for multi-app
+- No `CMD` — the base image handles mode via `APPLICATION_MODE` env var set by Helm
+- No `entrypoint.sh`, `supervisord.conf`, `otel-config.yaml` — v3 base image handles all of these
 
 ### output_path and output_prefix must be computed
 
@@ -665,20 +692,24 @@ When the v2 connector has multiple workflows (e.g. metadata extraction + lineage
 **Rules:**
 - ONE primary app — serves the HTTP handler (`/auth`, `/check`, `/start`, `/metadata`)
 - N secondary apps — registered on the worker, triggered only via Temporal by workflow name
-- ONE handler total — only the primary app needs a handler. Secondary apps have no handler.
-- Handler lives in its own module (e.g. `app/handlers/__init__.py`) and is declared via `ATLAN_HANDLER_MODULE`
+- ONE handler total — imported in the primary app module. Secondary apps have no handler.
 
 **Dockerfile pattern:**
 ```dockerfile
 # Comma-separated: first is primary (HTTP), rest register on worker
 ENV ATLAN_APP_MODULE=app.primary_app:PrimaryApp,app.secondary_app:SecondaryApp
-ENV ATLAN_HANDLER_MODULE=app.handlers:MyHandler
+```
+
+**Handler registration** — import in the primary app module (recommended approach):
+```python
+# app/primary_app.py
+from app.handlers import MyHandler  # noqa: F401 — registers handler
 ```
 
 The SDK parses `ATLAN_APP_MODULE`:
 1. First entry → loaded as primary app, serves HTTP via handler
 2. Remaining entries → loaded and registered on the worker (workflows + tasks)
-3. `app_names=None` on `create_worker` ensures all apps' tasks are registered
+3. Only explicitly declared apps' tasks are registered — template base classes imported transitively are excluded
 
 **File structure:**
 ```
