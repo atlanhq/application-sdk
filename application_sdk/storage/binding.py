@@ -119,9 +119,24 @@ def create_store_from_binding(
         return AzureStore(container_name=container, config=az_config)
 
     if store_kind == "gcs":
+        import json
+
         from obstore.store import GCSStore
 
         bucket = meta.get("bucket", "")
-        return GCSStore(bucket=bucket)
+        gcs_config: dict[str, str] = {}
+
+        # Build service account JSON from Dapr component metadata fields
+        # (injected from gcp-service-account-creds secret via Helm).
+        _sa_fields = [
+            "type", "project_id", "private_key_id", "private_key",
+            "client_email", "client_id", "auth_uri", "token_uri",
+            "auth_provider_x509_cert_url", "client_x509_cert_url",
+        ]
+        sa_data = {k: meta[k] for k in _sa_fields if k in meta}
+        if sa_data:
+            gcs_config["service_account_key"] = json.dumps(sa_data)
+
+        return GCSStore(bucket=bucket, config=gcs_config if gcs_config else None)
 
     raise StorageConfigError(f"Store kind not implemented: {store_kind!r}")
