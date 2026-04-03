@@ -625,7 +625,20 @@ def create_app_handler_service(
                 config_hash = input_data.config_hash()
                 workflow_id = f"{app_name}-{config_hash}-{uuid4().hex[:8]}"
 
-            correlation_id = str(uuid4())
+            # Populate framework-managed fields on input_data before Temporal dispatch.
+            # These fields are declared on Input (contracts/base.py) but the /start
+            # handler constructs input_data before generating them — so they must be
+            # injected after the fact.
+            #
+            # workflow_id: always set by the framework (caller value is popped at
+            #   line 607 and used only if explicitly provided).
+            # correlation_id: respect caller-supplied value if present (docstring:
+            #   "Caller-supplied correlation ID for tracing across systems"), only
+            #   generate a UUID when the caller didn't provide one.
+            input_data.workflow_id = workflow_id
+
+            correlation_id = input_data.correlation_id or str(uuid4())
+            input_data.correlation_id = correlation_id
             input_data._correlation_id = correlation_id
 
             from application_sdk.observability.correlation import (
@@ -1217,6 +1230,9 @@ def create_app_handler_service(
             )
 
             workflow_id = f"{app_name}-event-{event_id}-{uuid4().hex[:8]}"
+
+            # Inject workflow_id so run() can access it via input.workflow_id
+            input_data.workflow_id = workflow_id
 
             handle = await client.start_workflow(
                 app_cls._app_name,  # type: ignore[attr-defined]
