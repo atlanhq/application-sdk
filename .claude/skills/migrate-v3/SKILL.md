@@ -805,3 +805,22 @@ The auto-heartbeater creates a `DaprClient` which blocks on Dapr health check (6
 async def my_long_task(self, input: MyInput) -> MyOutput:
     ...
 ```
+
+### Template base classes auto-register and can shadow task overrides
+
+When you `from application_sdk.templates import SqlMetadataExtractor`, Python imports all templates from `__init__.py`. Each has a concrete `run()`, so `__init_subclass__` registers them all in `AppRegistry`. If the worker uses `app_names=None`, base class tasks like `fetch_databases` register first and shadow your connector's overrides.
+
+The SDK handles this by only registering tasks for apps explicitly declared in `ATLAN_APP_MODULE`. Template base classes register in `AppRegistry` (harmless) but their tasks are excluded from the worker. You don't need to do anything — just make sure all your apps are listed in `ATLAN_APP_MODULE`.
+
+### os.environ is blocked inside Temporal workflow sandbox
+
+`os.environ.get()` cannot be called from `run()` — Temporal's sandbox blocks it as non-deterministic. Read env vars at module level:
+```python
+# Module level — runs at import time, before sandbox
+_MY_CONFIG = os.environ.get("MY_CONFIG", "default")
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> MyOutput:
+        # Use _MY_CONFIG here, not os.environ.get()
+        ...
+```
