@@ -441,3 +441,35 @@ class TestSendPeriodicHeartbeatSync:
         stop_event.set()
         send_periodic_heartbeat_sync(1.0, stop_event)
         mock_activity.heartbeat.assert_not_called()
+
+    @patch("application_sdk.activities.common.utils.activity")
+    def test_retries_on_transient_failure(self, mock_activity):
+        """Test that heartbeat retries after transient failure instead of dying."""
+        call_count = 0
+
+        def heartbeat_side_effect(*args):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                raise Exception("transient gRPC error")
+            # Succeeds on 3rd+ call
+
+        mock_activity.heartbeat.side_effect = heartbeat_side_effect
+
+        stop_event = threading.Event()
+        thread = threading.Thread(
+            target=send_periodic_heartbeat_sync,
+            args=(0.05, stop_event),
+            daemon=True,
+        )
+        thread.start()
+        # Wait for at least 4 calls (2 failures + 2 successes)
+        deadline = time.monotonic() + 10
+        while mock_activity.heartbeat.call_count < 4 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        stop_event.set()
+        thread.join(timeout=2)
+        assert not thread.is_alive(), "Heartbeat thread failed to terminate"
+        assert (
+            mock_activity.heartbeat.call_count >= 4
+        ), "Heartbeat should have retried and recovered"

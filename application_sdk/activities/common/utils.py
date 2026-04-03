@@ -291,6 +291,10 @@ def send_periodic_heartbeat_sync(
     This function runs in a loop, waiting on the stop_event for the specified delay.
     When the event is set, the loop exits cleanly.
 
+    On transient failures, applies exponential backoff (capped at 5x the base delay)
+    to avoid hammering an unhealthy Temporal server. Resets to normal interval after
+    a successful heartbeat.
+
     Args:
         delay: The delay between heartbeats in seconds.
         stop_event: Threading event used to signal the thread to stop.
@@ -300,8 +304,27 @@ def send_periodic_heartbeat_sync(
         This function is used internally by the @auto_heartbeater decorator for
         sync activity functions and should not need to be called directly.
     """
-    while not stop_event.wait(timeout=delay):
+    consecutive_failures = 0
+    max_backoff_multiplier = 5
+    current_delay = delay
+
+    while not stop_event.wait(timeout=current_delay):
         try:
             activity.heartbeat(*details)
+            if consecutive_failures > 0:
+                logger.info(
+                    "Heartbeat recovered after %d consecutive failures",
+                    consecutive_failures,
+                )
+            consecutive_failures = 0
+            current_delay = delay
         except Exception as e:
-            logger.warning("Heartbeat failed, will retry next interval: %s", e)
+            consecutive_failures += 1
+            backoff_multiplier = min(2**consecutive_failures, max_backoff_multiplier)
+            current_delay = delay * backoff_multiplier
+            logger.warning(
+                "Heartbeat failed (attempt %d), retrying in %.1fs: %s",
+                consecutive_failures,
+                current_delay,
+                e,
+            )
