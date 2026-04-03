@@ -560,12 +560,12 @@ These are issues discovered during production migrations that are not covered by
 
 v3 discovers the `Handler` subclass by looking in the same module as the `App` class. If your handler is in a different module (e.g. `app/handlers/handler.py` while the App is in `app/app.py`), the SDK will use `DefaultHandler` silently.
 
-**Fix:** Either import the handler in your App module:
+**Fix (default approach):** Import the handler in your primary App module:
 ```python
-# app/app.py
-from app.handlers.handler import MyHandler  # noqa: F401 — registers handler
+# app/my_app.py
+from app.handlers import MyHandler  # noqa: F401 — registers handler
 ```
-Or set the env var `ATLAN_HANDLER_MODULE=app.handlers.handler:MyHandler`.
+This is the recommended approach. Alternatively, set `ATLAN_HANDLER_MODULE=app.handlers:MyHandler` in the Dockerfile.
 
 ### Handler credentials — v2 nested dict vs v3 list format
 
@@ -657,3 +657,151 @@ class MyExtractionOutput(Output):
 ```
 
 If these fields are empty or named differently, AE won't find the output and the publish step fails silently.
+
+### Multi-app connectors (multiple v2 workflows → multiple v3 Apps)
+
+When the v2 connector has multiple workflows (e.g. metadata extraction + lineage extraction), each becomes a separate `App` subclass in v3. All apps share the same Temporal worker and task queue.
+
+**Rules:**
+- ONE primary app — serves the HTTP handler (`/auth`, `/check`, `/start`, `/metadata`)
+- N secondary apps — registered on the worker, triggered only via Temporal by workflow name
+- ONE handler total — only the primary app needs a handler. Secondary apps have no handler.
+- Handler lives in its own module (e.g. `app/handlers/__init__.py`) and is declared via `ATLAN_HANDLER_MODULE`
+
+**Dockerfile pattern:**
+```dockerfile
+# Comma-separated: first is primary (HTTP), rest register on worker
+ENV ATLAN_APP_MODULE=app.primary_app:PrimaryApp,app.secondary_app:SecondaryApp
+ENV ATLAN_HANDLER_MODULE=app.handlers:MyHandler
+```
+
+The SDK parses `ATLAN_APP_MODULE`:
+1. First entry → loaded as primary app, serves HTTP via handler
+2. Remaining entries → loaded and registered on the worker (workflows + tasks)
+3. `app_names=None` on `create_worker` ensures all apps' tasks are registered
+
+**File structure:**
+```
+app/
+  primary_app.py         — PrimaryApp(App) with @task methods
+  secondary_app.py       — SecondaryApp(App) with @task methods
+  handlers/__init__.py   — MyHandler(Handler) — shared by primary app's HTTP endpoints
+  contracts.py           — Input/Output for all apps
+  clients/__init__.py    — Shared API client
+```
+
+**Do NOT:**
+- Import secondary apps inside the primary app module — use `ATLAN_APP_MODULE` comma syntax instead
+- Define handlers on secondary apps — only the primary app serves HTTP
+- Give each app its own handler — one handler per connector
+
+**Marketplace template:**
+Each app has a distinct `workflow-type` (kebab-case of the App class name). The Argo template triggers them by name:
+```yaml
+# Primary app
+- name: workflow-type
+  value: "primary-app"
+
+# Secondary app
+- name: workflow-type
+  value: "secondary-app"
+```
+
+Both run on the same task queue (derived from `ATLAN_APPLICATION_NAME` + `ATLAN_DEPLOYMENT_NAME`).
+
+### self.context vs self.task_context
+
+Use `self.context` (returns `AppContext`) inside `@task` methods. It has `get_secret()`, `storage`, `run_id`, etc. `self.task_context` returns `TaskExecutionContext` which does NOT have `get_secret`. Using `task_context.get_secret()` will crash with `AttributeError`.
+
+### app_state only inside @task methods
+
+`self.get_app_state()` and `self.set_app_state()` can only be called inside `@task` methods. Calling from `run()` crashes with "Cannot access app state outside of task context". Pass data to tasks via their typed Input contracts instead.
+
+### build_output_path() cannot be called from run()
+
+`build_output_path()` uses `activity.info().workflow_id` internally which is not available in the workflow context (`run()`). Use `self.run_id` directly:
+```python
+output_path = str(Path(tempfile.gettempdir()) / "my-app" / self.run_id)
+```
+
+### Write to local disk, not ParquetFileWriter/JsonFileWriter
+
+`ParquetFileWriter` and `JsonFileWriter` internally call `ObjectStore` → `DaprClient()` → Dapr health check (60s timeout). This fails locally and adds unnecessary coupling. Write directly to local disk:
+```python
+# Parquet
+pandas_df.to_parquet(str(output_file))
+
+# JSONL
+with output_file.open("wb") as f:
+    f.write(json.dumps(entity).encode() + b"\n")
+```
+
+### workflows extra is required
+
+`orjson`, `temporalio`, and `dapr` are in the `[workflows]` optional extra, not core dependencies. Without it the container fails with `ModuleNotFoundError: No module named 'orjson'`.
+```toml
+"atlan-application-sdk[daft,iam-auth,pandas,workflows]"
+```
+
+### InMemorySecretStore for local dev
+
+For local testing with credentials, use `run_dev_combined()` with `InMemorySecretStore`:
+```python
+from application_sdk.infrastructure.secrets import InMemorySecretStore
+
+secrets = {"my-cred": json.dumps({"host": "...", "password": "..."})}
+credential_stores = {"default": InMemorySecretStore(secrets)}
+
+await run_dev_combined(MyApp, credential_stores=credential_stores)
+```
+
+### Credential resolution only via credential_guid
+
+No `credentials` dict fallback. Always resolve from secret store inside `@task` methods:
+```python
+creds_json = await self.context.get_secret(credential_guid)
+creds = json.loads(creds_json) if isinstance(creds_json, str) else creds_json
+```
+
+### QueryBasedTransformer needs workflow_id and workflow_run_id
+
+`transform_metadata()` requires `workflow_id` and `workflow_run_id` as kwargs. Use `self.context.run_id` for both:
+```python
+transform_kwargs = {
+    "workflow_id": self.context.run_id,
+    "workflow_run_id": self.context.run_id,
+    ...
+}
+```
+
+### Transformer output format
+
+`QueryBasedTransformer.transform_metadata()` returns a Daft DataFrame with columns `typeName`, `status`, `attributes` — NOT `entity`. Write JSONL by iterating these:
+```python
+result_dict = transformed.to_pydict()
+for i in range(len(result_dict["typeName"])):
+    entity = {
+        "typeName": result_dict["typeName"][i],
+        "status": result_dict["status"][i],
+        "attributes": result_dict["attributes"][i],
+    }
+    f.write(json.dumps(entity).encode() + b"\n")
+```
+
+### Output paths computed internally
+
+Do not pass `output_path` or `output_prefix` via the run() Input contract. Compute them inside `run()` and pass to tasks:
+```python
+output_path = str(Path(tempfile.gettempdir()) / "my-app" / self.run_id)
+output_prefix = str(Path(tempfile.gettempdir()))
+```
+The interim-apps framework handles S3 mapping in production.
+
+### auto_heartbeat_seconds triggers Dapr health check
+
+The auto-heartbeater creates a `DaprClient` which blocks on Dapr health check (60s timeout). For tasks that don't need fine-grained heartbeating, omit `auto_heartbeat_seconds`:
+```python
+@task(timeout_seconds=3600)  # no auto_heartbeat_seconds
+async def my_long_task(self, input: MyInput) -> MyOutput:
+    ...
+```

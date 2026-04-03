@@ -104,6 +104,9 @@ class AppConfig:
     handler_module: str | None = None
     """Optional explicit handler module path."""
 
+    extra_app_modules: list[str] | None = None
+    """Additional app modules to register on the worker (comma-separated in env var)."""
+
     # Worker
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"
@@ -166,11 +169,22 @@ class AppConfig:
                 _legacy_mode, "combined"
             )
 
-        app_module = args.app or _env("ATLAN_APP_MODULE")
-        if not app_module:
+        app_module_raw = args.app or _env("ATLAN_APP_MODULE")
+        if not app_module_raw:
             raise ValueError(
                 "App module is required. Use --app or set ATLAN_APP_MODULE."
             )
+
+        # Support comma-separated modules: first is primary, rest are extra
+        app_module_parts = [m.strip() for m in app_module_raw.split(",") if m.strip()]
+        if not app_module_parts:
+            raise ValueError(
+                "App module is required. Use --app or set ATLAN_APP_MODULE."
+            )
+        app_module = app_module_parts[0]
+        extra_from_app_module = (
+            app_module_parts[1:] if len(app_module_parts) > 1 else []
+        )
 
         service_name = (
             getattr(args, "service_name", None)
@@ -191,12 +205,15 @@ class AppConfig:
         # TemporalWorkflowClient.get_worker_task_queue()), fall back to class-name derivation.
         _default_task_queue = _derive_task_queue(app_module)
 
+        extra_app_modules = extra_from_app_module if extra_from_app_module else None
+
         return cls(
             mode=mode,
             app_module=app_module,
             handler_module=getattr(args, "handler", None)
             or _env("ATLAN_HANDLER_MODULE")
             or None,
+            extra_app_modules=extra_app_modules,
             temporal_host=getattr(args, "temporal_host", None)
             or _env("ATLAN_TEMPORAL_HOST")
             or _v2_temporal_host
@@ -462,6 +479,20 @@ def _derive_task_queue(app_module: str) -> str:
     return f"{_derive_service_name(app_module)}-queue"
 
 
+def _load_extra_app_modules(extra_app_modules: list[str] | None) -> None:
+    """Load additional app modules so they register with AppRegistry."""
+    if not extra_app_modules:
+        return
+    for module_path in extra_app_modules:
+        app_cls = load_app_class(module_path)
+        validate_app_class(app_cls)
+        logger.info(
+            "Loaded extra app %s version %s",
+            app_cls._app_name,  # type: ignore[attr-defined]
+            app_cls._app_version,  # type: ignore[attr-defined]
+        )
+
+
 async def _flush_observability() -> None:
     """Flush all observability buffers before exit."""
     from application_sdk.observability.observability import AtlanObservability
@@ -554,6 +585,8 @@ async def run_worker_mode(config: AppConfig) -> None:
         app_class._app_version,  # type: ignore[attr-defined]
     )
 
+    _load_extra_app_modules(config.extra_app_modules)
+
     data_converter = create_data_converter_for_app(app_class)
 
     # Acquire auth token if enabled
@@ -593,7 +626,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue, app_names=[app_name])
+    worker = create_worker(client, task_queue=config.task_queue, app_names=None)
 
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -641,6 +674,10 @@ def run_handler_mode(config: AppConfig) -> None:
 
     Loads the handler class (or DefaultHandler) and runs the FastAPI
     server via uvicorn. This is synchronous — uvicorn manages its own loop.
+
+    Note: extra_app_modules are intentionally NOT loaded here. Handler mode
+    only serves HTTP for the primary app — no Temporal worker, so secondary
+    apps don't need to register.
     """
     from application_sdk.execution._temporal.converter import (
         create_data_converter_for_app,
@@ -757,6 +794,8 @@ async def run_combined_mode(config: AppConfig) -> None:
         app_class._app_version,  # type: ignore[attr-defined]
     )
 
+    _load_extra_app_modules(config.extra_app_modules)
+
     data_converter = create_data_converter_for_app(app_class)
 
     auth_manager: Any = None
@@ -795,7 +834,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    worker = create_worker(client, task_queue=config.task_queue, app_names=[app_name])
+    worker = create_worker(client, task_queue=config.task_queue, app_names=None)
 
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
@@ -994,7 +1033,9 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 Environment Variables:
   ATLAN_APP_MODE           Execution mode (worker, handler, or combined)
-  ATLAN_APP_MODULE         App class path (e.g., my_package.apps:MyApp)
+  ATLAN_APP_MODULE         App class path(s), comma-separated for multi-app
+                           First is primary (HTTP handler), rest register on worker
+                           (e.g., app.main:MainApp,app.secondary:SecondaryApp)
   ATLAN_HANDLER_MODULE     Optional custom handler module path
   ATLAN_TEMPORAL_HOST      Temporal server address (default: localhost:7233)
                            Falls back to ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT (v2)
@@ -1025,7 +1066,7 @@ Examples:
     parser.add_argument(
         "--app",
         "-a",
-        help="App module path (e.g., my_package.apps:MyApp)",
+        help="App module path(s), comma-separated for multi-app (e.g., app.main:MainApp,app.secondary:SecondaryApp). First is primary (HTTP handler), rest register on worker.",
     )
     parser.add_argument(
         "--handler",

@@ -908,11 +908,89 @@ def create_app_handler_service(
     # Config (state store)
     # ------------------------------------------------------------------
 
+    def _config_objectstore_key(config_id: str, config_type: str = "workflows") -> str:
+        """Build S3 key matching v2 SDK statestore path convention.
+
+        Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json
+        """
+        from application_sdk.constants import APPLICATION_NAME
+
+        return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
+
+    async def _config_load_from_objectstore(
+        config_id: str, config_type: str = "workflows"
+    ) -> "dict[str, Any] | None":
+        """Load workflow config from object store (S3) fallback."""
+        if _storage is None:
+            return None
+        import json as _json
+        import os
+        import tempfile
+
+        from application_sdk.storage.ops import download_file
+
+        key = _config_objectstore_key(config_id, config_type)
+        tmp = tempfile.mktemp(suffix=".json")
+        try:
+            await download_file(key, tmp, _storage)
+            with open(tmp) as f:
+                return _json.load(f)
+        except Exception:
+            return None
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    async def _config_save_to_objectstore(
+        config_id: str, body: "dict[str, Any]", config_type: str = "workflows"
+    ) -> bool:
+        """Save workflow config to object store (S3) fallback."""
+        if _storage is None:
+            return False
+        import json as _json
+        import os
+        import tempfile
+
+        from application_sdk.storage.ops import upload_file
+
+        key = _config_objectstore_key(config_id, config_type)
+        tmp = tempfile.mktemp(suffix=".json")
+        try:
+            with open(tmp, "w") as f:
+                _json.dump(body, f)
+            await upload_file(key, tmp, _storage)
+            return True
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
     @app.get("/workflows/v1/config/{config_id}")
-    async def get_workflow_config(config_id: str) -> JSONResponse:
-        if _state_store is None:
-            raise HTTPException(status_code=503, detail="State store not configured")
-        config = await _state_store.load(f"workflows/{config_id}")
+    async def get_workflow_config(
+        config_id: str, type: str = "workflows"
+    ) -> JSONResponse:
+        """Fetch workflow config — tries statestore first, falls back to object store."""
+        config = None
+
+        # Try statestore
+        if _state_store is not None:
+            try:
+                config = await _state_store.load(f"workflows/{config_id}")
+            except Exception:
+                logger.warning(
+                    "State store load failed for config %s (type=%s), trying object store",
+                    config_id,
+                    type,
+                )
+
+        # Fallback to object store (S3)
+        if config is None:
+            config = await _config_load_from_objectstore(config_id, config_type=type)
+
+        if config is None and _state_store is None and _storage is None:
+            raise HTTPException(
+                status_code=503,
+                detail="No state store or object store configured",
+            )
         if config is None:
             raise HTTPException(
                 status_code=404, detail=f"Config not found: {config_id}"
@@ -925,11 +1003,40 @@ def create_app_handler_service(
         )
 
     @app.post("/workflows/v1/config/{config_id}")
-    async def update_workflow_config(config_id: str, request: Request) -> JSONResponse:
-        if _state_store is None:
-            raise HTTPException(status_code=503, detail="State store not configured")
+    async def update_workflow_config(
+        config_id: str, request: Request, type: str = "workflows"
+    ) -> JSONResponse:
+        """Save workflow config — tries statestore first, falls back to object store.
+
+        Object store fallback is only used for non-credential config types
+        to avoid persisting sensitive credential data to S3.
+        """
         body = await request.json()
-        await _state_store.save(f"workflows/{config_id}", body)
+        saved = False
+
+        # Try statestore
+        if _state_store is not None:
+            try:
+                await _state_store.save(f"workflows/{config_id}", body)
+                saved = True
+            except Exception:
+                logger.warning(
+                    "State store save failed for config %s (type=%s), trying object store",
+                    config_id,
+                    type,
+                )
+
+        # Fallback to object store (S3) for all config types.
+        # Credential configs only contain non-sensitive metadata (host, port,
+        # authType, extra) — actual secrets are managed by Heracles/Vault.
+        if not saved:
+            saved = await _config_save_to_objectstore(config_id, body, config_type=type)
+
+        if not saved:
+            raise HTTPException(
+                status_code=503,
+                detail="No state store or object store configured",
+            )
         return JSONResponse(
             content=_wrap_response(
                 cast("dict[str, Any]", body),

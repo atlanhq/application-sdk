@@ -210,8 +210,18 @@ class TestGetAllTaskActivities:
                 return _Out2()
 
         activities = get_all_task_activities(app_names=None)
-        # 1 user task per app + 4 framework tasks (upload, download, cleanup_files, cleanup_storage) per app = 10
-        assert len(activities) == 10
+        # 1 user task per app (2) + 4 framework tasks deduplicated across apps (4) = 6
+        assert len(activities) == 6
+        activity_names = [
+            a._task_metadata.name  # type: ignore[attr-defined]
+            for a in activities
+            if hasattr(a, "_task_metadata")
+        ]
+        assert "do_one" in activity_names
+        assert "do_two" in activity_names
+        # Framework tasks appear once (deduped)
+        assert activity_names.count("cleanup_files") == 1
+        assert activity_names.count("upload") == 1
 
 
 class TestGetActivityOptions:
