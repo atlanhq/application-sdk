@@ -60,6 +60,7 @@ class ExtractionOutput(Output):
     views_extracted: int = 0
     columns_extracted: int = 0
     procedures_extracted: int = 0
+    processes_extracted: int = 0
     records_uploaded: int = 0
     error: str = ""
 
