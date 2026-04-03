@@ -625,7 +625,13 @@ def create_app_handler_service(
                 config_hash = input_data.config_hash()
                 workflow_id = f"{app_name}-{config_hash}-{uuid4().hex[:8]}"
 
+            # Inject workflow_id back into input so run() can access it via
+            # input.workflow_id (docstring on Input.workflow_id: "Populated by
+            # the framework at dispatch time").
+            input_data.workflow_id = workflow_id
+
             correlation_id = str(uuid4())
+            input_data.correlation_id = correlation_id
             input_data._correlation_id = correlation_id
 
             from application_sdk.observability.correlation import (
@@ -1217,6 +1223,9 @@ def create_app_handler_service(
             )
 
             workflow_id = f"{app_name}-event-{event_id}-{uuid4().hex[:8]}"
+
+            # Inject workflow_id so run() can access it via input.workflow_id
+            input_data.workflow_id = workflow_id
 
             handle = await client.start_workflow(
                 app_cls._app_name,  # type: ignore[attr-defined]
