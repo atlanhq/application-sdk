@@ -140,6 +140,17 @@ class FetchProceduresOutput(Output):
     total_record_count: int = 0
 
 
+class FetchViewsInput(ExtractionTaskInput, allow_unbounded_fields=True):
+    """Input for fetching views from the source."""
+
+
+class FetchViewsOutput(Output):
+    """Output from fetching views."""
+
+    chunk_count: int = 0
+    total_record_count: int = 0
+
+
 class TransformInput(ExtractionTaskInput, allow_unbounded_fields=True):
     """Input for the transform_data task."""
 
