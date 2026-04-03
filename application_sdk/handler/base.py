@@ -10,7 +10,7 @@ useful for apps that don't need custom handler logic.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from application_sdk.errors import HANDLER_ERROR, ErrorCode
 from application_sdk.handler.contracts import (
@@ -145,14 +145,17 @@ class Handler(ABC):
         ...
 
     @abstractmethod
-    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+    async def fetch_metadata(
+        self, input: MetadataInput
+    ) -> MetadataOutput | list[dict[str, Any]] | dict[str, Any]:
         """Fetch metadata objects from the target system.
 
         Args:
             input: Credentials, connection config, and filter options.
 
         Returns:
-            MetadataOutput with discovered objects.
+            MetadataOutput for SQL/sqltree connectors, or a raw list/dict
+            for BI/apitree connectors (pass-through, v2-compatible).
 
         Raises:
             HandlerError: On fetch errors that should surface as HTTP 500.
