@@ -414,8 +414,6 @@ class AtlanObservability(Generic[T], ABC):
         if not ENABLE_OBSERVABILITY_DAPR_SINK or not records:
             return
         try:
-            from time import time_ns
-
             from application_sdk.services.objectstore import ObjectStore
 
             # Group records by partition using record's own timestamp
@@ -439,9 +437,9 @@ class AtlanObservability(Generic[T], ABC):
                         partition_data[0]["timestamp"]
                     )
 
-                    # Lexi-sortable filename
+                    # Lexi-sortable filename using first record's timestamp
                     filename = (
-                        f"{time_ns()}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
+                        f"{int(partition_data[0]['timestamp'] * 1e9)}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
                     )
                     local_path = os.path.join(partition_path, filename)
 
