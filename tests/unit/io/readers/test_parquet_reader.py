@@ -327,7 +327,7 @@ def _install_dummy_daft(monkeypatch):  # noqa: D401, ANN001
                 return f"daft_df:{self.path[0] if self.path else 'unknown'}"
             return f"daft_df:{self.path}"
 
-    def read_parquet(path, _chunk_size=None):  # noqa: D401, ANN001
+    def read_parquet(path, _chunk_size=None, **kwargs):  # noqa: D401, ANN001
         call_log.append({"path": path})
         if isinstance(path, list) and len(path) > 1:
             # For read_batches tests that need MockDaftDataFrame
