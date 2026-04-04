@@ -140,6 +140,36 @@ def _get_heartbeat_timeout() -> timedelta:
         return default_heartbeat_timeout
 
 
+def _start_heartbeat_thread(
+    stop_event: threading.Event,
+) -> threading.Thread:
+    """Start a daemon thread that sends heartbeats at regular intervals.
+
+    Uses a background thread instead of an asyncio task so that heartbeats
+    are never blocked by event loop starvation (e.g. sync code running
+    inside an async activity).
+
+    Args:
+        stop_event: Threading event used to signal the thread to stop.
+
+    Returns:
+        The started heartbeat thread.
+    """
+    heartbeat_timeout = _get_heartbeat_timeout()
+    ctx = contextvars.copy_context()
+    heartbeat_thread = threading.Thread(
+        target=ctx.run,
+        args=(
+            send_periodic_heartbeat_sync,
+            heartbeat_timeout.total_seconds() / 3,
+            stop_event,
+        ),
+        daemon=True,
+    )
+    heartbeat_thread.start()
+    return heartbeat_thread
+
+
 def auto_heartbeater(fn: F) -> F:
     """Decorator that automatically sends heartbeats during activity execution.
 
@@ -151,9 +181,9 @@ def auto_heartbeater(fn: F) -> F:
     heartbeat timeout. If no timeout is configured, it defaults to 120 seconds
     (resulting in a 40-second heartbeat interval).
 
-    Supports both async and sync activity functions. For async functions, heartbeats
-    are sent via an asyncio task. For sync functions, heartbeats are sent via a
-    background thread, preserving Temporal's thread pool execution model.
+    Heartbeats are always sent from a background thread, regardless of whether
+    the activity is async or sync. This ensures heartbeats are never starved
+    by event loop blocking (e.g. sync calls inside async activities).
 
     Args:
         fn: The activity function to be decorated. Can be sync or async.
@@ -186,39 +216,24 @@ def auto_heartbeater(fn: F) -> F:
 
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any):
-            heartbeat_timeout = _get_heartbeat_timeout()
-            heartbeat_task = asyncio.create_task(
-                send_periodic_heartbeat(heartbeat_timeout.total_seconds() / 3)
-            )
+            stop_event = threading.Event()
+            heartbeat_thread = _start_heartbeat_thread(stop_event)
             try:
                 return await fn(*args, **kwargs)
             except Exception as e:
                 logger.error("Error in activity: %s", e, exc_info=e)
                 raise
             finally:
-                heartbeat_task.cancel()
-                await asyncio.wait([heartbeat_task])
+                stop_event.set()
+                heartbeat_thread.join(timeout=5)
 
         return cast(F, async_wrapper)
     else:
 
         @wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any):
-            heartbeat_timeout = _get_heartbeat_timeout()
             stop_event = threading.Event()
-            # Copy the current context so the heartbeat thread can access
-            # the Temporal activity context (stored in contextvars)
-            ctx = contextvars.copy_context()
-            heartbeat_thread = threading.Thread(
-                target=ctx.run,
-                args=(
-                    send_periodic_heartbeat_sync,
-                    heartbeat_timeout.total_seconds() / 3,
-                    stop_event,
-                ),
-                daemon=True,
-            )
-            heartbeat_thread.start()
+            heartbeat_thread = _start_heartbeat_thread(stop_event)
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
@@ -262,7 +277,10 @@ async def send_periodic_heartbeat(delay: float, *details: Any) -> None:
     # Heartbeat every so often while not cancelled
     while True:
         await asyncio.sleep(delay)
-        activity.heartbeat(*details)
+        try:
+            activity.heartbeat(*details)
+        except Exception as e:
+            logger.warning("Heartbeat failed, will retry next interval: %s", e)
 
 
 def send_periodic_heartbeat_sync(
@@ -273,6 +291,10 @@ def send_periodic_heartbeat_sync(
     This function runs in a loop, waiting on the stop_event for the specified delay.
     When the event is set, the loop exits cleanly.
 
+    On transient failures, applies exponential backoff (capped at 5x the base delay)
+    to avoid hammering an unhealthy Temporal server. Resets to normal interval after
+    a successful heartbeat.
+
     Args:
         delay: The delay between heartbeats in seconds.
         stop_event: Threading event used to signal the thread to stop.
@@ -282,9 +304,27 @@ def send_periodic_heartbeat_sync(
         This function is used internally by the @auto_heartbeater decorator for
         sync activity functions and should not need to be called directly.
     """
-    while not stop_event.wait(timeout=delay):
+    consecutive_failures = 0
+    max_backoff_multiplier = 5
+    current_delay = delay
+
+    while not stop_event.wait(timeout=current_delay):
         try:
             activity.heartbeat(*details)
+            if consecutive_failures > 0:
+                logger.info(
+                    "Heartbeat recovered after %d consecutive failures",
+                    consecutive_failures,
+                )
+            consecutive_failures = 0
+            current_delay = delay
         except Exception as e:
-            logger.error("Error sending heartbeat: %s", e, exc_info=e)
-            return
+            consecutive_failures += 1
+            backoff_multiplier = min(2**consecutive_failures, max_backoff_multiplier)
+            current_delay = delay * backoff_multiplier
+            logger.warning(
+                "Heartbeat failed (attempt %d), retrying in %.1fs: %s",
+                consecutive_failures,
+                current_delay,
+                e,
+            )
