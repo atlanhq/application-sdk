@@ -311,3 +311,19 @@ class FileUploadResponse(BaseModel):
     file_size: int = 0
     is_uploaded: bool = False
     uploaded_at: str = ""
+
+
+class EventStatus(SerializableEnum):
+    """Status returned to Dapr after processing an event."""
+
+    SUCCESS = "success"
+    DROP = "drop"
+    RETRY = "retry"
+
+
+class EventResponse(BaseModel):
+    """Response from event ingestion endpoints."""
+
+    status: EventStatus
+    workflow_id: str = ""
+    message: str = ""
