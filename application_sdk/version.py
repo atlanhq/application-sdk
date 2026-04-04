@@ -2,4 +2,4 @@
 Version information for the application_sdk package.
 """
 
-__version__ = "2.8.2"
+__version__ = "2.8.3"
