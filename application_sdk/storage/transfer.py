@@ -115,6 +115,7 @@ async def upload(
     local_path: str,
     storage_path: str | None = None,
     *,
+    subdir: str | None = None,
     skip_if_exists: bool = False,
     store: "ObjectStore | None" = None,
     _app_prefix: str = "",
@@ -126,9 +127,16 @@ async def upload(
     prefix is auto-namespaced as ``{_app_prefix}/{filename}`` (files) or
     ``{_app_prefix}/`` (directories).
 
+    When *subdir* is set and *storage_path* is ``None``, the subdir name is
+    appended to _app_prefix so files land at ``{_app_prefix}/{subdir}/...``.
+    This preserves the directory name in the object store path.
+
     Args:
         local_path: Local file or directory to upload.
-        storage_path: Destination key or prefix override.
+        storage_path: Destination key or prefix override.  Takes priority
+            over *subdir* and *_app_prefix* when set.
+        subdir: Subdirectory name appended to the auto-generated run prefix.
+            Ignored when *storage_path* is set.
         skip_if_exists: Skip files whose SHA-256 matches the stored sidecar.
         store: Object store to use, or ``None`` to resolve from infrastructure.
         _app_prefix: Internal prefix injected by the ``App.upload`` task.
@@ -146,6 +154,8 @@ async def upload(
         # ── Single file ────────────────────────────────────────────────────
         if storage_path is not None:
             key = normalize_key(storage_path)
+        elif _app_prefix and subdir:
+            key = f"{_app_prefix}/{normalize_key(subdir)}/{src.name}"
         elif _app_prefix:
             key = f"{_app_prefix}/{src.name}"
         else:
@@ -167,6 +177,8 @@ async def upload(
         # ── Directory ──────────────────────────────────────────────────────
         if storage_path is not None:
             prefix = normalize_key(storage_path)
+        elif _app_prefix and subdir:
+            prefix = f"{_app_prefix}/{normalize_key(subdir)}"
         elif _app_prefix:
             prefix = _app_prefix
         else:

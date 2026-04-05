@@ -19,6 +19,10 @@ class UploadInput(Input):
         local_path: Local file or directory path to upload.
         storage_path: Destination key (single file) or prefix (directory)
             in the store.  Auto-namespaced based on *tier* when ``None``.
+        subdir: Subdirectory name appended to the auto-generated run prefix.
+            Use this when uploading a directory whose name should be preserved
+            in the object store (e.g. ``subdir="dbt"`` places files at
+            ``{run_prefix}/dbt/...``).  Ignored when *storage_path* is set.
         tier: Storage lifecycle tier.  Controls the destination prefix when
             *storage_path* is not given and sets ``tier`` on the returned
             ``FileReference`` so cleanup behaves correctly.
@@ -30,6 +34,7 @@ class UploadInput(Input):
 
     local_path: str = ""
     storage_path: str | None = None
+    subdir: str | None = None
     tier: StorageTier = StorageTier.RETAINED
     skip_if_exists: bool = False
 

@@ -942,6 +942,7 @@ class App(ABC):
         return await _upload(
             input.local_path,
             input.storage_path,
+            subdir=input.subdir,
             skip_if_exists=input.skip_if_exists,
             store=store,
             _app_prefix=app_prefix,
