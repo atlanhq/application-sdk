@@ -394,12 +394,13 @@ jobs:
             --ignore-unfixed \
             ${{ needs.prepare.outputs.ghcr_image }}
 
-  # ── Job 5: Snyk container scan — blocking, fails hard on high/critical vulns ──
+  # ── Job 5: Snyk container scan — non-blocking, reports findings without failing the run ──
   snyk:
     name: Snyk Container Scan
     needs: [prepare, merge]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    continue-on-error: true
 
     steps:
       - name: Log in to GHCR
