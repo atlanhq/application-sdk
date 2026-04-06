@@ -586,6 +586,17 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                     else:
                         kwargs[key] = str(value)
 
+        # Bridge: if legacy correlation_context dict is empty, read from v3
+        # CorrelationContext ContextVar (set by the v3 CorrelationContextInterceptor).
+        if "correlation_id" not in kwargs:
+            from application_sdk.observability.correlation import (
+                get_correlation_context,
+            )
+
+            v3_ctx = get_correlation_context()
+            if v3_ctx and v3_ctx.correlation_id:
+                kwargs["correlation_id"] = v3_ctx.correlation_id
+
         return msg, kwargs
 
     def debug(self, msg: str, *args: Any, **kwargs: Any):
