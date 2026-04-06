@@ -2,7 +2,6 @@
 
 from .atlan_storage import AtlanStorage, MigrationSummary
 from .eventstore import EventStore
-from .objectstore import ObjectStore
 from .secretstore import SecretStore
 from .statestore import (
     PathTraversalError,
@@ -10,6 +9,7 @@ from .statestore import (
     StateType,
     build_state_store_path,
 )
+from .storage import ObjectStore
 
 __all__ = [
     "AtlanStorage",

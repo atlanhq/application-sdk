@@ -87,6 +87,11 @@ incremental = [
     "rocksdict>=0.3.0",
 ]
 
+storage = [
+    "obstore>=0.5.0,<1.0.0",
+    "pyyaml>=6.0.2,<7.0.0",
+]
+
 # Development dependencies - Install using: uv sync --group dev
 [dependency-groups]
 dev = [
@@ -128,6 +133,11 @@ start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app
 start-temporal = "temporal server start-dev --db-filename ./temporal.db"
 start-deps.shell = "poe start-dapr & poe start-temporal &"
 stop-deps.shell = "lsof -ti:3000,3500,7233,50001 | xargs kill -9 2>/dev/null || true"
+
+# Storage integration tests (MinIO)
+test-storage-integration.shell = """
+    scripts/test-storage-integration.sh
+"""
 
 # API docs
 generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api application_sdk --docformat=google"
