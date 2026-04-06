@@ -10,6 +10,10 @@ from application_sdk.common.error_codes import IOError as SDKIOError
 from application_sdk.io import Reader
 from application_sdk.io.utils import download_files
 
+# Fixed UUID used in tests so download paths are deterministic
+_FIXED_UUID_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+_FIXED_DOWNLOAD_ID = _FIXED_UUID_HEX[:12]  # "a1b2c3d4e5f6"
+
 
 class MockReader(Reader):
     """Mock implementation of Reader for testing."""
@@ -181,13 +185,18 @@ class TestReaderDownloadFiles:
                 "application_sdk.services.objectstore.ObjectStore.download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
+            patch("uuid.uuid4") as mock_uuid4,
         ):
+            mock_uuid4.return_value.hex = _FIXED_UUID_HEX
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
             # as_store_key strips leading "/" so destination uses normalized key
-            expected_destination = os.path.join("./local/tmp/", "data/test.parquet")
+            # Downloads are isolated under a unique subdirectory
+            expected_destination = os.path.join(
+                "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/test.parquet"
+            )
             mock_download.assert_called_once_with(
                 source=path, destination=expected_destination
             )
@@ -201,7 +210,8 @@ class TestReaderDownloadFiles:
         expected_files = ["/data/file1.parquet", "/data/file2.parquet"]
 
         # as_store_key strips leading "/" so destination uses normalized key
-        expected_destination = os.path.join("./local/tmp/", "data")
+        # Downloads are isolated under a unique subdirectory
+        expected_destination = os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data")
 
         with (
             patch("os.path.isfile", return_value=False),
@@ -211,7 +221,9 @@ class TestReaderDownloadFiles:
                 "application_sdk.services.objectstore.ObjectStore.download_prefix",
                 new_callable=AsyncMock,
             ) as mock_download,
+            patch("uuid.uuid4") as mock_uuid4,
         ):
+            mock_uuid4.return_value.hex = _FIXED_UUID_HEX
             # Mock the file finding function to return empty on first call, then files on second
             with patch(
                 "application_sdk.io.utils.find_local_files_by_extension",
@@ -233,9 +245,10 @@ class TestReaderDownloadFiles:
         file_names = ["file1.parquet", "file2.parquet"]
         input_instance = MockReader(path, file_names)
         # as_store_key strips leading "/" so destinations use normalized keys
+        # Downloads are isolated under a unique subdirectory
         expected_files = [
-            os.path.join("./local/tmp/", "data/file1.parquet"),
-            os.path.join("./local/tmp/", "data/file2.parquet"),
+            os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file1.parquet"),
+            os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file2.parquet"),
         ]
 
         def mock_isfile(p):
@@ -255,7 +268,9 @@ class TestReaderDownloadFiles:
                 "application_sdk.services.objectstore.ObjectStore.download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
+            patch("uuid.uuid4") as mock_uuid4,
         ):
+            mock_uuid4.return_value.hex = _FIXED_UUID_HEX
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
@@ -264,11 +279,15 @@ class TestReaderDownloadFiles:
             assert mock_download.call_count == 2
             mock_download.assert_any_call(
                 source=os.path.join(path, "file1.parquet"),
-                destination=os.path.join("./local/tmp/", "data/file1.parquet"),
+                destination=os.path.join(
+                    "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file1.parquet"
+                ),
             )
             mock_download.assert_any_call(
                 source=os.path.join(path, "file2.parquet"),
-                destination=os.path.join("./local/tmp/", "data/file2.parquet"),
+                destination=os.path.join(
+                    "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file2.parquet"
+                ),
             )
             assert result == expected_files
 
