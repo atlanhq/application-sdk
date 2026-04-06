@@ -41,6 +41,19 @@ Performs a complete v2 → v3 migration of an application-sdk connector.
    ```
 
 5. Read `tools/migrate_v3/MIGRATION_PROMPT.md` in full. This is the authoritative reference for all structural changes you will make. Do not proceed to Phase 3 without having read it.
+
+5b. **Read a reference implementation.** Before touching code, read a working v3 connector of the same type. This prevents hours of debugging by showing the target state upfront.
+
+   - **SQL metadata extractor** → Read two references:
+     1. `apps/mssql/app/mssql_extractor.py` in the `connectors-sql` repo — full multidb pattern, custom retry logic, ODBC connection handling.
+     2. `app/saphana_extractor.py` in the `atlan-saphana-app` repo — standalone repo pattern, custom SQL queries, calculation view processing, non-standard DBAPI driver handling.
+     Pay attention to: `_app_registered`, `name: ClassVar[str]`, custom Input types, `_create_client` 3-source credential fallback, `run()` orchestration, `transform_data` wiring, `SafeParquetFileWriter`.
+   - **SQL query extractor** → Read the SDK's `application_sdk/templates/sql_query_extractor.py` and any existing query extractor in `connectors-sql`.
+   - **REST/HTTP connector** → Read an existing v3 REST connector (e.g. dbt app at `atlan-dbt-app/app/`).
+   - **Custom app** → Read the dbt app or any v3 app that matches the pattern.
+
+   > **Why this matters:** In the SAP HANA migration, comparing against MSSQL (Phase 8) and dbt (Phase 11) each revealed missing patterns. Doing this comparison BEFORE the first workflow run saves days of debugging.
+
 6. Run an initial checker pass to establish the baseline — **do not fix anything yet**:
 
 ```bash
@@ -142,9 +155,416 @@ Follow the exact checklists in `tools/migrate_v3/MIGRATION_PROMPT.md` for the co
 - Must NOT be used on inter-task Input/Output contracts — use `Annotated[list[T], MaxItems(N)]` or `FileReference` instead.
 - The checker will WARN if `allow_unbounded_fields=True` appears on task-level contracts.
 
+### v3 Mandatory Patterns — All Connectors
+
+> **These patterns were discovered during real v3 migrations (MSSQL, Postgres, SAP HANA, dbt). Every one was a production failure. They apply to ALL connector types — SQL, REST, and custom.**
+>
+> Apply each pattern during the relevant step below. After applying, run `check_migration` to verify.
+
+#### Pattern 1: App Registration + Name
+
+```python
+from typing import ClassVar
+
+class MyExtractor(SqlMetadataExtractor):
+    name: ClassVar[str] = "my-connector-name"       # matches pyproject.toml
+    _app_registered: ClassVar[bool] = False          # MANDATORY — force re-registration
+```
+
+**Without `_app_registered = False`:** The SDK's `__init_subclass__` uses `getattr(cls, "_app_registered", False)` which traverses the MRO, finds the parent's `True`, and skips registration entirely. Temporal runs the base `SqlMetadataExtractor.run()` instead of yours. You get `NotImplementedError: SqlMetadataExtractor must implement fetch_tables()` with no useful error pointing to the real cause.
+
+**Without `name`:** The workflow type registered with Temporal won't match what marketplace-packages expects. On tenant, workflow starts fail with "Workflow class X is not registered on this worker".
+
+#### Pattern 2: Custom Input Types with Explicit Credentials
+
+```python
+from pydantic import Field
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionInput, ExtractionTaskInput,
+)
+
+class MyExtractionInput(ExtractionInput, allow_unbounded_fields=True):
+    """Top-level run() input — carries inline credentials through serialization."""
+    credentials: dict[str, Any] = Field(default_factory=dict)
+
+class MyTaskInput(ExtractionTaskInput, allow_unbounded_fields=True):
+    """Per-task input with credentials + transform fields."""
+    credentials: dict[str, Any] = Field(default_factory=dict)
+    typename: str = ""                                    # for transform_data
+    file_names: list[str] = Field(default_factory=list)   # for transform_data
+    chunk_start: int = 0                                  # for transform_data
+```
+
+**Why `allow_unbounded_fields=True` is NOT enough:** It lets extra fields through Pydantic serialization, but does NOT make them accessible as attributes. `input.typename` raises `AttributeError` unless declared on the class.
+
+**Why credentials must be explicit:** `ExtractionInput` uses Pydantic `extra='ignore'` — inline credentials from `/start` are silently dropped. Temporal creates fresh instances per activity, so instance variables don't carry.
+
+**Naming:** Use `credentials` (plural) with `Field(default_factory=dict)` — matches MSSQL/SAP HANA pattern and Pydantic best practice for mutable defaults.
+
+#### Pattern 3: Multi-Source `_create_client`
+
+```python
+async def _create_client(self, input: Any) -> MyClient:
+    client = MyClient()
+    if input.credential_ref:
+        creds = await self.context.resolve_credential_raw(input.credential_ref)
+        await client.load(creds)
+    elif input.credential_guid:
+        from application_sdk.infrastructure.secrets import SecretStore
+        creds = await SecretStore.get_credentials(input.credential_guid)
+        await client.load(creds)
+    elif hasattr(input, "credentials") and input.credentials:
+        await client.load(input.credentials)
+    else:
+        raise ValueError("No credential source provided (credential_ref, credential_guid, or credentials)")
+    return client
+```
+
+The three sources, in priority order:
+1. `credential_ref` — v3 production (CredentialRef object)
+2. `credential_guid` — legacy secret store lookup (use `SecretStore.get_credentials` which merges state + secret stores)
+3. `credentials` — inline dict from `/start` (local dev)
+
+**Critical for split credentials:** Some connectors (SAP HANA, JDBC connectors) store host/port in the state store and username/password in the secret store. `self.context.get_secret(guid)` only returns the secret part — no host. `SecretStore.get_credentials(guid)` merges both stores. Use `get_credentials` for the `credential_guid` path. The dbt pattern (`get_secret`) only works for connectors with unified credentials.
+
+**WARNING — `resolve_credential_raw()` has a known SDK bug:** `_resolve_legacy_raw` passes `{"credential_guid": guid}` (a dict) to `SecretStore.get_credentials()` which expects a string. This means the `credential_ref` path can fail silently. Until this is fixed in the SDK, use `credential_guid` → `SecretStore.get_credentials(string)` as the primary production path, and `credential_ref` as a future/fallback path only.
+
+**Nested tenant credential format:** On tenant, credentials from the secret store may be nested: `{"authType": "basic", "host": "...", "basic": {"username": "...", "password": "..."}}`. Your `client.load()` must detect and normalize this — check if `username` is at top level; if not, merge `credentials[auth_type]` to top level.
+
+#### Pattern 4: Client Cleanup with try/finally
+
+**EVERY `_create_client` call MUST have a matching `await sql_client.close()` in a `finally` block.** No exceptions.
+
+```python
+@task(timeout_seconds=1800, heartbeat_timeout_seconds=300)
+async def fetch_schemas(self, input: MyTaskInput) -> FetchSchemasOutput:
+    sql_client = await self._create_client(input)
+    try:
+        # ... all extraction logic ...
+        return FetchSchemasOutput(...)
+    finally:
+        await sql_client.close()
+```
+
+**Without cleanup:** Each activity creates a SQLAlchemy engine with a connection pool. 5 parallel activities = 5 leaked pools per workflow. On continuous runs, this exhausts `max_connections` on the database server.
+
+This applies to ALL `@task` methods AND all handler methods (`test_auth`, `preflight_check`, `fetch_metadata`).
+
+#### Pattern 5: Output Path Computation in run()
+
+```python
+async def run(self, input: MyExtractionInput) -> ExtractionOutput:
+    from application_sdk.constants import APPLICATION_NAME, TEMPORARY_PATH
+    import temporalio.workflow
+
+    wf_info = temporalio.workflow.info()
+    wf_id = wf_info.workflow_id
+    run_id = wf_info.run_id
+
+    output_path = input.output_path
+    if not output_path:
+        output_path = os.path.join(
+            TEMPORARY_PATH,
+            f"artifacts/apps/{APPLICATION_NAME}/workflows/{wf_id or 'local'}/{run_id}",
+        )
+    output_prefix = input.output_prefix or TEMPORARY_PATH
+```
+
+**MUST include both `wf_id` AND `run_id`** — without `run_id`, multiple runs of the same workflow overwrite each other's output on S3.
+
+Do NOT call `build_output_path()` from `run()` — it requires Temporal activity context (`activity.info().workflow_id`) which doesn't exist in the workflow context.
+
+Do NOT use `self.context.workflow_id` — `AppContext` has no `workflow_id` attribute. Use `temporalio.workflow.info().workflow_id`.
+
+#### Pattern 6: Pass Credentials in task_kwargs
+
+```python
+task_kwargs: dict[str, Any] = dict(
+    workflow_id=wf_id,
+    connection=input.connection,
+    credential_guid=input.credential_guid,
+    credential_ref=cred_ref,
+    output_prefix=output_prefix,
+    output_path=output_path,
+    exclude_filter=input.exclude_filter,
+    include_filter=input.include_filter,
+    temp_table_regex=input.temp_table_regex,
+    source_tag_prefix=input.source_tag_prefix,
+    credentials=input.credentials,         # <-- MUST include this
+)
+```
+
+Without `credentials` in `task_kwargs`, Temporal creates fresh `MyTaskInput` instances per activity with `credentials={}`. All three credential sources will be empty → `ValueError: No credential source provided`.
+
+Also convert legacy `credential_guid` to `credential_ref` in `run()`:
+```python
+from application_sdk.templates.contracts.sql_metadata import legacy_credential_ref
+cred_ref = input.credential_ref or legacy_credential_ref(input.credential_guid)
+```
+
+#### Pattern 7: TaskStatistics is a dataclass
+
+`ParquetFileWriter.close()` returns `TaskStatistics` — a `@dataclass`, NOT a Pydantic model.
+
+```python
+# WRONG — crashes with AttributeError
+stats.model_copy(update={"typename": typename})
+
+# CORRECT
+from dataclasses import replace
+replace(stats, typename=typename)
+```
+
+---
+
+### SQL Connector Additional Patterns
+
+> The patterns above (1-7, 10-12, 14, 16) apply to **all** v3 connectors. The patterns below are specific to **SQL metadata extractors** that use `SqlMetadataExtractor`, `QueryBasedTransformer`, and parquet-based extraction pipelines.
+
+#### Pattern 8: Implement transform_data Explicitly (SQL)
+
+The base template has `transform_data` as a `NotImplementedError` stub. In v2 it ran automatically. In v3 you must implement and call it explicitly.
+
+**CRITICAL:** Do NOT use `ParquetFileReader` with daft's multi-file read (`daft.read_parquet(all_files)`). When early parquet chunks have all-null columns (type `null`) and later chunks have `string`-typed columns, daft silently drops all data. Read files ONE AT A TIME.
+
+```python
+@task(timeout_seconds=1800, heartbeat_timeout_seconds=300)
+async def transform_data(self, input: MyTaskInput) -> TransformOutput:
+    import daft
+    from application_sdk.io.json import JsonFileWriter
+    from application_sdk.io.parquet import PARQUET_FILE_EXTENSION, download_files
+    from application_sdk.io.utils import is_empty_dataframe
+    from app.transformers.query import MyTransformer
+
+    typename = input.typename
+    raw_dir = os.path.join(input.output_path, "raw", typename)
+
+    parquet_files = await download_files(raw_dir, PARQUET_FILE_EXTENSION, None)
+    transformed_output = JsonFileWriter(
+        path=os.path.join(input.output_path, "transformed"),
+        typename=typename,
+        chunk_start=input.chunk_start,
+        dataframe_type=DataframeType.daft,
+    )
+
+    connection = input.connection
+    transformer = MyTransformer(connector_name="my-connector", tenant_id="default")
+
+    # ConnectionRef uses NESTED attributes — see Pattern 12
+    connection_name = connection.attributes.name if connection else None
+    connection_qn = connection.attributes.qualified_name if connection else None
+
+    transform_kwargs: dict[str, Any] = {
+        "workflow_id": input.workflow_id,
+        "workflow_run_id": input.workflow_id or "",
+        "connection_name": connection_name,
+        "connection_qualified_name": connection_qn,
+        "output_path": input.output_path,
+        "output_prefix": input.output_prefix,
+    }
+
+    for pq_file in parquet_files:
+        dataframe = daft.read_parquet(pq_file)
+        if not is_empty_dataframe(dataframe):
+            transformed = transformer.transform_metadata(
+                typename=typename,
+                dataframe=dataframe,
+                **transform_kwargs,
+            )
+            if transformed is not None:
+                await transformed_output.write(transformed)
+
+    stats = await transformed_output.close()
+    return TransformOutput(
+        typename=typename,
+        total_record_count=stats.total_record_count,
+        chunk_count=stats.chunk_count,
+    )
+```
+
+**Common errors:**
+- `is_empty_dataframe` is in `application_sdk.io.utils`, NOT `application_sdk.common.utils`
+- `transform_metadata()` requires `typename` and `workflow_run_id` as positional args — not just kwargs
+- `connection_qualified_name` must be a non-empty string — if None, transformed JSONL has wrong qualifiedNames on all lineage references
+
+#### Pattern 8b: SafeParquetFileWriter for Extraction (SQL)
+
+When pandas writes an all-null column to parquet, pyarrow infers the type as `null` instead of `string`. Later, when daft reads multiple parquet files, it uses `null` for ALL rows — silently dropping data. Create `app/io.py`:
+
+```python
+from application_sdk.io.parquet import ParquetFileWriter
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+class SafeParquetFileWriter(ParquetFileWriter):
+    async def _write_chunk(self, chunk, file_name):
+        table = pa.Table.from_pandas(chunk, preserve_index=False)
+        null_cols = [f.name for f in table.schema if pa.types.is_null(f.type)]
+        if null_cols:
+            new_schema = pa.schema([
+                pa.field(f.name, pa.large_string()) if pa.types.is_null(f.type) else f
+                for f in table.schema
+            ])
+            table = table.cast(new_schema)
+        pq.write_table(table, file_name, compression="snappy")
+```
+
+Use `SafeParquetFileWriter` everywhere instead of `ParquetFileWriter` in extraction tasks.
+
+#### Cleanup: Remove dead resolve_credentials task
+
+v2 connectors often have a `resolve_credentials` activity/task that looks up credentials from the secret store. In v3, credential resolution is handled by `_create_client()` inside each task. If the v2 code has a `resolve_credentials` method that's now a no-op (returns empty output), delete it entirely during migration. Don't leave dead tasks registered with Temporal.
+
+#### Pattern 9: Wire Transform into run() (SQL)
+
+After the fetch `asyncio.gather`, add transform:
+
+```python
+# Fetch all entity types in parallel
+(db_result, schema_result, ...) = await asyncio.gather(
+    self.fetch_databases(MyTaskInput(**task_kwargs)),
+    self.fetch_schemas(MyTaskInput(**task_kwargs)),
+    ...
+)
+
+# Transform all entity types in parallel
+entity_types = ["database", "schema", "table", "column", "procedure"]
+await asyncio.gather(
+    *(self.transform_data(MyTaskInput(**{**task_kwargs, "typename": t}))
+      for t in entity_types)
+)
+```
+
+#### Pattern 10: Handler Cleanup
+
+Every handler method must use `try/finally`:
+
+```python
+async def test_auth(self, input: AuthInput) -> AuthOutput:
+    client: MyClient | None = None
+    try:
+        client = await self._build_client(input)
+        return AuthOutput(status=AuthStatus.SUCCESS)
+    except Exception as e:
+        return AuthOutput(status=AuthStatus.FAILED, message=str(e))
+    finally:
+        if client:
+            await client.close()
+```
+
+#### Pattern 11: Set heartbeat_timeout_seconds on @task
+
+**ALWAYS set `heartbeat_timeout_seconds=300` on every `@task` decorator.** The v3 `@task` defaults to 60s, which is too short for SQL queries against remote databases. The env var `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` is ignored by v3 `@task` decorators.
+
+```python
+# WRONG — uses default 60s, will timeout on slow queries
+@task(timeout_seconds=1800)
+
+# CORRECT — 300s matches SDK's SQL extraction workflows
+@task(timeout_seconds=1800, heartbeat_timeout_seconds=300)
+```
+
+#### Pattern 12: ConnectionRef Uses Nested Attributes
+
+```python
+# WRONG — AttributeError at runtime
+connection_name = connection.connection_name
+connection_qn = connection.connection_qualified_name
+
+# CORRECT — SDK ConnectionRef model nests under .attributes
+connection_name = connection.attributes.name
+connection_qn = connection.attributes.qualified_name
+```
+
+V2 connectors used a flat dict. V3 uses the SDK's `ConnectionRef` model which mirrors the Atlas wire shape: `{ typeName: "Connection", attributes: { name, qualifiedName } }`. Pyright won't catch this because the old attribute names don't exist and resolve as `Any`.
+
+#### Pattern 13: URL-Encode ALL Connection String Components (SQL)
+
+```python
+from urllib.parse import quote
+
+# WRONG — only encodes username/password
+f"postgresql+psycopg://{quote(user)}:{quote(pass)}@{host}:{port}/{database}"
+
+# CORRECT — encode all 5 components
+f"driver://{quote(user, safe='')}:{quote(pass, safe='')}@{quote(host, safe='')}:{quote(str(port), safe='')}/{quote(database, safe='')}"
+```
+
+Also validate `sslmode` against an allowlist — don't interpolate it raw:
+```python
+valid_sslmodes = {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+if sslmode and sslmode not in valid_sslmodes:
+    raise ValueError(f"Invalid sslmode: {sslmode!r}")
+```
+
+#### Pattern 14: Auth Validation Before try/except
+
+```python
+# WRONG — ValueError caught by generic handler, re-raised as "Connection failed"
+try:
+    if auth_type != AuthType.BASIC.value:
+        raise ValueError(f"Unsupported auth type: {auth_type}")
+    ...
+except Exception as e:
+    raise ValueError(f"Connection failed to {host}") from e
+
+# CORRECT — validation errors escape cleanly
+if auth_type != AuthType.BASIC.value:
+    raise ValueError(f"Unsupported auth type: {auth_type}")
+try:
+    ...
+except Exception as e:
+    raise ValueError(f"Connection failed to {host}") from e
+```
+
+#### Pattern 15: YAML Templates Must Match Assets List 1:1 (SQL)
+
+The transformer's `assets` list and YAML files in `sql_query_templates/` must correspond exactly:
+
+```python
+# In transformers/query/__init__.py
+assets = ["TABLE", "COLUMN", "DATABASE", "SCHEMA", "PROCEDURE"]
+```
+
+Requires: `table.yaml`, `column.yaml`, `database.yaml`, `schema.yaml`, `procedure.yaml`.
+
+**Common mistake:** Copying v2 assets list which uses `"EXTRAS-PROCEDURE"` and `"FUNCTION"`. V3 expects `"PROCEDURE"` — no prefix, no standalone function type. There is NO startup validation — the mismatch is caught only at transform time: `"No SQL transformation registered for PROCEDURE"`.
+
+#### Pattern 16: Recreate Writer Inside Retry Loop
+
+```python
+# WRONG — partial writes persist, causing duplicate rows
+parquet_output = SafeParquetFileWriter(...)
+while attempt < max_retries and not success:
+    attempt += 1
+    try: ...
+
+# CORRECT — fresh writer per attempt
+while attempt < max_retries and not success:
+    attempt += 1
+    parquet_output = SafeParquetFileWriter(...)  # fresh on each attempt
+    try: ...
+```
+
+#### Pattern 17: Frontend Form Validation
+
+`required: true` in JSON Schema means "key must be present" — NOT "value must be non-empty". Always add:
+- `minLength: 1` on required string fields (host, username, password, database)
+- `minimum: 1, maximum: 65535` on port
+- `pattern: "^[^\\s/:]+$"` on host (no spaces, slashes, protocol prefixes)
+- `maxLength` on free-text inputs (especially regex fields — prevents ReDoS)
+
+---
+
 Apply changes in this order:
 
-1. **App class** — merge Workflow + Activities into the appropriate template subclass with `@task` methods. Preserve all SQL query strings and business logic verbatim.
+1. **App class** — merge Workflow + Activities into the appropriate template subclass with `@task` methods. Preserve all SQL query strings and business logic verbatim. **Apply universal Patterns 1-7, 11, 12, 16 during this step. For SQL connectors, also apply SQL Patterns 8, 8b, 9.**
+
+   **Non-standard DBAPI drivers:** If the connector uses a driver that returns plain PEP 249 tuples from `cursor.description` (e.g. SAP HANA hdbcli returns `(name, type_code, ...)` instead of named tuples with `.name`), the SDK's `BaseSQLClient.run_query()` will crash with `AttributeError: 'tuple' object has no attribute 'name'`. Override `run_query` in the client with a helper that handles both formats:
+   ```python
+   def _col_name(self, desc_item) -> str:
+       return desc_item.name if hasattr(desc_item, "name") else desc_item[0]
+   ```
 
    > After completing this step, run:
    > ```bash
@@ -152,7 +572,11 @@ Apply changes in this order:
    > ```
    > Review any new/resolved FAILs (especially `no-v2-decorators`, `no-execute-activity-method`) before proceeding.
 
-2. **Handler** — update base class, method signatures (typed contracts, no `**kwargs`), remove `load()`.
+2. **Handler** — update base class, method signatures (typed contracts, no `**kwargs`), remove `load()`. **Apply universal Patterns 10 and 14. For SQL connectors, also apply Pattern 13.**
+
+   **`fetch_metadata` must return `MetadataObject` instances:** The handler's `fetch_metadata` must return `MetadataOutput(objects=[MetadataObject(name=..., ...)])`. Returning raw SQL dicts (`{TABLE_CATALOG, TABLE_SCHEMA}`) fails Pydantic validation — the `except Exception` block in the SDK swallows the error silently and returns 0 objects. This is extremely hard to debug because there's no error log.
+
+   **Preflight checks must populate `checks` list:** Return `PreflightOutput(status="ready", checks=[PreflightCheck(name="...", passed=True, message="...")])`. Do NOT return empty `checks: []` — the playground renders each empty check as failed. If using custom `checks` in the pkl contract's `SageV2` widget, the `PreflightCheck.name` must exactly match the contract's `Dynamic { name = "..." }`. Safe default: omit custom checks from the contract and let the playground render from the API response generically.
 
    > After completing this step, run:
    > ```bash
@@ -276,7 +700,55 @@ If the connector has no v2-style e2e tests, skip this step.
 
 ---
 
-## Phase 5 — Summary report
+## Phase 5 — Contract setup
+
+> **This phase delegates to the `/contract` skill** (`connector-os/skills/contract/SKILL.md`) which uses the `app-contract-toolkit` (`atlanhq/app-contract-toolkit`) as its source of truth. The toolkit repo has the authoritative docs, examples, and pkl modules. The skill orchestrates the workflow. Do NOT duplicate their logic here.
+
+### 5a — Run the /contract skill
+
+Run the `/contract` skill which handles the full contract lifecycle — create, migrate, or update:
+```
+/contract <connector-name>
+```
+
+The skill reads the `app-contract-toolkit` repo (must be cloned as a sibling directory) for pkl modules, examples (Teradata, Redshift, Trino), and generation commands. It produces: `contract/app.pkl`, and generated artifacts (`{name}.json`, `atlan-connectors-{name}.json`, `manifest.json`, `_input.py`) copied into `app/generated/`.
+
+If the `/contract` skill is not available, follow the `app-contract-toolkit` README directly:
+1. Clone `atlanhq/app-contract-toolkit` as a sibling directory
+2. Create `contract/app.pkl` following the toolkit's examples
+3. Run `pkl project resolve && pkl eval -m contract/generated contract/app.pkl`
+4. Copy artifacts to `app/generated/`
+
+### 5b — Post-contract verification (migration-specific)
+
+After the contract artifacts are generated, verify these migration-specific items:
+
+1. **`app/generated/` must be a REAL directory** (not a symlink — symlinks break in Docker because the symlink target doesn't exist inside the container). The `/contract` skill should handle this, but verify.
+
+2. **Pre-commit exclusions** for generated files in `.pre-commit-config.yaml`:
+   ```yaml
+   - id: ruff
+     exclude: app/generated/
+   - id: ruff-format
+     exclude: app/generated/
+   - id: pyright
+     exclude: app/generated/
+   ```
+
+3. **Remove legacy directories:**
+   - `app/templates/` with old configmap JSONs → delete (now served from `app/generated/`)
+   - `frontend/` with `static/` and `templates/` → dead code in v3. Playground is installed via `npx --yes @atlanhq/app-playground@latest install-to app/generated/frontend/static`
+   - `get_configmap()` handler overrides → remove (SDK serves configmaps from `app/generated/` automatically)
+
+4. **`ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated`** must be set in the Dockerfile.
+
+**Gotcha — contract workflowType vs marketplace-packages:** The `workflowType` in `contract/app.pkl` generates `manifest.json` for the **new Automation Engine flow**. If the tenant still uses the **Argo/interim flow** (marketplace-packages templates), the manifest's `workflowType` is irrelevant — the Argo template's `workflow-type` parameter is what matters. Don't waste time aligning contract workflowType with the Argo template; focus on `marketplace-packages` alignment in Phase 8b instead.
+
+**Gotcha — pkl SSL errors:** Corporate proxies (Netskope) intercept HTTPS and re-sign with their own CA. pkl's embedded cert store doesn't trust it. Fix: build a CA bundle with `openssl s_client` to capture the live proxy chain, then set `SSL_CERT_FILE` before running pkl.
+
+---
+
+## Phase 6 — Summary report
 
 Print a structured summary:
 
@@ -316,6 +788,13 @@ Print a structured summary:
 - Generated test function count: N
 - Human validation required: yes/no
 
+### Phase 5 — Contract setup
+- pkl contract found: yes/no
+- Artifacts generated: <list of files>
+- app/generated/ created: yes/no (real directory, not symlink)
+- Pre-commit exclusions added: yes/no
+- Legacy directories removed: <list or "none">
+
 ### API Contract Changes (inform frontend consumers)
 <list any response-format-change WARNs from the checker — these indicate v3 handler
 methods that return a different response shape than v2, which may break frontends>
@@ -331,14 +810,16 @@ Remind the user:
 - Review all `# TODO(v3-migration)` comments — each one marks a location that needs human verification.
 - The typed `Input`/`Output` models for custom `@task` methods should be defined (see §7 of MIGRATION_PROMPT.md) — these were not auto-generated.
 - If an e2e test was generated in Phase 4b, validate that it is logically equivalent to the original before deleting the old file.
+- **Keep a build journey document** — record every error, root cause, and fix as you encounter them. This is the most valuable artifact for improving the migration skill and helping the next person. See `atlan-saphana-app/docs/BUILD_JOURNEY.md` as an example.
+- **Test on a tenant early** — local dev hides credential resolution, Temporal connectivity, Dockerfile base image, and marketplace-packages integration issues. Every Phase 8 issue is invisible locally.
 
 ---
 
-## Phase 6 — Live verification
+## Phase 7 — Live verification
 
 This phase starts the app locally and verifies handler endpoints and workflow execution against a v2 baseline. **Ask the user for confirmation before each major step.**
 
-### 6a — Establish v2 baseline
+### 7a — Establish v2 baseline
 
 Before starting the v3 app, check for an existing v2 workflow run:
 
@@ -358,7 +839,7 @@ Before starting the v3 app, check for an existing v2 workflow run:
    ```
    Record these counts — they are the parity target.
 
-### 6b — Run tests
+### 7b — Run tests
 
 Run the full test suite before attempting a live run:
 
@@ -369,7 +850,7 @@ cd <target-path> && uv run pytest tests/e2e/ --tb=short -q
 
 If any tests fail, fix production code issues before proceeding. Do not continue to 6c with failing tests.
 
-### 6c — Start the app
+### 7c — Start the app
 
 Ask the user:
 > "Tests pass. Ready to start the app with `atlan app run`. This requires credentials in `.env`. Should I proceed?"
@@ -382,7 +863,7 @@ cd <target-path> && atlan app run -p .
 
 Wait for the app to be ready (look for `Uvicorn running on http://127.0.0.1:8000`).
 
-### 6d — Test handler endpoints
+### 7d — Test handler endpoints
 
 Read credentials from `.env` (look for `API_KEY_ID`, `API_SECRET`, and any workspace/extra fields). Then test all three handler endpoints:
 
@@ -440,7 +921,7 @@ If any endpoint returns 500, check the app terminal for the traceback. Common is
 - Credential format error → ensure `_normalize_credentials` is in the SDK version being used
 - Missing configmap files → verify `app/generated/` has the JSON files from `poe generate`
 
-### 6e — Start a workflow run
+### 7e — Start a workflow run
 
 Ask the user:
 > "Handler endpoints verified. Ready to trigger a workflow run. This will call external APIs and write output to `./local/dapr/objectstore/`. Should I proceed?"
@@ -463,7 +944,7 @@ curl -s http://localhost:8000/workflows/v1/status/<workflow_id>/<run_id>
 
 Poll until status is `COMPLETED` or `FAILED`. Also monitor Temporal UI at `http://localhost:8233`.
 
-### 6f — Parity comparison
+### 7f — Parity comparison
 
 Once the workflow completes, locate the v3 output. The path follows this structure:
 ```
@@ -497,11 +978,37 @@ collection       |       67 |       67 | ✓
 report           |       68 |       30 | ✗ (-38)
 ```
 
-### 6g — Fix-and-retry loop
+### 7g — Fix-and-retry loop
 
 If parity fails (counts differ, workflow errors, or endpoint failures):
 
-1. **Diagnose.** Read the app terminal logs and Temporal UI (`http://localhost:8233`) for errors. Common causes:
+1. **Diagnose.** Read the app terminal logs and Temporal UI (`http://localhost:8233`) for errors.
+
+   **Error → Fix lookup table** (from MSSQL, Postgres, SAP HANA migrations):
+
+   | Error Message | Root Cause | Fix |
+   |---|---|---|
+   | `SqlMetadataExtractor must implement fetch_*()` | `_app_registered` not set on subclass | Add `_app_registered: ClassVar[bool] = False` (Pattern 1) |
+   | `Secret '' not found` or `No credential source provided` | Credentials not in task input | Custom input types + pass `credentials` in task_kwargs (Patterns 2, 6) |
+   | `Output path must be specified` | v3 doesn't auto-compute | Compute default in `run()` with `wf_id` + `run_id` (Pattern 5) |
+   | `'TaskStatistics' has no attribute 'model_copy'` | It's a dataclass, not Pydantic | Use `dataclasses.replace()` (Pattern 7) |
+   | `is_empty_dataframe` import error | Wrong module path | Import from `application_sdk.io.utils` not `common.utils` |
+   | `transform_metadata()` missing positional args | `typename` and `workflow_run_id` required | Pass as positional args (Pattern 8) |
+   | No `transformed/` directory after success | Transform not wired into run() | Implement `transform_data` and call in `run()` (Patterns 8, 9) |
+   | DB connections exhausted over time | No cleanup in finally block | Add `try/finally: await sql_client.close()` (Pattern 4) |
+   | Descriptions/definitions `None` despite raw data | null-type parquet schema merge | Use `SafeParquetFileWriter` + per-file reads (Pattern 8b) |
+   | `'ConnectionRef' has no attribute 'connection_name'` | Nested attributes model | Use `.attributes.name` / `.attributes.qualified_name` (Pattern 12) |
+   | `heartbeat timeout` after 60s | Default too short, env var ignored | Set `heartbeat_timeout_seconds=300` (Pattern 11) |
+   | `'AppContext' has no attribute 'workflow_id'` | Wrong API for workflow context | Use `temporalio.workflow.info().workflow_id` |
+   | `KeyError: 'username'` with nested credentials | Tenant cred format is nested | Normalize nested format in `client.load()` (Pattern 3 note) |
+   | `connection_qualified_name` is None | ConnectionRef nested attributes | Use `_resolve_connection_info()` fallback chain (Pattern 12) |
+   | `'tuple' has no attribute 'name'` in run_query | Non-standard DBAPI cursor.description | Override `run_query` with `_col_name()` helper |
+   | `No SQL transformation registered for X` | Asset name mismatch with YAML | Check assets list matches YAML files 1:1 (Pattern 15) |
+   | Duplicate rows after transient failure | Stateful writer reused in retry loop | Recreate `SafeParquetFileWriter` per attempt (Pattern 16) |
+   | `ModuleNotFoundError: No module named 'application_sdk.secrets'` | Importing v2 module path inside workflow sandbox | Use `_create_client` pattern; do NOT import v2 module paths in workflow code |
+   | Metadata endpoint returns 0 objects (silently) | Raw dicts instead of MetadataObject | Return `MetadataObject(name=...)` instances |
+
+   Common causes:
    - HTTP errors during extraction → check client retry logic, rate limiting, auth
    - Missing entities → check filtering logic, pagination, or API response parsing
    - Transform errors → check Parquet round-trip issues (nested dicts become JSON strings)
@@ -523,7 +1030,7 @@ Do not proceed to the summary until:
 - Workflow completes without errors
 - Entity counts match the v2 baseline (or the user explicitly accepts the difference with an explanation)
 
-### 6h — Print verification summary
+### 7h — Print verification summary
 
 Only print this after parity is achieved or the user accepts the result:
 
@@ -548,6 +1055,66 @@ Only print this after parity is achieved or the user accepts the result:
 <entity count comparison table>
 - Parity: ACHIEVED
 - Fixes applied during retry loop: <list of fixes, or "none">
+```
+
+---
+
+## Phase 8 — Tenant deployment readiness
+
+Before deploying to a tenant, verify these items. Every issue in this checklist was discovered during a real tenant deployment (SAP HANA on `atlanp8p01`) and is invisible during local development.
+
+### 8a — Dockerfile verification
+
+Read the connector's `Dockerfile` and verify:
+
+- [ ] Base image is `registry.atlan.com/public/app-runtime-base:refactor-v3-latest` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
+- [ ] `ATLAN_APP_MODULE` is set correctly (e.g. `app.my_extractor:MyExtractor`). Comma-separated for multi-app.
+- [ ] `ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated`
+- [ ] No `CMD` — the v3 base image handles mode via `APPLICATION_MODE` env var set by Helm
+- [ ] No `entrypoint.sh`, `supervisord.conf`, or `otel-config.yaml` — v3 base image handles all of these
+- [ ] `COPY app/ app/` — only app code, NOT the entire repo
+- [ ] `git` is installed (`RUN apk add --no-cache git`) for uv to fetch git-sourced dependencies
+
+**Why base image matters:** The v2 base image's entrypoint runs `main.py` → `run_dev_combined` → defaults to `localhost:7233`. On tenant, Temporal runs at `temporal-cluster-internal-frontend-headless.temporal.svc.cluster.local:7236` (set via `ATLAN_WORKFLOW_HOST`), but the v2 entrypoint doesn't read it. The pod will crash-loop connecting to localhost.
+
+### 8b — marketplace-packages alignment
+
+If the connector uses an Argo WorkflowTemplate (in `marketplace-packages`) to trigger workflows:
+
+- [ ] `workflow-type` in the Argo template matches the v3 `name` ClassVar (kebab-case), NOT the old v2 class name (e.g. `saphana-metadata-extractor`, not `SAPHanaMetadataExtractionWorkflow`)
+- [ ] `workflow-arguments` JSON includes ALL required fields: `credential_guid`, `connection`, `exclude_filter`, `include_filter`, `workflow_id`
+
+**Why this is critical:** `workflow-arguments` is the ENTIRE Temporal workflow input. If a field isn't in that JSON, the workflow doesn't get it. There's no magic injection of credentials, connection, or filters. Missing `credential_guid` → `No credential source provided`. Missing `connection` → transform outputs have wrong qualifiedNames.
+
+### 8c — Credential format verification
+
+Identify how this connector's credentials are stored:
+
+- **Unified** (host + username + password all in secret store) → `self.context.get_secret(guid)` works (dbt pattern)
+- **Split** (host/port in state store, username/password in secret store) → MUST use `SecretStore.get_credentials(guid)` which merges both stores
+
+Also verify `client.load()` handles **nested tenant credential format**: `{"authType": "basic", "host": "...", "basic": {"username": "...", "password": "..."}}`. Detect and normalize: if `username` not at top level, merge `credentials[auth_type]` to top level.
+
+### 8d — Output path verification
+
+- [ ] Output path includes both `workflow_id` AND `run_id`: `artifacts/apps/{app}/workflows/{wf_id}/{run_id}`
+- [ ] `transformed_data_prefix` is populated in the output contract (AE reads this via JSONPath)
+- [ ] `connection_qualified_name` is populated in the output contract
+
+### 8e — Print tenant deployment checklist
+
+```
+## Tenant Deployment Checklist
+- [ ] Dockerfile uses v3 base image (registry.atlan.com/public/app-runtime-base:refactor-v3-latest)
+- [ ] ATLAN_APP_MODULE set correctly
+- [ ] ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
+- [ ] marketplace-packages workflow-type matches name ClassVar
+- [ ] marketplace-packages workflow-arguments includes all required fields
+- [ ] Credential format handles nested tenant format
+- [ ] Output path includes run_id
+- [ ] pre-commit passes on all files
+- [ ] Build and push Docker image to registry
+- [ ] Deploy via FluxCD / HelmRelease / ArgoCD
 ```
 
 ---
@@ -786,13 +1353,49 @@ credential_stores = {"default": InMemorySecretStore(secrets)}
 await run_dev_combined(MyApp, credential_stores=credential_stores)
 ```
 
-### Credential resolution only via credential_guid
+### Credential resolution: split vs unified stores
 
-No `credentials` dict fallback. Always resolve from secret store inside `@task` methods:
+`self.context.get_secret(guid)` only returns the secret store part (username, password). For connectors where host/port live in the **state store** (SAP HANA, some JDBC connectors), this returns an incomplete credential dict — no host. Use `SecretStore.get_credentials(guid)` which merges both state and secret stores. The dbt pattern (`get_secret`) only works for connectors with unified credentials (host + password all in the secret store).
+
 ```python
+# For unified credentials (dbt pattern):
 creds_json = await self.context.get_secret(credential_guid)
 creds = json.loads(creds_json) if isinstance(creds_json, str) else creds_json
+
+# For split credentials (SAP HANA, JDBC pattern):
+from application_sdk.infrastructure.secrets import SecretStore
+creds = await SecretStore.get_credentials(credential_guid)
 ```
+
+### Nested tenant credential format
+
+On tenant, credentials from the secret store may be nested: `{"authType": "basic", "host": "...", "basic": {"username": "...", "password": "..."}}`. Your `client.load()` must detect and normalize:
+```python
+if "username" not in creds and creds.get("authType"):
+    auth_type = creds["authType"]
+    if auth_type in creds and isinstance(creds[auth_type], dict):
+        creds = {**creds, **creds[auth_type]}
+```
+
+### MetadataOutput expects MetadataObject instances
+
+`fetch_metadata` handler must return `MetadataOutput(objects=[MetadataObject(name=..., ...)])`. Returning raw SQL dicts (`{TABLE_CATALOG, TABLE_SCHEMA}`) fails Pydantic validation — the `except Exception` block in the SDK swallows the error and returns 0 objects with no error log. Extremely hard to debug.
+
+### Preflight check rendering in playground
+
+Don't define custom `checks` in `Config.SageV2` contract unless the handler returns `PreflightCheck` objects with names that exactly match the contract's `Dynamic { name = "..." }`. Safe default: omit `checks` entirely and let the playground render from the API response generically. Always compare against a working example in `app-contract-toolkit/examples/`.
+
+### App Playground not at localhost:8000
+
+v3 handler service is API-only — no static file serving. Navigating to `http://localhost:8000` returns `{"detail":"Not Found"}`. The playground is installed via `npx --yes @atlanhq/app-playground@latest install-to app/generated/frontend/static` and served by the SDK from `app/generated/frontend/static`.
+
+### workflow-arguments in marketplace-packages is the entire Temporal input
+
+If a field isn't in the `workflow-arguments` JSON in the Argo template, the workflow doesn't get it. This is the bridge between the Argo world and the Temporal world. No magic injection. Missing `credential_guid` → `No credential source provided`. Missing `connection` → transform outputs have wrong qualifiedNames.
+
+### Non-standard DBAPI cursor.description (SQL connectors)
+
+Some drivers (SAP HANA hdbcli) return plain PEP 249 tuples `(name, type_code, ...)` from `cursor.description` instead of named tuples with `.name`. The SDK's `BaseSQLClient.run_query()` crashes with `AttributeError: 'tuple' object has no attribute 'name'`. Override `run_query` with a helper that handles both formats.
 
 ### QueryBasedTransformer needs workflow_id and workflow_run_id
 
