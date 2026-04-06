@@ -16,6 +16,21 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
+# GCP service account JSON fields injected from Kubernetes secret via Helm.
+GCS_SERVICE_ACCOUNT_FIELDS: tuple[str, ...] = (
+    "type",
+    "project_id",
+    "private_key_id",
+    "private_key",
+    "client_email",
+    "client_id",
+    "auth_uri",
+    "token_uri",
+    "auth_provider_x509_cert_url",
+    "client_x509_cert_url",
+    "universe_domain",
+)
+
 # Map Dapr binding type strings to store kind tokens.
 BINDING_TYPE_MAP: dict[str, str] = {
     "bindings.localstorage": "local",
@@ -119,8 +134,7 @@ def create_store_from_binding(
         return AzureStore(container_name=container, config=az_config)
 
     if store_kind == "gcs":
-        import json
-
+        import orjson
         from obstore.store import GCSStore
 
         bucket = meta.get("bucket", "")
@@ -128,15 +142,14 @@ def create_store_from_binding(
 
         # Build service account JSON from Dapr component metadata fields
         # (injected from gcp-service-account-creds secret via Helm).
-        _sa_fields = [
-            "type", "project_id", "private_key_id", "private_key",
-            "client_email", "client_id", "auth_uri", "token_uri",
-            "auth_provider_x509_cert_url", "client_x509_cert_url",
-        ]
-        sa_data = {k: meta[k] for k in _sa_fields if k in meta}
+        sa_data = {k: meta[k] for k in GCS_SERVICE_ACCOUNT_FIELDS if k in meta}
         if sa_data:
-            gcs_config["service_account_key"] = json.dumps(sa_data)
+            # Normalize escaped newlines in private_key PEM blocks — Helm
+            # templating from K8s secrets can produce literal two-char "\n".
+            if "private_key" in sa_data:
+                sa_data["private_key"] = sa_data["private_key"].replace("\\n", "\n")
+            gcs_config["service_account_key"] = orjson.dumps(sa_data).decode()
 
-        return GCSStore(bucket=bucket, config=gcs_config if gcs_config else None)
+        return GCSStore(bucket=bucket, config=gcs_config)
 
     raise StorageConfigError(f"Store kind not implemented: {store_kind!r}")
