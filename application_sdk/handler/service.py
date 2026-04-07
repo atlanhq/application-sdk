@@ -621,7 +621,11 @@ def create_app_handler_service(
 
             # Save inline credentials to the v3 secret store and replace
             # with a credential_guid so raw secrets never travel over Temporal.
+            # Normalize to v3 list format first (same as auth/preflight),
+            # then store. Apps use their Pydantic credential model to
+            # convert back to the shape they need.
             # Only works with writable stores (InMemorySecretStore in local dev).
+            body = _normalize_credentials(body)
             if "credentials" in body and body["credentials"]:
                 from application_sdk.infrastructure.context import (
                     get_infrastructure,
