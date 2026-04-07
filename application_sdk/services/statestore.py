@@ -153,30 +153,6 @@ class StateStore:
                 suppress_error=True,
             )
             if not object_store_content:
-                # Fallback: try reading from local file written by save_state_object.
-                # In local dev without Dapr, ObjectStore.get_content uses Dapr bindings
-                # which fail, but the file was written to the local store path.
-                local_store_root = os.environ.get(
-                    "APP_STORAGE_ROOT", "./local/dapr/objectstore"
-                )
-                # state_file_path includes TEMPORARY_PATH prefix (e.g., "./local/tmp/persistent-artifacts/...")
-                # but the file was uploaded to object store which strips the prefix.
-                # Extract just the persistent-artifacts/... portion.
-                relative_path = state_file_path
-                temp_path = TEMPORARY_PATH.rstrip("/")
-                if relative_path.startswith(temp_path):
-                    relative_path = relative_path[len(temp_path):].lstrip("/")
-                local_path = os.path.join(local_store_root, relative_path)
-                if os.path.exists(local_path):
-                    with open(local_path) as f:
-                        state = json.load(f)
-                    logger.info(
-                        "State object retrieved from local file: %s (type=%s)",
-                        id,
-                        type.value,
-                    )
-                    return state
-
                 logger.warning(
                     "No state found for %s (type=%s), returning empty dict",
                     id,

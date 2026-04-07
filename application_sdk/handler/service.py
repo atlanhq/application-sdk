@@ -619,18 +619,35 @@ def create_app_handler_service(
                     detail=f"App class {app_cls.__name__} does not define _input_type.",
                 )
 
-            # Save inline credentials to secret store and replace with guid
-            # (matches v2 behavior from temporal.py client)
+            # Save inline credentials to the v3 secret store and replace
+            # with a credential_guid so raw secrets never travel over Temporal.
+            # Only works with writable stores (InMemorySecretStore in local dev).
             if "credentials" in body and body["credentials"]:
-                from application_sdk.services.secretstore import SecretStore as _SS
-
-                credential_guid = await _SS.save_secret(body["credentials"])
-                body["credential_guid"] = credential_guid
-                del body["credentials"]
-                logger.info(
-                    "Saved inline credentials to secret store: guid=%s",
-                    credential_guid,
+                from application_sdk.infrastructure.context import (
+                    get_infrastructure,
                 )
+
+                infra = get_infrastructure()
+                secret_store = infra.secret_store if infra else None
+                if secret_store is not None and hasattr(secret_store, "set"):
+                    import json as _json
+                    from uuid import uuid4 as _uuid4
+
+                    credential_guid = str(_uuid4())
+                    secret_store.set(
+                        credential_guid, _json.dumps(body["credentials"])
+                    )
+                    body["credential_guid"] = credential_guid
+                    del body["credentials"]
+                    logger.debug(
+                        "Saved inline credentials to secret store: guid=%s",
+                        credential_guid,
+                    )
+                else:
+                    logger.warning(
+                        "Secret store not writable; inline credentials will be "
+                        "passed through on the workflow input."
+                    )
 
             input_data = input_type(**body)
 
