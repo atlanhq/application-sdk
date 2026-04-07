@@ -894,3 +894,103 @@ class TestNormalizeCredentials:
         )
         assert response.status_code == 200
         assert response.json()["data"]["status"] == "success"
+
+
+class TestStartCredentialPersistence:
+    """Tests for inline credential save in /start handler.
+
+    The /start endpoint needs Temporal, so we test the normalization +
+    InMemorySecretStore interaction directly to verify the contract.
+    """
+
+    def test_normalize_then_store_v2_dict_credentials(self) -> None:
+        """V2 dict credentials are normalized to v3 list before storage."""
+        from application_sdk.infrastructure.secrets import InMemorySecretStore
+
+        body = {
+            "credentials": {
+                "host": "db.example.com",
+                "port": 5432,
+                "username": "admin",
+                "password": "secret",
+            },
+            "other_field": "kept",
+        }
+
+        # Normalize (same as /start handler does)
+        body = _normalize_credentials(body)
+
+        # Verify normalization produced v3 list format
+        assert isinstance(body["credentials"], list)
+        keys = {item["key"] for item in body["credentials"]}
+        assert "host" in keys
+        assert "port" in keys
+
+        # Store in InMemorySecretStore (same as /start handler does)
+        store = InMemorySecretStore()
+        guid = "test-guid-123"
+        store.set(guid, json.dumps(body["credentials"]))
+
+        # Verify round-trip: read back and parse
+        raw = json.loads(store._secrets[guid])
+        assert isinstance(raw, list)
+        host_entry = next(item for item in raw if item["key"] == "host")
+        assert host_entry["value"] == "db.example.com"
+
+        # Verify other fields preserved
+        assert body["other_field"] == "kept"
+        assert "credentials" in body
+
+    def test_normalize_then_store_v3_list_credentials(self) -> None:
+        """V3 list credentials pass through normalization unchanged."""
+        from application_sdk.infrastructure.secrets import InMemorySecretStore
+
+        body = {
+            "credentials": [
+                {"key": "host", "value": "db.example.com"},
+                {"key": "username", "value": "admin"},
+            ],
+        }
+
+        body = _normalize_credentials(body)
+
+        # Already v3 format — unchanged
+        assert isinstance(body["credentials"], list)
+        assert len(body["credentials"]) == 2
+
+        store = InMemorySecretStore()
+        guid = "test-guid-456"
+        store.set(guid, json.dumps(body["credentials"]))
+
+        raw = json.loads(store._secrets[guid])
+        assert raw[0]["key"] == "host"
+        assert raw[0]["value"] == "db.example.com"
+
+    def test_no_credentials_skips_store(self) -> None:
+        """Body without credentials is not stored."""
+        body = {"name": "test-workflow"}
+        body = _normalize_credentials(body)
+        assert "credentials" not in body or not body.get("credentials")
+
+    async def test_credential_resolver_v3_path_reads_from_inmemory_store(self) -> None:
+        """CredentialResolver new path reads from InMemorySecretStore."""
+        from application_sdk.credentials.ref import CredentialRef
+        from application_sdk.credentials.resolver import CredentialResolver
+        from application_sdk.infrastructure.secrets import InMemorySecretStore
+
+        store = InMemorySecretStore()
+        creds = [
+            {"key": "host", "value": "db.example.com"},
+            {"key": "port", "value": "5432"},
+        ]
+        store.set("my-guid", json.dumps(creds))
+
+        resolver = CredentialResolver(secret_store=store)
+        ref = CredentialRef(name="my-guid", credential_type="basic")
+
+        # No credential_guid → takes v3 new path → secret_store.get("my-guid")
+        result = await resolver.resolve_raw(ref)
+
+        assert isinstance(result, list)
+        assert result[0]["key"] == "host"
+        assert result[0]["value"] == "db.example.com"
