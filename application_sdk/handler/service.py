@@ -55,6 +55,7 @@ from application_sdk.handler.contracts import (
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
+from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -618,6 +619,31 @@ def create_app_handler_service(
                     status_code=500,
                     detail=f"App class {app_cls.__name__} does not define _input_type.",
                 )
+
+            # Save inline credentials to the v3 secret store and replace
+            # with a credential_guid so raw secrets never travel over Temporal.
+            # Normalize to v3 list format first (same as auth/preflight),
+            # then store. Apps use their Pydantic credential model to
+            # convert back to the shape they need.
+            # Only works with writable stores (InMemorySecretStore in local dev).
+            body = _normalize_credentials(body)
+            if "credentials" in body and body["credentials"]:
+                infra = get_infrastructure()
+                secret_store = infra.secret_store if infra else None
+                if secret_store is not None and hasattr(secret_store, "set"):
+                    credential_guid = str(uuid4())
+                    secret_store.set(credential_guid, json.dumps(body["credentials"]))
+                    body["credential_guid"] = credential_guid
+                    del body["credentials"]
+                    logger.debug(
+                        "Saved inline credentials to secret store: guid=%s",
+                        credential_guid,
+                    )
+                else:
+                    logger.warning(
+                        "Secret store not writable; inline credentials will be "
+                        "passed through on the workflow input."
+                    )
 
             input_data = input_type(**body)
 
