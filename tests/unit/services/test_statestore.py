@@ -1,6 +1,7 @@
 """Unit tests for StateStore services."""
 
 import json
+import os
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
@@ -232,3 +233,60 @@ class TestStateStore:
         assert StateType.is_member("invalid") is False
         assert StateType.is_member("") is False
         assert StateType.is_member("WORKFLOWS") is False  # Case sensitive
+
+
+class TestStateStoreLocalFallback:
+    """Tests for StateStore.get_state local file fallback."""
+
+    @pytest.mark.asyncio
+    @patch(
+        "application_sdk.services.statestore.ObjectStore.get_content",
+        new_callable=AsyncMock,
+    )
+    async def test_get_state_falls_back_to_local_file(
+        self, mock_get_content: AsyncMock, tmp_path: MagicMock
+    ) -> None:
+        """Test get_state reads from local file when ObjectStore returns None."""
+        mock_get_content.return_value = None
+
+        # Build the expected local path and write state there
+        state_data = {"status": "running", "progress": 42}
+        state_path = build_state_store_path("test-wf", StateType.WORKFLOWS)
+
+        # Strip TEMPORARY_PATH prefix to get relative path
+        from application_sdk.constants import TEMPORARY_PATH
+
+        relative = state_path
+        temp = TEMPORARY_PATH.rstrip("/")
+        if relative.startswith(temp):
+            relative = relative[len(temp):].lstrip("/")
+
+        store_root = str(tmp_path / "objectstore")
+        local_path = os.path.join(store_root, relative)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with open(local_path, "w") as f:
+            json.dump(state_data, f)
+
+        with patch.dict(os.environ, {"APP_STORAGE_ROOT": store_root}):
+            result = await StateStore.get_state("test-wf", StateType.WORKFLOWS)
+
+        assert result == state_data
+
+    @pytest.mark.asyncio
+    @patch(
+        "application_sdk.services.statestore.ObjectStore.get_content",
+        new_callable=AsyncMock,
+    )
+    async def test_get_state_returns_empty_when_no_local_file(
+        self, mock_get_content: AsyncMock, tmp_path: MagicMock
+    ) -> None:
+        """Test get_state returns empty dict when ObjectStore and local both miss."""
+        mock_get_content.return_value = None
+
+        store_root = str(tmp_path / "empty_store")
+        os.makedirs(store_root, exist_ok=True)
+
+        with patch.dict(os.environ, {"APP_STORAGE_ROOT": store_root}):
+            result = await StateStore.get_state("missing-wf", StateType.WORKFLOWS)
+
+        assert result == {}
