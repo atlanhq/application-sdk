@@ -344,7 +344,10 @@ class Output(BaseModel):
         if allow_unbounded_fields:
             cls._allow_unbounded_fields = True  # type: ignore[attr-defined]
 
-        validate_payload_safety(cls)
+        # Skip framework-managed fields — metrics and artifacts are populated
+        # by the OutputInterceptor, not by user code, and are bounded in
+        # practice (a handful of metric key-value pairs per workflow).
+        validate_payload_safety(cls, skip_fields={"metrics", "artifacts"})
 
 
 class HeartbeatDetails(BaseModel):
