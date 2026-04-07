@@ -164,37 +164,29 @@ def _merge_outputs_into_result(result: Any, collector: OutputCollector) -> Any:
     if isinstance(result, BaseModel):
         model_cls = type(result)
         merged = {**result.model_dump(), **output_data}
+        # Always use a permissive subclass so metrics/artifacts are not silently
+        # dropped by models whose model_config has extra="ignore" (the default).
+        # model_validate() on a strict model succeeds but strips unknown fields,
+        # so we cannot rely on it raising to trigger the fallback.
         try:
-            # Reconstruct with extra fields allowed so metrics/artifacts pass through.
-            # Use model_validate to preserve the original model type.
-            return model_cls.model_validate(merged)
-        except Exception:
-            # If strict validation rejects the extra keys, fall back to a
-            # permissive reconstruction using model_config override.
-            logger.debug(
-                "Strict model_validate failed for %s, trying with extra='allow'",
-                model_cls.__name__,
+            permissive_cls = type(
+                "_%sWithOutputs" % model_cls.__name__,
+                (model_cls,),
+                {
+                    "model_config": {
+                        **getattr(model_cls, "model_config", {}),
+                        "extra": "allow",
+                    }
+                },
             )
-            try:
-                # Build a temporary subclass that allows extra fields
-                permissive_cls = type(
-                    "_%sWithOutputs" % model_cls.__name__,
-                    (model_cls,),
-                    {
-                        "model_config": {
-                            **getattr(model_cls, "model_config", {}),
-                            "extra": "allow",
-                        }
-                    },
-                )
-                return permissive_cls.model_validate(merged)
-            except Exception:
-                logger.warning(
-                    "Could not merge outputs into %s model; returning outputs as separate dict",
-                    model_cls.__name__,
-                    exc_info=True,
-                )
-                return output_data
+            return permissive_cls.model_validate(merged)
+        except Exception:
+            logger.warning(
+                "Could not merge outputs into %s model; returning outputs as separate dict",
+                model_cls.__name__,
+                exc_info=True,
+            )
+            return output_data
 
     return output_data
 
