@@ -231,6 +231,11 @@ class ObjectStore:
                 store_name=store_name,
             )
             if not response_data:
+                # Fallback: try reading from local object store (for local dev
+                # without Dapr where save_state_object uploads via LocalStore)
+                local_data = cls._try_local_read(key)
+                if local_data is not None:
+                    return local_data
                 if suppress_error:
                     return None
                 raise Exception(f"No data received for file: {normalized_key}")
@@ -239,9 +244,36 @@ class ObjectStore:
             return response_data
 
         except Exception as e:
+            # Fallback: try reading from local object store
+            local_data = cls._try_local_read(key)
+            if local_data is not None:
+                return local_data
             if suppress_error:
                 return None
             raise rewrap(e, f"Error getting file content (key={normalized_key})") from e
+
+    @classmethod
+    def _try_local_read(cls, key: str) -> bytes | None:
+        """Try reading from local object store filesystem (dev fallback)."""
+        local_store_root = os.environ.get(
+            "APP_STORAGE_ROOT", "./local/dapr/objectstore"
+        )
+        # Strip TEMPORARY_PATH prefix if present (state store paths include it)
+        from application_sdk.constants import TEMPORARY_PATH
+
+        relative_key = key
+        temp_prefix = TEMPORARY_PATH.rstrip("/")
+        if relative_key.startswith(temp_prefix):
+            relative_key = relative_key[len(temp_prefix):].lstrip("/")
+        elif relative_key.startswith("./"):
+            relative_key = relative_key[2:]
+
+        local_path = os.path.join(local_store_root, relative_key)
+        if os.path.exists(local_path):
+            logger.debug("Reading from local store fallback: %s", local_path)
+            with open(local_path, "rb") as f:
+                return f.read()
+        return None
 
     @classmethod
     async def exists(

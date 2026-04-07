@@ -617,6 +617,19 @@ def create_app_handler_service(
                     detail=f"App class {app_cls.__name__} does not define _input_type.",
                 )
 
+            # Save inline credentials to secret store and replace with guid
+            # (matches v2 behavior from temporal.py client)
+            if "credentials" in body and body["credentials"]:
+                from application_sdk.services.secretstore import SecretStore as _SS
+
+                credential_guid = await _SS.save_secret(body["credentials"])
+                body["credential_guid"] = credential_guid
+                del body["credentials"]
+                logger.info(
+                    "Saved inline credentials to secret store: guid=%s",
+                    credential_guid,
+                )
+
             input_data = input_type(**body)
 
             if explicit_workflow_id:
