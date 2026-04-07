@@ -305,9 +305,23 @@ class Output(BaseModel):
             records_extracted: int
             checkpoint_path: str
             status: str = "completed"
+
+    Structured outputs:
+        The SDK's OutputInterceptor automatically populates ``metrics`` and
+        ``artifacts`` from any ``get_outputs().add_metric()`` /
+        ``add_artifact()`` calls made during the workflow or its activities.
+        Connector code never needs to set these fields directly.
     """
 
     model_config = ConfigDict()
+
+    metrics: dict[str, Any] | None = None
+    """Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+    Populated automatically — do not set manually."""
+
+    artifacts: dict[str, Any] | None = None
+    """Artifact references collected by the OutputInterceptor.
+    Populated automatically — do not set manually."""
 
     def __init_subclass__(
         cls, allow_unbounded_fields: bool = False, **kwargs: Any

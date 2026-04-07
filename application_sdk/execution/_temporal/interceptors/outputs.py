@@ -150,8 +150,9 @@ def _merge_outputs_into_result(result: Any, collector: OutputCollector) -> Any:
 
     Handles three cases:
     1. dict result — merge directly (v2 / legacy path)
-    2. Pydantic BaseModel result — round-trip via model_dump/model_validate
-       so the typed model is preserved for Temporal's pydantic_data_converter
+    2. Pydantic BaseModel result — round-trip via model_dump/model_validate.
+       Output base class declares metrics/artifacts fields so they are
+       accepted without any runtime class manipulation.
     3. Other — return just the collector dict (fallback)
     """
     from pydantic import BaseModel
@@ -164,22 +165,8 @@ def _merge_outputs_into_result(result: Any, collector: OutputCollector) -> Any:
     if isinstance(result, BaseModel):
         model_cls = type(result)
         merged = {**result.model_dump(), **output_data}
-        # Always use a permissive subclass so metrics/artifacts are not silently
-        # dropped by models whose model_config has extra="ignore" (the default).
-        # model_validate() on a strict model succeeds but strips unknown fields,
-        # so we cannot rely on it raising to trigger the fallback.
         try:
-            permissive_cls = type(
-                "_%sWithOutputs" % model_cls.__name__,
-                (model_cls,),
-                {
-                    "model_config": {
-                        **getattr(model_cls, "model_config", {}),
-                        "extra": "allow",
-                    }
-                },
-            )
-            return permissive_cls.model_validate(merged)
+            return model_cls.model_validate(merged)
         except Exception:
             logger.warning(
                 "Could not merge outputs into %s model; returning outputs as separate dict",
