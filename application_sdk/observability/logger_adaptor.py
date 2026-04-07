@@ -346,17 +346,25 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             )
             record["extra"].setdefault("logger_name", "")
 
+            # Build correlation_id display string from extra (set by the v3
+            # CorrelationContextInterceptor bridge or bound directly).
+            correlation_id = record["extra"].get("correlation_id", "")
+            record["extra"]["_correlation_id_str"] = (
+                f" correlation_id={correlation_id}" if correlation_id else ""
+            )
+
             if colorize:
                 return (
                     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> "
                     "<blue>[{level}]</blue>"
-                    "<magenta>{extra[_trace_id_str]}</magenta> "
+                    "<magenta>{extra[_trace_id_str]}</magenta>"
+                    "<yellow>{extra[_correlation_id_str]}</yellow> "
                     "<cyan>{extra[logger_name]}</cyan>"
                     " - <level>{message}</level>\n{exception}"
                 )
             return (
                 "{time:YYYY-MM-DD HH:mm:ss} [{level}]"
-                "{extra[_trace_id_str]} {extra[logger_name]}"
+                "{extra[_trace_id_str]}{extra[_correlation_id_str]} {extra[logger_name]}"
                 " - {message}\n{exception}"
             )
 
