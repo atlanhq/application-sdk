@@ -108,9 +108,15 @@ class BaseSQLClient(ClientInterface):
                 pool_pre_ping=True,
             )
 
-            # Test connection briefly to validate credentials
-            with self.engine.connect() as _:
-                pass  # Connection test successful
+            # Test connection briefly to validate credentials.
+            # Wrapped in asyncio.to_thread because SQLAlchemy's synchronous
+            # engine.connect() blocks the event loop — critical for Temporal
+            # activities where blocking starves the auto-heartbeat.
+            def _ping() -> None:
+                with self.engine.connect() as _:
+                    pass  # Connection test successful
+
+            await asyncio.to_thread(_ping)
 
             # Don't store persistent connection
             self.connection = None
