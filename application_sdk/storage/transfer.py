@@ -150,6 +150,9 @@ async def upload(
     resolved = _resolve_store(store)
     src = Path(local_path)
 
+    if subdir and ".." in subdir.split("/"):
+        raise ValueError(f"subdir must not contain path traversal segments: {subdir!r}")
+
     if src.is_file():
         # ── Single file ────────────────────────────────────────────────────
         if storage_path is not None:

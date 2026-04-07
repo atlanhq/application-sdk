@@ -77,6 +77,46 @@ class TestUploadDirectory:
         assert out2.reason == "skipped:hash_match"
 
 
+class TestUploadSubdir:
+    """Tests for the subdir parameter on upload."""
+
+    async def test_file_with_subdir_and_app_prefix(self, store, tmp_path) -> None:
+        f = tmp_path / "data.txt"
+        f.write_bytes(b"hello")
+        out = await upload(str(f), store=store, _app_prefix="run/123", subdir="dbt")
+        assert out.ref.storage_path == "run/123/dbt/data.txt"
+
+    async def test_dir_with_subdir_and_app_prefix(self, store, tmp_path) -> None:
+        d = tmp_path / "dbt"
+        d.mkdir()
+        (d / "models.json").write_bytes(b"m")
+        (d / "tests.json").write_bytes(b"t")
+        out = await upload(str(d), store=store, _app_prefix="run/123", subdir="dbt")
+        assert out.ref.storage_path == "run/123/dbt/"
+        assert out.ref.file_count == 2
+
+    async def test_storage_path_overrides_subdir(self, store, tmp_path) -> None:
+        f = tmp_path / "data.txt"
+        f.write_bytes(b"payload")
+        out = await upload(str(f), "explicit/key.txt", store=store, subdir="ignored")
+        assert out.ref.storage_path == "explicit/key.txt"
+
+    async def test_subdir_without_app_prefix_is_ignored(self, store, tmp_path) -> None:
+        """subdir only applies when _app_prefix is set."""
+        d = tmp_path / "mydir"
+        d.mkdir()
+        (d / "a.txt").write_bytes(b"a")
+        out = await upload(str(d), store=store, subdir="dbt")
+        # No _app_prefix → falls through to src.name, subdir ignored
+        assert out.ref.storage_path == "mydir/"
+
+    async def test_subdir_path_traversal_rejected(self, store, tmp_path) -> None:
+        f = tmp_path / "data.txt"
+        f.write_bytes(b"x")
+        with pytest.raises(ValueError, match="path traversal"):
+            await upload(str(f), store=store, _app_prefix="run/123", subdir="../../etc")
+
+
 class TestDownloadSingleFile:
     async def test_roundtrip_single_file(self, store, tmp_path) -> None:
         f = tmp_path / "src.txt"
