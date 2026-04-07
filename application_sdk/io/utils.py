@@ -59,17 +59,19 @@ def find_local_files_by_extension(
             rel_paths_set: set[str] = set()
             basenames_only: set[str] = set()
             for fn in file_names:
-                if os.sep in fn or "/" in fn:
+                if "/" in fn or (os.sep != "/" and os.sep in fn):
                     # Entry contains a directory component — use precise
                     # relative-path matching (e.g. "table/chunk-0-part0.parquet").
-                    rel_paths_set.add(fn)
+                    # Normalize to forward slashes for cross-platform matching.
+                    rel_paths_set.add(fn.replace("\\", "/"))
                 else:
                     # Plain basename — use basename matching for backward
                     # compatibility (e.g. "file1.parquet").
                     basenames_only.add(fn)
 
             def _matches(filepath: str) -> bool:
-                rel = os.path.relpath(filepath, path)
+                # Normalize to forward slashes so Windows paths match too.
+                rel = os.path.relpath(filepath, path).replace("\\", "/")
                 if rel in rel_paths_set:
                     return True
                 if basenames_only and os.path.basename(filepath) in basenames_only:
