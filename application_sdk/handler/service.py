@@ -55,6 +55,7 @@ from application_sdk.handler.contracts import (
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
+from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -627,20 +628,11 @@ def create_app_handler_service(
             # Only works with writable stores (InMemorySecretStore in local dev).
             body = _normalize_credentials(body)
             if "credentials" in body and body["credentials"]:
-                from application_sdk.infrastructure.context import (
-                    get_infrastructure,
-                )
-
                 infra = get_infrastructure()
                 secret_store = infra.secret_store if infra else None
                 if secret_store is not None and hasattr(secret_store, "set"):
-                    import json as _json
-                    from uuid import uuid4 as _uuid4
-
-                    credential_guid = str(_uuid4())
-                    secret_store.set(
-                        credential_guid, _json.dumps(body["credentials"])
-                    )
+                    credential_guid = str(uuid4())
+                    secret_store.set(credential_guid, json.dumps(body["credentials"]))
                     body["credential_guid"] = credential_guid
                     del body["credentials"]
                     logger.debug(

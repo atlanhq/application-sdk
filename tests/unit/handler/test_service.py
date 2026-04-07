@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -881,10 +880,8 @@ class TestStartCredentialPersistence:
         body = _normalize_credentials(body)
         assert "credentials" not in body or not body.get("credentials")
 
-    def test_credential_resolver_v3_path_reads_from_inmemory_store(self) -> None:
+    async def test_credential_resolver_v3_path_reads_from_inmemory_store(self) -> None:
         """CredentialResolver new path reads from InMemorySecretStore."""
-        import asyncio
-
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver
         from application_sdk.infrastructure.secrets import InMemorySecretStore
@@ -900,9 +897,7 @@ class TestStartCredentialPersistence:
         ref = CredentialRef(name="my-guid", credential_type="basic")
 
         # No credential_guid → takes v3 new path → secret_store.get("my-guid")
-        result = asyncio.new_event_loop().run_until_complete(
-            resolver.resolve_raw(ref)
-        )
+        result = await resolver.resolve_raw(ref)
 
         assert isinstance(result, list)
         assert result[0]["key"] == "host"
