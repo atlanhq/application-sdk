@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.contracts import (
+    ApiMetadataObject,
+    ApiMetadataOutput,
     AuthInput,
     AuthOutput,
     AuthStatus,
@@ -20,6 +22,8 @@ from application_sdk.handler.contracts import (
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
+    SqlMetadataObject,
+    SqlMetadataOutput,
     SubscriptionConfig,
 )
 from application_sdk.handler.service import (
@@ -34,7 +38,7 @@ from application_sdk.handler.service import (
 
 
 class _TestHandler(Handler):
-    """Minimal handler for testing."""
+    """Minimal handler for testing — returns SqlMetadataOutput."""
 
     async def test_auth(self, input: AuthInput) -> AuthOutput:
         return AuthOutput(status=AuthStatus.SUCCESS, message="auth ok")
@@ -43,7 +47,23 @@ class _TestHandler(Handler):
         return PreflightOutput(status=PreflightStatus.READY, message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
-        return MetadataOutput(objects=[], total_count=0)
+        return SqlMetadataOutput(objects=[])
+
+
+class _ApiTreeHandler(Handler):
+    """Handler that returns ApiMetadataOutput (BI connector path)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.SUCCESS, message="auth ok")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return ApiMetadataOutput(objects=[
+            ApiMetadataObject(value="tag-1", title="Tag One", node_type="tag"),
+            ApiMetadataObject(value="tag-2", title="Tag Two", node_type="tag"),
+        ])
 
 
 class _FailingHandler(Handler):
@@ -159,7 +179,10 @@ class TestPreflightEndpoint:
         assert response.status_code == 200
         body = response.json()
         assert body["success"] is True
-        assert body["data"]["status"] == "ready"
+        # v2 format: data is a dict of check results keyed by camelCase name.
+        # _TestHandler returns no checks, so data is empty.
+        assert body["data"] == {}
+        assert body["message"] == "ready"
 
     def test_preflight_handler_error_returns_500(self) -> None:
         client = _make_client(handler=_FailingHandler())
@@ -173,7 +196,8 @@ class TestPreflightEndpoint:
 class TestMetadataEndpoint:
     """Tests for POST /workflows/v1/metadata."""
 
-    def test_metadata_success(self) -> None:
+    def test_metadata_sql_empty_returns_empty_list(self) -> None:
+        """SqlMetadataOutput with no objects → empty list in data."""
         client = _make_client()
         response = client.post(
             "/workflows/v1/metadata",
@@ -182,7 +206,75 @@ class TestMetadataEndpoint:
         assert response.status_code == 200
         body = response.json()
         assert body["success"] is True
-        assert body["data"]["total_count"] == 0
+        assert body["data"] == []
+
+    def test_metadata_sql_returns_flat_rows(self) -> None:
+        """SqlMetadataOutput → [{TABLE_CATALOG, TABLE_SCHEMA}] for sqltree widget."""
+
+        class _SQLHandler(_TestHandler):
+            async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+                return SqlMetadataOutput(objects=[
+                    SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="FINANCE"),
+                    SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="SALES"),
+                ])
+
+        client = _make_client(handler=_SQLHandler())
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"] == [
+            {"TABLE_CATALOG": "DEFAULT", "TABLE_SCHEMA": "FINANCE"},
+            {"TABLE_CATALOG": "DEFAULT", "TABLE_SCHEMA": "SALES"},
+        ]
+        assert body["message"] == "Fetched 2 objects"
+
+    def test_metadata_api_returns_tree_nodes(self) -> None:
+        """ApiMetadataOutput → [{value, title, node_type, children}] for apitree widget."""
+        client = _make_client(handler=_ApiTreeHandler())
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"] == [
+            {"value": "tag-1", "title": "Tag One", "node_type": "tag", "children": []},
+            {"value": "tag-2", "title": "Tag Two", "node_type": "tag", "children": []},
+        ]
+        assert body["message"] == "Fetched 2 objects"
+
+    def test_metadata_api_nested_children(self) -> None:
+        """ApiMetadataOutput with nested children serializes the full tree."""
+
+        class _NestedHandler(_TestHandler):
+            async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+                return ApiMetadataOutput(objects=[
+                    ApiMetadataObject(
+                        value="proj-1", title="Project A", node_type="project",
+                        children=[
+                            ApiMetadataObject(value="ws-1", title="Workspace 1", node_type="workspace"),
+                            ApiMetadataObject(value="ws-2", title="Workspace 2", node_type="workspace"),
+                        ],
+                    ),
+                ])
+
+        client = _make_client(handler=_NestedHandler())
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert len(data) == 1
+        assert data[0]["value"] == "proj-1"
+        assert len(data[0]["children"]) == 2
+        assert data[0]["children"][0]["value"] == "ws-1"
+        assert data[0]["children"][1]["node_type"] == "workspace"
 
     def test_metadata_handler_error_returns_500(self) -> None:
         client = _make_client(handler=_FailingHandler())

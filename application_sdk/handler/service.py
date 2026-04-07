@@ -52,6 +52,7 @@ from application_sdk.handler.contracts import (
     FileUploadResponse,
     MetadataInput,
     PreflightInput,
+    PreflightStatus,
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
@@ -153,13 +154,14 @@ if TYPE_CHECKING:
 
 
 def _wrap_response(
-    data: dict[str, Any],
+    data: Any,
     *,
     message: str = "",
     success: bool = True,
 ) -> dict[str, Any]:
     """Wrap response data in the standard envelope: {success, message, data}."""
     return {"success": success, "message": message, "data": data}
+
 
 
 async def _get_workflow_result(
@@ -503,10 +505,22 @@ def create_app_handler_service(
                 result.status.value,
                 len(result.checks),
             )
+            # Build v2-compatible response: each check becomes a top-level
+            # key in data so the frontend can iterate check names directly.
+            # v2 format: {"authenticationCheck": {"success": true, "message": "..."}, ...}
+            v2_data: dict[str, Any] = {}
+            for check in result.checks:
+                # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
+                key = check.name[0].lower() + check.name[1:]
+                v2_data[key] = {
+                    "success": check.passed,
+                    "message": check.message or "",
+                }
             return JSONResponse(
                 content=_wrap_response(
-                    result.model_dump(),
+                    v2_data,
                     message=result.message or f"Preflight check {result.status.value}",
+                    success=result.status == PreflightStatus.READY,
                 )
             )
         except HandlerError as e:
@@ -553,17 +567,22 @@ def create_app_handler_service(
                 context.request_id_str,
             )
             result = await handler.fetch_metadata(metadata_input)
+
+            # Both SqlMetadataOutput and ApiMetadataOutput expose
+            # .objects — model_dump() produces the correct shape for
+            # the corresponding frontend widget (sqltree / apitree).
+            data = [obj.model_dump() for obj in result.objects]
+            count = len(result.objects)
             logger.info(
-                "Metadata fetch completed: app=%s request=%s objects=%d truncated=%s",
+                "Metadata fetch completed: app=%s request=%s type=%s objects=%d",
                 app_name,
                 context.request_id_str,
-                len(result.objects),
-                result.truncated,
+                type(result).__name__,
+                count,
             )
             return JSONResponse(
                 content=_wrap_response(
-                    result.model_dump(),
-                    message=f"Fetched {result.total_count} objects",
+                    data, message=f"Fetched {count} objects"
                 )
             )
         except HandlerError as e:

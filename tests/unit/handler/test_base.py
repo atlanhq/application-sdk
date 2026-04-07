@@ -14,6 +14,7 @@ from application_sdk.handler.contracts import (
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
+    SqlMetadataOutput,
 )
 
 
@@ -103,6 +104,5 @@ class TestDefaultHandler:
         inp = MetadataInput()
         result = await handler.fetch_metadata(inp)
         assert isinstance(result, MetadataOutput)
+        assert isinstance(result, SqlMetadataOutput)
         assert result.objects == []
-        assert result.total_count == 0
-        assert result.truncated is False
