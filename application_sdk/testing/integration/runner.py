@@ -260,11 +260,20 @@ class BaseIntegrationTest:
         """Set up the test class before any tests run.
 
         This method:
-        1. Auto-discovers server URL and credentials from env vars
-        2. Checks if the server is running
-        3. Initializes the API client
-        4. Calls the setup_test_environment hook
+        1. Loads .env file (if present) for E2E_* credentials
+        2. Auto-discovers server URL and credentials from env vars
+        3. Checks if the server is running
+        4. Initializes the API client
+        5. Calls the setup_test_environment hook
         """
+        # Load .env file so E2E_* credentials are available
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv(override=False)
+        except ImportError:
+            pass  # python-dotenv not installed; env vars must be set manually
+
         # Auto-discover server URL if not explicitly set
         if not cls.server_host:
             cls.server_host = _auto_discover_server()

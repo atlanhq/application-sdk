@@ -101,6 +101,8 @@ class Test{ConnectorName}Integration(BaseIntegrationTest):
 
 ### Credential Auto-Discovery
 
+The framework automatically calls `load_dotenv()` during `setup_class`, so `.env` files are loaded before credential discovery. If `python-dotenv` is not installed, env vars must be set manually in the shell or CI environment.
+
 The framework reads `ATLAN_APPLICATION_NAME`, then loads all `E2E_{APP_NAME}_*` env vars:
 ```
 E2E_POSTGRES_USERNAME=postgres  →  {"username": "postgres"}
@@ -310,12 +312,13 @@ Scenario(
 
 ### Workflow Scenarios (minimum 2, target 5+)
 
+> **Important:** The `/start` endpoint does NOT validate credentials — it starts a Temporal workflow and returns immediately. Credential errors surface later during workflow execution. Do NOT write `workflow_invalid_credentials` scenarios that assert `success: equals(False)` at the start response — they will always pass because the HTTP call succeeds regardless.
+
 **Required:**
 - `workflow_start_success` — all fields present, success
 - `workflow_response_contains_ids` — IDs are strings
 
 **Recommended:**
-- `workflow_invalid_credentials` — fails with bad creds
 - `workflow_custom_connection_name` — custom connection name accepted
 - `workflow_narrow_filter` — narrow include-filter works
 

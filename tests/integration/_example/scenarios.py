@@ -20,7 +20,6 @@ from application_sdk.testing.integration import (
     exists,
     is_not_empty,
     is_string,
-    one_of,
 )
 
 # =============================================================================
@@ -34,11 +33,14 @@ auth_scenarios = [
         api="auth",
         assert_that={
             "success": equals(True),
+            "data.status": equals("success"),
             "message": all_of(is_string(), is_not_empty()),
         },
         description="Test authentication with valid credentials",
     ),
     # Invalid credentials - override to test failure
+    # In v3, the HTTP request succeeds (success=True) but
+    # data.status indicates the auth result.
     Scenario(
         name="auth_invalid_credentials",
         api="auth",
@@ -50,7 +52,7 @@ auth_scenarios = [
             "database": "invalid_db",
         },
         assert_that={
-            "success": equals(False),
+            "data.status": equals("failed"),
         },
         description="Test authentication with invalid credentials",
     ),
@@ -60,7 +62,7 @@ auth_scenarios = [
         api="auth",
         credentials={},
         assert_that={
-            "success": equals(False),
+            "data.status": equals("failed"),
         },
         description="Test authentication with empty credentials",
     ),
@@ -83,10 +85,11 @@ preflight_scenarios = [
         },
         assert_that={
             "success": equals(True),
+            "data.status": equals("ready"),
         },
         description="Test preflight check with valid configuration",
     ),
-    # Invalid credentials
+    # Invalid credentials — handler may raise (HTTP 500) or return not_ready
     Scenario(
         name="preflight_invalid_credentials",
         api="preflight",
@@ -102,7 +105,7 @@ preflight_scenarios = [
             "include_schemas": ["public"],
         },
         assert_that={
-            "success": equals(False),
+            "data.status": equals("not_ready"),
         },
         description="Test preflight check with invalid credentials",
     ),
@@ -160,27 +163,6 @@ workflow_scenarios = [
     #     },
     #     description="Workflow with metadata output validation against baseline",
     # ),
-    # Invalid credentials
-    Scenario(
-        name="workflow_invalid_credentials",
-        api="workflow",
-        credentials={
-            "host": "invalid_host",
-            "username": "invalid_user",
-            "password": "invalid_password",
-        },
-        metadata={
-            "databases": ["test_db"],
-        },
-        connection={
-            "connection_name": "example_test_connection",
-            "qualified_name": "default/example/test",
-        },
-        assert_that={
-            "success": one_of([True, False]),
-        },
-        description="Test workflow with invalid credentials",
-    ),
 ]
 
 
