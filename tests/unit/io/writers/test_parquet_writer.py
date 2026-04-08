@@ -4,6 +4,8 @@ from typing import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from application_sdk.common.types import DataframeType
@@ -205,7 +207,7 @@ class TestParquetFileWriterWriteDataframe:
             patch(
                 "application_sdk.services.objectstore.ObjectStore.upload_file"
             ) as mock_upload,
-            patch("pandas.DataFrame.to_parquet") as mock_to_parquet,
+            patch("pyarrow.parquet.write_table") as mock_write_table,
         ):
             mock_upload.return_value = AsyncMock()
 
@@ -220,12 +222,12 @@ class TestParquetFileWriterWriteDataframe:
 
             assert parquet_output.chunk_count == 1
 
-            # Check that to_parquet was called (the new implementation uses buffering)
-            mock_to_parquet.assert_called()
+            # Check that pyarrow write_table was called
+            mock_write_table.assert_called()
 
             # With small dataframes and consolidation disabled, upload may not be called
             # The important thing is that the dataframe was processed and written
-            # We can verify this by checking the chunk count and that to_parquet was called
+            # We can verify this by checking the chunk count
 
     @pytest.mark.asyncio
     async def test_write_with_custom_path_gen(
@@ -236,7 +238,7 @@ class TestParquetFileWriterWriteDataframe:
             patch(
                 "application_sdk.services.objectstore.ObjectStore.upload_file"
             ) as mock_upload,
-            patch("pandas.DataFrame.to_parquet") as mock_to_parquet,
+            patch("pyarrow.parquet.write_table") as mock_write_table,
         ):
             mock_upload.return_value = AsyncMock()
 
@@ -248,23 +250,21 @@ class TestParquetFileWriterWriteDataframe:
 
             await parquet_output.write(sample_dataframe)
 
-            # Check that to_parquet was called
-            mock_to_parquet.assert_called()
+            # Check that pyarrow write_table was called
+            mock_write_table.assert_called()
 
             # The current implementation uses chunk-based naming even with markers
-            # This is because the buffering system overrides the marker-based naming
-            call_args = mock_to_parquet.call_args[0][
-                0
-            ]  # First positional argument (file path)
-            assert "chunk-" in call_args and ".parquet" in call_args
+            call_args = mock_write_table.call_args
+            file_path = call_args[0][1]  # Second positional arg is the file path
+            assert "chunk-" in str(file_path) and ".parquet" in str(file_path)
 
     @pytest.mark.asyncio
     async def test_write_error_handling(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test error handling during DataFrame writing."""
-        with patch("pandas.DataFrame.to_parquet") as mock_to_parquet:
-            mock_to_parquet.side_effect = Exception("Test error")
+        with patch("pyarrow.parquet.write_table") as mock_write_table:
+            mock_write_table.side_effect = Exception("Test error")
 
             parquet_output = ParquetFileWriter(path=base_output_path)
 
@@ -1131,3 +1131,69 @@ class TestParquetFileWriterConsolidation:
 
                 # Verify partitions tracking
                 assert len(parquet_output.partitions) == 2
+
+
+class TestWriteChunkNullColumns:
+    """Tests for _write_chunk handling of null-typed columns (BLDX-837)."""
+
+    async def test_write_chunk_no_nulls_uses_fast_path(self, tmp_path) -> None:
+        """Normal DataFrame without all-null columns uses pandas fast path."""
+        df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
+        file_name = str(tmp_path / "no_nulls.parquet")
+
+        writer = ParquetFileWriter(str(tmp_path / "output"))
+        await writer._write_chunk(df, file_name)
+
+        table = pq.read_table(file_name)
+        assert table.num_rows == 3
+        assert table.column("b").type == pa.string()
+
+    async def test_write_chunk_all_null_column_cast_to_large_string(
+        self, tmp_path
+    ) -> None:
+        """All-null column should be written as large_string, not null type."""
+        df = pd.DataFrame({"a": [1, 2], "b": [None, None]})
+        file_name = str(tmp_path / "with_nulls.parquet")
+
+        writer = ParquetFileWriter(str(tmp_path / "output"))
+        await writer._write_chunk(df, file_name)
+
+        schema = pq.read_schema(file_name)
+        b_type = schema.field("b").type
+        assert b_type == pa.large_string(), f"Expected large_string, got {b_type}"
+
+    async def test_write_chunk_mixed_null_and_data_columns(self, tmp_path) -> None:
+        """DataFrame with both null and non-null columns handles both correctly."""
+        df = pd.DataFrame(
+            {"id": [1, 2], "name": ["Alice", "Bob"], "notes": [None, None]}
+        )
+        file_name = str(tmp_path / "mixed.parquet")
+
+        writer = ParquetFileWriter(str(tmp_path / "output"))
+        await writer._write_chunk(df, file_name)
+
+        schema = pq.read_schema(file_name)
+        assert schema.field("name").type == pa.string()
+        assert schema.field("notes").type == pa.large_string()
+
+    async def test_multi_file_roundtrip_no_data_loss(self, tmp_path) -> None:
+        """Write two files (one with null col, one with data) — reading both back preserves data."""
+        writer = ParquetFileWriter(str(tmp_path / "output"))
+
+        # File 1: column 'extra' is all-null
+        df1 = pd.DataFrame({"id": [1, 2], "extra": [None, None]})
+        f1 = str(tmp_path / "chunk1.parquet")
+        await writer._write_chunk(df1, f1)
+
+        # File 2: column 'extra' has data
+        df2 = pd.DataFrame({"id": [3, 4], "extra": ["foo", "bar"]})
+        f2 = str(tmp_path / "chunk2.parquet")
+        await writer._write_chunk(df2, f2)
+
+        # Read both and concat — should not lose data
+        t1 = pq.read_table(f1)
+        t2 = pq.read_table(f2)
+        combined = pa.concat_tables([t1, t2], promote_options="permissive")
+        assert combined.num_rows == 4
+        extra_col = combined.column("extra").to_pylist()
+        assert extra_col == [None, None, "foo", "bar"]
