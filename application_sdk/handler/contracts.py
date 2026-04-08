@@ -14,10 +14,11 @@ on ingress (``model_validate``), direct JSON serialization on egress
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
@@ -96,7 +97,7 @@ class PreflightStatus(SerializableEnum):
 class PreflightCheck(BaseModel):
     """Result of a single preflight check."""
 
-    name: str
+    name: str = Field(..., min_length=1)
     """Check name (e.g., 'connectivity', 'permissions')."""
 
     passed: bool = False
@@ -142,7 +143,13 @@ class PreflightOutput(BaseModel):
 
 
 class MetadataField(BaseModel):
-    """A field/column within a metadata object."""
+    """A field/column within a metadata object.
+
+    .. deprecated::
+        Retained for backward compatibility. Not used by the new
+        ``SqlMetadataObject`` / ``ApiMetadataObject`` contracts.
+        Will be removed in v3.1.0.
+    """
 
     name: str
     """Field name."""
@@ -156,9 +163,24 @@ class MetadataField(BaseModel):
     description: str = ""
     """Optional field description."""
 
+    def model_post_init(self, __context: Any) -> None:
+        warnings.warn(
+            "MetadataField is deprecated. "
+            "Use SqlMetadataObject or ApiMetadataObject instead. "
+            "Will be removed in v3.1.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
 
 class MetadataObject(BaseModel):
-    """A discoverable object (table, view, schema, etc.)."""
+    """A discoverable object (table, view, schema, etc.).
+
+    .. deprecated::
+        Use ``SqlMetadataObject`` for SQL connectors or
+        ``ApiMetadataObject`` for BI/API connectors instead.
+        Will be removed in v3.1.0.
+    """
 
     name: str
     """Object name."""
@@ -177,6 +199,63 @@ class MetadataObject(BaseModel):
 
     fields: list[MetadataField] = []
     """Fields/columns within this object."""
+
+    def model_post_init(self, __context: Any) -> None:
+        warnings.warn(
+            "MetadataObject is deprecated. "
+            "Use SqlMetadataObject or ApiMetadataObject instead. "
+            "Will be removed in v3.1.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Metadata object models — one per frontend widget type
+# ---------------------------------------------------------------------------
+
+
+class SqlMetadataObject(BaseModel):
+    """A row for the **sqltree** frontend widget.
+
+    The sqltree widget expects a flat list of catalog/schema pairs.
+    The frontend groups them into a tree (catalogs → schemas).
+    """
+
+    TABLE_CATALOG: str
+    """Database / catalog name."""
+
+    TABLE_SCHEMA: str
+    """Schema name."""
+
+
+class ApiMetadataObject(BaseModel):
+    """A node for the **apitree** frontend widget.
+
+    Supports arbitrarily nested hierarchies — each node can contain
+    child nodes via the ``children`` field.
+    """
+
+    value: str
+    """Unique identifier for this node (used as the selection value)."""
+
+    title: str
+    """Display label shown in the tree UI."""
+
+    node_type: str = ""
+    """Optional type discriminator (e.g., 'tag', 'project', 'folder')."""
+
+    children: list[ApiMetadataObject] = []
+    """Child nodes (empty for leaf nodes)."""
+
+
+# Resolve the recursive forward reference for ApiMetadataObject.children
+ApiMetadataObject.model_rebuild()
+
+
+# ---------------------------------------------------------------------------
+# Metadata input / output contracts
+# ---------------------------------------------------------------------------
 
 
 class MetadataInput(BaseModel):
@@ -202,19 +281,56 @@ class MetadataInput(BaseModel):
 
 
 class MetadataOutput(BaseModel):
-    """Output from the fetch_metadata handler operation."""
+    """Base output from the fetch_metadata handler operation.
 
-    objects: list[MetadataObject] = []
-    """Discovered metadata objects."""
+    Do not instantiate directly — use ``SqlMetadataOutput`` or
+    ``ApiMetadataOutput`` instead.  This base class exists so the
+    handler return type (``MetadataOutput``) covers both subtypes
+    via ``isinstance``.
+    """
 
-    total_count: int = 0
-    """Total number of objects found (may exceed len(objects) if truncated)."""
+    objects: list[Any] = []
+    """Metadata objects. Subclasses narrow this type."""
 
-    truncated: bool = False
-    """Whether results were truncated due to max_objects limit."""
 
-    fetch_duration_ms: float = 0.0
-    """Total fetch time in milliseconds."""
+class SqlMetadataOutput(MetadataOutput):
+    """Metadata output for SQL connectors (sqltree widget).
+
+    Each object is a flat ``{TABLE_CATALOG, TABLE_SCHEMA}`` row.
+    The frontend groups rows into a catalog → schema tree.
+
+    Example::
+
+        SqlMetadataOutput(objects=[
+            SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="FINANCE"),
+            SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="SALES"),
+        ])
+    """
+
+    objects: list[SqlMetadataObject] = []  # type: ignore[assignment]
+    """Discovered catalog/schema pairs."""
+
+
+class ApiMetadataOutput(MetadataOutput):
+    """Metadata output for BI / API connectors (apitree widget).
+
+    Each object is a ``{value, title, node_type, children}`` tree node.
+    The backend builds the full hierarchy; the frontend renders it as-is.
+
+    Example::
+
+        ApiMetadataOutput(objects=[
+            ApiMetadataObject(
+                value="tag-1", title="Finance", node_type="tag",
+                children=[
+                    ApiMetadataObject(value="tag-1a", title="Revenue", node_type="tag"),
+                ],
+            ),
+        ])
+    """
+
+    objects: list[ApiMetadataObject] = []  # type: ignore[assignment]
+    """Top-level tree nodes."""
 
 
 class EventFilterRule(BaseModel):
