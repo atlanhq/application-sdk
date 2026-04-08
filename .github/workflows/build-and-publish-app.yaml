@@ -358,7 +358,7 @@ jobs:
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
-    uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main
+    uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@feat/build-scan-publish
     with:
       image: ${{ needs.prepare.outputs.ghcr_image }}
       snyk_org: partner-images
