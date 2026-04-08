@@ -1,5 +1,6 @@
 import glob
 import os
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
@@ -130,8 +131,6 @@ async def download_files(
         # Use a unique download directory per invocation to prevent race
         # conditions when multiple activities download files concurrently
         # in the same worker process (e.g. parallel transform_data tasks).
-        import uuid
-
         download_id = uuid.uuid4().hex[:12]
         isolated_tmp = os.path.join(TEMPORARY_PATH, download_id)
 

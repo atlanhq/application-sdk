@@ -449,3 +449,94 @@ class TestReaderDownloadFiles:
             )
             # Download error now propagates in the exception (SDKIOError.__cause__)
             # rather than being separately logged, verified via pytest.raises above
+
+
+class TestDownloadFilesIsolation:
+    """Regression tests for the parallel download race condition.
+
+    The bug: concurrent transform_data activities all download to
+    ./local/tmp/ and overwrite each other's files. The fix uses a
+    UUID-isolated subdirectory per download_files() call.
+    """
+
+    @pytest.mark.asyncio
+    async def test_concurrent_downloads_get_isolated_directories(self):
+        """Two concurrent download_files calls must use DIFFERENT temp dirs."""
+        path = "/raw/table"
+
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=True),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                new_callable=AsyncMock,
+            ) as mock_download,
+            patch(
+                "application_sdk.io.utils.find_local_files_by_extension",
+                side_effect=[
+                    [],
+                    ["/fake/result1.parquet"],
+                    [],
+                    ["/fake/result2.parquet"],
+                ],
+            ),
+        ):
+            import asyncio
+
+            results = await asyncio.gather(
+                download_files(path, ".parquet"),
+                download_files(path, ".parquet"),
+            )
+
+            assert len(results) == 2
+            assert mock_download.call_count == 2
+
+            dest1 = mock_download.call_args_list[0].kwargs["destination"]
+            dest2 = mock_download.call_args_list[1].kwargs["destination"]
+
+            # Destinations must differ (UUID isolation)
+            assert (
+                dest1 != dest2
+            ), f"Concurrent downloads used same destination: {dest1}"
+            assert dest1.startswith("./local/tmp/")
+            assert dest2.startswith("./local/tmp/")
+
+    @pytest.mark.asyncio
+    async def test_file_names_with_relative_path_match_correctly(self):
+        """Reproduce the basename collision bug.
+
+        Before fix: file_names=["table/chunk-0.parquet"] matched ANY file
+        named chunk-0.parquet regardless of directory.
+        After fix: matching uses relative paths.
+        """
+        import tempfile
+        from pathlib import Path
+
+        from application_sdk.io.utils import find_local_files_by_extension
+
+        with tempfile.TemporaryDirectory() as tmp:
+            table_dir = Path(tmp) / "table"
+            schema_dir = Path(tmp) / "schema"
+            table_dir.mkdir()
+            schema_dir.mkdir()
+
+            table_chunk = table_dir / "chunk-0-part0.parquet"
+            schema_chunk = schema_dir / "chunk-0-part0.parquet"
+            table_chunk.write_bytes(b"table data")
+            schema_chunk.write_bytes(b"schema data")
+
+            # Activity A wants only table/chunk-0-part0.parquet
+            result = find_local_files_by_extension(
+                tmp, ".parquet", file_names=["table/chunk-0-part0.parquet"]
+            )
+            assert len(result) == 1
+            assert str(table_chunk) in result
+            assert str(schema_chunk) not in result
+
+            # Activity B wants only schema/chunk-0-part0.parquet
+            result_b = find_local_files_by_extension(
+                tmp, ".parquet", file_names=["schema/chunk-0-part0.parquet"]
+            )
+            assert len(result_b) == 1
+            assert str(schema_chunk) in result_b
+            assert str(table_chunk) not in result_b
