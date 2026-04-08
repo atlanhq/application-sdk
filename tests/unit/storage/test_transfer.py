@@ -116,12 +116,6 @@ class TestUploadStorageSubdir:
         with pytest.raises(ValueError, match="path traversal"):
             await upload(str(f), store=store, _app_prefix="run/123", storage_subdir="../../etc")
 
-    async def test_deprecated_subdir_still_works(self, store, tmp_path) -> None:
-        """Backwards compat: old 'subdir' kwarg still works."""
-        f = tmp_path / "data.txt"
-        f.write_bytes(b"hello")
-        out = await upload(str(f), store=store, _app_prefix="run/123", subdir="legacy")
-        assert out.ref.storage_path == "run/123/legacy/data.txt"
 
 
 class TestUploadSensitivePathBlocking:

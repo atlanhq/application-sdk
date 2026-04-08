@@ -164,7 +164,6 @@ async def upload(
     local_path: str,
     storage_path: str | None = None,
     *,
-    subdir: str | None = None,
     storage_subdir: str | None = None,
     skip_if_exists: bool = False,
     store: "ObjectStore | None" = None,
@@ -185,7 +184,6 @@ async def upload(
         local_path: Local file or directory to upload.
         storage_path: Destination key or prefix override.  Takes priority
             over *storage_subdir* and *_app_prefix* when set.
-        subdir: Deprecated alias for *storage_subdir*. Use *storage_subdir* instead.
         storage_subdir: Subdirectory name appended to the auto-generated run prefix.
             Ignored when *storage_path* is set.
         skip_if_exists: Skip files whose SHA-256 matches the stored sidecar.
@@ -198,31 +196,28 @@ async def upload(
     from application_sdk.contracts.storage import UploadOutput
     from application_sdk.storage.ops import _resolve_store, normalize_key
 
-    # Support deprecated 'subdir' kwarg
-    effective_subdir = storage_subdir or subdir
-
     resolved = _resolve_store(store)
     src = Path(local_path)
 
     # Block sensitive paths
     _validate_upload_path(src)
 
-    if effective_subdir:
+    if storage_subdir:
         from pathlib import PurePosixPath
 
-        cleaned = effective_subdir.strip("/")
-        if not cleaned or ".." in PurePosixPath(cleaned).parts or "\x00" in effective_subdir:
+        cleaned = storage_subdir.strip("/")
+        if not cleaned or ".." in PurePosixPath(cleaned).parts or "\x00" in storage_subdir:
             raise ValueError(
-                f"storage_subdir must not contain path traversal segments: {effective_subdir!r}"
+                f"storage_subdir must not contain path traversal segments: {storage_subdir!r}"
             )
-        effective_subdir = cleaned
+        storage_subdir = cleaned
 
     if src.is_file():
         # ── Single file ────────────────────────────────────────────────────
         if storage_path is not None:
             key = normalize_key(storage_path)
-        elif _app_prefix and effective_subdir:
-            key = f"{_app_prefix}/{normalize_key(effective_subdir)}/{src.name}"
+        elif _app_prefix and storage_subdir:
+            key = f"{_app_prefix}/{normalize_key(storage_subdir)}/{src.name}"
         elif _app_prefix:
             key = f"{_app_prefix}/{src.name}"
         else:
@@ -244,8 +239,8 @@ async def upload(
         # ── Directory ──────────────────────────────────────────────────────
         if storage_path is not None:
             prefix = normalize_key(storage_path)
-        elif _app_prefix and effective_subdir:
-            prefix = f"{_app_prefix}/{normalize_key(effective_subdir)}"
+        elif _app_prefix and storage_subdir:
+            prefix = f"{_app_prefix}/{normalize_key(storage_subdir)}"
         elif _app_prefix:
             prefix = _app_prefix
         else:
