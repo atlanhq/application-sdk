@@ -199,7 +199,9 @@ class TestUploadSensitivePathBlocking:
         custom_dir.mkdir()
         secret = custom_dir / "token"
         secret.write_bytes(b"secret")
-        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "custom_secrets,.credentials")
+        monkeypatch.setenv(
+            "ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "custom_secrets,.credentials"
+        )
         with pytest.raises(ValueError, match="ATLAN_UPLOAD_FILE_BLOCKED_PATHS"):
             await upload(str(secret), store=store)
 
