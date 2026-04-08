@@ -37,6 +37,11 @@ on:
         required: false
         type: boolean
         default: false
+      fail_on_findings:
+        description: "Exit 1 if new non-allowlisted vulnerabilities found (true for PR gate, false for merge path)"
+        required: false
+        type: boolean
+        default: true
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -251,6 +256,8 @@ jobs:
           path: /tmp
 
       - name: Check against allowlist
+        env:
+          FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
         run: |
           python3 - <<'PYEOF'
           import json, sys, os
@@ -380,9 +387,11 @@ jobs:
                   print(f"  {v['severity']:8s} [{v['source']:5s}] {v['id']} {v['package']}@{v['installed']}{fix}")
               print()
 
+          fail_on_findings = os.environ.get("FAIL_ON_FINDINGS", "true").lower() == "true"
+
           blockers = new_vulns + expired
           if blockers:
-              summary = f"### Security Gate Failed\n\n"
+              summary = f"### Security Gate {'Failed' if fail_on_findings else 'Warning'}\n\n"
               summary += f"Found **{len(blockers)}** CRITICAL/HIGH vulnerabilities not in allowlist:\n\n"
               summary += "| Severity | Scanner | ID | Package | Fix |\n"
               summary += "|----------|---------|-----|---------|-----|\n"
@@ -392,8 +401,11 @@ jobs:
               summary += f"\n**To resolve:** fix the vulnerability or add to `.security/allowlist.json` with owner approval.\n"
               with open(os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null"), "a") as f:
                   f.write(summary)
-              print(f"GATE FAILED: {len(blockers)} non-allowlisted vulnerabilities")
-              sys.exit(1)
+              if fail_on_findings:
+                  print(f"GATE FAILED: {len(blockers)} non-allowlisted vulnerabilities")
+                  sys.exit(1)
+              else:
+                  print(f"GATE WARNING: {len(blockers)} non-allowlisted vulnerabilities (non-blocking)")
           else:
               print(f"GATE PASSED: All {len(unique)} vulnerabilities are allowlisted")
           PYEOF
