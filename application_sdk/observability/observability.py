@@ -438,9 +438,7 @@ class AtlanObservability(Generic[T], ABC):
                     )
 
                     # Lexi-sortable filename using first record's timestamp
-                    filename = (
-                        f"{int(partition_data[0]['timestamp'] * 1e9)}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
-                    )
+                    filename = f"{int(partition_data[0]['timestamp'] * 1e9)}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
                     local_path = os.path.join(partition_path, filename)
 
                     # Write NDJSON with gzip compression
