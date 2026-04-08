@@ -364,7 +364,6 @@ jobs:
       snyk_org: partner-images
       snyk_monitor: ${{ inputs.snyk_monitor }}
     secrets: inherit
-    continue-on-error: true
 
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
   app-deployment-dispatcher:
