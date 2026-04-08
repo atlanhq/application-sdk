@@ -38,14 +38,14 @@ def mock_async_engine_with_connection():
     mock_connection_with_options = AsyncMock()
     mock_connection_with_options.stream = AsyncMock()
     mock_connection_with_options.execute = AsyncMock()
-    mock_connection_with_options.execution_options = MagicMock(
+    mock_connection_with_options.execution_options = AsyncMock(
         return_value=mock_connection_with_options
     )
 
     # Set up the original connection
     mock_connection.stream = AsyncMock()
     mock_connection.execute = AsyncMock()
-    mock_connection.execution_options = MagicMock(
+    mock_connection.execution_options = AsyncMock(
         return_value=mock_connection_with_options
     )
 
@@ -282,6 +282,7 @@ async def test_run_query_server_side_cursor(
 
     # Assertions
     assert results == expected_results
+    mock_connection.execution_options.assert_awaited_once_with(yield_per=2)
     mock_connection_with_options.stream.assert_called_once_with(query)
     mock_result.fetchmany.assert_awaited()
     mock_result.keys.assert_called_once()
