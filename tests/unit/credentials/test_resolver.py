@@ -248,12 +248,14 @@ class TestLegacyV2SecretStorePath:
         assert cred.get("host") == "db.example.com"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", ["resolve_raw", "resolve"])
     async def test_v2_store_error_raises_credential_not_found(
-        self, store, resolver, monkeypatch
+        self, store, resolver, monkeypatch, method
     ):
         """When v2 SecretStore raises, resolver re-raises as CredentialNotFoundError.
 
         This verifies the error does NOT silently fall through to the v3 store.
+        Tests both resolve_raw() and resolve() paths.
         """
         import types
 
@@ -272,28 +274,4 @@ class TestLegacyV2SecretStorePath:
 
         ref = legacy_credential_ref("abc-123")
         with pytest.raises(CredentialNotFoundError):
-            await resolver.resolve_raw(ref)
-
-    @pytest.mark.asyncio
-    async def test_v2_store_error_on_resolve_raises_credential_not_found(
-        self, store, resolver, monkeypatch
-    ):
-        """Same as above but through resolve() (typed path)."""
-        import types
-
-        class FakeV2SecretStore:
-            @classmethod
-            async def get_credentials(cls, credential_guid):
-                raise RuntimeError("Dapr state store unavailable")
-
-        fake_module = types.ModuleType("application_sdk.services.secretstore")
-        fake_module.SecretStore = FakeV2SecretStore
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "application_sdk.services.secretstore",
-            fake_module,
-        )
-
-        ref = legacy_credential_ref("abc-123")
-        with pytest.raises(CredentialNotFoundError):
-            await resolver.resolve(ref)
+            await getattr(resolver, method)(ref)
