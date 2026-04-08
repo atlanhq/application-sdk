@@ -133,7 +133,7 @@ class CredentialResolver:
             )
 
             result: dict[str, Any] = await V2SecretStore.get_credentials(
-                {"credential_guid": ref.credential_guid}
+                ref.credential_guid
             )
             return result
         except ImportError:
