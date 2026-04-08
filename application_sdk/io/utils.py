@@ -1,5 +1,6 @@
 import glob
 import os
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
@@ -29,7 +30,9 @@ def find_local_files_by_extension(
     Args:
         path (str): Local path to search in (file or directory)
         extension (str): File extension to filter by (e.g., '.parquet', '.json')
-        file_names (Optional[List[str]]): List of file names (basenames) to filter by, paths are not supported
+        file_names (Optional[List[str]]): List of relative paths or basenames to filter by.
+            Supports both plain basenames (``"file1.parquet"``) and relative paths
+            containing directories (``"table/chunk-0-part0.parquet"``).
 
     Returns:
         List[str]: List of matching file paths
@@ -54,8 +57,29 @@ def find_local_files_by_extension(
 
         # Filter by file names if specified
         if file_names:
-            file_names_set = set(file_names)  # Convert to set for O(1) lookup
-            return [f for f in all_files if os.path.basename(f) in file_names_set]
+            rel_paths_set: set[str] = set()
+            basenames_only: set[str] = set()
+            for fn in file_names:
+                if "/" in fn or (os.sep != "/" and os.sep in fn):
+                    # Entry contains a directory component — use precise
+                    # relative-path matching (e.g. "table/chunk-0-part0.parquet").
+                    # Normalize to forward slashes for cross-platform matching.
+                    rel_paths_set.add(fn.replace("\\", "/"))
+                else:
+                    # Plain basename — use basename matching for backward
+                    # compatibility (e.g. "file1.parquet").
+                    basenames_only.add(fn)
+
+            def _matches(filepath: str) -> bool:
+                # Normalize to forward slashes so Windows paths match too.
+                rel = os.path.relpath(filepath, path).replace("\\", "/")
+                if rel in rel_paths_set:
+                    return True
+                if basenames_only and os.path.basename(filepath) in basenames_only:
+                    return True
+                return False
+
+            return [f for f in all_files if _matches(f)]
         else:
             return all_files
 
@@ -104,13 +128,19 @@ async def download_files(
         # Determine what to download based on path type and filters
         downloaded_paths: List[str] = []
 
+        # Use a unique download directory per invocation to prevent race
+        # conditions when multiple activities download files concurrently
+        # in the same worker process (e.g. parallel transform_data tasks).
+        download_id = uuid.uuid4().hex[:12]
+        isolated_tmp = os.path.join(TEMPORARY_PATH, download_id)
+
         if path.endswith(file_extension):
             # Single file case (file_names validation already ensures this is valid)
             source_path = path
             # Use the normalized store key for the local destination to avoid
             # double-prefixing when path already starts with TEMPORARY_PATH
             store_key = ObjectStore.as_store_key(source_path)
-            destination_path = os.path.join(TEMPORARY_PATH, store_key)
+            destination_path = os.path.join(isolated_tmp, store_key)
             await ObjectStore.download_file(
                 source=source_path,
                 destination=destination_path,
@@ -123,7 +153,7 @@ async def download_files(
                 file_path = os.path.join(path, file_name)
                 source_path = file_path
                 store_key = ObjectStore.as_store_key(source_path)
-                destination_path = os.path.join(TEMPORARY_PATH, store_key)
+                destination_path = os.path.join(isolated_tmp, store_key)
                 await ObjectStore.download_file(
                     source=source_path,
                     destination=destination_path,
@@ -133,7 +163,7 @@ async def download_files(
             # Download entire directory
             source_path = path
             store_key = ObjectStore.as_store_key(source_path)
-            destination_path = os.path.join(TEMPORARY_PATH, store_key)
+            destination_path = os.path.join(isolated_tmp, store_key)
             await ObjectStore.download_prefix(
                 source=source_path,
                 destination=destination_path,
