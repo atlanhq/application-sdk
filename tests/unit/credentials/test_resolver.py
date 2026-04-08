@@ -142,3 +142,132 @@ class TestLegacyPath:
         raw = await resolver.resolve_raw(ref)
         assert isinstance(raw, dict)
         assert raw["username"] == "u"
+
+
+class TestLegacyV2SecretStorePath:
+    """Tests for the legacy path when v2 SecretStore IS available.
+
+    Verifies that _resolve_legacy_raw passes the credential_guid as a bare
+    string to V2SecretStore.get_credentials, not wrapped in a dict.
+    """
+
+    async def test_get_credentials_receives_string_not_dict(
+        self, store, resolver, monkeypatch
+    ):
+        """The resolver must pass credential_guid as a string to get_credentials.
+
+        Regression test: previously passed {"credential_guid": guid} (a dict),
+        which caused StateStore.get_state to miss the credential lookup.
+        """
+        captured_args = []
+        expected_creds = {
+            "host": "db.example.com",
+            "port": 1025,
+            "username": "u",
+            "password": "p",
+        }
+
+        class FakeV2SecretStore:
+            @classmethod
+            async def get_credentials(cls, credential_guid):
+                captured_args.append(credential_guid)
+                return expected_creds
+
+        # Inject fake v2 SecretStore module
+        import types
+
+        fake_module = types.ModuleType("application_sdk.services.secretstore")
+        fake_module.SecretStore = FakeV2SecretStore
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "application_sdk.services.secretstore",
+            fake_module,
+        )
+
+        ref = legacy_credential_ref("abc-123")
+        raw = await resolver.resolve_raw(ref)
+
+        assert len(captured_args) == 1
+        assert (
+            captured_args[0] == "abc-123"
+        ), f"get_credentials should receive a string, got {type(captured_args[0])}: {captured_args[0]}"
+        assert isinstance(raw, dict)
+        assert raw["host"] == "db.example.com"
+
+    async def test_resolve_legacy_returns_typed_credential(
+        self, store, resolver, monkeypatch
+    ):
+        """Legacy path with v2 SecretStore returns typed credential when type is known."""
+        import types
+
+        class FakeV2SecretStore:
+            @classmethod
+            async def get_credentials(cls, credential_guid):
+                return {"api_key": "secret-from-heracles"}
+
+        fake_module = types.ModuleType("application_sdk.services.secretstore")
+        fake_module.SecretStore = FakeV2SecretStore
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "application_sdk.services.secretstore",
+            fake_module,
+        )
+
+        ref = legacy_credential_ref("abc-123", credential_type="api_key")
+        cred = await resolver.resolve(ref)
+
+        assert isinstance(cred, ApiKeyCredential)
+        assert cred.api_key == "secret-from-heracles"
+
+    async def test_resolve_legacy_unknown_type_returns_raw(
+        self, store, resolver, monkeypatch
+    ):
+        """Legacy path with v2 SecretStore wraps in RawCredential for unknown type."""
+        import types
+
+        class FakeV2SecretStore:
+            @classmethod
+            async def get_credentials(cls, credential_guid):
+                return {"host": "db.example.com", "username": "u", "password": "p"}
+
+        fake_module = types.ModuleType("application_sdk.services.secretstore")
+        fake_module.SecretStore = FakeV2SecretStore
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "application_sdk.services.secretstore",
+            fake_module,
+        )
+
+        ref = legacy_credential_ref("abc-123")  # credential_type="unknown"
+        cred = await resolver.resolve(ref)
+
+        assert isinstance(cred, RawCredential)
+        assert cred.get("host") == "db.example.com"
+
+    @pytest.mark.parametrize("method", ["resolve_raw", "resolve"])
+    async def test_v2_store_error_raises_credential_not_found(
+        self, store, resolver, monkeypatch, method
+    ):
+        """When v2 SecretStore raises, resolver re-raises as CredentialNotFoundError.
+
+        This verifies the error does NOT silently fall through to the v3 store.
+        Tests both resolve_raw() and resolve() paths.
+        """
+        import types
+
+        class FakeV2SecretStore:
+            @classmethod
+            async def get_credentials(cls, credential_guid):
+                raise RuntimeError("Dapr state store unavailable")
+
+        fake_module = types.ModuleType("application_sdk.services.secretstore")
+        fake_module.SecretStore = FakeV2SecretStore
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "application_sdk.services.secretstore",
+            fake_module,
+        )
+
+        ref = legacy_credential_ref("abc-123")
+        with pytest.raises(CredentialNotFoundError):
+            await getattr(resolver, method)(ref)

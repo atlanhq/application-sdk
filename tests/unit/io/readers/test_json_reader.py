@@ -64,8 +64,11 @@ async def test_download_file_invoked_for_missing_files() -> None:
     file_names = ["a.json", "b.json"]
 
     # as_store_key strips leading "/" so destinations use the normalized key
-    expected_dest_a = os.path.join("./local/tmp/", "local/a.json")
-    expected_dest_b = os.path.join("./local/tmp/", "local/b.json")
+    # Downloads are isolated under a unique subdirectory
+    _FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+    _DL_ID = _FIXED_HEX[:12]
+    expected_dest_a = os.path.join("./local/tmp/", _DL_ID, "local/a.json")
+    expected_dest_b = os.path.join("./local/tmp/", _DL_ID, "local/b.json")
 
     def mock_isfile(p):
         # Return False for initial local check, True for downloaded files
@@ -80,7 +83,9 @@ async def test_download_file_invoked_for_missing_files() -> None:
         patch(  # Only for initial local check
             "application_sdk.services.objectstore.ObjectStore.download_file"
         ) as mock_download,
+        patch("uuid.uuid4") as mock_uuid4,
     ):
+        mock_uuid4.return_value.hex = _FIXED_HEX
         json_input = JsonFileReader(
             path=path, file_names=file_names, dataframe_type=DataframeType.daft
         )
