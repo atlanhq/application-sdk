@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from application_sdk.contracts.storage import UploadOutput
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.transfer import download, upload
+
+_IS_WINDOWS = sys.platform == "win32"
 
 
 @pytest.fixture
@@ -136,10 +140,12 @@ class TestUploadStorageSubdir:
 class TestUploadSensitivePathBlocking:
     """Tests for blocking uploads from sensitive system paths."""
 
+    @pytest.mark.skipif(_IS_WINDOWS, reason="Unix-only sensitive paths")
     async def test_etc_blocked(self, store) -> None:
         with pytest.raises(ValueError, match="sensitive system path"):
             await upload("/etc/passwd", store=store)
 
+    @pytest.mark.skipif(_IS_WINDOWS, reason="Unix-only sensitive paths")
     async def test_proc_blocked(self, store) -> None:
         with pytest.raises(ValueError, match="sensitive system path"):
             await upload("/proc/self/environ", store=store)
