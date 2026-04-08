@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.8.4 (April 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.3...v2.8.4
+
+### Bug Fixes
+
+- make Snyk scan non-blocking (continue-on-error) (#1222) (by @adityachoudhury-cloud in [3601fd5](https://github.com/atlanhq/application-sdk/commit/3601fd5))
+- stop pushing to app-runtime-base image from main (#1218) (by @fyzanshaik-atlan in [a5adf69](https://github.com/atlanhq/application-sdk/commit/a5adf69))
+- allow complex types in MetricRecord labels (#1231) (by @nishantmunjal7 in [00abc95](https://github.com/atlanhq/application-sdk/commit/00abc95))
+- apply ruff-format to fix pre-commit check failure (#1232) (by @OnkarVO7 in [09132d5](https://github.com/atlanhq/application-sdk/commit/09132d5))
+
+
 ## v2.8.3 (April 04, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.2...v2.8.3
