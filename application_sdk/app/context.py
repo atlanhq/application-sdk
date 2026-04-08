@@ -124,7 +124,21 @@ class _WorkflowSafeLogger:
                 else:
                     log_method(message, *args, extra=extra)
         else:
-            # In activity or elsewhere: use loguru
+            # In activity or elsewhere: use loguru.
+            # Dynamically fetch correlation_id from the v3 ContextVar — the
+            # value frozen in self._context may be stale (set before the
+            # CorrelationContextInterceptor ran) or empty.
+            if "correlation_id" not in kwargs:
+                try:
+                    from application_sdk.observability.correlation import (
+                        get_correlation_context,
+                    )
+
+                    v3_ctx = get_correlation_context()
+                    if v3_ctx and v3_ctx.correlation_id:
+                        kwargs = {**kwargs, "correlation_id": v3_ctx.correlation_id}
+                except Exception:
+                    pass
             logger = self._get_structlog_logger()
             log_method = getattr(logger, level)
             log_method(message, *args, **kwargs)
