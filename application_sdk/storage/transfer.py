@@ -150,8 +150,15 @@ async def upload(
     resolved = _resolve_store(store)
     src = Path(local_path)
 
-    if subdir and ".." in subdir.split("/"):
-        raise ValueError(f"subdir must not contain path traversal segments: {subdir!r}")
+    if subdir:
+        from pathlib import PurePosixPath
+
+        cleaned = subdir.strip("/")
+        if not cleaned or ".." in PurePosixPath(cleaned).parts or "\x00" in subdir:
+            raise ValueError(
+                f"subdir must not contain path traversal segments: {subdir!r}"
+            )
+        subdir = cleaned
 
     if src.is_file():
         # ── Single file ────────────────────────────────────────────────────

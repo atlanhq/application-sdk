@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+from pathlib import PurePosixPath
+
+from pydantic import Field, field_validator
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, StorageTier
@@ -37,6 +39,17 @@ class UploadInput(Input):
     subdir: str | None = None
     tier: StorageTier = StorageTier.RETAINED
     skip_if_exists: bool = False
+
+    @field_validator("subdir")
+    @classmethod
+    def _validate_subdir(cls, v: str | None) -> str | None:
+        if v is not None:
+            cleaned = v.strip("/")
+            if not cleaned or ".." in PurePosixPath(cleaned).parts or "\x00" in v:
+                raise ValueError(
+                    f"subdir must not contain path traversal segments: {v!r}"
+                )
+        return v
 
 
 class UploadOutput(Output):
