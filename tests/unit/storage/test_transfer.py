@@ -77,44 +77,101 @@ class TestUploadDirectory:
         assert out2.reason == "skipped:hash_match"
 
 
-class TestUploadSubdir:
-    """Tests for the subdir parameter on upload."""
+class TestUploadStorageSubdir:
+    """Tests for the storage_subdir parameter on upload."""
 
-    async def test_file_with_subdir_and_app_prefix(self, store, tmp_path) -> None:
+    async def test_file_with_storage_subdir_and_app_prefix(self, store, tmp_path) -> None:
         f = tmp_path / "data.txt"
         f.write_bytes(b"hello")
-        out = await upload(str(f), store=store, _app_prefix="run/123", subdir="dbt")
+        out = await upload(str(f), store=store, _app_prefix="run/123", storage_subdir="dbt")
         assert out.ref.storage_path == "run/123/dbt/data.txt"
 
-    async def test_dir_with_subdir_and_app_prefix(self, store, tmp_path) -> None:
+    async def test_dir_with_storage_subdir_and_app_prefix(self, store, tmp_path) -> None:
         d = tmp_path / "dbt"
         d.mkdir()
         (d / "models.json").write_bytes(b"m")
         (d / "tests.json").write_bytes(b"t")
-        out = await upload(str(d), store=store, _app_prefix="run/123", subdir="dbt")
+        out = await upload(str(d), store=store, _app_prefix="run/123", storage_subdir="dbt")
         assert out.ref.storage_path == "run/123/dbt/"
         assert out.ref.file_count == 2
 
-    async def test_storage_path_overrides_subdir(self, store, tmp_path) -> None:
+    async def test_storage_path_overrides_storage_subdir(self, store, tmp_path) -> None:
         f = tmp_path / "data.txt"
         f.write_bytes(b"payload")
-        out = await upload(str(f), "explicit/key.txt", store=store, subdir="ignored")
+        out = await upload(str(f), "explicit/key.txt", store=store, storage_subdir="ignored")
         assert out.ref.storage_path == "explicit/key.txt"
 
-    async def test_subdir_without_app_prefix_is_ignored(self, store, tmp_path) -> None:
-        """subdir only applies when _app_prefix is set."""
+    async def test_storage_subdir_without_app_prefix_is_ignored(self, store, tmp_path) -> None:
+        """storage_subdir only applies when _app_prefix is set."""
         d = tmp_path / "mydir"
         d.mkdir()
         (d / "a.txt").write_bytes(b"a")
-        out = await upload(str(d), store=store, subdir="dbt")
-        # No _app_prefix → falls through to src.name, subdir ignored
+        out = await upload(str(d), store=store, storage_subdir="dbt")
+        # No _app_prefix → falls through to src.name, storage_subdir ignored
         assert out.ref.storage_path == "mydir/"
 
-    async def test_subdir_path_traversal_rejected(self, store, tmp_path) -> None:
+    async def test_storage_subdir_path_traversal_rejected(self, store, tmp_path) -> None:
         f = tmp_path / "data.txt"
         f.write_bytes(b"x")
         with pytest.raises(ValueError, match="path traversal"):
-            await upload(str(f), store=store, _app_prefix="run/123", subdir="../../etc")
+            await upload(str(f), store=store, _app_prefix="run/123", storage_subdir="../../etc")
+
+    async def test_deprecated_subdir_still_works(self, store, tmp_path) -> None:
+        """Backwards compat: old 'subdir' kwarg still works."""
+        f = tmp_path / "data.txt"
+        f.write_bytes(b"hello")
+        out = await upload(str(f), store=store, _app_prefix="run/123", subdir="legacy")
+        assert out.ref.storage_path == "run/123/legacy/data.txt"
+
+
+class TestUploadSensitivePathBlocking:
+    """Tests for blocking uploads from sensitive system paths."""
+
+    async def test_etc_blocked(self, store) -> None:
+        with pytest.raises(ValueError, match="sensitive system path"):
+            await upload("/etc/passwd", store=store)
+
+    async def test_proc_blocked(self, store) -> None:
+        with pytest.raises(ValueError, match="sensitive system path"):
+            await upload("/proc/self/environ", store=store)
+
+    async def test_aws_dir_blocked(self, store, tmp_path) -> None:
+        aws_dir = tmp_path / ".aws"
+        aws_dir.mkdir()
+        creds = aws_dir / "credentials"
+        creds.write_bytes(b"secret")
+        with pytest.raises(ValueError, match="sensitive directory"):
+            await upload(str(creds), store=store)
+
+    async def test_ssh_dir_blocked(self, store, tmp_path) -> None:
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        key = ssh_dir / "id_rsa"
+        key.write_bytes(b"private-key")
+        with pytest.raises(ValueError, match="sensitive directory"):
+            await upload(str(key), store=store)
+
+    async def test_env_file_blocked(self, store, tmp_path) -> None:
+        env_file = tmp_path / ".env"
+        env_file.write_bytes(b"SECRET=value")
+        with pytest.raises(ValueError, match="sensitive file"):
+            await upload(str(env_file), store=store)
+
+    async def test_env_local_file_blocked(self, store, tmp_path) -> None:
+        env_file = tmp_path / ".env.local"
+        env_file.write_bytes(b"SECRET=value")
+        with pytest.raises(ValueError, match="sensitive file"):
+            await upload(str(env_file), store=store)
+
+    async def test_path_traversal_blocked(self, store, tmp_path) -> None:
+        with pytest.raises(ValueError, match="Path traversal"):
+            await upload(str(tmp_path / ".." / "etc" / "passwd"), store=store)
+
+    async def test_normal_path_allowed(self, store, tmp_path) -> None:
+        f = tmp_path / "normal.txt"
+        f.write_bytes(b"safe content")
+        out = await upload(str(f), store=store)
+        assert out.ref.is_durable is True
 
 
 class TestDownloadSingleFile:
