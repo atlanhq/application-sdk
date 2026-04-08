@@ -8,6 +8,8 @@ creating FastAPI applications.
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
+    ApiMetadataObject,
+    ApiMetadataOutput,
     AuthInput,
     AuthOutput,
     AuthStatus,
@@ -20,6 +22,8 @@ from application_sdk.handler.contracts import (
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
+    SqlMetadataObject,
+    SqlMetadataOutput,
 )
 from application_sdk.handler.service import (
     create_app_handler_service,
@@ -31,6 +35,8 @@ __all__ = [
     "DefaultHandler",
     "HandlerError",
     "HandlerContext",
+    "ApiMetadataObject",
+    "ApiMetadataOutput",
     "AuthInput",
     "AuthOutput",
     "AuthStatus",
@@ -43,6 +49,8 @@ __all__ = [
     "PreflightInput",
     "PreflightOutput",
     "PreflightStatus",
+    "SqlMetadataObject",
+    "SqlMetadataOutput",
     "create_app_handler_service",
     "run_app_handler_service",
 ]

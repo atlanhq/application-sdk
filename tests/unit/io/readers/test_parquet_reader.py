@@ -74,6 +74,9 @@ async def test_download_file_invoked_for_missing_files() -> None:
     """Ensure that a download is triggered when no parquet files exist locally."""
     path = "/local/test.parquet"
 
+    _FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+    _DL_ID = _FIXED_HEX[:12]
+
     with (
         patch("os.path.isfile", side_effect=[False, True]),
         patch("os.path.isdir", return_value=False),
@@ -81,7 +84,9 @@ async def test_download_file_invoked_for_missing_files() -> None:
         patch(
             "application_sdk.services.objectstore.ObjectStore.download_file"
         ) as mock_download,
+        patch("uuid.uuid4") as mock_uuid4,
     ):
+        mock_uuid4.return_value.hex = _FIXED_HEX
         parquet_input = ParquetFileReader(
             path=path, chunk_size=100000, dataframe_type=DataframeType.pandas
         )
@@ -92,7 +97,10 @@ async def test_download_file_invoked_for_missing_files() -> None:
 
         # Should attempt to download the file
         # as_store_key strips leading "/" so destination uses normalized key
-        expected_destination = os.path.join("./local/tmp/", "local/test.parquet")
+        # Downloads are isolated under a unique subdirectory
+        expected_destination = os.path.join(
+            "./local/tmp/", _DL_ID, "local/test.parquet"
+        )
         mock_download.assert_called_once_with(
             source=path, destination=expected_destination
         )
@@ -327,7 +335,7 @@ def _install_dummy_daft(monkeypatch):  # noqa: D401, ANN001
                 return f"daft_df:{self.path[0] if self.path else 'unknown'}"
             return f"daft_df:{self.path}"
 
-    def read_parquet(path, _chunk_size=None):  # noqa: D401, ANN001
+    def read_parquet(path, _chunk_size=None, **kwargs):  # noqa: D401, ANN001
         call_log.append({"path": path})
         if isinstance(path, list) and len(path) > 1:
             # For read_batches tests that need MockDaftDataFrame

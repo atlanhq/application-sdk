@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+from pathlib import PurePosixPath
+
+from pydantic import Field, field_validator
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, StorageTier
@@ -19,6 +21,10 @@ class UploadInput(Input):
         local_path: Local file or directory path to upload.
         storage_path: Destination key (single file) or prefix (directory)
             in the store.  Auto-namespaced based on *tier* when ``None``.
+        storage_subdir: Subdirectory name appended to the auto-generated run prefix.
+            Use this when uploading a directory whose name should be preserved
+            in the object store (e.g. ``storage_subdir="dbt"`` places files at
+            ``{run_prefix}/dbt/...``).  Ignored when *storage_path* is set.
         tier: Storage lifecycle tier.  Controls the destination prefix when
             *storage_path* is not given and sets ``tier`` on the returned
             ``FileReference`` so cleanup behaves correctly.
@@ -30,8 +36,20 @@ class UploadInput(Input):
 
     local_path: str = ""
     storage_path: str | None = None
+    storage_subdir: str | None = None
     tier: StorageTier = StorageTier.RETAINED
     skip_if_exists: bool = False
+
+    @field_validator("storage_subdir")
+    @classmethod
+    def _validate_storage_subdir(cls, v: str | None) -> str | None:
+        if v is not None:
+            cleaned = v.strip("/")
+            if not cleaned or ".." in PurePosixPath(cleaned).parts or "\x00" in v:
+                raise ValueError(
+                    f"storage_subdir must not contain path traversal segments: {v!r}"
+                )
+        return v
 
 
 class UploadOutput(Output):

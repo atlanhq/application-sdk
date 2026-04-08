@@ -14,6 +14,7 @@ from application_sdk.handler.contracts import (
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
+    SqlMetadataOutput,
 )
 
 
@@ -84,25 +85,21 @@ class TestDefaultHandler:
     def handler(self):
         return DefaultHandler()
 
-    @pytest.mark.asyncio
     async def test_test_auth_returns_success(self, handler):
         inp = AuthInput()
         result = await handler.test_auth(inp)
         assert isinstance(result, AuthOutput)
         assert result.status == AuthStatus.SUCCESS
 
-    @pytest.mark.asyncio
     async def test_preflight_check_returns_ready(self, handler):
         inp = PreflightInput()
         result = await handler.preflight_check(inp)
         assert isinstance(result, PreflightOutput)
         assert result.status == PreflightStatus.READY
 
-    @pytest.mark.asyncio
     async def test_fetch_metadata_returns_empty(self, handler):
         inp = MetadataInput()
         result = await handler.fetch_metadata(inp)
         assert isinstance(result, MetadataOutput)
+        assert isinstance(result, SqlMetadataOutput)
         assert result.objects == []
-        assert result.total_count == 0
-        assert result.truncated is False
