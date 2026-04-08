@@ -90,6 +90,10 @@ class TestPreflightCheck:
         assert check.passed is True
         assert check.duration_ms == 50.0
 
+    def test_empty_name_rejected(self):
+        with pytest.raises(ValidationError):
+            PreflightCheck(name="")
+
 
 class TestPreflightOutput:
     def test_required_status(self):
@@ -119,10 +123,12 @@ class TestMetadataOutput:
         assert out.objects == []
 
     def test_sql_output_with_objects(self):
-        out = SqlMetadataOutput(objects=[
-            SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="FINANCE"),
-            SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="SALES"),
-        ])
+        out = SqlMetadataOutput(
+            objects=[
+                SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="FINANCE"),
+                SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="SALES"),
+            ]
+        )
         assert len(out.objects) == 2
         assert out.objects[0].TABLE_CATALOG == "DEFAULT"
         assert out.objects[0].TABLE_SCHEMA == "FINANCE"
@@ -137,9 +143,11 @@ class TestMetadataOutput:
         assert out.objects == []
 
     def test_api_output_with_flat_objects(self):
-        out = ApiMetadataOutput(objects=[
-            ApiMetadataObject(value="t1", title="Tag 1", node_type="tag"),
-        ])
+        out = ApiMetadataOutput(
+            objects=[
+                ApiMetadataObject(value="t1", title="Tag 1", node_type="tag"),
+            ]
+        )
         assert len(out.objects) == 1
         assert out.objects[0].value == "t1"
         assert out.objects[0].title == "Tag 1"
@@ -149,7 +157,10 @@ class TestMetadataOutput:
     def test_api_output_nested_children(self):
         child = ApiMetadataObject(value="c1", title="Child 1")
         parent = ApiMetadataObject(
-            value="p1", title="Parent", node_type="project", children=[child],
+            value="p1",
+            title="Parent",
+            node_type="project",
+            children=[child],
         )
         out = ApiMetadataOutput(objects=[parent])
         assert len(out.objects[0].children) == 1
@@ -157,7 +168,9 @@ class TestMetadataOutput:
 
     def test_api_output_model_dump_nested(self):
         obj = ApiMetadataObject(
-            value="p1", title="Parent", node_type="folder",
+            value="p1",
+            title="Parent",
+            node_type="folder",
             children=[ApiMetadataObject(value="c1", title="Child")],
         )
         dumped = obj.model_dump()
@@ -176,13 +189,33 @@ class TestMetadataOutput:
         assert isinstance(sql, MetadataOutput)
         assert isinstance(api, MetadataOutput)
 
+    def test_api_output_rejects_invalid_child_type(self):
+        """Passing a non-ApiMetadataObject item raises ValidationError."""
+        with pytest.raises(ValidationError):
+            ApiMetadataObject(
+                value="p",
+                title="P",
+                children=["not-an-object"],  # type: ignore[list-item]
+            )
+
     def test_legacy_metadata_object_still_works(self):
         """Deprecated MetadataObject is still importable and functional."""
-        obj = MetadataObject(
-            name="users",
-            object_type="TABLE",
-            schema="public",
-            fields=[MetadataField(name="id", field_type="INTEGER")],
-        )
+        with pytest.warns(DeprecationWarning, match="MetadataObject is deprecated"):
+            obj = MetadataObject(
+                name="users",
+                object_type="TABLE",
+                schema="public",
+                fields=[MetadataField(name="id", field_type="INTEGER")],
+            )
         assert obj.name == "users"
         assert obj.fields[0].name == "id"
+
+    def test_deprecated_metadata_field_warns(self):
+        """MetadataField emits DeprecationWarning on instantiation."""
+        with pytest.warns(DeprecationWarning, match="MetadataField is deprecated"):
+            MetadataField(name="col1")
+
+    def test_deprecated_metadata_object_warns(self):
+        """MetadataObject emits DeprecationWarning on instantiation."""
+        with pytest.warns(DeprecationWarning, match="MetadataObject is deprecated"):
+            MetadataObject(name="tbl")

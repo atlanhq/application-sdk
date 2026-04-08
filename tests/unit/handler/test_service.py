@@ -60,10 +60,12 @@ class _ApiTreeHandler(Handler):
         return PreflightOutput(status=PreflightStatus.READY, message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
-        return ApiMetadataOutput(objects=[
-            ApiMetadataObject(value="tag-1", title="Tag One", node_type="tag"),
-            ApiMetadataObject(value="tag-2", title="Tag Two", node_type="tag"),
-        ])
+        return ApiMetadataOutput(
+            objects=[
+                ApiMetadataObject(value="tag-1", title="Tag One", node_type="tag"),
+                ApiMetadataObject(value="tag-2", title="Tag Two", node_type="tag"),
+            ]
+        )
 
 
 class _FailingHandler(Handler):
@@ -213,10 +215,16 @@ class TestMetadataEndpoint:
 
         class _SQLHandler(_TestHandler):
             async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
-                return SqlMetadataOutput(objects=[
-                    SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="FINANCE"),
-                    SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="SALES"),
-                ])
+                return SqlMetadataOutput(
+                    objects=[
+                        SqlMetadataObject(
+                            TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="FINANCE"
+                        ),
+                        SqlMetadataObject(
+                            TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="SALES"
+                        ),
+                    ]
+                )
 
         client = _make_client(handler=_SQLHandler())
         response = client.post(
@@ -253,15 +261,27 @@ class TestMetadataEndpoint:
 
         class _NestedHandler(_TestHandler):
             async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
-                return ApiMetadataOutput(objects=[
-                    ApiMetadataObject(
-                        value="proj-1", title="Project A", node_type="project",
-                        children=[
-                            ApiMetadataObject(value="ws-1", title="Workspace 1", node_type="workspace"),
-                            ApiMetadataObject(value="ws-2", title="Workspace 2", node_type="workspace"),
-                        ],
-                    ),
-                ])
+                return ApiMetadataOutput(
+                    objects=[
+                        ApiMetadataObject(
+                            value="proj-1",
+                            title="Project A",
+                            node_type="project",
+                            children=[
+                                ApiMetadataObject(
+                                    value="ws-1",
+                                    title="Workspace 1",
+                                    node_type="workspace",
+                                ),
+                                ApiMetadataObject(
+                                    value="ws-2",
+                                    title="Workspace 2",
+                                    node_type="workspace",
+                                ),
+                            ],
+                        ),
+                    ]
+                )
 
         client = _make_client(handler=_NestedHandler())
         response = client.post(
@@ -354,6 +374,11 @@ class TestWrapResponse:
         result = _wrap_response({"error": "oops"}, success=False, message="failed")
         assert result["success"] is False
         assert result["message"] == "failed"
+
+    def test_list_data(self) -> None:
+        result = _wrap_response([{"a": 1}, {"b": 2}], message="ok")
+        assert result["data"] == [{"a": 1}, {"b": 2}]
+        assert result["message"] == "ok"
 
 
 class TestRunIdPathParam:

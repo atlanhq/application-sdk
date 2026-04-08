@@ -155,14 +155,13 @@ if TYPE_CHECKING:
 
 
 def _wrap_response(
-    data: Any,
+    data: dict[str, Any] | list[Any],
     *,
     message: str = "",
     success: bool = True,
 ) -> dict[str, Any]:
     """Wrap response data in the standard envelope: {success, message, data}."""
     return {"success": success, "message": message, "data": data}
-
 
 
 async def _get_workflow_result(
@@ -473,7 +472,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Internal error: {e}"
+                status_code=500, detail="Internal server error"
             ) from None
         finally:
             handler._context = None
@@ -542,7 +541,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Internal error: {e}"
+                status_code=500, detail="Internal server error"
             ) from None
         finally:
             handler._context = None
@@ -582,9 +581,7 @@ def create_app_handler_service(
                 count,
             )
             return JSONResponse(
-                content=_wrap_response(
-                    data, message=f"Fetched {count} objects"
-                )
+                content=_wrap_response(data, message=f"Fetched {count} objects")
             )
         except HandlerError as e:
             logger.error(
@@ -604,7 +601,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Internal error: {e}"
+                status_code=500, detail="Internal server error"
             ) from None
         finally:
             handler._context = None

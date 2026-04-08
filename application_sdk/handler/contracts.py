@@ -14,10 +14,11 @@ on ingress (``model_validate``), direct JSON serialization on egress
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
@@ -96,7 +97,7 @@ class PreflightStatus(SerializableEnum):
 class PreflightCheck(BaseModel):
     """Result of a single preflight check."""
 
-    name: str
+    name: str = Field(..., min_length=1)
     """Check name (e.g., 'connectivity', 'permissions')."""
 
     passed: bool = False
@@ -147,6 +148,7 @@ class MetadataField(BaseModel):
     .. deprecated::
         Retained for backward compatibility. Not used by the new
         ``SqlMetadataObject`` / ``ApiMetadataObject`` contracts.
+        Will be removed in v3.1.0.
     """
 
     name: str
@@ -161,6 +163,15 @@ class MetadataField(BaseModel):
     description: str = ""
     """Optional field description."""
 
+    def model_post_init(self, __context: Any) -> None:
+        warnings.warn(
+            "MetadataField is deprecated. "
+            "Use SqlMetadataObject or ApiMetadataObject instead. "
+            "Will be removed in v3.1.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
 
 class MetadataObject(BaseModel):
     """A discoverable object (table, view, schema, etc.).
@@ -168,6 +179,7 @@ class MetadataObject(BaseModel):
     .. deprecated::
         Use ``SqlMetadataObject`` for SQL connectors or
         ``ApiMetadataObject`` for BI/API connectors instead.
+        Will be removed in v3.1.0.
     """
 
     name: str
@@ -187,6 +199,15 @@ class MetadataObject(BaseModel):
 
     fields: list[MetadataField] = []
     """Fields/columns within this object."""
+
+    def model_post_init(self, __context: Any) -> None:
+        warnings.warn(
+            "MetadataObject is deprecated. "
+            "Use SqlMetadataObject or ApiMetadataObject instead. "
+            "Will be removed in v3.1.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +289,9 @@ class MetadataOutput(BaseModel):
     via ``isinstance``.
     """
 
+    objects: list[Any] = []
+    """Metadata objects. Subclasses narrow this type."""
+
 
 class SqlMetadataOutput(MetadataOutput):
     """Metadata output for SQL connectors (sqltree widget).
@@ -283,7 +307,7 @@ class SqlMetadataOutput(MetadataOutput):
         ])
     """
 
-    objects: list[SqlMetadataObject] = []
+    objects: list[SqlMetadataObject] = []  # type: ignore[assignment]
     """Discovered catalog/schema pairs."""
 
 
@@ -305,7 +329,7 @@ class ApiMetadataOutput(MetadataOutput):
         ])
     """
 
-    objects: list[ApiMetadataObject] = []
+    objects: list[ApiMetadataObject] = []  # type: ignore[assignment]
     """Top-level tree nodes."""
 
 
