@@ -173,6 +173,23 @@ class TestUploadSensitivePathBlocking:
         out = await upload(str(f), store=store)
         assert out.ref.is_durable is True
 
+    async def test_user_blocked_paths_env_var(self, store, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "/custom/secrets/,.vault")
+        f = tmp_path / "normal.txt"
+        f.write_bytes(b"safe")
+        # Normal path should still work
+        out = await upload(str(f), store=store)
+        assert out.ref.is_durable is True
+
+    async def test_user_blocked_paths_matches(self, store, tmp_path, monkeypatch) -> None:
+        vault_dir = tmp_path / ".vault"
+        vault_dir.mkdir()
+        secret = vault_dir / "token"
+        secret.write_bytes(b"secret")
+        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", ".vault,.credentials")
+        with pytest.raises(ValueError, match="ATLAN_UPLOAD_FILE_BLOCKED_PATHS"):
+            await upload(str(secret), store=store)
+
 
 class TestDownloadSingleFile:
     async def test_roundtrip_single_file(self, store, tmp_path) -> None:

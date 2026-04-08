@@ -129,6 +129,12 @@ _SENSITIVE_DIR_NAMES = frozenset({".aws", ".ssh", ".gnupg", ".kube", ".vault"})
 _SENSITIVE_FILE_PREFIXES = (".env",)
 
 
+def _parse_blocked_paths() -> list[str]:
+    """Parse ATLAN_UPLOAD_FILE_BLOCKED_PATHS env var (comma-separated patterns)."""
+    val = os.environ.get("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "")
+    return [p.strip() for p in val.split(",") if p.strip()] if val else []
+
+
 def _validate_upload_path(path: Path) -> None:
     """Block uploads from sensitive system paths, credential dirs, and env files."""
     if ".." in path.parts:
@@ -145,6 +151,13 @@ def _validate_upload_path(path: Path) -> None:
 
     if resolved.is_file() and resolved.name.startswith(_SENSITIVE_FILE_PREFIXES):
         raise ValueError(f"Upload of sensitive file blocked: {path!r}")
+
+    # User-defined blocked paths via ATLAN_UPLOAD_FILE_BLOCKED_PATHS (comma-separated).
+    # Each entry is matched as a substring against the full resolved path.
+    # e.g. ATLAN_UPLOAD_FILE_BLOCKED_PATHS="/custom/secrets/,.vault,.credentials"
+    user_blocked = _parse_blocked_paths()
+    if any(pattern in resolved_str for pattern in user_blocked):
+        raise ValueError(f"Upload blocked by ATLAN_UPLOAD_FILE_BLOCKED_PATHS: {path!r}")
 
 
 async def upload(
