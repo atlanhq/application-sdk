@@ -87,6 +87,60 @@ class TestFindFilesByExtension:
             assert len(result) == 1
             assert str(file1) in result
 
+    def test_directory_with_relative_path_matching(self):
+        """Test that file_names with directory prefixes match correctly.
+
+        This is the fix for the parallel transform_data race condition:
+        when file_names contain paths like 'table/chunk-0-part0.parquet',
+        matching must use the relative path, not just the basename.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Create nested directory structure mimicking raw extraction output
+            table_dir = Path(tmp_dir) / "table"
+            table_dir.mkdir()
+
+            chunk0 = table_dir / "chunk-0-part0.parquet"
+            chunk1 = table_dir / "chunk-1-part0.parquet"
+            chunk0.touch()
+            chunk1.touch()
+
+            # Request only chunk-0 by relative path
+            result = find_local_files_by_extension(
+                tmp_dir,
+                ".parquet",
+                file_names=["table/chunk-0-part0.parquet"],
+            )
+
+            # Should find exactly chunk-0, not chunk-1
+            assert len(result) == 1
+            assert str(chunk0) in result
+            assert str(chunk1) not in result
+
+    def test_relative_path_no_false_positives_across_dirs(self):
+        """Test that relative path matching doesn't match files in wrong subdirectories."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Two subdirs with identically-named files
+            dir_a = Path(tmp_dir) / "a"
+            dir_b = Path(tmp_dir) / "b"
+            dir_a.mkdir()
+            dir_b.mkdir()
+
+            file_a = dir_a / "data.parquet"
+            file_b = dir_b / "data.parquet"
+            file_a.touch()
+            file_b.touch()
+
+            # Request only a/data.parquet
+            result = find_local_files_by_extension(
+                tmp_dir,
+                ".parquet",
+                file_names=["a/data.parquet"],
+            )
+
+            assert len(result) == 1
+            assert str(file_a) in result
+            assert str(file_b) not in result
+
     def test_nonexistent_path(self):
         """Test nonexistent path returns empty list."""
         result = find_local_files_by_extension("/nonexistent/path", ".parquet")

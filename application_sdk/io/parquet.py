@@ -371,13 +371,36 @@ class ParquetFileReader(Reader):
                 "Reading parquet files as daft batches", file_count=len(parquet_files)
             )
 
-            # Create a lazy dataframe without loading data into memory
-            lazy_df = daft.read_parquet(parquet_files)
+            # Unify parquet schemas before reading: when early files have
+            # null-typed columns and later files have string-typed columns,
+            # daft silently drops all data. We read each file's schema
+            # metadata (cheap), unify via pyarrow, and pass the result to
+            # daft so it reads all files with consistent types. See BLDX-837.
+            daft_schema = None
+            try:
+                import pyarrow as pa
+                import pyarrow.parquet as pq_meta
 
-            # Get total count efficiently
+                pa_schemas = [pq_meta.read_schema(f) for f in parquet_files]
+                unified = pa.unify_schemas(pa_schemas, promote_options="permissive")
+                daft_schema = {
+                    field.name: daft.DataType.from_arrow_type(
+                        pa.large_string()
+                        if pa.types.is_null(field.type)
+                        else field.type
+                    )
+                    for field in unified
+                }
+            except Exception as exc:
+                logger.debug(
+                    "Could not unify parquet schemas (%s); "
+                    "falling back to daft default schema inference",
+                    type(exc).__name__,
+                )
+
+            lazy_df = daft.read_parquet(parquet_files, schema=daft_schema)
             total_rows = lazy_df.count_rows()
 
-            # Yield chunks without loading everything into memory
             for offset in range(0, total_rows, self.buffer_size):
                 chunk = lazy_df.offset(offset).limit(self.buffer_size)
                 yield chunk
@@ -842,8 +865,30 @@ class ParquetFileWriter(Writer):
             logger.warning("Error cleaning up temp folders", exc_info=True)
 
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
-        """Write a chunk to a Parquet file.
+        """Write a chunk to a Parquet file, casting null-typed columns to string.
 
-        This method writes a chunk to a Parquet file and uploads the file to the object store.
+        When a pandas DataFrame has an all-null column, pyarrow infers the parquet
+        type as ``null``. This causes silent data loss when daft reads multiple
+        parquet files with mixed null/string column types — daft resolves the
+        conflict by using ``null`` for ALL rows, dropping actual data from files
+        that had the column typed as ``string``. See BLDX-837.
         """
-        chunk.to_parquet(file_name, index=False, compression="snappy")
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        table = pa.Table.from_pandas(chunk, preserve_index=False)
+
+        # Fast path: no null-typed columns → write directly (O(cols) check)
+        if not any(pa.types.is_null(f.type) for f in table.schema):
+            pq.write_table(table, file_name, compression="snappy")
+            return
+
+        # Slow path: cast null-typed columns to large_string before writing
+        new_schema = pa.schema(
+            [
+                pa.field(f.name, pa.large_string()) if pa.types.is_null(f.type) else f
+                for f in table.schema
+            ]
+        )
+        table = table.cast(new_schema)
+        pq.write_table(table, file_name, compression="snappy")

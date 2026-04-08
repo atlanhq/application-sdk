@@ -22,6 +22,7 @@ from application_sdk.handler.contracts import (
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
+    SqlMetadataOutput,
 )
 
 if TYPE_CHECKING:
@@ -93,7 +94,7 @@ class Handler(ABC):
                 return PreflightOutput(status=PreflightStatus.READY)
 
             async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
-                return MetadataOutput(objects=[], total_count=0)
+                return SqlMetadataOutput(objects=[])
     """
 
     _context: HandlerContext | None = None
@@ -152,7 +153,9 @@ class Handler(ABC):
             input: Credentials, connection config, and filter options.
 
         Returns:
-            MetadataOutput with discovered objects.
+            A ``SqlMetadataOutput`` (for sqltree widget) or
+            ``ApiMetadataOutput`` (for apitree widget).  Both are
+            subtypes of ``MetadataOutput``.
 
         Raises:
             HandlerError: On fetch errors that should surface as HTTP 500.
@@ -182,4 +185,4 @@ class DefaultHandler(Handler):
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         """Always returns empty metadata."""
-        return MetadataOutput(objects=[], total_count=0, truncated=False)
+        return SqlMetadataOutput(objects=[])

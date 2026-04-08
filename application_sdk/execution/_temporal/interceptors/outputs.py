@@ -149,11 +149,12 @@ def _merge_outputs_into_result(result: Any, collector: OutputCollector) -> Any:
     """Merge collected outputs into a workflow result.
 
     Handles three cases:
-    1. dict result — merge directly (v2 / legacy path)
-    2. Pydantic BaseModel result — round-trip via model_dump/model_validate.
-       Output base class declares metrics/artifacts fields so they are
-       accepted without any runtime class manipulation.
-    3. Other — return just the collector dict (fallback)
+
+    - dict result: merge directly (v2 / legacy path).
+    - Pydantic BaseModel result: round-trip via model_dump/model_validate.
+      Output base class declares metrics/artifacts fields so they are
+      accepted without any runtime class manipulation.
+    - Other: return just the collector dict (fallback).
     """
     from pydantic import BaseModel
 
