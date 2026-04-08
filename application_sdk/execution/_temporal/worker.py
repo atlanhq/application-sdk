@@ -182,6 +182,13 @@ def create_worker(
 
         all_interceptors.append(CorrelationContextInterceptor())
 
+    if interceptor_settings.enable_output_interceptor:
+        from application_sdk.execution._temporal.interceptors.outputs import (
+            OutputInterceptor,
+        )
+
+        all_interceptors.append(OutputInterceptor())
+
     registry = AppRegistry.get_instance()
     registered_apps = registry.list_all()
     primary_app_name = (

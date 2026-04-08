@@ -305,9 +305,23 @@ class Output(BaseModel):
             records_extracted: int
             checkpoint_path: str
             status: str = "completed"
+
+    Structured outputs:
+        The SDK's OutputInterceptor automatically populates ``metrics`` and
+        ``artifacts`` from any ``get_outputs().add_metric()`` /
+        ``add_artifact()`` calls made during the workflow or its activities.
+        Connector code never needs to set these fields directly.
     """
 
     model_config = ConfigDict()
+
+    metrics: dict[str, Any] | None = None
+    """Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+    Populated automatically — do not set manually."""
+
+    artifacts: dict[str, Any] | None = None
+    """Artifact references collected by the OutputInterceptor.
+    Populated automatically — do not set manually."""
 
     def __init_subclass__(
         cls, allow_unbounded_fields: bool = False, **kwargs: Any
@@ -330,7 +344,10 @@ class Output(BaseModel):
         if allow_unbounded_fields:
             cls._allow_unbounded_fields = True  # type: ignore[attr-defined]
 
-        validate_payload_safety(cls)
+        # Skip framework-managed fields — metrics and artifacts are populated
+        # by the OutputInterceptor, not by user code, and are bounded in
+        # practice (a handful of metric key-value pairs per workflow).
+        validate_payload_safety(cls, skip_fields={"metrics", "artifacts"})
 
 
 class HeartbeatDetails(BaseModel):
