@@ -112,8 +112,12 @@ class BaseSQLClient(ClientInterface):
             # Wrapped in asyncio.to_thread because SQLAlchemy's synchronous
             # engine.connect() blocks the event loop — critical for Temporal
             # activities where blocking starves the auto-heartbeat.
+            # Capture engine in a local variable so the closure doesn't need to
+            # re-read self.engine (which is typed Optional) and pyright can narrow it.
+            _engine = self.engine
+
             def _ping() -> None:
-                with self.engine.connect() as _:
+                with _engine.connect() as _:
                     pass  # Connection test successful
 
             await asyncio.to_thread(_ping)

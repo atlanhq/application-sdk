@@ -313,7 +313,7 @@ def _parse_all_component_yamls(components_dir: "Path") -> dict[str, dict[str, st
 def _log_dapr_components(
     dapr_client: "DaprClient",
     components_dir: "Path",
-) -> set:
+) -> set[str]:
     """Log registered Dapr components and their safe configuration at startup.
 
     Queries the Dapr sidecar metadata API for all registered components and
@@ -340,7 +340,8 @@ def _log_dapr_components(
         metadata = dapr_client.get_metadata()
     except Exception:
         logger.warning(
-            "Could not query Dapr metadata — component diagnostics unavailable",
+            "Could not query Dapr metadata — component diagnostics unavailable; "
+            "optional components (e.g. event binding) will be disabled",
             exc_info=True,
         )
         return set()
