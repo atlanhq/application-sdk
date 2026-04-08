@@ -641,7 +641,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 from sqlalchemy import text
 
                 if use_server_side_cursor:
-                    connection = connection.execution_options(yield_per=batch_size)
+                    connection = await connection.execution_options(yield_per=batch_size)
 
                 result = (
                     await connection.stream(text(query))
