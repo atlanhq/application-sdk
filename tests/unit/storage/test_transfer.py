@@ -80,28 +80,40 @@ class TestUploadDirectory:
 class TestUploadStorageSubdir:
     """Tests for the storage_subdir parameter on upload."""
 
-    async def test_file_with_storage_subdir_and_app_prefix(self, store, tmp_path) -> None:
+    async def test_file_with_storage_subdir_and_app_prefix(
+        self, store, tmp_path
+    ) -> None:
         f = tmp_path / "data.txt"
         f.write_bytes(b"hello")
-        out = await upload(str(f), store=store, _app_prefix="run/123", storage_subdir="dbt")
+        out = await upload(
+            str(f), store=store, _app_prefix="run/123", storage_subdir="dbt"
+        )
         assert out.ref.storage_path == "run/123/dbt/data.txt"
 
-    async def test_dir_with_storage_subdir_and_app_prefix(self, store, tmp_path) -> None:
+    async def test_dir_with_storage_subdir_and_app_prefix(
+        self, store, tmp_path
+    ) -> None:
         d = tmp_path / "dbt"
         d.mkdir()
         (d / "models.json").write_bytes(b"m")
         (d / "tests.json").write_bytes(b"t")
-        out = await upload(str(d), store=store, _app_prefix="run/123", storage_subdir="dbt")
+        out = await upload(
+            str(d), store=store, _app_prefix="run/123", storage_subdir="dbt"
+        )
         assert out.ref.storage_path == "run/123/dbt/"
         assert out.ref.file_count == 2
 
     async def test_storage_path_overrides_storage_subdir(self, store, tmp_path) -> None:
         f = tmp_path / "data.txt"
         f.write_bytes(b"payload")
-        out = await upload(str(f), "explicit/key.txt", store=store, storage_subdir="ignored")
+        out = await upload(
+            str(f), "explicit/key.txt", store=store, storage_subdir="ignored"
+        )
         assert out.ref.storage_path == "explicit/key.txt"
 
-    async def test_storage_subdir_without_app_prefix_is_ignored(self, store, tmp_path) -> None:
+    async def test_storage_subdir_without_app_prefix_is_ignored(
+        self, store, tmp_path
+    ) -> None:
         """storage_subdir only applies when _app_prefix is set."""
         d = tmp_path / "mydir"
         d.mkdir()
@@ -110,12 +122,15 @@ class TestUploadStorageSubdir:
         # No _app_prefix → falls through to src.name, storage_subdir ignored
         assert out.ref.storage_path == "mydir/"
 
-    async def test_storage_subdir_path_traversal_rejected(self, store, tmp_path) -> None:
+    async def test_storage_subdir_path_traversal_rejected(
+        self, store, tmp_path
+    ) -> None:
         f = tmp_path / "data.txt"
         f.write_bytes(b"x")
         with pytest.raises(ValueError, match="path traversal"):
-            await upload(str(f), store=store, _app_prefix="run/123", storage_subdir="../../etc")
-
+            await upload(
+                str(f), store=store, _app_prefix="run/123", storage_subdir="../../etc"
+            )
 
 
 class TestUploadSensitivePathBlocking:
@@ -167,7 +182,9 @@ class TestUploadSensitivePathBlocking:
         out = await upload(str(f), store=store)
         assert out.ref.is_durable is True
 
-    async def test_user_blocked_paths_env_var(self, store, tmp_path, monkeypatch) -> None:
+    async def test_user_blocked_paths_env_var(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
         monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "/custom/secrets/,.vault")
         f = tmp_path / "normal.txt"
         f.write_bytes(b"safe")
@@ -175,7 +192,9 @@ class TestUploadSensitivePathBlocking:
         out = await upload(str(f), store=store)
         assert out.ref.is_durable is True
 
-    async def test_user_blocked_paths_matches(self, store, tmp_path, monkeypatch) -> None:
+    async def test_user_blocked_paths_matches(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
         vault_dir = tmp_path / ".vault"
         vault_dir.mkdir()
         secret = vault_dir / "token"

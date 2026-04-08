@@ -206,7 +206,11 @@ async def upload(
         from pathlib import PurePosixPath
 
         cleaned = storage_subdir.strip("/")
-        if not cleaned or ".." in PurePosixPath(cleaned).parts or "\x00" in storage_subdir:
+        if (
+            not cleaned
+            or ".." in PurePosixPath(cleaned).parts
+            or "\x00" in storage_subdir
+        ):
             raise ValueError(
                 f"storage_subdir must not contain path traversal segments: {storage_subdir!r}"
             )
