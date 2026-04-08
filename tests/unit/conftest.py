@@ -5,18 +5,31 @@ from unittest.mock import Mock, patch
 import pytest
 
 
+def _safe_patch(target, side_effect=None, mock_obj=None):
+    """Create a patch context that gracefully handles unresolvable targets."""
+    try:
+        if mock_obj is not None:
+            ctx = patch(target, mock_obj)
+        elif side_effect is not None:
+            ctx = patch(target, side_effect=side_effect)
+        else:
+            ctx = patch(target)
+        ctx.__enter__()
+        return ctx
+    except (AttributeError, ModuleNotFoundError):
+        return None
+
+
 @pytest.fixture(autouse=True)
 def mock_secret_store():
     """Automatically mock SecretStore.get_deployment_secret for all unit tests."""
-
-    def mock_get_deployment_secret(key: str):
-        return None
-
-    with patch(
+    ctx = _safe_patch(
         "application_sdk.services.secretstore.SecretStore.get_deployment_secret",
-        side_effect=mock_get_deployment_secret,
-    ):
-        yield
+        side_effect=lambda key: None,
+    )
+    yield
+    if ctx is not None:
+        ctx.__exit__(None, None, None)
 
 
 @pytest.fixture(autouse=True)
@@ -32,14 +45,15 @@ def mock_dapr_client():
         mock_instance.get_secret = Mock(return_value=Mock(secret={}))
         return mock_instance
 
-    def _patch(target):
-        mock_dapr = Mock()
-        mock_instance = _make_mock_dapr()
-        mock_dapr.return_value.__enter__ = Mock(return_value=mock_instance)
-        mock_dapr.return_value.__exit__ = Mock(return_value=None)
-        return patch(target, mock_dapr)
+    mock_dapr = Mock()
+    mock_instance = _make_mock_dapr()
+    mock_dapr.return_value.__enter__ = Mock(return_value=mock_instance)
+    mock_dapr.return_value.__exit__ = Mock(return_value=None)
 
-    with (
-        _patch("application_sdk.infrastructure._dapr.client.DaprClient"),
-    ):
-        yield
+    ctx = _safe_patch(
+        "application_sdk.infrastructure._dapr.client.DaprClient",
+        mock_obj=mock_dapr,
+    )
+    yield
+    if ctx is not None:
+        ctx.__exit__(None, None, None)

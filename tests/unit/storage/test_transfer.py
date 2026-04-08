@@ -195,11 +195,11 @@ class TestUploadSensitivePathBlocking:
     async def test_user_blocked_paths_matches(
         self, store, tmp_path, monkeypatch
     ) -> None:
-        vault_dir = tmp_path / ".vault"
-        vault_dir.mkdir()
-        secret = vault_dir / "token"
+        custom_dir = tmp_path / "custom_secrets"
+        custom_dir.mkdir()
+        secret = custom_dir / "token"
         secret.write_bytes(b"secret")
-        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", ".vault,.credentials")
+        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "custom_secrets,.credentials")
         with pytest.raises(ValueError, match="ATLAN_UPLOAD_FILE_BLOCKED_PATHS"):
             await upload(str(secret), store=store)
 

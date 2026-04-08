@@ -119,7 +119,6 @@ _SENSITIVE_SYSTEM_PREFIXES = (
     "/dev/",
     "/root/",
     "/private/etc/",
-    "/private/var/",
 )
 
 # Hidden credential/config directories that must never be uploaded.
