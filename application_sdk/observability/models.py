@@ -6,7 +6,7 @@ Separated from metrics_adaptor.py to avoid circular dependencies.
 
 from enum import Enum
 from time import time as get_current_time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 
@@ -30,7 +30,7 @@ class MetricRecord(BaseModel):
         name (str): Name of the metric
         value (float): Numeric value of the metric
         type (str): Type of metric (counter, gauge, or histogram)
-        labels (Dict[str, str]): Key-value pairs for metric dimensions
+        labels (Dict[str, Any]): Key-value pairs for metric dimensions
         description (Optional[str]): Optional description of the metric
         unit (Optional[str]): Optional unit of measurement
     """
@@ -39,7 +39,7 @@ class MetricRecord(BaseModel):
     name: str
     value: float
     type: MetricType  # counter, gauge, histogram
-    labels: Dict[str, str]
+    labels: Dict[str, Any]
     description: Optional[str] = None
     unit: Optional[str] = None
 
