@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from unittest import mock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from application_sdk.main import AppConfig, _derive_service_name, parse_args, run_main
+from application_sdk.main import (
+    AppConfig,
+    _create_infrastructure,
+    _derive_service_name,
+    _log_dapr_components,
+    parse_args,
+    run_main,
+)
 
 
 class TestDeriveServiceName:
@@ -411,3 +420,108 @@ class TestParseArgs:
         args = parse_args()
         assert args.mode is None
         assert args.app is None
+
+
+class TestLogDaprComponents:
+    """Tests for _log_dapr_components()."""
+
+    def _make_component(
+        self, name: str, comp_type: str = "bindings.redis", version: str = "v1"
+    ) -> MagicMock:
+        c = MagicMock()
+        c.name = name
+        c.type = comp_type
+        c.version = version
+        return c
+
+    def test_returns_registered_component_names(self, tmp_path: Path) -> None:
+        """Returns the set of registered component names on success."""
+        dapr_client = MagicMock()
+        metadata = MagicMock()
+        metadata.registered_components = [
+            self._make_component("atlan-statestore"),
+            self._make_component("atlan-secretstore"),
+        ]
+        dapr_client.get_metadata.return_value = metadata
+
+        result = _log_dapr_components(dapr_client, tmp_path)
+
+        assert result == {"atlan-statestore", "atlan-secretstore"}
+
+    def test_returns_empty_set_on_metadata_failure(self, tmp_path: Path) -> None:
+        """Returns empty set (not None, not an exception) when Dapr metadata query fails."""
+        dapr_client = MagicMock()
+        dapr_client.get_metadata.side_effect = Exception("Dapr not reachable")
+
+        result = _log_dapr_components(dapr_client, tmp_path)
+
+        assert result == set()
+
+    def test_return_type_is_set_of_str(self, tmp_path: Path) -> None:
+        """Return type is set[str] — every element is a string."""
+        dapr_client = MagicMock()
+        metadata = MagicMock()
+        metadata.registered_components = [self._make_component("my-component")]
+        dapr_client.get_metadata.return_value = metadata
+
+        result = _log_dapr_components(dapr_client, tmp_path)
+
+        assert isinstance(result, set)
+        assert all(isinstance(name, str) for name in result)
+
+
+class TestCreateInfrastructureEventBinding:
+    """Tests for _create_infrastructure() conditional event_binding."""
+
+    # DaprBinding and friends are locally imported inside _create_infrastructure,
+    # so we patch them at their source module, not at application_sdk.main.
+    _DAPR_CLIENT_MOD = "application_sdk.infrastructure._dapr.client"
+    _STORAGE_MOD = "application_sdk.storage"
+
+    def _make_dapr_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+
+    def test_event_binding_created_when_component_registered(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """DaprBinding is created when the eventstore component is in the registered set."""
+        from application_sdk.constants import EVENT_STORE_NAME
+
+        self._make_dapr_env(monkeypatch)
+
+        with (
+            patch(
+                "application_sdk.main._log_dapr_components",
+                return_value={EVENT_STORE_NAME},
+            ),
+            patch(f"{self._DAPR_CLIENT_MOD}.create_dapr_client"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(f"{self._STORAGE_MOD}.create_store_from_binding"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprBinding") as mock_binding,
+        ):
+            infra = _create_infrastructure()
+
+        mock_binding.assert_called_once()
+        assert infra.event_binding is not None
+
+    def test_event_binding_is_none_when_component_absent(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """event_binding is None (not a DaprBinding) when eventstore is not registered."""
+        self._make_dapr_env(monkeypatch)
+
+        with (
+            patch("application_sdk.main._log_dapr_components", return_value=set()),
+            patch(f"{self._DAPR_CLIENT_MOD}.create_dapr_client"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(f"{self._STORAGE_MOD}.create_store_from_binding"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprBinding") as mock_binding,
+        ):
+            infra = _create_infrastructure()
+
+        mock_binding.assert_not_called()
+        assert infra.event_binding is None
