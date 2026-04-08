@@ -151,7 +151,6 @@ class TestLegacyV2SecretStorePath:
     string to V2SecretStore.get_credentials, not wrapped in a dict.
     """
 
-    @pytest.mark.asyncio
     async def test_get_credentials_receives_string_not_dict(
         self, store, resolver, monkeypatch
     ):
@@ -195,7 +194,6 @@ class TestLegacyV2SecretStorePath:
         assert isinstance(raw, dict)
         assert raw["host"] == "db.example.com"
 
-    @pytest.mark.asyncio
     async def test_resolve_legacy_returns_typed_credential(
         self, store, resolver, monkeypatch
     ):
@@ -221,7 +219,6 @@ class TestLegacyV2SecretStorePath:
         assert isinstance(cred, ApiKeyCredential)
         assert cred.api_key == "secret-from-heracles"
 
-    @pytest.mark.asyncio
     async def test_resolve_legacy_unknown_type_returns_raw(
         self, store, resolver, monkeypatch
     ):
@@ -247,7 +244,6 @@ class TestLegacyV2SecretStorePath:
         assert isinstance(cred, RawCredential)
         assert cred.get("host") == "db.example.com"
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("method", ["resolve_raw", "resolve"])
     async def test_v2_store_error_raises_credential_not_found(
         self, store, resolver, monkeypatch, method
