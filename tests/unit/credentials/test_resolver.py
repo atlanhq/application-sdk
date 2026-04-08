@@ -161,7 +161,12 @@ class TestLegacyV2SecretStorePath:
         which caused StateStore.get_state to miss the credential lookup.
         """
         captured_args = []
-        expected_creds = {"host": "db.example.com", "port": 1025, "username": "u", "password": "p"}
+        expected_creds = {
+            "host": "db.example.com",
+            "port": 1025,
+            "username": "u",
+            "password": "p",
+        }
 
         class FakeV2SecretStore:
             @classmethod
@@ -184,9 +189,9 @@ class TestLegacyV2SecretStorePath:
         raw = await resolver.resolve_raw(ref)
 
         assert len(captured_args) == 1
-        assert captured_args[0] == "abc-123", (
-            f"get_credentials should receive a string, got {type(captured_args[0])}: {captured_args[0]}"
-        )
+        assert (
+            captured_args[0] == "abc-123"
+        ), f"get_credentials should receive a string, got {type(captured_args[0])}: {captured_args[0]}"
         assert isinstance(raw, dict)
         assert raw["host"] == "db.example.com"
 
