@@ -1,8 +1,8 @@
 # Changelog
 
-## v2.9.0 (April 09, 2026)
+## v2.8.5 (April 09, 2026)
 
-Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.4...v2.9.0
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.4...v2.8.5
 
 ### Features
 
