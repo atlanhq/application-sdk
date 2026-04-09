@@ -106,8 +106,12 @@ Examine the source files in the target path (exclude test files from this analys
 - Look for classes inheriting from `SQLQueryExtractionWorkflow` / `SQLQueryExtractionActivities` → SQL query extractor (§2b)
 - Look for classes inheriting from `IncrementalSQLMetadataExtractionWorkflow` → Incremental SQL extractor (§2c)
 - Look for HTTP/REST client usage (`httpx`, `aiohttp`, `requests`, or custom `BaseClient` subclasses) with no SQL queries → REST/HTTP metadata extractor (§2d)
+- Look for `boto3` / AWS SDK usage (e.g. `import boto3`, `glue`, `s3`, `sts`) → AWS/API metadata extractor (§2d — treat same as REST/HTTP)
+- Look for `BaseApplication` + `MetadataExtractionWorkflow` + `BaseMetadataExtractionActivities` without SQL class attributes → Custom API extractor (§2d or §3)
 - Look for any other `WorkflowInterface` / `ActivitiesInterface` subclasses that don't fit above → Custom App (§3)
 - In all cases: identify the handler class (§4) and the entry point (§5)
+
+> **Warning — fingerprinter misclassification:** The F3 fingerprinter may misclassify API-based connectors (boto3, REST) as `"custom"` (0.5 confidence) or even `"sql_metadata"` after import rewrites. Always verify the detected type manually for non-SQL connectors.
 
 > **Tip — auto-detect the connector type:**
 > ```bash
@@ -1133,4 +1137,133 @@ class MyApp(App):
     async def run(self, input: MyInput) -> MyOutput:
         # Use _MY_CONFIG here, not os.environ.get()
         ...
+```
+
+### Workflow type name must match v2 class name
+
+The platform/Argo triggers workflows by the v2 class name (e.g. `GlueMetadataExtractionWorkflow`). v3 derives the workflow type from `App.name`. If you set `name = "glue"`, the worker registers type `"glue"` and platform triggers fail with `NotFoundError: Workflow class GlueMetadataExtractionWorkflow is not registered`.
+
+**Fix:** Set `name` to the exact v2 workflow class name:
+```python
+class GlueApp(App):
+    name = "GlueMetadataExtractionWorkflow"  # Must match v2 class name
+```
+
+Every migrated connector will hit this. The skill MUST check the v2 `@workflow.defn` class name and carry it over.
+
+### Credential resolution — dual path required
+
+`self.context.get_secret(guid)` only does a raw secret store lookup. In production, credentials require **two-step resolution**: state store config + secret store values (handled by `SecretStore.get_credentials()`). For local dev, `InMemorySecretStore` is used via `context.get_secret()`.
+
+**Fix:** Try v3 path first, fall back to v2:
+```python
+async def _get_client(self, workflow_args):
+    credential_guid = workflow_args.get("credential_guid")
+    if credential_guid:
+        try:
+            creds_json = await self.context.get_secret(credential_guid)
+            creds = json.loads(creds_json) if isinstance(creds_json, str) else creds_json
+        except Exception:
+            from application_sdk.services.secretstore import SecretStore
+            creds = await SecretStore.get_credentials(credential_guid)
+    ...
+```
+
+### get_workflow_args must replicate v2 StateStore fallback
+
+The v2 `ActivitiesInterface.get_workflow_args()` does:
+1. `StateStore.get_state(workflow_id, StateType.WORKFLOWS)` — gets full config from state store
+2. Falls back to `workflow_config` dict if state store is empty (AE invocation path)
+3. Normalizes connection object (handles 3 shapes: AE nested, flat, SDK)
+4. Builds output paths via `build_output_path()`
+5. Sets `workflow_id` and `workflow_run_id` from Temporal activity context
+
+The skill must replicate ALL of these steps. Missing the StateStore lookup means `credential_guid` won't be found in production (platform stores it in state store, not in the workflow start input).
+
+### ParquetFileWriter/JsonFileWriter lose files without Dapr
+
+These writers upload via `ObjectStore` → `DaprClient()`. Without a Dapr sidecar (local dev or v3 base image), the upload silently fails and `_cleanup_local_path()` deletes the local copy. Files are written, processed, transformed — then destroyed.
+
+**Fix:** Replace with direct local disk writes:
+```python
+class LocalParquetWriter:
+    def __init__(self, path, typename=""):
+        os.makedirs(path, exist_ok=True)
+        self.path = path
+        self._chunk = 0
+        self._rows = 0
+
+    async def write_batches(self, batches):
+        for df in batches:
+            if df is not None and len(df) > 0:
+                df.to_parquet(os.path.join(self.path, f"part-{self._chunk}.parquet"), index=False)
+                self._rows += len(df)
+                self._chunk += 1
+
+    async def close(self):
+        return {"total_record_count": self._rows, "chunk_count": self._chunk}
+```
+
+Use `ParquetFileReader` for reads (it works fine — reads local files first, only tries objectstore as fallback).
+
+### Empty nested column dirs cause 60s Dapr timeouts
+
+When `process_column_data` creates empty relation level directories (levels 3-15 with no data), the `ParquetFileReader` in `transform_data` tries to read from them, finds no local parquet files, falls back to Dapr objectstore (60s health check timeout each).
+
+**Fix:** Check for local parquet files before creating a reader:
+```python
+local_parquets = [f for f in os.listdir(level_path) if f.endswith(".parquet")]
+if not local_parquets:
+    continue  # Skip empty level dirs
+```
+
+### run_dev.py must read Temporal host from env vars
+
+`run_dev_combined()` defaults to `localhost:7233`. In production (v3 base image), the Temporal host comes from environment variables set by Helm. Hardcoding localhost causes `ConnectionRefused` in deployed pods.
+
+**Fix:**
+```python
+workflow_host = os.environ.get("ATLAN_WORKFLOW_HOST", "localhost")
+workflow_port = os.environ.get("ATLAN_WORKFLOW_PORT", "7233")
+await run_dev_combined(MyApp, temporal_host=f"{workflow_host}:{workflow_port}")
+```
+
+### run_dev_combined() does not accept handler_class
+
+Handler is auto-discovered by type inspection — importing the handler class in the App module is sufficient. Do NOT pass `handler_class=` to `run_dev_combined()`.
+
+### QueryBasedTransformer.transform_metadata() signature changed
+
+v3 requires `workflow_id` and `workflow_run_id` as **explicit positional args**, not via `**kwargs`. Code that passes them in a kwargs dict will get `TypeError: missing required positional argument`.
+
+**Fix:** Extract and pass explicitly:
+```python
+transformer.transform_metadata(
+    typename=typename,
+    dataframe=dataframe,
+    workflow_id=workflow_id,
+    workflow_run_id=workflow_run_id,
+    **remaining_kwargs,
+)
+```
+
+### @task enforces typed Input/Output — no raw dicts
+
+`dict[str, Any]` as a `@task` parameter raises `TaskContractError` at class definition time. Every task MUST use Input/Output subclasses. For connectors migrating from v2 where helper functions expect dicts, create thin wrappers:
+
+```python
+class WorkflowArgsInput(Input, allow_unbounded_fields=True):
+    args: dict[str, Any] = {}
+
+class StatsOutput(Output):
+    total_record_count: int = 0
+    chunk_count: int = 0
+```
+
+### pyproject.toml — local path fails in Docker
+
+`path = "./application-sdk"` works locally but fails in CI Docker builds (`Distribution not found at: file:///app/application-sdk`). Use git source for CI:
+```toml
+[tool.uv.sources]
+atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "refactor-v3" }
 ```
