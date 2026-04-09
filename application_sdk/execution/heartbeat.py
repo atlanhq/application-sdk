@@ -167,17 +167,8 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     Returns:
         Result of ``func(*args, **kwargs)``.
     """
-    import concurrent.futures
-
     loop = asyncio.get_running_loop()
-    executor = concurrent.futures.ThreadPoolExecutor(
-        max_workers=4, thread_name_prefix="run_in_thread"
+    return await loop.run_in_executor(
+        None,  # use the loop's shared default executor
+        functools.partial(func, *args, **kwargs),
     )
-    try:
-        result = await loop.run_in_executor(
-            executor,
-            functools.partial(func, *args, **kwargs),
-        )
-        return result
-    finally:
-        executor.shutdown(wait=False)
