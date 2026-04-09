@@ -80,6 +80,10 @@ class SqlMetadataExtractor(App):
             ...
     """
 
+    # Prevent auto-registration: SqlMetadataExtractor is a base template, not a
+    # concrete app. Concrete subclasses (e.g. CloudSqlApp) register themselves.
+    _app_registered: bool = True
+
     @task(timeout_seconds=1800)
     async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
         """Fetch databases from the source system.
