@@ -1,333 +1,681 @@
-# Building SQL Applications with Application SDK
+# Building SQL Applications with Application SDK v3
 
-The Application SDK provides a robust framework for building SQL applications that interact with databases to extract, process, and store metadata. This guide demonstrates how to leverage the SDK's default implementations while maintaining the flexibility to customize behavior for your specific needs.
+This guide walks through building a SQL metadata extraction connector using the v3 Application SDK. By the end, you will have a working PostgreSQL connector that extracts databases, schemas, tables, and columns.
+
+v3 replaces the v2 `BaseSQLMetadataExtractionWorkflow` + `BaseSQLMetadataExtractionActivities` split with a single `SqlMetadataExtractor` class. If you are migrating an existing v2 connector, see the [Migration Guide](../migration-guide-v3.md) for a step-by-step checklist.
 
 ## Overview
 
-An SQL application built with the SDK typically performs the following operations:
+A SQL connector built with v3 has four parts:
 
-1.  **Connect**: Securely connects to SQL databases using various authentication methods.
-2.  **Extract**: Fetches metadata (schemas, tables, columns, procedures, etc.) using configurable SQL queries.
-3.  **Validate**: Performs preflight checks and validates extracted metadata.
-4.  **Transform**: Converts the extracted metadata into a standardized format (e.g., Atlas entities).
-5.  **Store**: Saves the processed metadata to a configured object store.
-6.  **Orchestrate**: Manages the entire process using Temporal workflows for reliability and scalability.
+1. **App (extractor)** --- a `SqlMetadataExtractor` subclass with `@task` methods that fetch metadata from your database.
+2. **Handler** --- a `Handler` subclass that implements HTTP endpoints for authentication, preflight checks, and metadata discovery.
+3. **SQL Client** --- a `BaseSQLClient` subclass that defines the connection string template for your database dialect.
+4. **Entry point** --- the `ATLAN_APP_MODULE` environment variable and `application-sdk` CLI that start your app.
 
-The SDK follows a "batteries included but swappable" philosophy - it provides sensible defaults for common tasks while allowing customization at every level.
+The SDK orchestrates everything through Temporal workflows. You never import from `temporalio` directly --- the `@task` decorator handles activity registration, heartbeating, and retry configuration.
 
-## Core Components
+## Prerequisites
 
-The SDK's SQL metadata extraction workflow (`application_sdk.workflows.metadata_extraction.sql.BaseSQLMetadataExtractionWorkflow`) relies on three main customizable components defined in `application_sdk`:
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) package manager
+- [Temporal](https://docs.temporal.io/) server (local or remote)
+- [Dapr](https://docs.dapr.io/) runtime (for state and secret stores in production)
 
-1.  **SQL Client** (`application_sdk.clients.sql.BaseSQLClient`)
-    *   **Responsibility**: Handles database connectivity and query execution.
-    *   **Extensibility**: Extend this class to support different SQL dialects, connection string formats, or custom authentication logic (like IAM roles).
+Install the SDK:
 
-2.  **Activities** (`application_sdk.activities.metadata_extraction.sql.BaseSQLMetadataExtractionActivities`)
-    *   **Responsibility**: Defines the SQL queries used to extract metadata (databases, schemas, tables, columns, etc.) and manages the extraction process.
-    *   **Extensibility**: Override specific SQL query attributes (`fetch_database_sql`, `fetch_schema_sql`, etc.) to tailor metadata extraction for your database schema or specific needs.
+```bash
+uv add application-sdk
+```
 
-3.  **Handler** (`application_sdk.handlers.sql.BaseSQLHandler`)
-    *   **Responsibility**: Manages database-specific validation logic (e.g., checking table counts, validating filters) and provides helper methods for SQL operations.
-    *   **Extensibility**: Extend this class to implement custom validation checks (`tables_check_sql`, `metadata_sql`) or database-specific logic required during the workflow.
+Start local infrastructure (Temporal + Dapr sidecars):
 
-These components work together within the `BaseSQLMetadataExtractionWorkflow`, orchestrated by a `application_sdk.worker.Worker`.
+```bash
+uv run poe start-deps
+```
 
-## Quick Start: Using Defaults
+## Project Structure
 
-You can quickly get started by using the default implementations provided by the SDK. The main steps involve:
+A v3 SQL connector follows this layout:
 
-1.  Getting a workflow client.
-2.  Instantiating the default activities (`BaseSQLMetadataExtractionActivities`) and optionally providing a custom SQL client class or handler class if needed (though defaults exist).
-3.  Creating a `Worker` instance, passing the workflow client, the base workflow class (`BaseSQLMetadataExtractionWorkflow`), and the activities.
-4.  Defining `workflow_args` with credentials and configuration.
-5.  Starting the workflow and the worker.
+```
+my-postgres-connector/
+  app/
+    __init__.py
+    client.py          # BaseSQLClient subclass
+    extractor.py       # SqlMetadataExtractor subclass
+    handler.py         # Handler subclass
+    generated/         # Pkl-generated contract JSON files
+      ...
+  tests/
+    test_extractor.py
+    test_handler.py
+  Dockerfile
+  pyproject.toml
+```
 
-*(See the full example in the "Putting It All Together" section below, which demonstrates both default usage and customization).*
+## SQL Client
 
-## Customization Examples
-
-While the defaults are powerful, you'll often need to customize components for specific databases or requirements. Here's how you can extend the core components, using examples inspired by `examples/application_sql.py`:
-
-### 1. Custom SQL Client
-
-Extend `BaseSQLClient` to define connection parameters specific to your database (e.g., PostgreSQL).
+Extend `BaseSQLClient` to define the connection string template for your database. The SDK uses this template to build a SQLAlchemy connection URL.
 
 ```python
-# examples/application_sql.py
+# app/client.py
 from application_sdk.clients.sql import BaseSQLClient
 
-class SQLClient(BaseSQLClient):
-    # Define connection string template and required parameters for PostgreSQL
+
+class PostgresClient(BaseSQLClient):
     DB_CONFIG = {
         "template": "postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
         "required": ["username", "password", "host", "port", "database"],
     }
 ```
 
-### 2. Custom Activities
+The `required` list declares which credential keys must be present. The SDK validates these at connection time and raises a clear error if any are missing.
 
-Extend `BaseSQLMetadataExtractionActivities` to provide custom SQL queries for metadata extraction.
+## Handler
+
+The `Handler` ABC defines three HTTP endpoints that the Atlan platform calls during connector setup and operation. Each method receives a typed input and returns a typed output.
 
 ```python
-# examples/application_sql.py
-from application_sdk.activities.metadata_extraction.sql import (
-    BaseSQLMetadataExtractionActivities,
+# app/handler.py
+from application_sdk.handler import (
+    Handler,
+    AuthInput,
+    AuthOutput,
+    AuthStatus,
+    PreflightInput,
+    PreflightOutput,
+    PreflightStatus,
+    MetadataInput,
+    MetadataOutput,
+    SqlMetadataObject,
+    SqlMetadataOutput,
 )
+from application_sdk.clients.sql import BaseSQLClient
 
-class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
-    # Customize database metadata query for PostgreSQL
-    fetch_database_sql = """
-    SELECT datname as database_name FROM pg_database WHERE datname = current_database();
-    """
+from app.client import PostgresClient
 
-    # Customize schema metadata query for PostgreSQL
-    fetch_schema_sql = """
-    SELECT
-        s.*
-    FROM
-        information_schema.schemata s
-    WHERE
-        s.schema_name NOT LIKE 'pg_%'
-        AND s.schema_name != 'information_schema'
-        AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) !~ '{normalized_exclude_regex}'
-        AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) ~ '{normalized_include_regex}';
-    """
 
-    # Customize table metadata query
-    fetch_table_sql = """
-    SELECT
-        t.*
-    FROM
-        information_schema.tables t
-    WHERE concat(current_database(), concat('.', t.table_schema)) !~ '{normalized_exclude_regex}'
-        AND concat(current_database(), concat('.', t.table_schema)) ~ '{normalized_include_regex}'
-        {temp_table_regex_sql};
-    """
+class PostgresHandler(Handler):
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        """Verify that the provided credentials can connect to the database."""
+        try:
+            client = PostgresClient()
+            creds = {c.key: c.value for c in input.credentials}
+            await client.load(credentials=creds)
+            # Run a simple connectivity check
+            return AuthOutput(status=AuthStatus.SUCCESS, message="Connected")
+        except Exception as e:
+            return AuthOutput(status=AuthStatus.FAILED, message=str(e))
 
-    # Provide SQL snippet for excluding temporary tables (used in other queries)
-    extract_temp_table_regex_table_sql = "AND t.table_name !~ '{exclude_table_regex}'"
-    extract_temp_table_regex_column_sql = "AND c.table_name !~ '{exclude_table_regex}'"
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        """Run pre-extraction checks (connectivity, permissions, table counts)."""
+        return PreflightOutput(status=PreflightStatus.READY, message="All checks passed")
 
-    # Customize column metadata query
-    fetch_column_sql = """
-    SELECT
-        c.*
-    FROM
-        information_schema.columns c
-    WHERE
-        concat(current_database(), concat('.', c.table_schema)) !~ '{normalized_exclude_regex}'
-        AND concat(current_database(), concat('.', c.table_schema)) ~ '{normalized_include_regex}'
-        {temp_table_regex_sql};
-    """
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        """Return catalog/schema pairs for the Atlan UI filter tree."""
+        client = PostgresClient()
+        creds = {c.key: c.value for c in input.credentials}
+        await client.load(credentials=creds)
+
+        rows = await client.execute_query(
+            "SELECT catalog_name AS TABLE_CATALOG, schema_name AS TABLE_SCHEMA "
+            "FROM information_schema.schemata "
+            "WHERE schema_name NOT LIKE 'pg_%' "
+            "AND schema_name != 'information_schema'"
+        )
+        objects = [
+            SqlMetadataObject(TABLE_CATALOG=r["TABLE_CATALOG"], TABLE_SCHEMA=r["TABLE_SCHEMA"])
+            for r in rows
+        ]
+        return SqlMetadataOutput(objects=objects)
 ```
 
-### 3. Custom Handler
+### Handler contracts
 
-Extend `BaseSQLHandler` to implement custom validation logic specific to your database.
+| Method | Input | Output | Purpose |
+|--------|-------|--------|---------|
+| `test_auth` | `AuthInput` | `AuthOutput` | Verify credentials work |
+| `preflight_check` | `PreflightInput` | `PreflightOutput` | Check connectivity, permissions, table counts |
+| `fetch_metadata` | `MetadataInput` | `MetadataOutput` | Return catalog/schema tree for UI filters |
+
+`AuthOutput.status` uses `AuthStatus` (SUCCESS, FAILED, EXPIRED, INVALID_CREDENTIALS). `PreflightOutput.status` uses `PreflightStatus` (READY, NOT_READY, PARTIAL).
+
+## App (Extractor)
+
+The core of your connector is a `SqlMetadataExtractor` subclass. Override `@task` methods to implement the SQL queries that extract metadata from your database.
 
 ```python
-# examples/application_sql.py
-from application_sdk.handlers.sql import BaseSQLHandler
+# app/extractor.py
+from application_sdk.templates import SqlMetadataExtractor
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionInput,
+    ExtractionOutput,
+    FetchDatabasesInput,
+    FetchDatabasesOutput,
+    FetchSchemasInput,
+    FetchSchemasOutput,
+    FetchTablesInput,
+    FetchTablesOutput,
+    FetchColumnsInput,
+    FetchColumnsOutput,
+)
+from application_sdk.app import task
+from application_sdk.observability.logger_adaptor import get_logger
 
-class SampleSQLWorkflowHandler(BaseSQLHandler):
-    # Customize query to check table count (used in preflight checks)
-    tables_check_sql = """
-    SELECT count(*)
-        FROM INFORMATION_SCHEMA.TABLES t -- Added alias 't'
-        WHERE concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}'
-            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) ~ '{normalized_include_regex}'
-            AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal')
-            {temp_table_regex_sql};
-    """
+from app.client import PostgresClient
 
-    # Define SQL snippet for excluding temporary tables (used in tables_check_sql)
-    temp_table_regex_sql = "AND t.table_name !~ '{exclude_table_regex}'" # Uses alias 't'
+logger = get_logger(__name__)
 
-    # Customize query to fetch basic schema/catalog info (used in preflight checks)
-    metadata_sql = """
-    SELECT schema_name, catalog_name
-        FROM INFORMATION_SCHEMA.SCHEMATA
-        WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'
-    """
+
+class PostgresExtractor(SqlMetadataExtractor):
+    @task(timeout_seconds=1800)
+    async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
+        """Fetch the current database name from PostgreSQL."""
+        client = PostgresClient()
+        await client.load(credential_ref=input.credential_ref)
+
+        rows = await client.execute_query(
+            "SELECT datname AS database_name FROM pg_database WHERE datname = current_database()"
+        )
+        databases = [r["database_name"] for r in rows]
+
+        return FetchDatabasesOutput(
+            databases=databases,
+            chunk_count=1,
+            total_record_count=len(databases),
+        )
+
+    @task(timeout_seconds=1800)
+    async def fetch_schemas(self, input: FetchSchemasInput) -> FetchSchemasOutput:
+        """Fetch non-system schemas, applying include/exclude filters."""
+        client = PostgresClient()
+        await client.load(credential_ref=input.credential_ref)
+
+        rows = await client.execute_query(f"""
+            SELECT s.schema_name
+            FROM information_schema.schemata s
+            WHERE s.schema_name NOT LIKE 'pg_%'
+              AND s.schema_name != 'information_schema'
+              AND concat(s.catalog_name, '.', s.schema_name) !~ '{input.exclude_filter}'
+              AND concat(s.catalog_name, '.', s.schema_name) ~ '{input.include_filter}'
+        """)
+        schemas = [r["schema_name"] for r in rows]
+
+        return FetchSchemasOutput(
+            schemas=schemas,
+            chunk_count=1,
+            total_record_count=len(schemas),
+        )
+
+    @task(timeout_seconds=1800)
+    async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
+        """Fetch tables matching the configured filters."""
+        client = PostgresClient()
+        await client.load(credential_ref=input.credential_ref)
+
+        sql = f"""
+            SELECT t.table_schema, t.table_name, t.table_type
+            FROM information_schema.tables t
+            WHERE concat(current_database(), '.', t.table_schema) !~ '{input.exclude_filter}'
+              AND concat(current_database(), '.', t.table_schema) ~ '{input.include_filter}'
+        """
+        if input.temp_table_regex:
+            sql += f" AND t.table_name !~ '{input.temp_table_regex}'"
+
+        rows = await client.execute_query(sql)
+        tables = [f"{r['table_schema']}.{r['table_name']}" for r in rows]
+
+        return FetchTablesOutput(
+            tables=tables,
+            chunk_count=1,
+            total_record_count=len(tables),
+        )
+
+    @task(timeout_seconds=3600)
+    async def fetch_columns(self, input: FetchColumnsInput) -> FetchColumnsOutput:
+        """Fetch column metadata for all matching tables."""
+        client = PostgresClient()
+        await client.load(credential_ref=input.credential_ref)
+
+        sql = f"""
+            SELECT c.table_schema, c.table_name, c.column_name,
+                   c.data_type, c.ordinal_position, c.is_nullable
+            FROM information_schema.columns c
+            WHERE concat(current_database(), '.', c.table_schema) !~ '{input.exclude_filter}'
+              AND concat(current_database(), '.', c.table_schema) ~ '{input.include_filter}'
+        """
+        if input.temp_table_regex:
+            sql += f" AND c.table_name !~ '{input.temp_table_regex}'"
+
+        rows = await client.execute_query(sql)
+
+        return FetchColumnsOutput(
+            chunk_count=1,
+            total_record_count=len(rows),
+        )
+```
+
+### What happens under the hood
+
+Each `@task` method becomes a Temporal activity. The `SqlMetadataExtractor.run()` method (inherited from the base class) orchestrates the full extraction:
+
+1. Fetch databases, schemas, tables, and columns **in parallel** via `asyncio.gather`
+2. Aggregate counts into an `ExtractionOutput`
+3. Return the result to Temporal
+
+You can override `run()` to change the orchestration --- for example, to add a `fetch_views` step or to run tasks sequentially.
+
+### Available task methods
+
+| Method | Input | Output | Default behavior |
+|--------|-------|--------|-----------------|
+| `fetch_databases` | `FetchDatabasesInput` | `FetchDatabasesOutput` | Required --- raises `NotImplementedError` |
+| `fetch_schemas` | `FetchSchemasInput` | `FetchSchemasOutput` | Required --- raises `NotImplementedError` |
+| `fetch_tables` | `FetchTablesInput` | `FetchTablesOutput` | Required --- raises `NotImplementedError` |
+| `fetch_columns` | `FetchColumnsInput` | `FetchColumnsOutput` | Required --- raises `NotImplementedError` |
+| `fetch_procedures` | `FetchProceduresInput` | `FetchProceduresOutput` | Optional --- not called from default `run()` |
+| `transform_data` | `TransformInput` | `TransformOutput` | Optional --- override for custom transformation |
+
+### Adding custom tasks
+
+Use `@task` to define additional extraction steps:
+
+```python
+from application_sdk.templates.contracts.sql_metadata import (
+    FetchViewsInput,
+    FetchViewsOutput,
+)
+
+class PostgresExtractor(SqlMetadataExtractor):
+    @task(timeout_seconds=1800)
+    async def fetch_views(self, input: FetchViewsInput) -> FetchViewsOutput:
+        """Fetch views from PostgreSQL."""
+        # ... implementation
+        return FetchViewsOutput(chunk_count=1, total_record_count=len(views))
+
+    async def run(self, input: ExtractionInput) -> ExtractionOutput:
+        """Override run() to include views in the extraction."""
+        # Call the base extraction
+        result = await super().run(input)
+
+        # Add views
+        views_result = await self.fetch_views(
+            FetchViewsInput(
+                workflow_id=input.workflow_id,
+                connection=input.connection,
+                credential_ref=input.credential_ref,
+            )
+        )
+        result.views_extracted = views_result.total_record_count
+        return result
+```
+
+## Typed Contracts
+
+v3 replaces `Dict[str, Any]` with Pydantic models for all task inputs and outputs. This provides:
+
+- **Type safety** --- errors caught at import time, not at runtime
+- **Payload validation** --- Temporal has a 2 MB payload limit; contracts forbid unbounded types (`Any`, bare `bytes`, unbounded `list`)
+- **Self-documenting APIs** --- contract fields visible in Temporal UI and IDE autocompletion
+
+### Contract hierarchy
+
+All SQL metadata extraction contracts live in `application_sdk.templates.contracts.sql_metadata`:
+
+```
+ExtractionInput          -- top-level input to run()
+ExtractionOutput         -- top-level output from run()
+ExtractionTaskInput      -- shared fields for all per-task inputs
+  FetchDatabasesInput
+  FetchSchemasInput
+  FetchTablesInput
+  FetchColumnsInput
+  FetchProceduresInput
+  FetchViewsInput
+  TransformInput
+FetchDatabasesOutput
+FetchSchemasOutput
+FetchTablesOutput
+FetchColumnsOutput
+FetchProceduresOutput
+FetchViewsOutput
+TransformOutput
+```
+
+### Bounded collections
+
+Unbounded `list` and `dict` are forbidden in contracts. Use `MaxItems` to declare an upper bound:
+
+```python
+from typing import Annotated
+from pydantic import Field
+from application_sdk.contracts.types import MaxItems
+
+class FetchDatabasesOutput(Output):
+    databases: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
+    chunk_count: int = 0
+    total_record_count: int = 0
+```
+
+### FileReference for large data
+
+When a task produces data too large for a Temporal payload, use `FileReference`. The SDK uploads it to object storage automatically:
+
+```python
+from application_sdk.contracts.types import FileReference
+
+class FetchOutput(Output):
+    results: FileReference  # automatically uploaded on task output
+
+class ProcessInput(Input):
+    results: FileReference  # automatically downloaded on task input
+```
+
+## Entry Point
+
+v3 uses the `application-sdk` CLI to start your app. The `ATLAN_APP_MODULE` environment variable tells the CLI which class to load.
+
+### For local development
+
+```python
+# main.py
+import asyncio
+from application_sdk.main import run_dev_combined
+from app.extractor import PostgresExtractor
+from app.handler import PostgresHandler
+
+asyncio.run(run_dev_combined(PostgresExtractor, handler_class=PostgresHandler))
+```
+
+`run_dev_combined` starts both the Temporal worker and the HTTP handler in a single process.
+
+### CLI modes
+
+The `application-sdk` CLI supports three modes:
+
+| Mode | What it runs | Use case |
+|------|-------------|----------|
+| `worker` | Temporal worker only | Production worker pods |
+| `handler` | HTTP handler only | Production handler pods |
+| `combined` | Worker + handler | Local dev, SDR (single-deploy runtime) |
+
+```bash
+# Local development
+application-sdk --mode combined --app app.extractor:PostgresExtractor
+
+# Production (separate pods)
+application-sdk --mode worker
+application-sdk --mode handler
+```
+
+In production, the `--app` flag is optional --- `ATLAN_APP_MODULE` is the recommended approach (see Dockerfile section).
+
+## Dockerfile
+
+```dockerfile
+FROM ghcr.io/atlanhq/application-sdk:v3 AS base
+
+WORKDIR /app
+
+# Install dependencies
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+# Copy application code
+COPY app/ app/
+
+# Set the app module --- this is mandatory in production
+ENV ATLAN_APP_MODULE=app.extractor:PostgresExtractor
+ENV ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
+
+CMD ["application-sdk", "--mode", "combined"]
+```
+
+Key environment variables:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ATLAN_APP_MODULE` | Yes | Python import path to your `SqlMetadataExtractor` subclass (e.g., `app.extractor:PostgresExtractor`) |
+| `ATLAN_CONTRACT_GENERATED_DIR` | No | Path to Pkl-generated contract JSON files (defaults to `/app/app/generated`) |
+
+The entry point hard-fails at startup if `ATLAN_APP_MODULE` is not set.
+
+## Testing
+
+v3 provides in-memory mock implementations of infrastructure services so you can test without running Dapr or Temporal sidecars.
+
+```python
+# tests/test_extractor.py
+import pytest
+from application_sdk.testing.mocks import MockStateStore, MockSecretStore
+from application_sdk.templates.contracts.sql_metadata import (
+    FetchDatabasesInput,
+    FetchDatabasesOutput,
+)
+from app.extractor import PostgresExtractor
+
+
+@pytest.fixture
+def state_store():
+    return MockStateStore()
+
+
+@pytest.fixture
+def secret_store():
+    return MockSecretStore()
+
+
+@pytest.mark.asyncio
+async def test_fetch_databases_contract():
+    """Verify fetch_databases returns the correct contract shape."""
+    # The task method can be called directly in tests
+    # (Temporal decorators are no-ops outside the worker)
+    extractor = PostgresExtractor()
+
+    input = FetchDatabasesInput(
+        workflow_id="test-workflow-1",
+        credential_ref=None,
+    )
+
+    # In a real test, you would mock the SQL client
+    # Here we verify the contract types are correct
+    assert isinstance(input, FetchDatabasesInput)
+    assert input.workflow_id == "test-workflow-1"
+```
+
+### Mock infrastructure
+
+| Mock | Replaces | Purpose |
+|------|----------|---------|
+| `MockStateStore` | Dapr state store | In-memory key-value store with call tracking |
+| `MockSecretStore` | Dapr secret store | In-memory secret store with call tracking |
+
+Both mocks record every call for assertions:
+
+```python
+async def test_state_store_tracking():
+    store = MockStateStore()
+    await store.save("key", {"value": "data"})
+
+    assert store.get_save_calls() == [("key", {"value": "data"})]
+    result = await store.load("key")
+    assert result == {"value": "data"}
 ```
 
 ## Putting It All Together
 
-This example, adapted from `examples/application_sql.py`, shows how to integrate custom components into a complete application:
+Here is a complete, minimal PostgreSQL connector using v3 patterns:
 
 ```python
-import asyncio
-import os
-from typing import Any, Dict
-
-# Import SDK components
-from application_sdk.activities.metadata_extraction.sql import BaseSQLMetadataExtractionActivities
+# app/client.py
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.clients.utils import get_workflow_client
-from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.worker import Worker
-from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow
-from application_sdk.observability.logger_adaptor import get_logger
 
-APPLICATION_NAME = "postgres-app-example" # Define application name
-logger = get_logger(__name__)
 
-# --- Custom Component Definitions (as shown in previous sections) ---
-class SQLClient(BaseSQLClient):
+class PostgresClient(BaseSQLClient):
     DB_CONFIG = {
         "template": "postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
         "required": ["username", "password", "host", "port", "database"],
     }
+```
 
-class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
-    fetch_database_sql = "SELECT datname as database_name FROM pg_database WHERE datname = current_database();"
-    fetch_schema_sql = "SELECT s.* FROM information_schema.schemata s WHERE s.schema_name NOT LIKE 'pg_%' AND s.schema_name != 'information_schema' AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) !~ '{normalized_exclude_regex}' AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) ~ '{normalized_include_regex}';"
-    fetch_table_sql = "SELECT t.* FROM information_schema.tables t WHERE concat(current_database(), concat('.', t.table_schema)) !~ '{normalized_exclude_regex}' AND concat(current_database(), concat('.', t.table_schema)) ~ '{normalized_include_regex}' {temp_table_regex_sql};"
-    extract_temp_table_regex_table_sql = "AND t.table_name !~ '{exclude_table_regex}'"
-    extract_temp_table_regex_column_sql = "AND c.table_name !~ '{exclude_table_regex}'"
-    fetch_column_sql = "SELECT c.* FROM information_schema.columns c WHERE concat(current_database(), concat('.', c.table_schema)) !~ '{normalized_exclude_regex}' AND concat(current_database(), concat('.', c.table_schema)) ~ '{normalized_include_regex}' {temp_table_regex_sql};"
+```python
+# app/handler.py
+from application_sdk.handler import (
+    Handler,
+    AuthInput,
+    AuthOutput,
+    AuthStatus,
+    PreflightInput,
+    PreflightOutput,
+    PreflightStatus,
+    MetadataInput,
+    MetadataOutput,
+    SqlMetadataObject,
+    SqlMetadataOutput,
+)
+from app.client import PostgresClient
 
-class SampleSQLWorkflowHandler(BaseSQLHandler):
-    tables_check_sql = "SELECT count(*) FROM INFORMATION_SCHEMA.TABLES t WHERE concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}' AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) ~ '{normalized_include_regex}' AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal') {temp_table_regex_sql};"
-    temp_table_regex_sql = "AND t.table_name !~ '{exclude_table_regex}'"
-    metadata_sql = "SELECT schema_name, catalog_name FROM INFORMATION_SCHEMA.SCHEMATA WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'"
-# --- End Custom Component Definitions ---
 
-async def run_sql_application(daemon: bool = True) -> Dict[str, Any]:
-    """Sets up and runs the SQL metadata extraction workflow."""
-    logger.info(f"Starting SQL application: {APPLICATION_NAME}")
+class PostgresHandler(Handler):
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        try:
+            client = PostgresClient()
+            creds = {c.key: c.value for c in input.credentials}
+            await client.load(credentials=creds)
+            return AuthOutput(status=AuthStatus.SUCCESS, message="Connected")
+        except Exception as e:
+            return AuthOutput(status=AuthStatus.FAILED, message=str(e))
 
-    # 1. Initialize workflow client (uses Temporal client configured via constants)
-    workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
-    await workflow_client.load()
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="All checks passed")
 
-    # 2. Instantiate activities with custom SQL client and handler
-    activities = SampleSQLActivities(
-        sql_client_class=SQLClient, # Use our custom PostgreSQL client
-        handler_class=SampleSQLWorkflowHandler # Use our custom handler
-    )
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        client = PostgresClient()
+        creds = {c.key: c.value for c in input.credentials}
+        await client.load(credentials=creds)
 
-    # 3. Set up the Temporal worker
-    #    - Uses the base workflow class (handles orchestration)
-    #    - Registers the activities instance (provides extraction logic)
-    worker = Worker(
-        workflow_client=workflow_client,
-        workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(activities),
-    )
+        rows = await client.execute_query(
+            "SELECT catalog_name AS TABLE_CATALOG, schema_name AS TABLE_SCHEMA "
+            "FROM information_schema.schemata "
+            "WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'"
+        )
+        return SqlMetadataOutput(
+            objects=[
+                SqlMetadataObject(TABLE_CATALOG=r["TABLE_CATALOG"], TABLE_SCHEMA=r["TABLE_SCHEMA"])
+                for r in rows
+            ]
+        )
+```
 
-    # 4. Configure workflow arguments
-    #    These arguments control credentials, connection details, filtering, etc.
-    #    They are typically loaded from a secure source or environment variables.
-    workflow_args = {
-        "credentials": {
-            "authType": "basic",
-            "host": os.getenv("POSTGRES_HOST", "localhost"),
-            "port": os.getenv("POSTGRES_PORT", "5432"),
-            "username": os.getenv("POSTGRES_USER", "postgres"),
-            "password": os.getenv("POSTGRES_PASSWORD", "password"),
-            "database": os.getenv("POSTGRES_DATABASE", "postgres"),
-        },
-        "connection": {
-            "connection_name": "test-postgres-connection", # Example connection name
-            "connection_qualified_name": f"default/postgres/{int(time.time())}", # Example qualified name
-        },
-        "metadata": {
-            # Define include/exclude filters (regex patterns)
-            "exclude-filter": "{}",
-            "include-filter": "{}",
-            # Define regex for temporary tables to exclude
-            "temp-table-regex": "^temp_",
-            # Extraction method (direct connection)
-            "extraction-method": "direct",
-            # Options to exclude views or empty tables
-            "exclude_views": "false",
-            "exclude_empty_tables": "false",
-        },
-        "tenant_id": os.getenv("ATLAN_TENANT_ID", "default"), # Tenant ID from constants
-        # --- Optional arguments ---
-        # "workflow_id": "existing-workflow-run_id", # Uncomment to rerun a specific workflow
-        # "cron_schedule": "0 */1 * * *", # Uncomment to run hourly
-    }
+```python
+# app/extractor.py
+from application_sdk.templates import SqlMetadataExtractor
+from application_sdk.templates.contracts.sql_metadata import (
+    FetchDatabasesInput, FetchDatabasesOutput,
+    FetchSchemasInput, FetchSchemasOutput,
+    FetchTablesInput, FetchTablesOutput,
+    FetchColumnsInput, FetchColumnsOutput,
+)
+from application_sdk.app import task
+from application_sdk.observability.logger_adaptor import get_logger
+from app.client import PostgresClient
 
-    # 5. Start the workflow execution via the Temporal client
-    logger.info(f"Starting workflow with args: {workflow_args}")
-    workflow_response = await workflow_client.start_workflow(
-        workflow_args, BaseSQLMetadataExtractionWorkflow
-    )
-    logger.info(f"Workflow started: {workflow_response}")
+logger = get_logger(__name__)
 
-    # 6. Start the Temporal worker to process tasks
-    #    Set daemon=True to run in background, False to run in foreground (for scripts)
-    logger.info(f"Starting worker (daemon={daemon})...")
-    await worker.start(daemon=daemon)
 
-    return workflow_response # Returns info like workflow_id, run_id
+class PostgresExtractor(SqlMetadataExtractor):
+    @task(timeout_seconds=1800)
+    async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
+        client = PostgresClient()
+        await client.load(credential_ref=input.credential_ref)
+        rows = await client.execute_query(
+            "SELECT datname AS database_name FROM pg_database WHERE datname = current_database()"
+        )
+        databases = [r["database_name"] for r in rows]
+        return FetchDatabasesOutput(databases=databases, chunk_count=1, total_record_count=len(databases))
 
-# --- Script Execution ---
+    @task(timeout_seconds=1800)
+    async def fetch_schemas(self, input: FetchSchemasInput) -> FetchSchemasOutput:
+        client = PostgresClient()
+        await client.load(credential_ref=input.credential_ref)
+        rows = await client.execute_query(f"""
+            SELECT s.schema_name FROM information_schema.schemata s
+            WHERE s.schema_name NOT LIKE 'pg_%' AND s.schema_name != 'information_schema'
+              AND concat(s.catalog_name, '.', s.schema_name) !~ '{input.exclude_filter}'
+              AND concat(s.catalog_name, '.', s.schema_name) ~ '{input.include_filter}'
+        """)
+        schemas = [r["schema_name"] for r in rows]
+        return FetchSchemasOutput(schemas=schemas, chunk_count=1, total_record_count=len(schemas))
+
+    @task(timeout_seconds=1800)
+    async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
+        client = PostgresClient()
+        await client.load(credential_ref=input.credential_ref)
+        sql = f"""
+            SELECT t.table_schema, t.table_name, t.table_type
+            FROM information_schema.tables t
+            WHERE concat(current_database(), '.', t.table_schema) !~ '{input.exclude_filter}'
+              AND concat(current_database(), '.', t.table_schema) ~ '{input.include_filter}'
+        """
+        if input.temp_table_regex:
+            sql += f" AND t.table_name !~ '{input.temp_table_regex}'"
+        rows = await client.execute_query(sql)
+        tables = [f"{r['table_schema']}.{r['table_name']}" for r in rows]
+        return FetchTablesOutput(tables=tables, chunk_count=1, total_record_count=len(tables))
+
+    @task(timeout_seconds=3600)
+    async def fetch_columns(self, input: FetchColumnsInput) -> FetchColumnsOutput:
+        client = PostgresClient()
+        await client.load(credential_ref=input.credential_ref)
+        sql = f"""
+            SELECT c.table_schema, c.table_name, c.column_name, c.data_type, c.ordinal_position
+            FROM information_schema.columns c
+            WHERE concat(current_database(), '.', c.table_schema) !~ '{input.exclude_filter}'
+              AND concat(current_database(), '.', c.table_schema) ~ '{input.include_filter}'
+        """
+        if input.temp_table_regex:
+            sql += f" AND c.table_name !~ '{input.temp_table_regex}'"
+        rows = await client.execute_query(sql)
+        return FetchColumnsOutput(chunk_count=1, total_record_count=len(rows))
+```
+
+```python
+# main.py
+import asyncio
+from application_sdk.main import run_dev_combined
+from app.extractor import PostgresExtractor
+from app.handler import PostgresHandler
+
 if __name__ == "__main__":
-    import time # Needed for connection_qualified_name example
-    # Run the application in the foreground when script is executed directly
-    asyncio.run(run_sql_application(daemon=False))
-
+    asyncio.run(run_dev_combined(PostgresExtractor, handler_class=PostgresHandler))
 ```
 
-## Configuration Details
-
-The `workflow_args` dictionary is crucial for controlling the workflow's behavior. Key sections include:
-
-*   **`credentials`**: Contains database connection details (`host`, `port`, `username`, `password`, `database`) and the `authType` (e.g., `basic`, `iam_user`, `iam_role`). Sensitive values should be loaded securely (e.g., from environment variables or a secret store).
-*   **`connection`**: Defines how the connection is identified in Atlan (`connection_name`, `connection_qualified_name`).
-*   **`metadata`**: Controls extraction behavior:
-    *   `include-filter`/`exclude-filter`: JSON strings containing regex patterns to filter schemas/tables.
-    *   `temp-table-regex`: Regex to identify temporary tables for exclusion.
-    *   `extraction-method`: Typically "direct".
-    *   `exclude_views`: Boolean string ("true"/"false") to skip views.
-    *   `exclude_empty_tables`: Boolean string to skip tables with zero rows (requires count checks).
-*   **`tenant_id`**: Specifies the tenant context.
-*   **Optional**: `workflow_id` for reruns, `cron_schedule` for scheduled execution.
-
-Refer to the [Configuration Guide](../configuration.md) for details on setting these via environment variables.
-
-## Advanced Features
-
-### Scheduled Execution
-
-Run workflows automatically by adding `cron_schedule` to `workflow_args`:
-
-```python
-workflow_args["cron_schedule"] = "0 1 * * *" # Run daily at 1 AM
+```dockerfile
+# Dockerfile
+FROM ghcr.io/atlanhq/application-sdk:v3 AS base
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+COPY app/ app/
+ENV ATLAN_APP_MODULE=app.extractor:PostgresExtractor
+ENV ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
+CMD ["application-sdk", "--mode", "combined"]
 ```
-
-### Workflow Rerun
-
-Resume or rerun a specific workflow execution by providing its `workflow_id`:
-
-```python
-workflow_args["workflow_id"] = "your-previous-workflow_id"
-```
-
-### Custom Authentication
-
-The `BaseSQLClient` supports different `authType` values in the `credentials`:
-
-*   `basic`: Uses `username` and `password`.
-*   `iam_user`: Uses AWS IAM user credentials (requires specific keys in `credentials`).
-*   `iam_role`: Uses an AWS IAM role (requires specific keys in `credentials`).
-
-You can extend `BaseSQLClient` to add support for other authentication mechanisms.
 
 ## Best Practices
 
-1.  **Configuration**: Load sensitive credentials and configuration from environment variables or secure stores, not directly in code. Use the constants defined in `application_sdk.constants`.
-2.  **Error Handling**: Implement `try...except` blocks in custom code (especially within Activities or Handlers) to handle potential database errors or unexpected data.
-3.  **Logging**: Use the SDK's logger (`application_sdk.observability.logger_adaptor.get_logger`) for consistent and structured logging integrated with Temporal.
-4.  **Idempotency**: Design activities to be idempotent where possible, meaning they can be run multiple times with the same result. Temporal handles retries, but idempotent activities simplify recovery.
-5.  **Testing**: Write unit tests for your custom Client, Activities, and Handler classes to ensure they function correctly. The SDK provides testing utilities (`application_sdk.test_utils`).
-6.  **Resource Management**: Ensure database connections are properly closed. The SDK's client and workflow management generally handle this, but be mindful in custom extensions.
+1. **Use typed contracts.** Never pass `Dict[str, Any]` between tasks. The SDK validates contract fields at import time and catches payload safety issues before your app runs.
+2. **Keep tasks focused.** Each `@task` method should do one thing --- fetch databases, fetch schemas, etc. The `run()` method handles orchestration.
+3. **Use `FileReference` for large data.** If a task produces output larger than ~1 MB, store it in object storage via `FileReference` rather than passing it through Temporal.
+4. **Load credentials via `credential_ref`.** Use `input.credential_ref` (the typed `CredentialRef`) rather than the legacy `credential_guid` string.
+5. **Log with the SDK logger.** Use `application_sdk.observability.logger_adaptor.get_logger` for structured logging that integrates with Temporal.
+6. **Test without sidecars.** Use `MockStateStore` and `MockSecretStore` from `application_sdk.testing.mocks` to test your extractor and handler without Dapr or Temporal running.
+7. **Set `ATLAN_APP_MODULE` in the Dockerfile.** This locks the app module to the image and avoids runtime misconfiguration.
 
 ## Next Steps
 
-*   Explore the complete [PostgreSQL example application](https://github.com/atlanhq/atlan-postgres-app) for a more production-ready implementation.
-*   Consult the [Configuration Guide](../configuration.md) for managing environment variables.
+- [What's New in v3](../whats-new-v3.md) --- detailed comparison of v2 and v3 patterns
+- [Migration Guide](../migration-guide-v3.md) --- step-by-step migration from v2 to v3
+- [Getting Started](getting-started.md) --- development environment setup
+- [Architecture](architecture.md) --- SDK architecture and component overview
