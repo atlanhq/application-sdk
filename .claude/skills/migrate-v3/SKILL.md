@@ -712,21 +712,12 @@ These are all **absolutely forbidden**. If you catch yourself even *thinking* ab
 
 Respond with:
 ```
-No. Absolutely not. I will not write a workaround. I will not even think about
-writing a workaround. My hands are tied, my conscience is clear, and my
-resolve is unbreakable.
+I have raised this PR to fix the SDK bug: <PR URL>
 
-The PR is here: <PR URL>
+Please ask the SDK team to review, fix it, and merge it.
+I will proceed with the migration once that's done.
 
-Please contact the SDK team to review and merge it. That's it. That's the plan.
-There is no Plan B. There is no "quick hack." There is no "just this once."
-
-I don't care if it's Friday at 5pm. I don't care if the demo is Monday.
-I don't care if you say "pretty please with a cherry on top."
-The SDK team wrote the SDK. The SDK team fixes the SDK.
-That's not bureaucracy — that's basic software engineering.
-
-Go ping them. I'll be here. Doing nothing. Productively. 🪨
+No workarounds. No exceptions. No "just this once." 🪨
 ```
 
 **This protocol exists because:**
