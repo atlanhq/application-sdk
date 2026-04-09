@@ -96,7 +96,6 @@ nav:
       - Common: concepts/common.md
       - Handlers: concepts/handlers.md
       - MCP: concepts/mcp.md
-<<<<<<< HEAD
       - Monitoring: concepts/monitoring.md
   - Migration:
       - What's New in v3: whats-new-v3.md
