@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.9.0 (April 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.4...v2.9.0
+
+### Features
+
+- add unified build-scan-publish workflow with security gate (#1235) (by @mananjain99 in [b164364](https://github.com/atlanhq/application-sdk/commit/b164364))
+- add custom SSL certificate support for HTTP and Temporal clients (#1253) (by @louisnow in [4bed9d2](https://github.com/atlanhq/application-sdk/commit/4bed9d2))
+
+### Bug Fixes
+
+- remove continue-on-error from reusable workflow job (#1243) (by @hamza-atlan in [9a61307](https://github.com/atlanhq/application-sdk/commit/9a61307))
+- add fail_on_findings input to control security gate behavior (#1244) (by @adityachoudhury-cloud in [af115c3](https://github.com/atlanhq/application-sdk/commit/af115c3))
+- bump Dapr CLI, runtime, and Python SDK to latest versions (#1259) (by @praveenkmr in [3a7ed51](https://github.com/atlanhq/application-sdk/commit/3a7ed51))
+
+
 ## v2.8.4 (April 08, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.3...v2.8.4
