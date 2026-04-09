@@ -641,7 +641,7 @@ def validate_payload_safety(cls: type, *, skip_fields: set[str] | None = None) -
             raise PayloadSafetyError(cls.__name__, field_name, field_type, reason)
 
 
-class PublishInputMixin(Input):
+class PublishInputMixin(BaseModel):
     """Mixin for apps whose workflow output feeds the Publish App.
 
     The Automation Engine reads these fields via JSONPath
