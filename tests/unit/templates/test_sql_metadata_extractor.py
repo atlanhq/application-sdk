@@ -18,7 +18,10 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchSchemasInput,
     FetchTablesInput,
 )
-from application_sdk.templates.sql_metadata_extractor import SqlMetadataExtractor
+from application_sdk.templates.sql_metadata_extractor import (
+    SqlMetadataExtractor,
+    compute_ae_output_fields,
+)
 
 
 class TestSqlMetadataExtractorStructure:
@@ -177,3 +180,186 @@ class TestSqlMetadataExtractorSubclass:
             import asyncio
 
             asyncio.run(extractor.fetch_databases(FetchDatabasesInput()))
+
+
+class TestExtractionOutputAEFields:
+    """Tests for the AE/publish-app fields on ExtractionOutput."""
+
+    def test_new_fields_default_to_empty_string(self) -> None:
+        out = ExtractionOutput()
+        assert out.transformed_data_prefix == ""
+        assert out.connection_qualified_name == ""
+        assert out.publish_state_prefix == ""
+        assert out.current_state_prefix == ""
+
+    def test_fields_accept_values(self) -> None:
+        out = ExtractionOutput(
+            transformed_data_prefix="artifacts/run/transformed",
+            connection_qualified_name="default/trino/1234",
+            publish_state_prefix="persistent-artifacts/apps/atlan-publish-app/state/default/trino/1234/publish-state",
+            current_state_prefix="argo-artifacts/default/trino/1234/current-state",
+        )
+        assert out.transformed_data_prefix == "artifacts/run/transformed"
+        assert out.connection_qualified_name == "default/trino/1234"
+        assert (
+            out.publish_state_prefix
+            == "persistent-artifacts/apps/atlan-publish-app/state/default/trino/1234/publish-state"
+        )
+        assert (
+            out.current_state_prefix
+            == "argo-artifacts/default/trino/1234/current-state"
+        )
+
+    def test_serialization_includes_ae_fields(self) -> None:
+        out = ExtractionOutput(
+            transformed_data_prefix="artifacts/run/transformed",
+            connection_qualified_name="default/trino/1234",
+        )
+        data = out.model_dump()
+        assert data["transformed_data_prefix"] == "artifacts/run/transformed"
+        assert data["connection_qualified_name"] == "default/trino/1234"
+
+    def test_evolution_safety_old_payload_without_new_fields(self) -> None:
+        """Old serialized ExtractionOutput without AE fields still deserializes."""
+        old_payload = {"workflow_id": "wf-1", "success": True}
+        out = ExtractionOutput.model_validate(old_payload)
+        assert out.workflow_id == "wf-1"
+        assert out.success is True
+        assert out.transformed_data_prefix == ""
+        assert out.connection_qualified_name == ""
+        assert out.publish_state_prefix == ""
+        assert out.current_state_prefix == ""
+
+    def test_serialization_roundtrip(self) -> None:
+        original = ExtractionOutput(
+            workflow_id="wf-1",
+            success=True,
+            transformed_data_prefix="run/transformed",
+            connection_qualified_name="default/snowflake/123",
+            publish_state_prefix="persistent-artifacts/apps/atlan-publish-app/state/default/snowflake/123/publish-state",
+            current_state_prefix="argo-artifacts/default/snowflake/123/current-state",
+        )
+        serialized = original.model_dump_json()
+        restored = ExtractionOutput.model_validate_json(serialized)
+        assert restored == original
+
+
+class TestComputeAEOutputFields:
+    """Tests for the compute_ae_output_fields() helper."""
+
+    def test_strips_prefix_from_output_path(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="./local/tmp/2024/01/01/run-1",
+            output_prefix="./local/tmp/",
+            connection_qualified_name="default/snowflake/123",
+        )
+        assert result["transformed_data_prefix"] == "2024/01/01/run-1/transformed"
+
+    def test_no_prefix_match_uses_full_path(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="artifacts/run-1",
+            output_prefix="./local/tmp/",
+            connection_qualified_name="default/pg/456",
+        )
+        assert result["transformed_data_prefix"] == "artifacts/run-1/transformed"
+
+    def test_empty_prefix_uses_full_path(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="some/path",
+            output_prefix="",
+            connection_qualified_name="default/bq/789",
+        )
+        assert result["transformed_data_prefix"] == "some/path/transformed"
+
+    def test_empty_output_path_yields_empty_transformed_prefix(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="",
+            output_prefix="./local/tmp/",
+            connection_qualified_name="default/snowflake/123",
+        )
+        assert result["transformed_data_prefix"] == ""
+
+    def test_both_empty_yields_all_empty(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="",
+            output_prefix="",
+            connection_qualified_name="",
+        )
+        assert result["transformed_data_prefix"] == ""
+        assert result["connection_qualified_name"] == ""
+        assert result["publish_state_prefix"] == ""
+        assert result["current_state_prefix"] == ""
+
+    def test_publish_state_prefix_format(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="p",
+            output_prefix="",
+            connection_qualified_name="default/snowflake/abc",
+        )
+        assert result["publish_state_prefix"] == (
+            "persistent-artifacts/apps/atlan-publish-app/state/default/snowflake/abc/publish-state"
+        )
+
+    def test_current_state_prefix_format(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="p",
+            output_prefix="",
+            connection_qualified_name="default/snowflake/abc",
+        )
+        assert result["current_state_prefix"] == (
+            "argo-artifacts/default/snowflake/abc/current-state"
+        )
+
+    def test_empty_connection_yields_empty_state_prefixes(self) -> None:
+        """v3 returns empty strings when connection_qn is empty (diverges from v2)."""
+
+        result = compute_ae_output_fields(
+            output_path="./local/tmp/run",
+            output_prefix="./local/tmp/",
+            connection_qualified_name="",
+        )
+        assert result["connection_qualified_name"] == ""
+        assert result["publish_state_prefix"] == ""
+        assert result["current_state_prefix"] == ""
+
+    def test_path_traversal_in_output_path_yields_empty(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="../../etc/passwd",
+            output_prefix="",
+            connection_qualified_name="default/snowflake/123",
+        )
+        assert result["transformed_data_prefix"] == ""
+
+    def test_path_traversal_after_prefix_strip_yields_empty(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="artifacts/../../../sensitive",
+            output_prefix="artifacts",
+            connection_qualified_name="default/snowflake/123",
+        )
+        assert result["transformed_data_prefix"] == ""
+
+    def test_unsafe_connection_qn_cleared(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="some/path",
+            output_prefix="",
+            connection_qualified_name="../../other-tenant/x",
+        )
+        assert result["connection_qualified_name"] == ""
+        assert result["publish_state_prefix"] == ""
+        assert result["current_state_prefix"] == ""
+
+    def test_absolute_output_path_yields_empty(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="/etc/passwd",
+            output_prefix="",
+            connection_qualified_name="default/snowflake/123",
+        )
+        assert result["transformed_data_prefix"] == ""
+
+    def test_trailing_slash_stripped_from_prefix(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="./local/tmp/run/",
+            output_prefix="./local/tmp/",
+            connection_qualified_name="c",
+        )
+        assert result["transformed_data_prefix"] == "run/transformed"

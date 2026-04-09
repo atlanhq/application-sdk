@@ -34,6 +34,8 @@ Subclass ``SqlMetadataExtractor`` to implement connector-specific logic::
 from __future__ import annotations
 
 import asyncio
+import posixpath
+import re
 from typing import TYPE_CHECKING
 
 from application_sdk.app.base import App
@@ -61,6 +63,72 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     pass
+
+# Pattern for valid connection qualified names (alphanumeric, slashes, hyphens, underscores, dots).
+# Rejects ".." path traversal segments.
+_SAFE_PATH_SEGMENT_RE = re.compile(
+    r"\A(?!.*(?:^|/)\.\.)(?!.*\.\./)[a-zA-Z0-9/_\-\.]+\Z"
+)
+
+PUBLISH_STATE_PREFIX_TEMPLATE = (
+    "persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}/publish-state"
+)
+CURRENT_STATE_PREFIX_TEMPLATE = "argo-artifacts/{connection_qn}/current-state"
+
+
+def compute_ae_output_fields(
+    output_path: str,
+    output_prefix: str,
+    connection_qualified_name: str,
+) -> dict[str, str]:
+    """Compute the Automation Engine / publish-app fields for ``ExtractionOutput``.
+
+    Extracted from ``run()`` so subclasses and tests can reuse the logic.
+    """
+    # Compute transformed_data_prefix
+    transformed_data_prefix = ""
+    if output_path:
+        relative_path = output_path
+        if output_prefix and relative_path.startswith(output_prefix):
+            relative_path = relative_path[len(output_prefix) :]
+            relative_path = relative_path.lstrip("/")
+        transformed_data_prefix = posixpath.normpath(f"{relative_path}/transformed")
+        if transformed_data_prefix.startswith(
+            ".."
+        ) or transformed_data_prefix.startswith("/"):
+            logger.warning(
+                "Computed transformed_data_prefix escapes allowed prefix: %s",
+                transformed_data_prefix,
+            )
+            transformed_data_prefix = ""
+
+    # Validate connection_qn before interpolating into paths
+    connection_qn = connection_qualified_name
+    if connection_qn and not _SAFE_PATH_SEGMENT_RE.match(connection_qn):
+        logger.warning(
+            "connection_qualified_name contains unsafe characters, "
+            "clearing AE path fields: %s",
+            connection_qn,
+        )
+        connection_qn = ""
+
+    publish_state_prefix = (
+        PUBLISH_STATE_PREFIX_TEMPLATE.format(connection_qn=connection_qn)
+        if connection_qn
+        else ""
+    )
+    current_state_prefix = (
+        CURRENT_STATE_PREFIX_TEMPLATE.format(connection_qn=connection_qn)
+        if connection_qn
+        else ""
+    )
+
+    return {
+        "transformed_data_prefix": transformed_data_prefix,
+        "connection_qualified_name": connection_qn,
+        "publish_state_prefix": publish_state_prefix,
+        "current_state_prefix": current_state_prefix,
+    }
 
 
 class SqlMetadataExtractor(App):
@@ -227,6 +295,14 @@ class SqlMetadataExtractor(App):
                 ),
             )
 
+            # Compute AE / publish-app output fields
+            connection_qn = input.connection.attributes.qualified_name or ""
+            ae_fields = compute_ae_output_fields(
+                output_path=input.output_path,
+                output_prefix=input.output_prefix,
+                connection_qualified_name=connection_qn,
+            )
+
             logger.info(
                 "Metadata extraction completed",
                 workflow_id=workflow_id,
@@ -234,6 +310,8 @@ class SqlMetadataExtractor(App):
                 schemas=schema_result.total_record_count,
                 tables=table_result.total_record_count,
                 columns=column_result.total_record_count,
+                transformed_data_prefix=ae_fields["transformed_data_prefix"],
+                connection_qualified_name=ae_fields["connection_qualified_name"],
             )
 
             return ExtractionOutput(
@@ -243,6 +321,7 @@ class SqlMetadataExtractor(App):
                 schemas_extracted=schema_result.total_record_count,
                 tables_extracted=table_result.total_record_count,
                 columns_extracted=column_result.total_record_count,
+                **ae_fields,
             )
 
         except Exception as e:
