@@ -675,6 +675,14 @@ class PublishInputMixin(BaseModel):
         r"\A(?!.*(?:^|/)\.\.)(?!.*\.\./)[a-zA-Z0-9/_\-\.]+\Z"
     )
 
+    # ── Input fields (used to derive output fields) ────────────────
+    output_path: str = ""
+    """SDK output path. Used to derive ``transformed_data_prefix``."""
+
+    output_prefix: str = ""
+    """Prefix to strip from ``output_path`` before deriving transformed prefix."""
+
+    # ── Output fields (read by AE via JSONPath) ──────────────────
     transformed_data_prefix: str = ""
     """Object-store-relative path to transformed data files."""
 
@@ -689,7 +697,19 @@ class PublishInputMixin(BaseModel):
 
     @model_validator(mode="after")
     def _derive_publish_paths(self) -> "PublishInputMixin":
-        """Auto-derive state prefixes from connection_qualified_name."""
+        """Auto-derive all publish-related paths."""
+        import posixpath
+
+        # Derive transformed_data_prefix from output_path
+        if not self.transformed_data_prefix and self.output_path:
+            relative = self.output_path
+            if self.output_prefix and relative.startswith(self.output_prefix):
+                relative = relative[len(self.output_prefix) :].lstrip("/")
+            result = posixpath.normpath(f"{relative}/transformed")
+            if not result.startswith("..") and not result.startswith("/"):
+                self.transformed_data_prefix = result
+
+        # Derive state prefixes from connection_qualified_name
         cqn = self.connection_qualified_name
         if not cqn or not self._SAFE_CONNECTION_QN_RE.match(cqn):
             return self
