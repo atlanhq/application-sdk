@@ -49,6 +49,7 @@ on:
 permissions:
   contents: read
   packages: read
+  pull-requests: write
 
 jobs:
   # ── Build Docker image (single-arch, no push) ──────────────────────────────
@@ -235,9 +236,6 @@ jobs:
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: write
     steps:
       - name: Checkout (for allowlist)
         uses: actions/checkout@v4
