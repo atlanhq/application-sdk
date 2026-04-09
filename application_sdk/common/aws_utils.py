@@ -78,7 +78,7 @@ def generate_aws_rds_token_with_iam_role(
         return token
 
     except ClientError as e:
-        raise Exception(f"Failed to assume role: {str(e)}")
+        raise Exception(f"Failed to assume role: {str(e)}") from e
 
 
 def generate_aws_rds_token_with_iam_user(
@@ -116,7 +116,7 @@ def generate_aws_rds_token_with_iam_user(
         )
         return token
     except Exception as e:
-        raise Exception(f"Failed to get user credentials: {str(e)}")
+        raise Exception(f"Failed to get user credentials: {str(e)}") from e
 
 
 def get_cluster_identifier(aws_client) -> Optional[str]:
@@ -285,7 +285,7 @@ def create_aws_client(
 
     except Exception as e:
         logger.error(f"Failed to create {service} client in region {region}: {e}")
-        raise Exception(f"Failed to create {service} client: {str(e)}")
+        raise Exception(f"Failed to create {service} client: {str(e)}") from e
 
 
 def create_engine_url(

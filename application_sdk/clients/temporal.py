@@ -402,7 +402,7 @@ class TemporalWorkflowClient(WorkflowClient):
             }
         except WorkflowFailureError as e:
             logger.error(f"Workflow failure: {e}")
-            raise e
+            raise
 
     async def stop_workflow(self, workflow_id: str, run_id: str) -> None:
         """Stop a workflow execution.
@@ -424,7 +424,9 @@ class TemporalWorkflowClient(WorkflowClient):
             await workflow_handle.terminate()
         except Exception as e:
             logger.error(f"Error terminating workflow {workflow_id} {run_id}: {e}")
-            raise Exception(f"Error terminating workflow {workflow_id} {run_id}: {e}")
+            raise Exception(
+                f"Error terminating workflow {workflow_id} {run_id}: {e}"
+            ) from e
 
     def create_worker(
         self,
@@ -623,4 +625,4 @@ class TemporalWorkflowClient(WorkflowClient):
             logger.error(f"Error getting workflow status: {e}")
             raise Exception(
                 f"Error getting workflow status for {workflow_id} {run_id}: {e}"
-            )
+            ) from e

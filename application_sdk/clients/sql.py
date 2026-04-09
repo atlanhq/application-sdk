@@ -123,7 +123,7 @@ class BaseSQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}")
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}") from e
 
     async def close(self) -> None:
         """Close the database connection."""
