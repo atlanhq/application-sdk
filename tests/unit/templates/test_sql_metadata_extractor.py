@@ -215,10 +215,10 @@ class TestPublishInputMixin:
         assert out.current_state_prefix == ""
 
     def test_used_as_mixin(self) -> None:
-        """Apps use PublishInputMixin as base for their output class."""
-        from application_sdk.contracts.base import PublishInputMixin
+        """Apps use PublishInputMixin as mixin alongside Output."""
+        from application_sdk.contracts.base import Output, PublishInputMixin
 
-        class MyOutput(PublishInputMixin, allow_unbounded_fields=True):
+        class MyOutput(Output, PublishInputMixin, allow_unbounded_fields=True):
             records: int = 0
 
         out = MyOutput(
