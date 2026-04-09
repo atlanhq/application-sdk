@@ -233,43 +233,6 @@ The common pattern is to use the `get_workflow_client` utility function.
     *   Handles storing configuration/credentials securely (StateStore/SecretStore).
     *   Initiates the workflow execution on Temporal.
 
-### Example (Getting and Using `TemporalWorkflowClient`)
-
-```python
-# In your application setup (e.g., examples/application_fastapi.py)
-import asyncio
-# Absolute imports
-from application_sdk.clients.utils import get_workflow_client
-from application_sdk.server.fastapi import Application, HttpWorkflowTrigger
-# Assuming your custom classes are defined
-from my_connector.handlers import MyConnectorHandler
-from my_connector.workflows import MyConnectorWorkflow
-
-async def run_app():
-    # Get the workflow client using the utility function
-    workflow_client = get_workflow_client(application_name="my-connector-queue")
-    await workflow_client.load() # Connect to Temporal
-
-    # Instantiate the FastAPI application, passing the connected client
-    fast_api_app = APIServer(
-        handler=MyConnectorHandler(),
-        workflow_client=workflow_client
-    )
-
-    # Register workflow triggers
-    fast_api_app.register_workflow(
-        MyConnectorWorkflow,
-        [HttpWorkflowTrigger(endpoint="/start", methods=["POST"])]
-    )
-
-    # Start the application server
-    await fast_api_app.start()
-    # await workflow_client.close() # Handle on shutdown
-
-if __name__ == "__main__":
-    asyncio.run(run_app())
-```
-
 ## Summary
 
 The `clients` module abstracts interactions with external services.

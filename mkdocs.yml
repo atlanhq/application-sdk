@@ -75,7 +75,6 @@ nav:
       - Troubleshooting: setup/troubleshooting.md
   - Guides:
       # Core concepts
-      - Overview: guides/index.md
       - Getting Started: guides/getting-started.md
       - Architecture: guides/architecture.md
 
@@ -86,12 +85,10 @@ nav:
 
       # Best practices & testing
       - Best Practices: guides/best-practices.md
-      - Test Framework: guides/test-framework.md
   - Concepts:
       - Apps: concepts/apps.md
       - Entry Points: concepts/entry-points.md
       - Tasks: concepts/tasks.md
-      - Atlan Upload: concepts/atlanupload.md
       - Server: concepts/server.md
       - Clients: concepts/clients.md
       - Common: concepts/common.md

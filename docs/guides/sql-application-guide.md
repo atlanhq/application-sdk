@@ -26,7 +26,7 @@ The SDK orchestrates everything through Temporal workflows. You never import fro
 Install the SDK:
 
 ```bash
-uv add application-sdk
+uv add atlan-application-sdk
 ```
 
 Start local infrastructure (Temporal + Dapr sidecars):
