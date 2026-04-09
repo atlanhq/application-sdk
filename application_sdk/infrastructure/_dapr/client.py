@@ -1,5 +1,6 @@
 """Dapr client implementations."""
 
+import asyncio
 import json
 from typing import Any
 
@@ -56,7 +57,8 @@ class DaprStateStore:
     async def save(self, key: str, value: dict[str, Any]) -> None:
         """Save state via Dapr."""
         try:
-            self._client.save_state(
+            await asyncio.to_thread(
+                self._client.save_state,
                 store_name=self._store_name,
                 key=key,
                 value=json.dumps(value),
@@ -72,7 +74,8 @@ class DaprStateStore:
     async def load(self, key: str) -> dict[str, Any] | None:
         """Load state via Dapr."""
         try:
-            result = self._client.get_state(
+            result = await asyncio.to_thread(
+                self._client.get_state,
                 store_name=self._store_name,
                 key=key,
             )
@@ -90,7 +93,8 @@ class DaprStateStore:
     async def delete(self, key: str) -> bool:
         """Delete state via Dapr."""
         try:
-            self._client.delete_state(
+            await asyncio.to_thread(
+                self._client.delete_state,
                 store_name=self._store_name,
                 key=key,
             )
@@ -136,7 +140,8 @@ class DaprSecretStore:
     async def get(self, name: str) -> str:
         """Get a secret via Dapr."""
         try:
-            result = self._client.get_secret(
+            result = await asyncio.to_thread(
+                self._client.get_secret,
                 store_name=self._store_name,
                 key=name,
             )
@@ -162,7 +167,9 @@ class DaprSecretStore:
     async def get_bulk(self, names: list[str]) -> dict[str, str]:
         """Get multiple secrets via Dapr."""
         try:
-            result = self._client.get_bulk_secret(store_name=self._store_name)
+            result = await asyncio.to_thread(
+                self._client.get_bulk_secret, store_name=self._store_name
+            )
             return {
                 name: result.secrets.get(name, {}).get(name, "")
                 for name in names
@@ -177,7 +184,9 @@ class DaprSecretStore:
     async def list_names(self) -> list[str]:
         """List secret names via Dapr."""
         try:
-            result = self._client.get_bulk_secret(store_name=self._store_name)
+            result = await asyncio.to_thread(
+                self._client.get_bulk_secret, store_name=self._store_name
+            )
             return list(result.secrets.keys())
         except Exception as e:
             raise SecretStoreError(
@@ -212,7 +221,8 @@ class DaprPubSub:
     ) -> None:
         """Publish a message via Dapr."""
         try:
-            self._client.publish_event(
+            await asyncio.to_thread(
+                self._client.publish_event,
                 pubsub_name=self._pubsub_name,
                 topic_name=topic,
                 data=json.dumps(data),
@@ -299,7 +309,8 @@ class DaprBinding:
     ) -> BindingResponse:
         """Invoke the binding via Dapr."""
         try:
-            result = self._client.invoke_binding(
+            result = await asyncio.to_thread(
+                self._client.invoke_binding,
                 binding_name=self._binding_name,
                 operation=operation,
                 data=data or b"",
