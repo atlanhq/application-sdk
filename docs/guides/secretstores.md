@@ -127,4 +127,4 @@ The credential resolution process follows these steps:
 5. Retrieved values are substituted for key references in the original credential object
 6. The resolved credentials are used for the database connection
 
-Future extensions to support additional secret stores should implement the `CredentialProvider` interface and register with the `CredentialProviderFactory`.
+Future extensions to support additional secret stores should implement the credential store interface provided by the SDK.

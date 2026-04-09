@@ -7,7 +7,7 @@ In v3, the HTTP server is created by the `create_app_handler_service()` function
 The handler service auto-wires routes from your `Handler` methods:
 
 ```python
-from application_sdk.server import create_app_handler_service
+from application_sdk.handler import create_app_handler_service
 from my_package.handlers import MyHandler
 
 app = create_app_handler_service(handler_class=MyHandler)
