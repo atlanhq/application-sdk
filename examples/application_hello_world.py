@@ -1,69 +1,56 @@
+"""Hello World example using v3 App + @task pattern.
+
+Demonstrates the simplest possible application: a single App class
+with one task that returns a greeting message. Uses typed Input/Output
+contracts and run_dev_combined() for local development.
+
+Usage:
+    python examples/application_hello_world.py
+"""
+
 import asyncio
-from datetime import timedelta
-from typing import Any, Callable, Dict, Sequence, cast
 
-from temporalio import activity, workflow
-
-from application_sdk.activities import ActivitiesInterface
-from application_sdk.activities.common.utils import auto_heartbeater
-from application_sdk.application import BaseApplication
+from application_sdk.app import App, Input, Output, task
+from application_sdk.main import run_dev_combined
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.workflows import WorkflowInterface
-
-APPLICATION_NAME = "hello-world"
 
 logger = get_logger(__name__)
 
 
-@workflow.defn
-class HelloWorldWorkflow(WorkflowInterface):
-    @workflow.run
-    async def run(self, workflow_config: Dict[str, Any]) -> None:
-        activities = HelloWorldActivities()
+class HelloInput(Input):
+    """Input contract for the hello world app."""
 
-        await workflow.execute_activity_method(
-            activities.demo_activity,
-            args=[workflow_config],
-            start_to_close_timeout=timedelta(seconds=10),
-            heartbeat_timeout=timedelta(seconds=10),
-        )
-
-    @staticmethod
-    def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
-        activities = cast(HelloWorldActivities, activities)
-        return [
-            activities.demo_activity,
-        ]
+    name: str = "World"
 
 
-class HelloWorldActivities(ActivitiesInterface):
-    @activity.defn
-    @auto_heartbeater
-    async def demo_activity(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
-        return {"message": "Demo activity completed successfully"}
+class HelloOutput(Output):
+    """Output contract for the hello world app."""
+
+    message: str = ""
 
 
-async def application_hello_world(daemon: bool = True) -> Dict[str, Any]:
-    logger.info("Starting application_hello_world")
+class HelloWorldApp(App):
+    """Minimal hello world application.
 
-    # initialize application
-    app = BaseApplication(name=APPLICATION_NAME)
+    Shows the v3 pattern: one class, @task for side-effects,
+    run() for orchestration, typed contracts at every boundary.
+    """
 
-    # setup workflow
-    await app.setup_workflow(
-        workflow_and_activities_classes=[(HelloWorldWorkflow, HelloWorldActivities)]
-    )
+    @task(timeout_seconds=10, heartbeat_timeout_seconds=10)
+    async def demo_task(self, input: HelloInput) -> HelloOutput:
+        """A simple task that returns a greeting."""
+        logger.info("Running demo_task", extra={"name": input.name})
+        return HelloOutput(message=f"Hello, {input.name}!")
 
-    # start workflow
-    workflow_response = await app.start_workflow(
-        workflow_args={"workflow_id": "hello-world"}, workflow_class=HelloWorldWorkflow
-    )
-
-    # start worker
-    await app.start_worker(daemon=daemon)
-
-    return workflow_response
+    async def run(self, input: HelloInput) -> HelloOutput:  # type: ignore[override]
+        """Orchestrate the hello world workflow."""
+        return await self.demo_task(input)
 
 
 if __name__ == "__main__":
-    asyncio.run(application_hello_world(daemon=False))
+    asyncio.run(
+        run_dev_combined(
+            HelloWorldApp,
+            example_input={"name": "World"},
+        )
+    )
