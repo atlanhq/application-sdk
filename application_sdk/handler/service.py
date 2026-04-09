@@ -1353,12 +1353,27 @@ def create_app_handler_service(
     # ------------------------------------------------------------------
 
     @app.get("/workflows/v1/manifest")
-    async def get_manifest() -> Response:
+    async def get_manifest(request: Request) -> Response:
         if manifest is not None:
             # Programmatic: Pydantic model → JSON bytes, single hop.
             return Response(
                 content=manifest.model_dump_json(), media_type="application/json"
             )
+
+        # Multi-package support: if ?package=@scope/name is provided, try
+        # serving manifest-{name}.json first (e.g., manifest-mssql-miner.json
+        # for ?package=@atlan/mssql-miner).  Falls back to manifest.json.
+        package_param = request.query_params.get("package", "")
+        if package_param:
+            # Extract the short name: "@atlan/mssql-miner" → "mssql-miner"
+            short_name = package_param.rsplit("/", 1)[-1] if "/" in package_param else package_param
+            pkg_manifest_path = CONTRACT_GENERATED_DIR / f"manifest-{short_name}.json"
+            if pkg_manifest_path.exists():
+                raw = pkg_manifest_path.read_bytes()
+                deployment = (DEPLOYMENT_NAME or "default").encode()
+                raw = raw.replace(b"{deployment_name}", deployment)
+                return Response(content=raw, media_type="application/json")
+
         manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
         if manifest_path.exists():
             # Disk: contract-generated file — serve raw bytes with deployment
@@ -1380,7 +1395,7 @@ def create_app_handler_service(
     # ------------------------------------------------------------------
 
     @app.get("/manifest", include_in_schema=False)
-    async def get_manifest_legacy() -> Response:
+    async def get_manifest_legacy(request: Request) -> Response:
         """Unversioned alias for ``GET /workflows/v1/manifest``.
 
         .. deprecated::
@@ -1390,7 +1405,7 @@ def create_app_handler_service(
             orchestrators have been updated to use ``/workflows/v1/manifest``.
             Do **not** add new callers of this endpoint.
         """
-        return await get_manifest()
+        return await get_manifest(request)
 
     # ------------------------------------------------------------------
     # Health probes
