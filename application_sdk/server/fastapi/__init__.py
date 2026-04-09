@@ -35,7 +35,6 @@ from application_sdk.constants import (
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
-from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
@@ -78,26 +77,24 @@ logger = get_logger(__name__)
 class APIServer(ServerInterface):
     """A FastAPI-based implementation of the ServerInterface.
 
-    This class provides a FastAPI-based web server that handles workflow management,
-    authentication, metadata operations, and event processing. It supports both HTTP and
-    event-based workflow triggers.
+        This class provides a FastAPI-based web server that handles workflow management,
+        authentication, metadata operations, and event processing. It supports both HTTP and
+        event-based workflow triggers.
 
-    Attributes:
-        app (FastAPI): The main FastAPI application instance.
-        workflow_client (Optional[WorkflowClient]): Client for interacting with Temporal workflows.
-        workflow_router (APIRouter): Router for workflow-related endpoints.
-        dapr_router (APIRouter): Router for pub/sub operations.
-        events_router (APIRouter): Router for event handling.
-        docs_directory_path (str): Path to documentation source directory.
-        docs_export_path (str): Path where documentation will be exported.
-        workflows (List[WorkflowInterface]): List of registered workflows.
-        event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
-        duckdb_ui (DuckDBUI): Instance of DuckDBUI for handling DuckDB UI functionality.
+        Attributes:
+            app (FastAPI): The main FastAPI application instance.
+            workflow_client (Optional[WorkflowClient]): Client for interacting with Temporal workflows.
+            workflow_router (APIRouter): Router for workflow-related endpoints.
+            dapr_router (APIRouter): Router for pub/sub operations.
+            events_router (APIRouter): Router for event handling.
+    workflows (List[WorkflowInterface]): List of registered workflows.
+            event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
+            duckdb_ui (DuckDBUI): Instance of DuckDBUI for handling DuckDB UI functionality.
 
-    Args:
-        lifespan: Optional lifespan manager for the FastAPI application.
-        handler (Optional[HandlerInterface]): Handler for processing application operations.
-        workflow_client (Optional[WorkflowClient]): Client for Temporal workflow operations.
+        Args:
+            lifespan: Optional lifespan manager for the FastAPI application.
+            handler (Optional[HandlerInterface]): Handler for processing application operations.
+            workflow_client (Optional[WorkflowClient]): Client for Temporal workflow operations.
     """
 
     # Declare class attributes with proper typing
@@ -111,8 +108,6 @@ class APIServer(ServerInterface):
     templates: Jinja2Templates
     duckdb_ui: DuckDBUI
 
-    docs_directory_path: str = "docs"
-    docs_export_path: str = "dist"
     # List of subscriptions to be registered
     subscriptions: List[Subscription] = []
 
@@ -171,9 +166,8 @@ class APIServer(ServerInterface):
         self.app.add_middleware(LogMiddleware)
         self.app.add_middleware(MetricsMiddleware)
 
-        # Register routers and setup docs
+        # Register routers
         self.register_routers()
-        self.setup_atlan_docs()
 
         # Initialize parent class
         super().__init__(handler)
@@ -183,27 +177,6 @@ class APIServer(ServerInterface):
         self.duckdb_ui.start_ui()
         # Redirect to the local DuckDB UI
         return RedirectResponse(url="http://0.0.0.0:4213")
-
-    def setup_atlan_docs(self):
-        """Set up and serve Atlan documentation.
-
-        Generates documentation using AtlanDocsGenerator and mounts it at the /atlandocs endpoint.
-        Any exceptions during documentation generation are logged as warnings.
-        """
-        docs_generator = AtlanDocsGenerator(
-            docs_directory_path=self.docs_directory_path,
-            export_path=self.docs_export_path,
-        )
-        try:
-            docs_generator.export()
-
-            self.app.mount(
-                "/atlandocs",
-                StaticFiles(directory=f"{self.docs_export_path}/site", html=True),
-                name="atlandocs",
-            )
-        except Exception:
-            logger.warning("Failed to mount static docs directory", exc_info=True)
 
     def frontend_home(self, request: Request) -> HTMLResponse:
         frontend_html_path = os.path.join(
