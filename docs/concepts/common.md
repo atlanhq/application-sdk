@@ -9,9 +9,9 @@ v3 uses `structlog` for structured logging. The v2 patterns of `workflow.logger`
 ### Getting a Logger
 
 ```python
-import structlog
+from application_sdk.observability.logger_adaptor import get_logger
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 def my_function(data):
     logger.info("processing_data", data=data)
@@ -28,7 +28,7 @@ def my_function(data):
 
 ```python
 # Bind context for a block of work
-logger = structlog.get_logger(__name__).bind(
+logger = get_logger(__name__).bind(
     connection_id="conn-123",
     step="metadata_extraction",
 )

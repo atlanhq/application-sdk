@@ -115,14 +115,14 @@ Extend `BaseSQLClient` to define the connection string template for your databas
 
 ```python
 # app/clients.py
-from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.clients.sql import BaseSQLClient, DatabaseConfig
 
 
 class PostgresClient(BaseSQLClient):
-    DB_CONFIG = {
-        "template": "postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
-        "required": ["username", "password", "host", "port", "database"],
-    }
+    DB_CONFIG = DatabaseConfig(
+        template="postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
+        required=["username", "password", "host", "port", "database"],
+    )
 ```
 
 The `required` list declares which credential keys must be present. The SDK validates these at connection time and raises a clear error if any are missing.
@@ -133,8 +133,8 @@ The `Handler` ABC defines three HTTP endpoints that the Atlan platform calls dur
 
 ```python
 # app/handler.py
-from application_sdk.handler import (
-    Handler,
+from application_sdk.handler import Handler
+from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
     AuthStatus,
@@ -165,7 +165,7 @@ class PostgresHandler(Handler):
         """Run pre-extraction checks (connectivity, permissions, table counts)."""
         return PreflightOutput(status=PreflightStatus.READY, message="All checks passed")
 
-    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
         """Return catalog/schema pairs for the Atlan UI filter tree."""
         cred = MyCredential.from_list(input.credentials)
         client = PostgresClient()
@@ -190,7 +190,7 @@ class PostgresHandler(Handler):
 |--------|-------|--------|---------|
 | `test_auth` | `AuthInput` | `AuthOutput` | Verify credentials work |
 | `preflight_check` | `PreflightInput` | `PreflightOutput` | Check connectivity, permissions, table counts |
-| `fetch_metadata` | `MetadataInput` | `MetadataOutput` | Return catalog/schema tree for UI filters |
+| `fetch_metadata` | `MetadataInput` | `SqlMetadataOutput` | Return catalog/schema tree for UI filters |
 
 `AuthOutput.status` uses `AuthStatus` (SUCCESS, FAILED, EXPIRED, INVALID_CREDENTIALS). `PreflightOutput.status` uses `PreflightStatus` (READY, NOT_READY, PARTIAL).
 

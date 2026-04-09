@@ -36,14 +36,11 @@ Each time a task completes, you've clipped in — progress is secured. If someth
 An `App` is a unit of durable execution. It has a typed input, a typed output, and a `run()` method that defines the sequence of steps.
 
 ```python
-from dataclasses import dataclass
 from application_sdk.app import App, Input, Output, task
 
-@dataclass
 class MyInput(Input):
     source_id: str
 
-@dataclass
 class MyOutput(Output):
     record_count: int
 
@@ -79,21 +76,19 @@ async def my_task(self, input: TaskInput) -> TaskOutput:
     ...
 ```
 
-- `@task` validates the single-dataclass contract (one `Input`, one `Output`) **at class definition time** — before any code runs.
+- `@task` validates the single-model contract (one `Input` model, one `Output` model) **at class definition time** — before any code runs.
 - Tasks run outside the Temporal sandbox; they can import any library without passthrough concerns.
 - Auto-heartbeating is built in. Use `self.task_context.run_in_thread(fn, *args)` to run blocking code without blocking the event loop (see [ADR-0010](../adr/0010-async-first-blocking-code.md)).
 
 ### Typed Contracts — Input and Output
 
-Every `run()` and `@task` boundary uses exactly one `Input` dataclass and one `Output` dataclass. The framework enforces this at class definition time.
+Every `run()` and `@task` boundary uses exactly one `Input` model and one `Output` model. The framework enforces this at class definition time.
 
 ```python
-@dataclass
 class ExtractInput(Input):
     connection_id: str
     max_records: int = 1000          # Default = safe for backwards compatibility
 
-@dataclass
 class ExtractOutput(Output):
     record_count: int
     checkpoint: str
@@ -309,9 +304,9 @@ The following Architecture Decision Records document the key choices made in the
 | [ADR-0001](../adr/0001-per-app-handlers.md) | Per-app handler deployments (not an uber-handler) |
 | [ADR-0002](../adr/0002-per-app-workers.md) | Per-app workers with dedicated task queues (not an uber-worker) |
 | [ADR-0003](../adr/0003-per-app-observability.md) | Per-app observability with correlation-based tracing |
-| [ADR-0004](../adr/0004-build-time-type-safety.md) | Build-time type safety with dataclasses (not Pydantic) |
+| [ADR-0004](../adr/0004-build-time-type-safety.md) | Build-time type safety with Pydantic models |
 | [ADR-0005](../adr/0005-infrastructure-abstraction.md) | Complete abstraction of Temporal and Dapr behind Protocols |
-| [ADR-0006](../adr/0006-schema-driven-contracts.md) | Single-dataclass contracts with additive evolution rules |
+| [ADR-0006](../adr/0006-schema-driven-contracts.md) | Single-model contracts with additive evolution rules |
 | [ADR-0007](../adr/0007-apps-as-coordination-unit.md) | Apps coordinate via child workflows (not shared activities) |
 | [ADR-0008](../adr/0008-payload-safe-bounded-types.md) | Import-time payload safety validation (prevents 2MB Temporal limit failures) |
 | [ADR-0009](../adr/0009-separate-handler-worker-deployments.md) | Separate handler and worker Kubernetes deployments |
