@@ -88,23 +88,19 @@ nav:
       - Best Practices: guides/best-practices.md
       - Test Framework: guides/test-framework.md
   - Concepts:
-      - Activities: concepts/activities.md
-      - API: concepts/API.md
+      - Apps: concepts/apps.md
+      - Entry Points: concepts/entry-points.md
+      - Tasks: concepts/tasks.md
       - Atlan Upload: concepts/atlanupload.md
-      - Workflows: concepts/workflows.md
       - Server: concepts/server.md
-      - Application: concepts/application.md
       - Clients: concepts/clients.md
-      - Services: concepts/services.md
       - Common: concepts/common.md
       - Handlers: concepts/handlers.md
-      - Inputs: concepts/inputs.md
       - MCP: concepts/mcp.md
-      - Output Paths: concepts/output_paths.md
-      - Outputs: concepts/outputs.md
-      - Temporal Auth: concepts/temporal_auth.md
-      - Worker: concepts/worker.md
-      - Example: concepts/application_sql.md
+      - Monitoring: concepts/monitoring.md
+  - Migration:
+      - What's New in v3: whats-new-v3.md
+      - Migration Guide v3: migration-guide-v3.md
   - Agent Guides:
       - Project Structure: agents/project-structure.md
       - Development Commands: agents/dev-commands.md

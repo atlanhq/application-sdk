@@ -217,29 +217,40 @@ await app.start()
 
 ### v3
 
-**`ATLAN_APP_MODULE` is mandatory in production.** The entrypoint hard-fails at startup if it
-is not set. Set it in your app's `Dockerfile` — it should never be left to Helm values or
-runtime defaults:
+**`ATLAN_APP_MODULE` is mandatory in production.** The base image entrypoint hard-fails at
+startup if it is not set. Set it in your app's `Dockerfile` — it should never be left to Helm
+values or runtime defaults.
+
+The base image (`registry.atlan.com/public/app-runtime-base:refactor-v3-latest`) includes
+the `application-sdk` CLI, Dapr, and the entrypoint. You do **not** need a custom `ENTRYPOINT`
+or `entrypoint.sh`. The base image handles mode selection at runtime:
 
 ```dockerfile
-ENV ATLAN_APP_MODULE=app.app:MyMetadataExtractor \
-    ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
-CMD ["application-sdk", "--mode", "combined"]
+# Application-sdk v3 base image (Chainguard-based)
+FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
+
+WORKDIR /app
+
+# Install dependencies first (better caching)
+COPY --chown=appuser:appuser pyproject.toml uv.lock README.md ./
+RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
+    uv venv .venv && \
+    uv sync --locked --no-install-project
+
+# Copy application code
+COPY --chown=appuser:appuser . .
+
+# App-specific environment variables
+ENV ATLAN_APP_HTTP_PORT=8000
+ENV ATLAN_APP_MODULE=app.app:MyMetadataExtractor
+ENV ATLAN_CONTRACT_GENERATED_DIR=app/generated
+
 ```
 
 `ATLAN_CONTRACT_GENERATED_DIR` tells the SDK where to find the generated contract JSON files
 (configmaps, manifest). Place these files inside your repo's `app/generated/` directory — the
-Pkl contract source (`contract/app.pkl`) outputs there, and `COPY app/ app/` in your Dockerfile
-automatically includes it. This makes the generated Python module (`app.generated`) directly
-importable. The base image default (`/app/app/generated`) matches this convention when your app
-code is copied to `/app/app/` in the image.
-
-The `--app` CLI flag is an alternative (takes precedence over the env var), but `ENV` in the
-Dockerfile is the recommended approach so the value is locked to the image:
-
-```dockerfile
-CMD ["application-sdk", "--mode", "combined", "--app", "app.app:MyMetadataExtractor"]
-```
+Pkl contract source (`contract/app.pkl`) outputs there, and `COPY . .` in your Dockerfile
+automatically includes it.
 
 For local dev, pass the class directly — `run_dev_combined` derives the module path automatically:
 

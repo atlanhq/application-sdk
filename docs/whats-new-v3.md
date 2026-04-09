@@ -401,7 +401,7 @@ class MyHandler(Handler):
 - Method signatures are now fully typed. This enables input validation, OpenAPI schema
   generation, and pyright type checking end-to-end.
 - The `fetch_metadata` response shape changed: v2 returned a nested `[{value, title, children}]`
-  tree; v3 returns a flat `MetadataOutput(fields=[MetadataField(...)])`.
+  tree; v3 returns a flat `SqlMetadataOutput(objects=[SqlMetadataObject(...)])`.
 - Error handling is structured: raise `HandlerError(message, http_status=400)` to get a
   consistent HTTP error response.
 
