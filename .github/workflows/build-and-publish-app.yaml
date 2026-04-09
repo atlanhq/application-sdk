@@ -354,7 +354,7 @@ jobs:
           echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Job 4: Security scan — Trivy + Snyk + allowlist gate (non-blocking on merge path) ──
+  # ── Job 4: Security scan — Trivy + Snyk + allowlist gate ──────────────────────
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
@@ -363,7 +363,7 @@ jobs:
       image: ${{ needs.prepare.outputs.ghcr_image }}
       snyk_org: partner-images
       snyk_monitor: ${{ inputs.snyk_monitor }}
-      fail_on_findings: false
+      fail_on_findings: true
     secrets: inherit
 
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
@@ -391,7 +391,7 @@ jobs:
   # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
   publish:
     name: Publish to Marketplace
-    needs: [prepare, merge]
+    needs: [prepare, merge, security-scan]
     if: inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
