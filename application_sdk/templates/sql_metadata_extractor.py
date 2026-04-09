@@ -97,8 +97,8 @@ def compute_ae_output_fields(
             ".."
         ) or transformed_data_prefix.startswith("/"):
             logger.warning(
-                "Computed transformed_data_prefix escapes allowed prefix: %s",
-                transformed_data_prefix,
+                "Computed transformed_data_prefix escapes allowed prefix",
+                transformed_data_prefix=transformed_data_prefix,
             )
             transformed_data_prefix = ""
 
@@ -107,8 +107,8 @@ def compute_ae_output_fields(
     if connection_qn and not _SAFE_PATH_SEGMENT_RE.match(connection_qn):
         logger.warning(
             "connection_qualified_name contains unsafe characters, "
-            "clearing AE path fields: %s",
-            connection_qn,
+            "clearing AE path fields",
+            connection_qualified_name=connection_qn,
         )
         connection_qn = ""
 

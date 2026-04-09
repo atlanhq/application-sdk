@@ -356,6 +356,24 @@ class TestComputeAEOutputFields:
         )
         assert result["transformed_data_prefix"] == ""
 
+    def test_prefix_fully_strips_output_path(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="./local/tmp/",
+            output_prefix="./local/tmp/",
+            connection_qualified_name="default/snowflake/123",
+        )
+        assert result["transformed_data_prefix"] == ""
+
+    def test_connection_qn_with_spaces_cleared(self) -> None:
+        result = compute_ae_output_fields(
+            output_path="some/path",
+            output_prefix="",
+            connection_qualified_name="default/my database/123",
+        )
+        assert result["connection_qualified_name"] == ""
+        assert result["publish_state_prefix"] == ""
+        assert result["current_state_prefix"] == ""
+
     def test_trailing_slash_stripped_from_prefix(self) -> None:
         result = compute_ae_output_fields(
             output_path="./local/tmp/run/",
