@@ -700,6 +700,24 @@ class PublishInputMixin(BaseModel):
         """Auto-derive all publish-related paths."""
         import posixpath
 
+        # Auto-resolve output_path from Temporal context if not set
+        if not self.output_path:
+            try:
+                from temporalio import workflow as _wf
+
+                from application_sdk.constants import (
+                    APPLICATION_NAME,
+                    WORKFLOW_OUTPUT_PATH_TEMPLATE,
+                )
+
+                self.output_path = WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
+                    application_name=APPLICATION_NAME,
+                    workflow_id=_wf.info().workflow_id,
+                    run_id=_wf.info().run_id,
+                )
+            except Exception:
+                pass  # Not in Temporal context — output_path stays empty
+
         # Derive transformed_data_prefix from output_path
         if not self.transformed_data_prefix and self.output_path:
             relative = self.output_path
