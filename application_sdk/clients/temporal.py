@@ -407,7 +407,9 @@ class TemporalWorkflowClient(WorkflowClient):
                 run_id,
                 exc_info=True,
             )
-            raise Exception(f"Error terminating workflow {workflow_id} {run_id}: {e}")
+            raise Exception(
+                f"Error terminating workflow {workflow_id} {run_id}: {e}"
+            ) from e
 
     def create_worker(
         self,
@@ -607,4 +609,4 @@ class TemporalWorkflowClient(WorkflowClient):
             logger.error("Error getting workflow status", exc_info=True)
             raise Exception(
                 f"Error getting workflow status for {workflow_id} {run_id}: {e}"
-            )
+            ) from e
