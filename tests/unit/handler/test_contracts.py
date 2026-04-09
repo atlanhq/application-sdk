@@ -4,6 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from application_sdk.handler.contracts import (
+    ApiMetadataObject,
+    ApiMetadataOutput,
     AuthInput,
     AuthOutput,
     AuthStatus,
@@ -14,6 +16,8 @@ from application_sdk.handler.contracts import (
     PreflightCheck,
     PreflightOutput,
     PreflightStatus,
+    SqlMetadataObject,
+    SqlMetadataOutput,
 )
 
 
@@ -86,6 +90,10 @@ class TestPreflightCheck:
         assert check.passed is True
         assert check.duration_ms == 50.0
 
+    def test_empty_name_rejected(self):
+        with pytest.raises(ValidationError):
+            PreflightCheck(name="")
+
 
 class TestPreflightOutput:
     def test_required_status(self):
@@ -103,21 +111,111 @@ class TestPreflightOutput:
 
 
 class TestMetadataOutput:
-    def test_defaults(self):
-        out = MetadataOutput()
-        assert out.objects == []
-        assert out.total_count == 0
-        assert out.truncated is False
-        assert out.fetch_duration_ms == 0.0
+    """Tests for the MetadataOutput hierarchy."""
 
-    def test_with_objects(self):
-        obj = MetadataObject(
-            name="users",
-            object_type="TABLE",
-            schema="public",
-            fields=[MetadataField(name="id", field_type="INTEGER")],
+    def test_base_class_is_empty(self):
+        out = MetadataOutput()
+        assert isinstance(out, MetadataOutput)
+
+    def test_sql_output_defaults(self):
+        out = SqlMetadataOutput()
+        assert isinstance(out, MetadataOutput)
+        assert out.objects == []
+
+    def test_sql_output_with_objects(self):
+        out = SqlMetadataOutput(
+            objects=[
+                SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="FINANCE"),
+                SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="SALES"),
+            ]
         )
-        out = MetadataOutput(objects=[obj], total_count=1)
-        assert out.total_count == 1
-        assert out.objects[0].name == "users"
-        assert out.objects[0].fields[0].name == "id"
+        assert len(out.objects) == 2
+        assert out.objects[0].TABLE_CATALOG == "DEFAULT"
+        assert out.objects[0].TABLE_SCHEMA == "FINANCE"
+
+    def test_sql_output_model_dump(self):
+        obj = SqlMetadataObject(TABLE_CATALOG="DB", TABLE_SCHEMA="SCH")
+        assert obj.model_dump() == {"TABLE_CATALOG": "DB", "TABLE_SCHEMA": "SCH"}
+
+    def test_api_output_defaults(self):
+        out = ApiMetadataOutput()
+        assert isinstance(out, MetadataOutput)
+        assert out.objects == []
+
+    def test_api_output_with_flat_objects(self):
+        out = ApiMetadataOutput(
+            objects=[
+                ApiMetadataObject(value="t1", title="Tag 1", node_type="tag"),
+            ]
+        )
+        assert len(out.objects) == 1
+        assert out.objects[0].value == "t1"
+        assert out.objects[0].title == "Tag 1"
+        assert out.objects[0].node_type == "tag"
+        assert out.objects[0].children == []
+
+    def test_api_output_nested_children(self):
+        child = ApiMetadataObject(value="c1", title="Child 1")
+        parent = ApiMetadataObject(
+            value="p1",
+            title="Parent",
+            node_type="project",
+            children=[child],
+        )
+        out = ApiMetadataOutput(objects=[parent])
+        assert len(out.objects[0].children) == 1
+        assert out.objects[0].children[0].value == "c1"
+
+    def test_api_output_model_dump_nested(self):
+        obj = ApiMetadataObject(
+            value="p1",
+            title="Parent",
+            node_type="folder",
+            children=[ApiMetadataObject(value="c1", title="Child")],
+        )
+        dumped = obj.model_dump()
+        assert dumped == {
+            "value": "p1",
+            "title": "Parent",
+            "node_type": "folder",
+            "children": [
+                {"value": "c1", "title": "Child", "node_type": "", "children": []},
+            ],
+        }
+
+    def test_isinstance_both_subtypes(self):
+        sql = SqlMetadataOutput()
+        api = ApiMetadataOutput()
+        assert isinstance(sql, MetadataOutput)
+        assert isinstance(api, MetadataOutput)
+
+    def test_api_output_rejects_invalid_child_type(self):
+        """Passing a non-ApiMetadataObject item raises ValidationError."""
+        with pytest.raises(ValidationError):
+            ApiMetadataObject(
+                value="p",
+                title="P",
+                children=["not-an-object"],  # type: ignore[list-item]
+            )
+
+    def test_legacy_metadata_object_still_works(self):
+        """Deprecated MetadataObject is still importable and functional."""
+        with pytest.warns(DeprecationWarning, match="MetadataObject is deprecated"):
+            obj = MetadataObject(
+                name="users",
+                object_type="TABLE",
+                schema="public",
+                fields=[MetadataField(name="id", field_type="INTEGER")],
+            )
+        assert obj.name == "users"
+        assert obj.fields[0].name == "id"
+
+    def test_deprecated_metadata_field_warns(self):
+        """MetadataField emits DeprecationWarning on instantiation."""
+        with pytest.warns(DeprecationWarning, match="MetadataField is deprecated"):
+            MetadataField(name="col1")
+
+    def test_deprecated_metadata_object_warns(self):
+        """MetadataObject emits DeprecationWarning on instantiation."""
+        with pytest.warns(DeprecationWarning, match="MetadataObject is deprecated"):
+            MetadataObject(name="tbl")

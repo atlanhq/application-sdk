@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.contracts import (
+    ApiMetadataObject,
+    ApiMetadataOutput,
     AuthInput,
     AuthOutput,
     AuthStatus,
@@ -20,6 +22,8 @@ from application_sdk.handler.contracts import (
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
+    SqlMetadataObject,
+    SqlMetadataOutput,
     SubscriptionConfig,
 )
 from application_sdk.handler.service import (
@@ -34,7 +38,7 @@ from application_sdk.handler.service import (
 
 
 class _TestHandler(Handler):
-    """Minimal handler for testing."""
+    """Minimal handler for testing — returns SqlMetadataOutput."""
 
     async def test_auth(self, input: AuthInput) -> AuthOutput:
         return AuthOutput(status=AuthStatus.SUCCESS, message="auth ok")
@@ -43,7 +47,25 @@ class _TestHandler(Handler):
         return PreflightOutput(status=PreflightStatus.READY, message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
-        return MetadataOutput(objects=[], total_count=0)
+        return SqlMetadataOutput(objects=[])
+
+
+class _ApiTreeHandler(Handler):
+    """Handler that returns ApiMetadataOutput (BI connector path)."""
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.SUCCESS, message="auth ok")
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return ApiMetadataOutput(
+            objects=[
+                ApiMetadataObject(value="tag-1", title="Tag One", node_type="tag"),
+                ApiMetadataObject(value="tag-2", title="Tag Two", node_type="tag"),
+            ]
+        )
 
 
 class _FailingHandler(Handler):
@@ -159,7 +181,10 @@ class TestPreflightEndpoint:
         assert response.status_code == 200
         body = response.json()
         assert body["success"] is True
-        assert body["data"]["status"] == "ready"
+        # v2 format: data is a dict of check results keyed by camelCase name.
+        # _TestHandler returns no checks, so data is empty.
+        assert body["data"] == {}
+        assert body["message"] == "ready"
 
     def test_preflight_handler_error_returns_500(self) -> None:
         client = _make_client(handler=_FailingHandler())
@@ -173,7 +198,8 @@ class TestPreflightEndpoint:
 class TestMetadataEndpoint:
     """Tests for POST /workflows/v1/metadata."""
 
-    def test_metadata_success(self) -> None:
+    def test_metadata_sql_empty_returns_empty_list(self) -> None:
+        """SqlMetadataOutput with no objects → empty list in data."""
         client = _make_client()
         response = client.post(
             "/workflows/v1/metadata",
@@ -182,7 +208,93 @@ class TestMetadataEndpoint:
         assert response.status_code == 200
         body = response.json()
         assert body["success"] is True
-        assert body["data"]["total_count"] == 0
+        assert body["data"] == []
+
+    def test_metadata_sql_returns_flat_rows(self) -> None:
+        """SqlMetadataOutput → [{TABLE_CATALOG, TABLE_SCHEMA}] for sqltree widget."""
+
+        class _SQLHandler(_TestHandler):
+            async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+                return SqlMetadataOutput(
+                    objects=[
+                        SqlMetadataObject(
+                            TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="FINANCE"
+                        ),
+                        SqlMetadataObject(
+                            TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="SALES"
+                        ),
+                    ]
+                )
+
+        client = _make_client(handler=_SQLHandler())
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"] == [
+            {"TABLE_CATALOG": "DEFAULT", "TABLE_SCHEMA": "FINANCE"},
+            {"TABLE_CATALOG": "DEFAULT", "TABLE_SCHEMA": "SALES"},
+        ]
+        assert body["message"] == "Fetched 2 objects"
+
+    def test_metadata_api_returns_tree_nodes(self) -> None:
+        """ApiMetadataOutput → [{value, title, node_type, children}] for apitree widget."""
+        client = _make_client(handler=_ApiTreeHandler())
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"] == [
+            {"value": "tag-1", "title": "Tag One", "node_type": "tag", "children": []},
+            {"value": "tag-2", "title": "Tag Two", "node_type": "tag", "children": []},
+        ]
+        assert body["message"] == "Fetched 2 objects"
+
+    def test_metadata_api_nested_children(self) -> None:
+        """ApiMetadataOutput with nested children serializes the full tree."""
+
+        class _NestedHandler(_TestHandler):
+            async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+                return ApiMetadataOutput(
+                    objects=[
+                        ApiMetadataObject(
+                            value="proj-1",
+                            title="Project A",
+                            node_type="project",
+                            children=[
+                                ApiMetadataObject(
+                                    value="ws-1",
+                                    title="Workspace 1",
+                                    node_type="workspace",
+                                ),
+                                ApiMetadataObject(
+                                    value="ws-2",
+                                    title="Workspace 2",
+                                    node_type="workspace",
+                                ),
+                            ],
+                        ),
+                    ]
+                )
+
+        client = _make_client(handler=_NestedHandler())
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert len(data) == 1
+        assert data[0]["value"] == "proj-1"
+        assert len(data[0]["children"]) == 2
+        assert data[0]["children"][0]["value"] == "ws-1"
+        assert data[0]["children"][1]["node_type"] == "workspace"
 
     def test_metadata_handler_error_returns_500(self) -> None:
         client = _make_client(handler=_FailingHandler())
@@ -262,6 +374,11 @@ class TestWrapResponse:
         result = _wrap_response({"error": "oops"}, success=False, message="failed")
         assert result["success"] is False
         assert result["message"] == "failed"
+
+    def test_list_data(self) -> None:
+        result = _wrap_response([{"a": 1}, {"b": 2}], message="ok")
+        assert result["data"] == [{"a": 1}, {"b": 2}]
+        assert result["message"] == "ok"
 
 
 class TestRunIdPathParam:
@@ -802,3 +919,103 @@ class TestNormalizeCredentials:
         )
         assert response.status_code == 200
         assert response.json()["data"]["status"] == "success"
+
+
+class TestStartCredentialPersistence:
+    """Tests for inline credential save in /start handler.
+
+    The /start endpoint needs Temporal, so we test the normalization +
+    InMemorySecretStore interaction directly to verify the contract.
+    """
+
+    def test_normalize_then_store_v2_dict_credentials(self) -> None:
+        """V2 dict credentials are normalized to v3 list before storage."""
+        from application_sdk.infrastructure.secrets import InMemorySecretStore
+
+        body = {
+            "credentials": {
+                "host": "db.example.com",
+                "port": 5432,
+                "username": "admin",
+                "password": "secret",
+            },
+            "other_field": "kept",
+        }
+
+        # Normalize (same as /start handler does)
+        body = _normalize_credentials(body)
+
+        # Verify normalization produced v3 list format
+        assert isinstance(body["credentials"], list)
+        keys = {item["key"] for item in body["credentials"]}
+        assert "host" in keys
+        assert "port" in keys
+
+        # Store in InMemorySecretStore (same as /start handler does)
+        store = InMemorySecretStore()
+        guid = "test-guid-123"
+        store.set(guid, json.dumps(body["credentials"]))
+
+        # Verify round-trip: read back and parse
+        raw = json.loads(store._secrets[guid])
+        assert isinstance(raw, list)
+        host_entry = next(item for item in raw if item["key"] == "host")
+        assert host_entry["value"] == "db.example.com"
+
+        # Verify other fields preserved
+        assert body["other_field"] == "kept"
+        assert "credentials" in body
+
+    def test_normalize_then_store_v3_list_credentials(self) -> None:
+        """V3 list credentials pass through normalization unchanged."""
+        from application_sdk.infrastructure.secrets import InMemorySecretStore
+
+        body = {
+            "credentials": [
+                {"key": "host", "value": "db.example.com"},
+                {"key": "username", "value": "admin"},
+            ],
+        }
+
+        body = _normalize_credentials(body)
+
+        # Already v3 format — unchanged
+        assert isinstance(body["credentials"], list)
+        assert len(body["credentials"]) == 2
+
+        store = InMemorySecretStore()
+        guid = "test-guid-456"
+        store.set(guid, json.dumps(body["credentials"]))
+
+        raw = json.loads(store._secrets[guid])
+        assert raw[0]["key"] == "host"
+        assert raw[0]["value"] == "db.example.com"
+
+    def test_no_credentials_skips_store(self) -> None:
+        """Body without credentials is not stored."""
+        body = {"name": "test-workflow"}
+        body = _normalize_credentials(body)
+        assert "credentials" not in body or not body.get("credentials")
+
+    async def test_credential_resolver_v3_path_reads_from_inmemory_store(self) -> None:
+        """CredentialResolver new path reads from InMemorySecretStore."""
+        from application_sdk.credentials.ref import CredentialRef
+        from application_sdk.credentials.resolver import CredentialResolver
+        from application_sdk.infrastructure.secrets import InMemorySecretStore
+
+        store = InMemorySecretStore()
+        creds = [
+            {"key": "host", "value": "db.example.com"},
+            {"key": "port", "value": "5432"},
+        ]
+        store.set("my-guid", json.dumps(creds))
+
+        resolver = CredentialResolver(secret_store=store)
+        ref = CredentialRef(name="my-guid", credential_type="basic")
+
+        # No credential_guid → takes v3 new path → secret_store.get("my-guid")
+        result = await resolver.resolve_raw(ref)
+
+        assert isinstance(result, list)
+        assert result[0]["key"] == "host"
+        assert result[0]["value"] == "db.example.com"

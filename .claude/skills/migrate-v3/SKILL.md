@@ -115,6 +115,35 @@ Examine the source files in the target path (exclude test files from this analys
 > This runs the F3 fingerprinter before the check pass and prints the detected
 > connector type with confidence score and evidence.
 
+### 2a′ — Choose transformation approach
+
+After identifying the connector type, determine the transformation strategy:
+
+**SQL connectors** (SqlMetadataExtractor, SqlQueryExtractor, IncrementalSqlMetadataExtractor):
+- Ask the user which approach they prefer:
+  1. **Keep existing transformer** — preserve `QueryBasedTransformer`/`AtlasTransformer` usage inside `transform_data()`. Less migration effort, leverages existing YAML query files.
+  2. **Asset-mapper approach** — replace the transformer with pure Python mapper functions that take typed records and return pyatlan Asset instances directly. More upfront work but eliminates Daft DataFrame and YAML query file dependencies.
+- If the user has no preference, keep the existing transformer to minimize migration risk.
+
+**REST/API connectors** (BaseMetadataExtractor, Custom App):
+- **Default to the asset-mapper approach.** This is the v3-native pattern (see `atlan-openapi-app` as the reference implementation). Inform the user:
+  > "REST/API connectors in v3 use the asset-mapper pattern: typed Python records → pure Python mapper functions → pyatlan Asset instances → JSONL. This replaces the v2 `QueryBasedTransformer`/`AtlasTransformer` approach. The reference implementation is `atlan-openapi-app`. Shall I proceed with this approach?"
+- If the user prefers to keep the existing transformer, respect that — but note it as a manual follow-up item in the summary.
+
+**Asset-mapper pattern summary** (for reference when implementing):
+```
+Extract phase:  API response → typed records (dataclass/msgspec.Struct) → JSONL files
+                Pass between tasks via FileReference
+Transform phase: Read typed records from JSONL → mapper functions → pyatlan Asset instances
+                 Write via asset.to_nested_bytes() → JSONL output file
+```
+Key elements:
+- `app/asset_mapper.py` — pure functions: `map_<entity>(record, connection_qn, ...) -> pyatlan.Asset`
+- `app/api_types.py` — typed intermediate records (dataclass or `msgspec.Struct`)
+- No `TransformerInterface`, no Daft DataFrames, no YAML query files
+- Uses `msgspec.json` or `json` for JSONL serialization
+- `FileReference` in task contracts to pass file paths between extract → transform tasks
+
 ### 2b — Apply structural changes
 
 > **Incremental validation**: Run `check_migration` after each sub-step below.
@@ -153,6 +182,12 @@ Apply changes in this order:
    > Review any new/resolved FAILs (especially `no-v2-decorators`, `no-execute-activity-method`) before proceeding.
 
 2. **Handler** — update base class, method signatures (typed contracts, no `**kwargs`), remove `load()`.
+
+   **`fetch_metadata` must return the correct widget-specific output type:**
+   - **SQL connectors** → `SqlMetadataOutput(objects=[SqlMetadataObject(TABLE_CATALOG="...", TABLE_SCHEMA="...")])`
+   - **BI/API connectors** → `ApiMetadataOutput(objects=[ApiMetadataObject(value="...", title="...", node_type="...", children=[...])])`
+   - Do NOT use generic `MetadataOutput` or deprecated `MetadataObject` — these emit `DeprecationWarning` and will be removed in v3.1.0.
+   - Import from `application_sdk.handler` (e.g. `from application_sdk.handler import SqlMetadataOutput, SqlMetadataObject`).
 
    > After completing this step, run:
    > ```bash
@@ -319,8 +354,8 @@ Print a structured summary:
 ### API Contract Changes (inform frontend consumers)
 <list any response-format-change WARNs from the checker — these indicate v3 handler
 methods that return a different response shape than v2, which may break frontends>
-- fetch_metadata: returns MetadataOutput (flat list) — was hierarchical [{value, title, children}]
-- preflight_check: returns PreflightOutput — was {authenticationCheck, hostCheck, permissionsCheck}
+- fetch_metadata: returns SqlMetadataOutput (flat [{TABLE_CATALOG, TABLE_SCHEMA}] for SQL) or ApiMetadataOutput (tree [{value, title, node_type, children}] for BI/API) — `data` is now a flat list, not {objects, total_count}
+- preflight_check: returns PreflightOutput — service auto-converts to v2 camelCase format {authCheck: {success, message}, connectivityCheck: {success, message}}
 
 ### Manual follow-up required
 <bulleted list of anything the AI skipped due to the test constraint or ambiguity>
@@ -410,7 +445,9 @@ curl -s -X POST http://localhost:8000/workflows/v1/check \
     "metadata": {}
   }'
 ```
-Expected: `{"success": true, "data": {"status": "ready", "checks": [...]}}`
+Expected: v2-compatible camelCase format — the service layer auto-converts `PreflightCheck` items:
+`{"success": true, "data": {"authCheck": {"success": true, "message": "..."}, "connectivityCheck": {"success": true, "message": "..."}}}`
+Each check's `name` field becomes a camelCase key in `data`, with `success` (from `passed`) and `message` fields.
 
 **Metadata fetch:**
 ```bash
@@ -421,7 +458,11 @@ curl -s -X POST http://localhost:8000/workflows/v1/metadata \
     "metadata": {}
   }'
 ```
-Expected: `{"success": true, "data": {"objects": [...], "total_count": N}}`
+Expected: **flat list** in `data` (NOT a nested object):
+- SQL connectors: `{"success": true, "data": [{"TABLE_CATALOG": "DEFAULT", "TABLE_SCHEMA": "FINANCE"}, ...]}`
+- BI/API connectors: `{"success": true, "data": [{"value": "id-1", "title": "Name", "node_type": "tag", "children": [...]}, ...]}`
+
+Note: `total_count`, `truncated`, and `fetch_duration_ms` are no longer in the response.
 
 **Config endpoints:**
 ```bash
@@ -721,6 +762,71 @@ v3 discovers the `Handler` subclass by looking in the same module as the `App` c
 from app.handlers import MyHandler  # noqa: F401 — registers handler
 ```
 This is the recommended approach. Alternatively, set `ATLAN_HANDLER_MODULE=app.handlers:MyHandler` in the Dockerfile.
+
+### Asset-mapper vs Transformer — choosing the right approach
+
+v2 connectors use `QueryBasedTransformer` or `AtlasTransformer` (Daft DataFrames + YAML query files) to convert raw extracted data into Atlan entities. v3 introduces the **asset-mapper** pattern as the native alternative — pure Python functions that map typed records directly to pyatlan Asset instances.
+
+**Reference implementation:** `atlan-openapi-app` — see `app/asset_mapper.py`, `app/api_types.py`, and the `transform` task in `app/connector.py`.
+
+**When to use which:**
+- **REST/API connectors** — use the asset-mapper approach. It's the v3-native pattern and eliminates Daft/YAML dependencies.
+- **SQL connectors** — either approach works. Keeping the existing transformer minimizes migration risk; switching to asset-mapper is cleaner but more effort.
+
+**Asset-mapper file layout:**
+```
+app/
+  api_types.py       — typed intermediate records (dataclass or msgspec.Struct)
+  asset_mapper.py    — pure mapper functions: map_<entity>(record, ...) -> pyatlan.Asset
+  connector.py       — App class with extract → transform → upload tasks
+```
+
+**Mapper function pattern:**
+```python
+from pyatlan.model.assets import Table
+
+def map_table(record: TableRecord, connection_qn: str, workflow_id: str, ...) -> Table:
+    asset = Table(
+        qualified_name=f"{connection_qn}/{record.database}/{record.schema}/{record.name}",
+        name=record.name,
+        connector_name="my-connector",
+        connection_qualified_name=connection_qn,
+    )
+    asset.status = "ACTIVE"
+    asset.last_sync_run = workflow_id
+    return asset
+```
+
+**Transform task pattern:**
+```python
+@task(timeout_seconds=1800)
+async def transform(self, input: TransformInput) -> TransformOutput:
+    for record in read_jsonl(input.raw_file, RecordType):
+        asset = map_entity(record, connection_qn, ...)
+        out_f.write(asset.to_nested_bytes() + b"\n")
+    return TransformOutput(output_file=FileReference(local_path=str(output_file)))
+```
+
+### Handler `fetch_metadata` must return widget-specific output types
+
+`MetadataOutput` and `MetadataObject` are deprecated (emit `DeprecationWarning`, removed in v3.1.0). The `fetch_metadata` handler method must return one of two widget-specific types:
+
+- **SQL connectors** (sqltree widget): `SqlMetadataOutput(objects=[SqlMetadataObject(TABLE_CATALOG="...", TABLE_SCHEMA="...")])`
+- **BI/API connectors** (apitree widget): `ApiMetadataOutput(objects=[ApiMetadataObject(value="...", title="...", node_type="...", children=[...])])`
+
+`ApiMetadataObject.children` supports recursive nesting for hierarchical trees. The handler return type annotation can stay `-> MetadataOutput` since both subtypes inherit from it.
+
+The service layer serializes `result.objects` as a **flat list** in the `data` field — not the old `{objects, total_count, truncated, fetch_duration_ms}` envelope. `total_count`, `truncated`, and `fetch_duration_ms` fields no longer exist on `MetadataOutput`.
+
+### Preflight response auto-conversion to v2 format
+
+The service layer (`service.py`) automatically converts `PreflightOutput` to the v2 camelCase response format the frontend expects. Each `PreflightCheck` in `result.checks` becomes a camelCase-keyed entry in `data`:
+```json
+{"success": true, "data": {"authCheck": {"success": true, "message": "..."}, "connectivityCheck": {"success": true, "message": "..."}}}
+```
+The `name` field on `PreflightCheck` is converted to camelCase and used as the key. `passed` maps to `success`. `PreflightCheck.name` has `min_length=1` validation — empty strings are rejected.
+
+Your handler just returns `PreflightOutput` with `PreflightCheck` items as before; the service layer handles the format conversion.
 
 ### Handler credentials — v2 nested dict vs v3 list format
 

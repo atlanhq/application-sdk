@@ -39,6 +39,9 @@ class InterceptorSettings:
     enable_correlation_interceptor: bool = True
     """Enable correlation context propagation interceptor."""
 
+    enable_output_interceptor: bool = True
+    """Enable structured output collection interceptor (metrics/artifacts)."""
+
     enable_cleanup_interceptor: bool = False
     """Enable temp-directory cleanup interceptor.
 
@@ -82,5 +85,6 @@ def load_interceptor_settings() -> InterceptorSettings:
         enable_correlation_interceptor=_bool(
             "APPLICATION_SDK_ENABLE_CORRELATION_INTERCEPTOR"
         ),
+        enable_output_interceptor=_bool("APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR"),
         enable_cleanup_interceptor=_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"),
     )

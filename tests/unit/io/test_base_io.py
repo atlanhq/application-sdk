@@ -10,6 +10,10 @@ from application_sdk.common.error_codes import IOError as SDKIOError
 from application_sdk.io import Reader
 from application_sdk.io.utils import download_files
 
+# Fixed UUID used in tests so download paths are deterministic
+_FIXED_UUID_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+_FIXED_DOWNLOAD_ID = _FIXED_UUID_HEX[:12]  # "a1b2c3d4e5f6"
+
 
 class MockReader(Reader):
     """Mock implementation of Reader for testing."""
@@ -181,13 +185,18 @@ class TestReaderDownloadFiles:
                 "application_sdk.services.objectstore.ObjectStore.download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
+            patch("uuid.uuid4") as mock_uuid4,
         ):
+            mock_uuid4.return_value.hex = _FIXED_UUID_HEX
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
             # as_store_key strips leading "/" so destination uses normalized key
-            expected_destination = os.path.join("./local/tmp/", "data/test.parquet")
+            # Downloads are isolated under a unique subdirectory
+            expected_destination = os.path.join(
+                "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/test.parquet"
+            )
             mock_download.assert_called_once_with(
                 source=path, destination=expected_destination
             )
@@ -201,7 +210,8 @@ class TestReaderDownloadFiles:
         expected_files = ["/data/file1.parquet", "/data/file2.parquet"]
 
         # as_store_key strips leading "/" so destination uses normalized key
-        expected_destination = os.path.join("./local/tmp/", "data")
+        # Downloads are isolated under a unique subdirectory
+        expected_destination = os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data")
 
         with (
             patch("os.path.isfile", return_value=False),
@@ -211,7 +221,9 @@ class TestReaderDownloadFiles:
                 "application_sdk.services.objectstore.ObjectStore.download_prefix",
                 new_callable=AsyncMock,
             ) as mock_download,
+            patch("uuid.uuid4") as mock_uuid4,
         ):
+            mock_uuid4.return_value.hex = _FIXED_UUID_HEX
             # Mock the file finding function to return empty on first call, then files on second
             with patch(
                 "application_sdk.io.utils.find_local_files_by_extension",
@@ -233,9 +245,10 @@ class TestReaderDownloadFiles:
         file_names = ["file1.parquet", "file2.parquet"]
         input_instance = MockReader(path, file_names)
         # as_store_key strips leading "/" so destinations use normalized keys
+        # Downloads are isolated under a unique subdirectory
         expected_files = [
-            os.path.join("./local/tmp/", "data/file1.parquet"),
-            os.path.join("./local/tmp/", "data/file2.parquet"),
+            os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file1.parquet"),
+            os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file2.parquet"),
         ]
 
         def mock_isfile(p):
@@ -255,7 +268,9 @@ class TestReaderDownloadFiles:
                 "application_sdk.services.objectstore.ObjectStore.download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
+            patch("uuid.uuid4") as mock_uuid4,
         ):
+            mock_uuid4.return_value.hex = _FIXED_UUID_HEX
             result = await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
@@ -264,11 +279,15 @@ class TestReaderDownloadFiles:
             assert mock_download.call_count == 2
             mock_download.assert_any_call(
                 source=os.path.join(path, "file1.parquet"),
-                destination=os.path.join("./local/tmp/", "data/file1.parquet"),
+                destination=os.path.join(
+                    "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file1.parquet"
+                ),
             )
             mock_download.assert_any_call(
                 source=os.path.join(path, "file2.parquet"),
-                destination=os.path.join("./local/tmp/", "data/file2.parquet"),
+                destination=os.path.join(
+                    "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file2.parquet"
+                ),
             )
             assert result == expected_files
 
@@ -430,3 +449,94 @@ class TestReaderDownloadFiles:
             )
             # Download error now propagates in the exception (SDKIOError.__cause__)
             # rather than being separately logged, verified via pytest.raises above
+
+
+class TestDownloadFilesIsolation:
+    """Regression tests for the parallel download race condition.
+
+    The bug: concurrent transform_data activities all download to
+    ./local/tmp/ and overwrite each other's files. The fix uses a
+    UUID-isolated subdirectory per download_files() call.
+    """
+
+    @pytest.mark.asyncio
+    async def test_concurrent_downloads_get_isolated_directories(self):
+        """Two concurrent download_files calls must use DIFFERENT temp dirs."""
+        path = "/raw/table"
+
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=True),
+            patch(
+                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                new_callable=AsyncMock,
+            ) as mock_download,
+            patch(
+                "application_sdk.io.utils.find_local_files_by_extension",
+                side_effect=[
+                    [],
+                    ["/fake/result1.parquet"],
+                    [],
+                    ["/fake/result2.parquet"],
+                ],
+            ),
+        ):
+            import asyncio
+
+            results = await asyncio.gather(
+                download_files(path, ".parquet"),
+                download_files(path, ".parquet"),
+            )
+
+            assert len(results) == 2
+            assert mock_download.call_count == 2
+
+            dest1 = mock_download.call_args_list[0].kwargs["destination"]
+            dest2 = mock_download.call_args_list[1].kwargs["destination"]
+
+            # Destinations must differ (UUID isolation)
+            assert (
+                dest1 != dest2
+            ), f"Concurrent downloads used same destination: {dest1}"
+            assert dest1.startswith("./local/tmp/")
+            assert dest2.startswith("./local/tmp/")
+
+    @pytest.mark.asyncio
+    async def test_file_names_with_relative_path_match_correctly(self):
+        """Reproduce the basename collision bug.
+
+        Before fix: file_names=["table/chunk-0.parquet"] matched ANY file
+        named chunk-0.parquet regardless of directory.
+        After fix: matching uses relative paths.
+        """
+        import tempfile
+        from pathlib import Path
+
+        from application_sdk.io.utils import find_local_files_by_extension
+
+        with tempfile.TemporaryDirectory() as tmp:
+            table_dir = Path(tmp) / "table"
+            schema_dir = Path(tmp) / "schema"
+            table_dir.mkdir()
+            schema_dir.mkdir()
+
+            table_chunk = table_dir / "chunk-0-part0.parquet"
+            schema_chunk = schema_dir / "chunk-0-part0.parquet"
+            table_chunk.write_bytes(b"table data")
+            schema_chunk.write_bytes(b"schema data")
+
+            # Activity A wants only table/chunk-0-part0.parquet
+            result = find_local_files_by_extension(
+                tmp, ".parquet", file_names=["table/chunk-0-part0.parquet"]
+            )
+            assert len(result) == 1
+            assert str(table_chunk) in result
+            assert str(schema_chunk) not in result
+
+            # Activity B wants only schema/chunk-0-part0.parquet
+            result_b = find_local_files_by_extension(
+                tmp, ".parquet", file_names=["schema/chunk-0-part0.parquet"]
+            )
+            assert len(result_b) == 1
+            assert str(schema_chunk) in result_b
+            assert str(table_chunk) not in result_b

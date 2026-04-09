@@ -52,9 +52,11 @@ from application_sdk.handler.contracts import (
     FileUploadResponse,
     MetadataInput,
     PreflightInput,
+    PreflightStatus,
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
+from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -153,7 +155,7 @@ if TYPE_CHECKING:
 
 
 def _wrap_response(
-    data: dict[str, Any],
+    data: dict[str, Any] | list[Any],
     *,
     message: str = "",
     success: bool = True,
@@ -470,7 +472,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Internal error: {e}"
+                status_code=500, detail="Internal server error"
             ) from None
         finally:
             handler._context = None
@@ -503,10 +505,22 @@ def create_app_handler_service(
                 result.status.value,
                 len(result.checks),
             )
+            # Build v2-compatible response: each check becomes a top-level
+            # key in data so the frontend can iterate check names directly.
+            # v2 format: {"authenticationCheck": {"success": true, "message": "..."}, ...}
+            v2_data: dict[str, Any] = {}
+            for check in result.checks:
+                # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
+                key = check.name[0].lower() + check.name[1:]
+                v2_data[key] = {
+                    "success": check.passed,
+                    "message": check.message or "",
+                }
             return JSONResponse(
                 content=_wrap_response(
-                    result.model_dump(),
+                    v2_data,
                     message=result.message or f"Preflight check {result.status.value}",
+                    success=result.status == PreflightStatus.READY,
                 )
             )
         except HandlerError as e:
@@ -527,7 +541,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Internal error: {e}"
+                status_code=500, detail="Internal server error"
             ) from None
         finally:
             handler._context = None
@@ -553,18 +567,21 @@ def create_app_handler_service(
                 context.request_id_str,
             )
             result = await handler.fetch_metadata(metadata_input)
+
+            # Both SqlMetadataOutput and ApiMetadataOutput expose
+            # .objects — model_dump() produces the correct shape for
+            # the corresponding frontend widget (sqltree / apitree).
+            data = [obj.model_dump() for obj in result.objects]
+            count = len(result.objects)
             logger.info(
-                "Metadata fetch completed: app=%s request=%s objects=%d truncated=%s",
+                "Metadata fetch completed: app=%s request=%s type=%s objects=%d",
                 app_name,
                 context.request_id_str,
-                len(result.objects),
-                result.truncated,
+                type(result).__name__,
+                count,
             )
             return JSONResponse(
-                content=_wrap_response(
-                    result.model_dump(),
-                    message=f"Fetched {result.total_count} objects",
-                )
+                content=_wrap_response(data, message=f"Fetched {count} objects")
             )
         except HandlerError as e:
             logger.error(
@@ -584,7 +601,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Internal error: {e}"
+                status_code=500, detail="Internal server error"
             ) from None
         finally:
             handler._context = None
@@ -618,6 +635,31 @@ def create_app_handler_service(
                     status_code=500,
                     detail=f"App class {app_cls.__name__} does not define _input_type.",
                 )
+
+            # Save inline credentials to the v3 secret store and replace
+            # with a credential_guid so raw secrets never travel over Temporal.
+            # Normalize to v3 list format first (same as auth/preflight),
+            # then store. Apps use their Pydantic credential model to
+            # convert back to the shape they need.
+            # Only works with writable stores (InMemorySecretStore in local dev).
+            body = _normalize_credentials(body)
+            if "credentials" in body and body["credentials"]:
+                infra = get_infrastructure()
+                secret_store = infra.secret_store if infra else None
+                if secret_store is not None and hasattr(secret_store, "set"):
+                    credential_guid = str(uuid4())
+                    secret_store.set(credential_guid, json.dumps(body["credentials"]))
+                    body["credential_guid"] = credential_guid
+                    del body["credentials"]
+                    logger.debug(
+                        "Saved inline credentials to secret store: guid=%s",
+                        credential_guid,
+                    )
+                else:
+                    logger.warning(
+                        "Secret store not writable; inline credentials will be "
+                        "passed through on the workflow input."
+                    )
 
             input_data = input_type(**body)
 
