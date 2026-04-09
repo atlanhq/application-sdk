@@ -27,6 +27,7 @@ def has_internet_connection() -> bool:
     except Exception:
         return False
 
+
 class TestGetSslCertDir:
     """Test cases for get_ssl_cert_dir function."""
 
@@ -127,7 +128,9 @@ class TestSslContextPublicCertificates:
                     # Test connection to a public URL - this should work because
                     # default certificates are preserved alongside custom ones
                     async with httpx.AsyncClient(verify=ssl_context) as client:
-                        response = await client.get("https://www.google.com", timeout=10)
+                        response = await client.get(
+                            "https://www.google.com", timeout=10
+                        )
                         assert response.status_code == 200
 
     @pytest.mark.asyncio
@@ -146,7 +149,9 @@ class TestSslContextPublicCertificates:
                     # default certificates are preserved alongside custom ones
                     async with aiohttp.ClientSession() as session:
                         async with session.get(
-                            "https://www.google.com", ssl=ssl_context, timeout=aiohttp.ClientTimeout(total=10)
+                            "https://www.google.com",
+                            ssl=ssl_context,
+                            timeout=aiohttp.ClientTimeout(total=10),
                         ) as response:
                             assert response.status == 200
 
@@ -261,7 +266,9 @@ class TestGetCustomCaCertBytes:
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a custom certificate file
-            custom_cert = b"-----BEGIN CERTIFICATE-----\nCUSTOM_CERT\n-----END CERTIFICATE-----"
+            custom_cert = (
+                b"-----BEGIN CERTIFICATE-----\nCUSTOM_CERT\n-----END CERTIFICATE-----"
+            )
             cert_file = f"{tmpdir}/custom-ca.pem"
             with open(cert_file, "wb") as f:
                 f.write(custom_cert)
@@ -347,7 +354,9 @@ class TestSslContextWithPrivateServer:
     """
 
     @pytest.mark.asyncio
-    async def test_httpx_connects_to_private_https_server(self, trustme_ca, server_ssl_ctx):  # type: ignore[no-untyped-def]
+    async def test_httpx_connects_to_private_https_server(
+        self, trustme_ca, server_ssl_ctx
+    ):  # type: ignore[no-untyped-def]
         """Test that httpx can connect to an HTTPS server using a private CA certificate."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Export the CA certificate to a file in the temp directory
@@ -378,14 +387,18 @@ class TestSslContextWithPrivateServer:
 
                     # Connect to the private server - this should succeed
                     async with httpx.AsyncClient(verify=client_ssl_context) as client:
-                        response = await client.get(f"https://localhost:{port}/", timeout=10)
+                        response = await client.get(
+                            f"https://localhost:{port}/", timeout=10
+                        )
                         assert response.status_code == 200
                         assert response.text == "Hello from private HTTPS server!"
             finally:
                 await runner.cleanup()
 
     @pytest.mark.asyncio
-    async def test_aiohttp_connects_to_private_https_server(self, trustme_ca, server_ssl_ctx):  # type: ignore[no-untyped-def]
+    async def test_aiohttp_connects_to_private_https_server(
+        self, trustme_ca, server_ssl_ctx
+    ):  # type: ignore[no-untyped-def]
         """Test that aiohttp can connect to an HTTPS server using a private CA certificate."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Export the CA certificate to a file in the temp directory
@@ -433,6 +446,7 @@ class TestSslContextWithPrivateServer:
         This verifies that our private server's certificate is NOT trusted
         by default system CAs, proving that our custom CA loading is necessary.
         """
+
         # Create a simple HTTPS server
         async def handle_request(request):  # type: ignore[no-untyped-def]
             return web.Response(text="Hello!")
@@ -461,7 +475,9 @@ class TestSslContextWithPrivateServer:
             await runner.cleanup()
 
     @pytest.mark.asyncio
-    async def test_private_and_public_certs_work_simultaneously(self, trustme_ca, server_ssl_ctx):  # type: ignore[no-untyped-def]
+    async def test_private_and_public_certs_work_simultaneously(
+        self, trustme_ca, server_ssl_ctx
+    ):  # type: ignore[no-untyped-def]
         """Test that both private server AND public URLs work with the same SSL context.
 
         This is the key test proving that custom certificates are ADDED to,
@@ -509,4 +525,3 @@ class TestSslContextWithPrivateServer:
                         # Both work with the same SSL context!
             finally:
                 await runner.cleanup()
-
