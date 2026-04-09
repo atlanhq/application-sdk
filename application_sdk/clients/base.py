@@ -11,6 +11,7 @@ from httpx._types import (
 )
 
 from application_sdk.clients import ClientInterface
+from application_sdk.clients.ssl_utils import get_ssl_context
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -184,8 +185,9 @@ class BaseClient(ClientInterface):
             ...     params={"limit": 100}
             ... )
         """
+        ssl_context = get_ssl_context()
         async with httpx.AsyncClient(
-            timeout=timeout, transport=self.http_retry_transport
+            timeout=timeout, transport=self.http_retry_transport, verify=ssl_context
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:
@@ -264,8 +266,10 @@ class BaseClient(ClientInterface):
             ...         auth=("username", "password")
             ... )
         """
+        # Use SSL_CERT_DIR if verify is True (default), otherwise respect explicit verify=False
+        ssl_context = get_ssl_context() if verify else False
         async with httpx.AsyncClient(
-            timeout=timeout, transport=self.http_retry_transport, verify=verify
+            timeout=timeout, transport=self.http_retry_transport, verify=ssl_context
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:
