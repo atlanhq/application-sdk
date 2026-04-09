@@ -70,6 +70,7 @@ permissions:
   contents: read
   packages: write
   actions: write
+  pull-requests: write
 
 jobs:
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
