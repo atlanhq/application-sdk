@@ -173,6 +173,14 @@ def create_worker(
     )
 
     all_interceptors: list[TemporalInterceptor] = [ExecutionContextInterceptor()]
+
+    if interceptor_settings.enable_app_vitals_interceptor:
+        from application_sdk.execution._temporal.interceptors.app_vitals import (
+            AppVitalsInterceptor,
+        )
+
+        all_interceptors.append(AppVitalsInterceptor())
+
     all_interceptors.extend(interceptors or [])
 
     if interceptor_settings.enable_correlation_interceptor:

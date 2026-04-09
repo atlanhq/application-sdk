@@ -53,6 +53,13 @@ class InterceptorSettings:
         cleanup, but the interceptor itself is no longer added to the worker.
     """
 
+    enable_app_vitals_interceptor: bool = True
+    """Enable App Vitals interceptor for P0 observability data points.
+
+    Emits OTel-friendly metrics for workflow/activity completion, duration,
+    error classification, retry detection, queue wait, and resource usage.
+    """
+
 
 def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables."""
@@ -87,4 +94,7 @@ def load_interceptor_settings() -> InterceptorSettings:
         ),
         enable_output_interceptor=_bool("APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR"),
         enable_cleanup_interceptor=_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"),
+        enable_app_vitals_interceptor=_bool(
+            "APPLICATION_SDK_ENABLE_APP_VITALS_INTERCEPTOR"
+        ),
     )
