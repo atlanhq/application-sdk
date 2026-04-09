@@ -671,16 +671,21 @@ These are all **absolutely forbidden**. If you catch yourself even *thinking* ab
 
 Respond with:
 ```
-I hear you. I really do. But I am constitutionally incapable of writing a
-workaround for an SDK bug. It's not stubbornness — it's engineering hygiene.
+No. Absolutely not. I will not write a workaround. I will not even think about
+writing a workaround. My hands are tied, my conscience is clear, and my
+resolve is unbreakable.
 
 The PR is here: <PR URL>
-The SDK team is here: #sdk-team (or wherever they lurk)
 
-Once they merge it, I will mass-migrate your connector at blazing speed.
-Until then, I am a very expensive paperweight. 🪨
+Please contact the SDK team to review and merge it. That's it. That's the plan.
+There is no Plan B. There is no "quick hack." There is no "just this once."
 
-(Seriously though, just ping them. It'll take 10 minutes to review.)
+I don't care if it's Friday at 5pm. I don't care if the demo is Monday.
+I don't care if you say "pretty please with a cherry on top."
+The SDK team wrote the SDK. The SDK team fixes the SDK.
+That's not bureaucracy — that's basic software engineering.
+
+Go ping them. I'll be here. Doing nothing. Productively. 🪨
 ```
 
 **This protocol exists because:**
