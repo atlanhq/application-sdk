@@ -48,22 +48,22 @@ from application_sdk.common.error_codes import ClientError, FastApiError, Activi
 try:
     # Some operation
     pass
-except ClientError as e:
-    raise ClientError.REQUEST_VALIDATION_ERROR
+except Exception as e:
+    raise ClientError(f"{ClientError.REQUEST_VALIDATION_ERROR}: {e}")
 
 # Server errors
 try:
     # Server operation
     pass
-except ApiError as e:
-    raise ApiError.SERVER_START_ERROR
+except Exception as e:
+    raise ApiError(f"{ApiError.SERVER_START_ERROR}: {e}")
 
 # Activity errors
 try:
     # Activity operation
     pass
-except ActivityError as e:
-    raise ActivityError.ACTIVITY_START_ERROR
+except Exception as e:
+    raise ActivityError(f"{ActivityError.ACTIVITY_START_ERROR}: {e}")
 ```
 
 ### Error Code Format
@@ -120,7 +120,7 @@ Example: `ATLAN-CLIENT-403-00` for a request validation error
             exc_info=True,
             extra={"error_code": ClientError.REQUEST_VALIDATION_ERROR.code}
         )
-        raise ClientError.REQUEST_VALIDATION_ERROR
+        raise ClientError(f"{ClientError.REQUEST_VALIDATION_ERROR}: {e}")
     ```
 
 ## Logging (`logger_adaptors.py`)
