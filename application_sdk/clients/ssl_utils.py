@@ -240,4 +240,3 @@ def get_custom_ca_cert_bytes() -> Optional[bytes]:
         f"from {ssl_cert_dir} ({len(combined_certs)} bytes total)"
     )
     return combined_certs
-

@@ -570,7 +570,6 @@ async def test_load_with_prometheus_metrics(
     assert isinstance(call_kwargs["runtime"], Runtime)
 
 
-
 class TestTemporalSslContext:
     """Test cases for TLS configuration integration with Temporal client.
 
@@ -586,7 +585,9 @@ class TestTemporalSslContext:
     ) -> None:
         """Test that _get_tls_config returns a TLSConfig when SSL_CERT_DIR is set."""
         # Create mock certificate bytes
-        mock_cert_bytes = b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"
+        mock_cert_bytes = (
+            b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"
+        )
 
         with patch(
             "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
@@ -606,15 +607,11 @@ class TestTemporalSslContext:
             "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
             return_value=None,
         ):
-            with patch(
-                "application_sdk.clients.temporal.WORKFLOW_TLS_ENABLED", False
-            ):
+            with patch("application_sdk.clients.temporal.WORKFLOW_TLS_ENABLED", False):
                 result = temporal_client._get_tls_config()
                 assert result is False
 
-            with patch(
-                "application_sdk.clients.temporal.WORKFLOW_TLS_ENABLED", True
-            ):
+            with patch("application_sdk.clients.temporal.WORKFLOW_TLS_ENABLED", True):
                 result = temporal_client._get_tls_config()
                 assert result is True
 
@@ -635,7 +632,9 @@ class TestTemporalSslContext:
         mock_connect.return_value = mock_client
 
         # Create mock certificate bytes
-        mock_cert_bytes = b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"
+        mock_cert_bytes = (
+            b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"
+        )
 
         with patch(
             "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
@@ -672,9 +671,7 @@ class TestTemporalSslContext:
             "application_sdk.clients.temporal.get_custom_ca_cert_bytes",
             return_value=None,
         ):
-            with patch(
-                "application_sdk.clients.temporal.WORKFLOW_TLS_ENABLED", True
-            ):
+            with patch("application_sdk.clients.temporal.WORKFLOW_TLS_ENABLED", True):
                 await temporal_client.load()
 
                 # Verify Client.connect was called with tls=True
@@ -694,9 +691,7 @@ class TestTemporalSslContext:
             ca_cert_path = f"{tmpdir}/ca.pem"
             ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
 
-            with patch(
-                "application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir
-            ):
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
                 result = temporal_client._get_tls_config()
 
                 # Should return a TLSConfig with the certificate bytes
@@ -717,9 +712,7 @@ class TestTemporalSslContext:
             ca_cert_path = f"{tmpdir}/ca.pem"
             ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
 
-            with patch(
-                "application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir
-            ):
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
                 result = temporal_client._get_tls_config()
 
                 # Should return a TLSConfig with the custom certificate loaded
@@ -757,9 +750,7 @@ class TestTemporalSslContext:
             ca_cert_path = f"{tmpdir}/ca.pem"
             ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
 
-            with patch(
-                "application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir
-            ):
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
                 await temporal_client.load()
 
                 # Verify Client.connect was called
