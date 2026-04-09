@@ -313,18 +313,21 @@ def _parse_all_component_yamls(components_dir: "Path") -> dict[str, dict[str, st
 def _log_dapr_components(
     dapr_client: "DaprClient",
     components_dir: "Path",
-) -> None:
+) -> set[str]:
     """Log registered Dapr components and their safe configuration at startup.
 
     Queries the Dapr sidecar metadata API for all registered components and
     emits one INFO log line per component showing its type, version, and any
     non-sensitive metadata from the corresponding component YAML.
 
-    Also warns about expected components (state store, secret store, object
-    store, event binding) that are not registered in the sidecar.
+    Warns about expected components (state store, secret store, object store,
+    event binding) that are not registered in the sidecar.
 
     This is best-effort: any failure is logged as a WARNING and never blocks
     startup.
+
+    Returns:
+        Set of registered component names. Empty set if metadata query fails.
     """
     from application_sdk.constants import (
         DEPLOYMENT_OBJECT_STORE_NAME,
@@ -337,10 +340,11 @@ def _log_dapr_components(
         metadata = dapr_client.get_metadata()
     except Exception:
         logger.warning(
-            "Could not query Dapr metadata — component diagnostics unavailable",
+            "Could not query Dapr metadata — component diagnostics unavailable; "
+            "optional components (e.g. event binding) will be disabled",
             exc_info=True,
         )
-        return
+        return set()
 
     registered = {c.name: c for c in getattr(metadata, "registered_components", [])}
     yaml_details = _parse_all_component_yamls(components_dir)
@@ -377,6 +381,8 @@ def _log_dapr_components(
                 comp_name,
                 role,
             )
+
+    return set(registered)
 
 
 def _create_infrastructure(
@@ -419,7 +425,7 @@ def _create_infrastructure(
 
         dapr_client = create_dapr_client()
         components_dir = Path(os.environ.get("DAPR_COMPONENTS_PATH", "./components"))
-        _log_dapr_components(dapr_client, components_dir)
+        registered_components = _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
         return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
@@ -428,7 +434,11 @@ def _create_infrastructure(
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=components_dir,
             ),
-            event_binding=DaprBinding(dapr_client, EVENT_STORE_NAME),
+            event_binding=(
+                DaprBinding(dapr_client, EVENT_STORE_NAME)
+                if EVENT_STORE_NAME in registered_components
+                else None
+            ),
         )
     else:
         # No Dapr — use InMemory implementations

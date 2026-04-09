@@ -133,13 +133,17 @@ class CredentialResolver:
             )
 
             result: dict[str, Any] = await V2SecretStore.get_credentials(
-                {"credential_guid": ref.credential_guid}
+                ref.credential_guid
             )
             return result
         except ImportError:
-            # v2 SecretStore not available — fall back to v3 secret store
+            # v2 SecretStore not available (e.g. local dev without Dapr) —
+            # fall through to the v3 secret store fallback below.
             pass
         except Exception as exc:
+            # v2 SecretStore is available but raised (e.g. Dapr/state store
+            # error). This is a real failure, not a missing dependency — do NOT
+            # fall through to the v3 store, raise immediately.
             raise CredentialNotFoundError(ref.credential_guid) from exc
 
         # Fall back: try the v3 secret store with the GUID as the key
