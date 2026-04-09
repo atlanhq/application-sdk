@@ -50,13 +50,7 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
 
 
 class ExtractionOutput(Output):
-    """Top-level output from a SQL metadata extraction run.
-
-    Includes AE/publish-app fields (``transformed_data_prefix``,
-    ``connection_qualified_name``, ``publish_state_prefix``,
-    ``current_state_prefix``) read by the Automation Engine via JSONPath
-    (``$.extract.outputs.*``) to feed the Publish App.
-    """
+    """Top-level output from a SQL metadata extraction run."""
 
     workflow_id: str = ""
     success: bool = False
@@ -69,19 +63,6 @@ class ExtractionOutput(Output):
     processes_extracted: int = 0
     records_uploaded: int = 0
     error: str = ""
-
-    # AE / publish-app fields — read via JSONPath ($.extract.outputs.*)
-    transformed_data_prefix: str = ""
-    """Object-store-relative path to transformed data files (JSONL/parquet)."""
-
-    connection_qualified_name: str = ""
-    """Qualified name of the Atlan connection (e.g., ``default/trino/1234``)."""
-
-    publish_state_prefix: str = ""
-    """Path where the Publish App tracks publish state."""
-
-    current_state_prefix: str = ""
-    """Path for the current extraction state."""
 
 
 class ExtractionTaskInput(Input, allow_unbounded_fields=True):
