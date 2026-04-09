@@ -8,13 +8,13 @@ Handlers implement the API contract for your application's HTTP endpoints: authe
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
     AuthInput, AuthOutput, AuthStatus,
-    PreflightInput, PreflightOutput, PreflightStatus,
-    MetadataInput, MetadataOutput, MetadataField,
+    PreflightInput, PreflightOutput, PreflightStatus, PreflightCheck,
+    MetadataInput, SqlMetadataOutput, SqlMetadataObject,
 )
 
 class MyHandler(Handler):
     async def test_auth(self, input: AuthInput) -> AuthOutput:
-        api_key = await self.context.get_secret("my-api-key")
+        api_key = self.context.get_credential("api_key")
         ok = await verify_key(api_key)
         return AuthOutput(
             status=AuthStatus.SUCCESS if ok else AuthStatus.FAILED,
@@ -23,9 +23,9 @@ class MyHandler(Handler):
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         return PreflightOutput(status=PreflightStatus.READY)
 
-    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
-        return MetadataOutput(fields=[
-            MetadataField(value="analytics", title="Analytics Schema"),
+    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
+        return SqlMetadataOutput(objects=[
+            SqlMetadataObject(TABLE_CATALOG="DEFAULT", TABLE_SCHEMA="ANALYTICS"),
         ])
 ```
 
@@ -37,34 +37,55 @@ Every handler method takes a single typed `Input` and returns a single typed `Ou
 
 ```python
 class AuthInput:
-    credentials: dict    # credential payload from the platform
+    credentials: list[HandlerCredential] = []  # credential key/value pairs
+    connection_id: str = ""                     # optional connection ID
+    timeout_seconds: int = 30                   # max wait time
 
 class AuthOutput:
-    status: AuthStatus   # SUCCESS or FAILED
-    message: str = ""    # optional detail message
+    status: AuthStatus       # SUCCESS, FAILED, EXPIRED, or INVALID_CREDENTIALS
+    message: str = ""        # optional detail message
+    identities: list[str] = []  # verified identities (usernames, roles)
+    scopes: list[str] = []     # authorized scopes or permissions
+    expires_at: str = ""       # ISO-8601 expiry timestamp
 ```
+
+Each `HandlerCredential` has a `key: str` and `value: str`.
 
 ### PreflightInput / PreflightOutput
 
 ```python
 class PreflightInput:
-    payload: dict        # preflight configuration from the platform
+    credentials: list[HandlerCredential] = []  # credentials for preflight
+    connection_config: dict[str, Any] = {}     # host, port, database, etc.
+    checks_to_run: list[str] = []              # specific checks (empty = all)
+    timeout_seconds: int = 60                  # max wait time
 
 class PreflightOutput:
-    status: PreflightStatus  # READY or NOT_READY
-    checks: list[Check] = [] # individual check results
+    status: PreflightStatus           # READY, NOT_READY, or PARTIAL
+    checks: list[PreflightCheck] = [] # individual check results
+    message: str = ""                 # human-readable summary
+    total_duration_ms: float = 0.0    # total time for all checks
 ```
 
 ### MetadataInput / MetadataOutput
 
 ```python
 class MetadataInput:
-    metadata_type: str | None = None
-    database: str | None = None
-    schema: str | None = None
+    credentials: list[HandlerCredential] = []  # credentials for discovery
+    connection_config: dict[str, Any] = {}     # connection configuration
+    object_filter: str = ""                    # filter pattern (e.g. 'public.*')
+    include_fields: bool = True                # include field/column details
+    max_objects: int = 1000                    # max objects to return
+    timeout_seconds: int = 120                 # max wait time
 
 class MetadataOutput:
-    fields: list[MetadataField] = []
+    objects: list[Any] = []  # base class — use SqlMetadataOutput or ApiMetadataOutput
+
+class SqlMetadataOutput(MetadataOutput):
+    objects: list[SqlMetadataObject] = []  # for sqltree widget
+
+class ApiMetadataOutput(MetadataOutput):
+    objects: list[ApiMetadataObject] = []  # for apitree widget
 ```
 
 ## Context Injection
@@ -76,15 +97,18 @@ Access infrastructure through `self.context`:
 ```python
 class MyHandler(Handler):
     async def test_auth(self, input: AuthInput) -> AuthOutput:
-        # Secret store
-        api_key = await self.context.get_secret("my-api-key")
+        # Get a credential value by key from the request credentials
+        api_key = self.context.get_credential("api_key")
 
-        # Credential resolution
-        cred = await self.context.resolve_credential(input.credential_ref)
+        # Get a secret from the secret store
+        secret = await self.context.get_secret("my-secret-name")
 
-        # State store
-        state = await self.context.load_state("handler-state")
-        ...
+        # Access all credentials as a list
+        all_creds = self.context.credentials
+
+        # Check if a credential exists
+        if self.context.has_credential("api_key"):
+            ...
 ```
 
 ## Error Handling with HandlerError
@@ -112,11 +136,18 @@ class MyHandler(Handler):
 For SQL-based connectors, your handler typically delegates to a SQL client:
 
 ```python
+from application_sdk.handler.contracts import (
+    AuthInput, AuthOutput, AuthStatus,
+    MetadataInput, SqlMetadataOutput, SqlMetadataObject,
+)
+
 class MySQLHandler(Handler):
     async def test_auth(self, input: AuthInput) -> AuthOutput:
-        cred = await self.context.resolve_credential(input.credential_ref)
+        host = self.context.get_credential("host")
+        username = self.context.get_credential("username")
+        password = self.context.get_credential("password")
         try:
-            async with create_connection(cred) as conn:
+            async with create_connection(host, username, password) as conn:
                 await conn.execute("SELECT 1")
             return AuthOutput(status=AuthStatus.SUCCESS)
         except Exception:
@@ -124,21 +155,22 @@ class MySQLHandler(Handler):
                 status=AuthStatus.FAILED, message="Connection failed"
             )
 
-    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
-        cred = await self.context.resolve_credential(input.credential_ref)
-        async with create_connection(cred) as conn:
-            if input.metadata_type == "database":
-                rows = await conn.execute(
-                    "SELECT database_name FROM databases"
+    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
+        host = self.context.get_credential("host")
+        username = self.context.get_credential("username")
+        password = self.context.get_credential("password")
+        async with create_connection(host, username, password) as conn:
+            rows = await conn.execute(
+                "SELECT TABLE_CATALOG, TABLE_SCHEMA "
+                "FROM information_schema.schemata"
+            )
+            return SqlMetadataOutput(objects=[
+                SqlMetadataObject(
+                    TABLE_CATALOG=r["TABLE_CATALOG"],
+                    TABLE_SCHEMA=r["TABLE_SCHEMA"],
                 )
-                return MetadataOutput(fields=[
-                    MetadataField(
-                        value=r["database_name"],
-                        title=r["database_name"],
-                    )
-                    for r in rows
-                ])
-        return MetadataOutput(fields=[])
+                for r in rows
+            ])
 ```
 
 ## Testing Handlers
@@ -161,6 +193,6 @@ def infra():
 
 async def test_auth_success(infra):
     handler = MyHandler()
-    result = await handler.test_auth(AuthInput(credentials={}))
+    result = await handler.test_auth(AuthInput(credentials=[]))
     assert result.status == AuthStatus.SUCCESS
 ```

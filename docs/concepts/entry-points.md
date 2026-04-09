@@ -31,21 +31,33 @@ Alternatively, set the `ATLAN_APP_MODULE` environment variable. This is mandator
 
 ## Dockerfile Configuration
 
-Set `ATLAN_APP_MODULE` in your Dockerfile so the value is locked to the image:
+The base image (`registry.atlan.com/public/app-runtime-base:refactor-v3-latest`) includes the `application-sdk` CLI, Dapr, and the entrypoint. You do not need a custom `ENTRYPOINT`, `CMD`, or `entrypoint.sh`. The base image handles mode selection at runtime.
 
 ```dockerfile
-ENV ATLAN_APP_MODULE=app.app:MyMetadataExtractor \
-    ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
-CMD ["application-sdk", "--mode", "combined"]
+# Application-sdk v3 base image (Chainguard-based)
+FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
+
+WORKDIR /app
+
+# Install dependencies first (better caching)
+COPY --chown=appuser:appuser pyproject.toml uv.lock README.md ./
+RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
+    uv venv .venv && \
+    uv sync --locked --no-install-project
+
+# Copy application code
+COPY --chown=appuser:appuser . .
+
+# App-specific environment variables
+ENV ATLAN_APP_HTTP_PORT=8000
+ENV ATLAN_APP_MODULE=app.connector:MyApp
+ENV ATLAN_CONTRACT_GENERATED_DIR=app/generated
+
 ```
 
 `ATLAN_CONTRACT_GENERATED_DIR` tells the SDK where to find the generated contract JSON files (configmaps, manifest). Place these files inside your repo's `app/generated/` directory.
 
-The `--app` CLI flag takes precedence over the env var:
-
-```dockerfile
-CMD ["application-sdk", "--mode", "combined", "--app", "app.app:MyMetadataExtractor"]
-```
+The `--app` CLI flag takes precedence over the env var, but hardcoding `ATLAN_APP_MODULE` in the Dockerfile is the recommended approach so the value is locked to the image.
 
 ## Programmatic: run_dev_combined()
 

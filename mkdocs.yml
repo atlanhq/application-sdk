@@ -95,7 +95,6 @@ nav:
       - Server: concepts/server.md
       - Application: concepts/application.md
       - Clients: concepts/clients.md
-      - Services: concepts/services.md
       - Common: concepts/common.md
       - Handlers: concepts/handlers.md
       - Inputs: concepts/inputs.md
@@ -104,7 +103,6 @@ nav:
       - Outputs: concepts/outputs.md
       - Temporal Auth: concepts/temporal_auth.md
       - Worker: concepts/worker.md
-      - Example: concepts/application_sql.md
   - Agent Guides:
       - Project Structure: agents/project-structure.md
       - Development Commands: agents/dev-commands.md
