@@ -91,12 +91,12 @@ nav:
       - Apps: concepts/apps.md
       - Entry Points: concepts/entry-points.md
       - Tasks: concepts/tasks.md
-      - Atlan Upload: concepts/atlanupload.md
       - Server: concepts/server.md
       - Clients: concepts/clients.md
       - Common: concepts/common.md
       - Handlers: concepts/handlers.md
       - MCP: concepts/mcp.md
+<<<<<<< HEAD
       - Monitoring: concepts/monitoring.md
   - Migration:
       - What's New in v3: whats-new-v3.md
