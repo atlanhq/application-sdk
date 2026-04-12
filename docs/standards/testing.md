@@ -1,6 +1,3 @@
----
-alwaysApply: true
----
 # Testing Guidelines
 
 - Run the unit tests using the command: `uv run coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics`
@@ -24,7 +21,7 @@ alwaysApply: true
 
 - **Example Test Structure**
   ```python
-  # ✅ DO: Proper test structure
+  # DO: Proper test structure
   import pytest
   from hypothesis import given, strategies as st
 
@@ -54,7 +51,7 @@ alwaysApply: true
           result = user_service.get_user(user_id)
           assert result is not None
 
-      # ❌ DON'T: Improper test structure
+      # DON'T: Improper test structure
       def test_get_user(self):  # No docstring
           service = UserService()  # No fixture
           assert service.get_user("123")  # No proper assertion
