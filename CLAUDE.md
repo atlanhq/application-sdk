@@ -17,7 +17,7 @@ Non-standard commands used across the repo:
 
 **Commit Rules**:
 - Never add Co-Authored-By lines to commits
-- Follow Conventional Commits format from `.cursor/rules/commits.mdc`
+- Follow Conventional Commits format from `docs/standards/commits.md`
 
 **Path Semantics (ObjectStore)**:
 - Key and prefix params for ObjectStore APIs accept either `./local/tmp/...` workflow paths or object-store keys like `artifacts/...`; the SDK normalizes these internally.

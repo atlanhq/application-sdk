@@ -108,5 +108,17 @@ nav:
       - Code Review: agents/review.md
       - DeepWiki MCP: agents/deepwiki.md
 
+  - Standards:
+      - Coding: standards/coding.md
+      - Commits: standards/commits.md
+      - Logging: standards/logging.md
+      - Exception Handling: standards/exceptions.md
+      - Performance: standards/performance.md
+      - Testing: standards/testing.md
+      - Documentation: standards/documentation.md
+      - Build & Security: standards/build-security.md
+      - Setup: standards/setup.md
+      - DeepWiki MCP: standards/deepwiki.md
+      - Review Checklist: standards/review-checklist.md
   - Configuration Reference: configuration.md
   - API Reference: https://k.atlan.dev/application-sdk/main/api
