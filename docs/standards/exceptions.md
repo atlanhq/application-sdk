@@ -182,7 +182,7 @@ finally:
 
 ## Module-Specific Guidelines
 
-### **Handlers (`application_sdk/handlers/`)**
+### **Handlers (`application_sdk/handler/`)**
 - **Critical**: Always re-raise exceptions after logging
 - **Include operation context** in error messages
 - **Use specific exception types** for different error scenarios
@@ -198,9 +198,9 @@ finally:
 - **Log all failures** for debugging
 - **Continue operation** when possible
 
-### **Workflows (`application_sdk/workflows/`)**
-- **Critical**: Re-raise exceptions to trigger workflow retry logic
-- **Include workflow context** in error messages
+### **Tasks (`application_sdk/app/task.py`)**
+- **Critical**: Re-raise exceptions to trigger Temporal retry logic
+- **Include task context** in error messages
 - **Handle Temporal-specific exceptions** appropriately
 
 ### **Server (`application_sdk/server/`)**

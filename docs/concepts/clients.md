@@ -1,6 +1,6 @@
 # Clients
 
-This module provides the necessary abstractions (clients) for interacting with various external systems required by the application workflows, such as databases and workflow orchestration engines (Temporal).
+This module provides the necessary abstractions (clients) for interacting with external data sources such as databases and REST APIs.
 
 ## Core Concepts
 
@@ -11,7 +11,6 @@ This module provides the necessary abstractions (clients) for interacting with v
 2.  **Specialized Clients:** The SDK provides concrete client implementations for specific services:
     *   **SQL Databases (`sql.py`):** For connecting to and querying SQL databases.
     *   **Non-SQL Systems (`base.py`):** For connecting to non-SQL data sources like REST APIs, or other services.
-    *   **Temporal (`temporal.py`, `workflow.py`):** For connecting to the Temporal service and managing workflow executions.
 
 ## SQL Client (`sql.py`)
 
@@ -176,67 +175,14 @@ class MyApiClient(BaseClient):
         # The RetryTransport can be overridden with a custom transport from libraries like `httpx-retries` through methods like `_retry_operation_async`. Check the library for more details.
 ```
 
-## Temporal / Workflow Client (`temporal.py`, `workflow.py`, `utils.py`)
+## Temporal / Workflow Execution
 
-Provides clients for interacting with the Temporal workflow orchestration service.
-
-### Key Classes
-
-*   **`TemporalClient` (`temporal.py`)**:
-    *   **Purpose:** Manages the low-level connection to the Temporal server frontend service.
-    *   **Usage:** Typically instantiated *internally* by `TemporalWorkflowClient`.
-*   **`WorkflowClient` (`workflow.py`)**:
-    *   **Purpose:** An *abstract base class* defining the interface for interacting with *any* workflow engine (`start_workflow`, `stop_workflow`, etc.).
-*   **`TemporalWorkflowClient(WorkflowClient)` (`temporal.py`)**:
-    *   **Purpose:** The concrete *Temporal implementation* of `WorkflowClient`. Primary client for applications.
-    *   **Connection:** Internally creates and uses a `TemporalClient` instance.
-    *   **Configuration:** Initialized with `host`, `port`, `application_name`, `namespace`. Defaults read from environment variables.
-    *   **Key Methods:** `load()`, `close()`, `start_workflow()`, `stop_workflow()`, `get_workflow_run_status()`, `create_worker()`.
-
-### Prometheus Metrics
-
-`TemporalWorkflowClient` automatically exposes ~40 built-in Temporal SDK metrics via a Prometheus endpoint on every worker. No code changes are required — metrics become available as soon as `load()` is called.
-
-**Endpoint:** `0.0.0.0:9464` by default (OpenTelemetry Prometheus convention).
-
-**Override:** Set `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS=<host>:<port>` to change the bind address.
-
-**Sample metrics exposed:**
-
-| Metric | Description |
-|--------|-------------|
-| `temporal_activity_execution_latency` | Activity execution duration |
-| `temporal_activity_schedule_to_start_latency` | Time from schedule to start for activities |
-| `temporal_workflow_completed` | Total completed workflows |
-| `temporal_workflow_endtoend_latency` | End-to-end workflow duration |
-| `temporal_request_latency` | gRPC request latency to Temporal server |
-| `temporal_request_failure` | gRPC request failures |
-| `temporal_worker_task_slots_available` | Available worker task slots |
-| `temporal_worker_task_slots_used` | In-use worker task slots |
-| `temporal_sticky_cache_hit` | Sticky cache hit count |
-| `temporal_sticky_cache_size` | Current sticky cache size |
-
-The Temporal `Runtime` that binds the metrics port is a process-level singleton (`TemporalWorkflowClient._prometheus_runtime`). Creating multiple client instances or calling `load()` more than once within the same process reuses the same `Runtime` and does not attempt to rebind the port.
-
-### Configuration and Usage
-
-The common pattern is to use the `get_workflow_client` utility function.
-
-1.  **Getting a Client (`utils.py`)**:
-    *   `get_workflow_client(engine_type=WorkflowEngineType.TEMPORAL, application_name=APPLICATION_NAME)` returns an instance of `TemporalWorkflowClient`.
-    *   `application_name` determines the default Temporal `task_queue`.
-
-2.  **Connecting (`load` method):** Must be called after instantiation.
-
-3.  **Starting Workflows (`start_workflow` method):**
-    *   Takes `workflow_args` (dict) and the `workflow_class`.
-    *   Handles storing configuration/credentials securely (StateStore/SecretStore).
-    *   Initiates the workflow execution on Temporal.
+In v3, Temporal worker and workflow management is handled by the `application_sdk.execution` module rather than client classes. See [Entry Points](entry-points.md) for details on `create_worker()` and the v3 execution model.
 
 ## Summary
 
-The `clients` module abstracts interactions with external services.
+The `clients` module abstracts interactions with external data sources.
 
-`SQLClient` subclasses (configured via `DB_CONFIG`) provide the database engine and query execution methods, which are used by activities to fetch data. `TemporalWorkflowClient` (obtained via `get_workflow_client`) manages interactions with the Temporal service for workflow lifecycle management.
+`SQLClient` subclasses (configured via `DB_CONFIG`) provide the database engine and query execution methods, which are used by `@task` methods to fetch data.
 
 `BaseClient` provides a foundation for non-SQL data sources with HTTP request support through the `execute_http_get_request` and `execute_http_post_request` methods. The class also allows for custom retry logic to be configured through the `http_retry_transport` attribute which can be set to a `httpx.AsyncBaseTransport` instance, either through the `httpx` default transport or a custom transport from libraries like `httpx-retries`.
