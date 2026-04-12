@@ -7,7 +7,7 @@ defining the core interface that all server types must implement.
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from application_sdk.handlers import HandlerInterface
+from application_sdk.handler.base import Handler
 
 
 class ServerInterface(ABC):
@@ -17,20 +17,20 @@ class ServerInterface(ABC):
     providing a standardized way to handle server lifecycle and configuration.
 
     Attributes:
-        handler (Optional[HandlerInterface]): The handler instance for processing
+        handler (Optional[Handler]): The handler instance for processing
             application-specific operations. Can be None if no handler is needed.
     """
 
-    handler: Optional[HandlerInterface]
+    handler: Optional[Handler]
 
     def __init__(
         self,
-        handler: Optional[HandlerInterface] = None,
+        handler: Optional[Handler] = None,
     ):
         """Initialize the API server.
 
         Args:
-            handler (Optional[HandlerInterface], optional): The handler instance for
+            handler (Optional[Handler], optional): The handler instance for
                 processing server-specific operations. Defaults to None.
         """
         self.handler = handler

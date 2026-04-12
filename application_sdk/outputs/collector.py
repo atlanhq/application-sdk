@@ -8,7 +8,7 @@ return dict.
 
 from typing import Any, Dict
 
-from application_sdk.workflows.outputs.models import Artifact, Metric
+from application_sdk.outputs.models import Artifact, Metric
 
 
 class OutputCollector:
@@ -24,7 +24,7 @@ class OutputCollector:
     - Merging all collected outputs into the workflow's return dict
 
     Example:
-        >>> from application_sdk.workflows.outputs import get_outputs, Metric
+        >>> from application_sdk.outputs import get_outputs, Metric
         >>> collector = get_outputs()
         >>> collector.add_metric(Metric(name="rows-processed", value=1000))
         >>> collector.add_metric(Metric(name="rows-processed", value=500))

@@ -56,7 +56,7 @@ from application_sdk.templates.contracts.base_metadata_extraction import (
 )
 
 if TYPE_CHECKING:
-    from application_sdk.handlers.base import BaseHandler
+    from application_sdk.handler.base import Handler  # noqa: F401
     from application_sdk.transformers import TransformerInterface
 
 
@@ -74,7 +74,7 @@ class BaseMetadataExtractor(App):
     """
 
     client_class: ClassVar[Type[BaseClient]] = BaseClient
-    handler_class: ClassVar[Type["BaseHandler"]]
+    handler_class: ClassVar[Type["Handler"]]
     transformer_class: ClassVar[Optional[Type["TransformerInterface"]]] = None
 
     @task(timeout_seconds=1800)

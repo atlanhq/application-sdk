@@ -12,7 +12,7 @@ from application_sdk.credentials.types import (
     CertificateCredential,
     OAuthClientCredential,
 )
-from application_sdk.test_utils.credentials import MockCredentialStore
+from application_sdk.testing import MockCredentialStore
 
 
 @pytest.fixture

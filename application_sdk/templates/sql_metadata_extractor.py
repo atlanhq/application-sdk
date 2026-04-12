@@ -34,7 +34,6 @@ Subclass ``SqlMetadataExtractor`` to implement connector-specific logic::
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
 
 from application_sdk.app.base import App
 from application_sdk.app.task import task
@@ -58,9 +57,6 @@ from application_sdk.templates.contracts.sql_metadata import (
 )
 
 logger = get_logger(__name__)
-
-if TYPE_CHECKING:
-    pass
 
 
 class SqlMetadataExtractor(App):

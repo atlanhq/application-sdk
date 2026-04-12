@@ -6,7 +6,7 @@ import pytest
 
 from application_sdk.app.context import AppContext
 from application_sdk.app.registry import AppRegistry, TaskRegistry
-from application_sdk.test_utils.credentials import MockCredentialStore
+from application_sdk.testing import MockCredentialStore
 from application_sdk.testing.fixtures import (
     app_context,
     clean_app_registry,

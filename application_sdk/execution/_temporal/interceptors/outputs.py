@@ -36,12 +36,8 @@ from temporalio.worker import (
 )
 
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.workflows.outputs import (
-    _collected_outputs,
-    _current_outputs,
-    _lock,
-)
-from application_sdk.workflows.outputs.collector import OutputCollector
+from application_sdk.outputs import _collected_outputs, _current_outputs, _lock
+from application_sdk.outputs.collector import OutputCollector
 
 logger = get_logger(__name__)
 

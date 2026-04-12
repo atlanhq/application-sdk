@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import warnings
 
 import pytest
 
@@ -318,31 +317,3 @@ class TestContractTypes:
             assert (
                 "workflow_args" not in cls.model_fields
             ), f"{cls.__name__} still has workflow_args field"
-
-
-class TestV2DeprecationWarning:
-    """Tests that importing the v2 incremental module emits a DeprecationWarning."""
-
-    def test_importing_incremental_activities_emits_deprecation(self) -> None:
-        import importlib
-        import sys
-
-        # Remove the module from cache so the warning fires again
-        mod_name = "application_sdk.activities.metadata_extraction.incremental"
-        sys.modules.pop(mod_name, None)
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            importlib.import_module(mod_name)
-
-        deprecation_warnings = [
-            w for w in caught if issubclass(w.category, DeprecationWarning)
-        ]
-        assert len(deprecation_warnings) >= 1, (
-            "Expected at least one DeprecationWarning when importing "
-            "application_sdk.activities.metadata_extraction.incremental"
-        )
-        assert (
-            "IncrementalSqlMetadataExtractor" in str(deprecation_warnings[0].message)
-            or "deprecated" in str(deprecation_warnings[0].message).lower()
-        )
