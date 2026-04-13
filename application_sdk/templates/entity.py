@@ -65,7 +65,20 @@ class EntityDef:
 
     depends_on: tuple[str, ...] = ()
     """Entity names that must complete before this one starts.
-    Empty = runs in the first parallel batch of its phase."""
+    Empty = runs in the first parallel batch of its phase.
+    Not yet implemented in orchestration — reserved for future use.
+
+    Example::
+
+        entities = [
+            EntityDef(name="databases", phase=1),
+            EntityDef(name="schemas",   phase=1),
+            # stages waits only for databases, not all of phase 1
+            EntityDef(name="stages",  phase=2, depends_on=("databases",)),
+            # streams waits for both databases and schemas
+            EntityDef(name="streams", phase=2, depends_on=("databases", "schemas")),
+        ]
+    """
 
     enabled: bool = True
     """Set to False to skip this entity (e.g. exclude_views toggle)."""
