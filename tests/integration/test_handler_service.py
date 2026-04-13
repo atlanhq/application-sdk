@@ -609,3 +609,50 @@ async def test_start_intercepts_inline_credentials(
     )
     assert credential_guid.encode() in start_payload_data
     assert b'"credentials"' not in start_payload_data
+
+
+# ---------------------------------------------------------------------------
+# Prometheus /metrics endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_prometheus_metrics_endpoint():
+    """GET /metrics returns Prometheus exposition format with HTTP metrics."""
+    from unittest import mock
+
+    from application_sdk.handler.service import create_app_handler_service
+
+    handler = DefaultHandler()
+    with mock.patch("application_sdk.handler.service.ENABLE_PROMETHEUS_METRICS", True):
+        app = create_app_handler_service(handler, app_name="prom-test-app")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Verify /metrics endpoint exists and returns 200
+        resp = await client.get("/metrics")
+        assert resp.status_code == 200
+        assert "text/plain" in resp.headers["content-type"]
+
+        body = resp.text
+        # Should contain standard prometheus_client metrics
+        assert "python_info" in body
+
+
+@pytest.mark.integration
+async def test_prometheus_metrics_not_exposed_when_disabled():
+    """GET /metrics returns 404 when Prometheus is disabled."""
+    from unittest import mock
+
+    from application_sdk.handler.service import create_app_handler_service
+
+    handler = DefaultHandler()
+    with mock.patch("application_sdk.handler.service.ENABLE_PROMETHEUS_METRICS", False):
+        app = create_app_handler_service(handler, app_name="no-prom-app")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/metrics")
+        assert resp.status_code == 404
