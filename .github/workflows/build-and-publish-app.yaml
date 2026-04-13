@@ -85,6 +85,7 @@ jobs:
       enable_sdr:       ${{ steps.manifest.outputs.enable_sdr }}
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
+      workflow_packages: ${{ steps.manifest.outputs.workflow_packages }}
       branch:           ${{ steps.tags.outputs.branch }}
       image_tag:        ${{ steps.tags.outputs.image_tag }}
       ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
@@ -136,6 +137,27 @@ jobs:
           if deploy_val is not None:
               deploy_config = yaml.dump(deploy_val, default_flow_style=False)
 
+          # Serialize workflow_packages (multi-package native apps, e.g. Teradata
+          # crawler + miner) as a single-line JSON string for the publish curl
+          # body. Absent or empty → emit empty string; the publish step will
+          # omit the field and GM will fall back to App.argo_package_names.
+          workflow_packages = ''
+          wp_val = d.get('workflow_packages')
+          if wp_val:
+              if not isinstance(wp_val, list):
+                  print('::error::atlan.yaml workflow_packages must be a list', file=sys.stderr)
+                  sys.exit(1)
+              required_keys = {'name', 'display_name', 'type', 'generated_dir'}
+              for i, pkg in enumerate(wp_val):
+                  if not isinstance(pkg, dict):
+                      print(f'::error::workflow_packages[{i}] must be a mapping', file=sys.stderr)
+                      sys.exit(1)
+                  missing = required_keys - set(pkg.keys())
+                  if missing:
+                      print(f'::error::workflow_packages[{i}] missing required keys: {sorted(missing)}', file=sys.stderr)
+                      sys.exit(1)
+              workflow_packages = json.dumps(wp_val, separators=(',', ':'))
+
           # Read exact SDK version from uv.lock (non-fatal).
           # uv.lock contains the precise locked version regardless of how the dep
           # is specified in pyproject.toml (==, >=, git ref, etc.).
@@ -167,6 +189,8 @@ jobs:
               out.write(f'dockerfile={dockerfile}\n')
               out.write(f'enable_sdr={enable_sdr}\n')
               out.write(f'sdk_version={sdk_version}\n')
+              # workflow_packages JSON is single-line by construction (separators=(',', ':'))
+              out.write(f'workflow_packages={workflow_packages}\n')
               # deploy_config may be multiline — use delimiter syntax
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write(f'deploy_config<<DEPLOY_EOF\n')
@@ -178,6 +202,7 @@ jobs:
           print(f'Dockerfile: {dockerfile}')
           print(f'SDR: {enable_sdr}')
           print(f'SDK version: {sdk_version}')
+          print(f'Workflow packages: {workflow_packages or "(none — falling back to argo_package_names)"}')
           PYEOF
 
       - name: Validate SDR secrets
@@ -409,6 +434,7 @@ jobs:
           APP_NAME: ${{ needs.prepare.outputs.app_name }}
           DEPLOY_CONFIG: ${{ needs.prepare.outputs.deploy_config }}
           SDK_VERSION: ${{ needs.prepare.outputs.sdk_version }}
+          WORKFLOW_PACKAGES: ${{ needs.prepare.outputs.workflow_packages }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -435,6 +461,12 @@ jobs:
           sdk = os.environ.get("SDK_VERSION", "").strip()
           if sdk:
               body["sdk_version"] = sdk
+
+          # workflow_packages: native multi-package declarations from atlan.yaml.
+          # Absent → GM falls back to App.argo_package_names for tile expansion.
+          wp = os.environ.get("WORKFLOW_PACKAGES", "").strip()
+          if wp:
+              body["workflow_packages"] = json.loads(wp)
 
           tenants = os.environ.get("TENANTS", "").strip()
           if tenants:
