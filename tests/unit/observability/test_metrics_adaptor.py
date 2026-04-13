@@ -462,3 +462,78 @@ class TestPython314EventLoopCompat:
 
                             mock_loop.create_task.assert_called_once()
                             mock_thread.assert_not_called()
+
+
+class TestPrometheusMetrics:
+    """Tests for Prometheus metrics integration."""
+
+    def test_prometheus_reader_added_when_enabled(self):
+        """When ENABLE_PROMETHEUS_METRICS is true, a PrometheusMetricReader
+        should be added to the MeterProvider."""
+        AtlanMetricsAdapter._flush_task_started = False
+        mock_prom_reader = mock.MagicMock()
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
+            True,
+        ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                True,
+            ):
+                with mock.patch(
+                    "application_sdk.observability.metrics_adaptor.metrics.set_meter_provider"
+                ):
+                    with mock.patch(
+                        "application_sdk.observability.metrics_adaptor.MeterProvider"
+                    ) as mock_provider:
+                        mock_provider.return_value.get_meter.return_value = (
+                            mock.MagicMock()
+                        )
+                        with mock.patch(
+                            "application_sdk.observability.metrics_adaptor.OTLPMetricExporter"
+                        ):
+                            with mock.patch(
+                                "application_sdk.observability.metrics_adaptor.PeriodicExportingMetricReader"
+                            ):
+                                with mock.patch.dict(
+                                    "sys.modules",
+                                    {
+                                        "opentelemetry.exporter.prometheus": mock.MagicMock(
+                                            PrometheusMetricReader=mock_prom_reader
+                                        )
+                                    },
+                                ):
+                                    AtlanMetricsAdapter()
+                                    call_kwargs = mock_provider.call_args[1]
+                                    assert len(call_kwargs["metric_readers"]) == 2
+
+    def test_prometheus_reader_not_added_when_disabled(self):
+        """When ENABLE_PROMETHEUS_METRICS is false, only the OTLP reader
+        should be in the MeterProvider."""
+        AtlanMetricsAdapter._flush_task_started = False
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
+            True,
+        ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                False,
+            ):
+                with mock.patch(
+                    "application_sdk.observability.metrics_adaptor.metrics.set_meter_provider"
+                ):
+                    with mock.patch(
+                        "application_sdk.observability.metrics_adaptor.MeterProvider"
+                    ) as mock_provider:
+                        mock_provider.return_value.get_meter.return_value = (
+                            mock.MagicMock()
+                        )
+                        with mock.patch(
+                            "application_sdk.observability.metrics_adaptor.OTLPMetricExporter"
+                        ):
+                            with mock.patch(
+                                "application_sdk.observability.metrics_adaptor.PeriodicExportingMetricReader"
+                            ):
+                                AtlanMetricsAdapter()
+                                call_kwargs = mock_provider.call_args[1]
+                                assert len(call_kwargs["metric_readers"]) == 1

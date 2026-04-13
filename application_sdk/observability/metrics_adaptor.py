@@ -12,6 +12,7 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
+    ENABLE_PROMETHEUS_METRICS,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
     METRICS_FILE_NAME,
@@ -82,8 +83,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             file_name=METRICS_FILE_NAME,
         )
 
-        # Initialize OpenTelemetry metrics if enabled
-        if ENABLE_OTLP_METRICS:
+        # Initialize OpenTelemetry metrics if enabled (OTLP export or Prometheus scraping)
+        if ENABLE_OTLP_METRICS or ENABLE_PROMETHEUS_METRICS:
             self._setup_otel_metrics()
 
         # Initialize Segment client (enabled automatically if write key is present)
@@ -128,22 +129,32 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             # Create resource
             resource = build_otel_resource()
 
-            # Create OTLP exporter
-            exporter = OTLPMetricExporter(
-                endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-            )
+            metric_readers = []
 
-            # Create metric reader
-            reader = PeriodicExportingMetricReader(
-                exporter,
-                export_interval_millis=OTEL_BATCH_DELAY_MS,
-            )
+            # Add OTLP exporter if enabled
+            if ENABLE_OTLP_METRICS:
+                exporter = OTLPMetricExporter(
+                    endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
+                    timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
+                )
+                reader = PeriodicExportingMetricReader(
+                    exporter,
+                    export_interval_millis=OTEL_BATCH_DELAY_MS,
+                )
+                metric_readers.append(reader)
+
+            # Add Prometheus metric reader if enabled
+            if ENABLE_PROMETHEUS_METRICS:
+                from opentelemetry.exporter.prometheus import PrometheusMetricReader
+
+                self._prometheus_reader = PrometheusMetricReader()
+                metric_readers.append(self._prometheus_reader)
+                logging.info("Prometheus metrics reader enabled")
 
             # Create meter provider
             self.meter_provider = MeterProvider(
                 resource=resource,
-                metric_readers=[reader],
+                metric_readers=metric_readers,
             )
 
             # Set global meter provider

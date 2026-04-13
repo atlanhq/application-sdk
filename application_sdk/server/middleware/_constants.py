@@ -10,5 +10,6 @@ EXCLUDED_LOG_PATHS: frozenset[str] = frozenset(
         "/server/ready",
         "/api/eventingress/",
         "/api/eventingress",
+        "/metrics",
     }
 )
