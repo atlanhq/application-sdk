@@ -1,19 +1,20 @@
 """SQL query extraction (mining) example using v3 SqlQueryExtractor template.
 
 Demonstrates how to build a Snowflake query miner by subclassing
-SqlQueryExtractor. In v3, the workflow + activities split collapses into
-a single App class with typed contracts.
+SqlQueryExtractor with declarative EntityDef-driven orchestration.
 
-Extraction steps (orchestrated by SqlQueryExtractor.run()):
-1. Determine query batches (get_query_batches)
-2. Fetch queries for each batch (fetch_queries)
-3. Aggregate and upload results
+Entity-driven orchestration:
+- Declare entities via the ``entities`` class variable
+- The "queries" entity handles batching internally
+  (get_query_batches → fetch_queries per batch)
+- Custom entities dispatch to fetch_{name}() by convention
 
 Usage:
     python examples/application_sql_miner.py
 """
 
 import asyncio
+from typing import Any
 
 from application_sdk.app import task
 from application_sdk.clients.models import DatabaseConfig
@@ -39,6 +40,7 @@ from application_sdk.templates.contracts.sql_query import (
     QueryFetchInput,
     QueryFetchOutput,
 )
+from application_sdk.templates.entity import EntityDef
 
 logger = get_logger(__name__)
 
@@ -121,21 +123,50 @@ class SQLClient(BaseSQLClient):
 class SnowflakeQueryExtractor(SqlQueryExtractor):
     """Snowflake query miner.
 
-    Overrides get_query_batches and fetch_queries to implement
-    Snowflake-specific query history extraction.
+    Declares a single "queries" entity. The base run() orchestrates
+    the batch loop: get_query_batches → fetch_queries per batch.
     """
 
-    fetch_queries_sql = FETCH_QUERIES_SQL
+    entities = [
+        EntityDef(name="queries", phase=1),
+    ]
 
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
         """Determine batch count from Snowflake query history."""
-        return await super().get_query_batches(input)
+        client = SQLClient(credentials={"account_id": "demo.snowflakecomputing.com"})
+        await client.load(credentials=client.credentials)
+        rows: list[dict[str, Any]] = []
+        async for batch in client.run_query(
+            "SELECT COUNT(*) AS total FROM QUERY_HISTORY "
+            "WHERE START_TIME >= CURRENT_DATE - INTERVAL '2 WEEK'"
+        ):
+            rows.extend(batch)
+        total_count = rows[0]["total"] if rows else 0
+        batch_size = input.workflow_args.get("batch_size", 5000)
+        total_batches = max(1, (total_count + batch_size - 1) // batch_size)
+        return QueryBatchOutput(
+            total_batches=total_batches,
+            batch_size=batch_size,
+            total_count=total_count,
+        )
 
     @task(timeout_seconds=3600, heartbeat_timeout_seconds=60, auto_heartbeat_seconds=10)
     async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
         """Fetch one batch of queries from Snowflake."""
-        return await super().fetch_queries(input)
+        client = SQLClient(credentials={"account_id": "demo.snowflakecomputing.com"})
+        await client.load(credentials=client.credentials)
+        rows: list[dict[str, Any]] = []
+        offset = input.batch_number * input.batch_size
+        async for batch in client.run_query(
+            f"{FETCH_QUERIES_SQL} LIMIT {input.batch_size} OFFSET {offset}"
+        ):
+            rows.extend(batch)
+        return QueryFetchOutput(
+            batch_number=input.batch_number,
+            queries_fetched=len(rows),
+            chunk_count=1,
+        )
 
 
 class SampleSnowflakeHandler(Handler):
