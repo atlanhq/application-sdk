@@ -76,7 +76,7 @@ Review for critical issues first - these take priority over everything else.
 **Critical organization patterns:**
 
 - **File Location Consistency**: Code must be placed in appropriate directories
-  - Decorators belong in `application_sdk/decorators/`, not scattered across modules
+  - Decorators belong next to their consumers (e.g. lock decorators in `execution/`, MCP decorators in `server/mcp/`)
   - Interceptors should be consolidated, not duplicated across files
   - Similar functionality must be grouped together
   - Dead code or "no need" code must be removed immediately
@@ -99,13 +99,12 @@ Review for critical issues first - these take priority over everything else.
 
 ```python
 # REJECT: Poor file organization
-# Having decorators scattered across multiple files
-application_sdk/lock/__init__.py  # Contains decorators
-application_sdk/observability/decorators/  # Contains other decorators
+# Decorators far from their consumers
+application_sdk/decorators/locks.py  # Used only by execution/_temporal/
 
-# REQUIRE: Centralized organization
-application_sdk/decorators/locks.py  # All lock decorators
-application_sdk/decorators/observability_decorator.py  # All observability decorators
+# REQUIRE: Colocate decorators with consumers
+application_sdk/execution/decorators.py  # Lock decorators near lock interceptor
+application_sdk/server/mcp/decorators.py  # MCP decorators near MCP server
 ```
 
 #### Python Code Organization and Style
