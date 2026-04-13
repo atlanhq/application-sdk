@@ -23,7 +23,7 @@ from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from application_sdk.clients import BaseClient
+from application_sdk.clients.client import Client
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.common.error_codes import ClientError
 from application_sdk.common.exc_utils import rewrap
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from application_sdk.credentials.types import Credential
 
 
-class BaseSQLClient(BaseClient):
+class SQLClient(Client):
     """SQL client for database operations.
 
     This class provides functionality for connecting to and querying SQL databases,
@@ -227,7 +227,7 @@ class BaseSQLClient(BaseClient):
         """Add additional connection parameters to a SQLAlchemy connection string.
 
         Backward-compatible alias for
-        :meth:`~BaseClient.add_url_params`.
+        :meth:`~Client.add_url_params`.
         """
         return self.add_url_params(connection_string, source_connection_params)
 
@@ -436,10 +436,10 @@ class BaseSQLClient(BaseClient):
             raise rewrap(e, "Error reading data(pandas) from SQL") from e
 
 
-class AsyncBaseSQLClient(BaseSQLClient):
+class AsyncSQLClient(SQLClient):
     """Asynchronous SQL client for database operations.
 
-    This class extends BaseSQLClient to provide asynchronous database operations,
+    This class extends SQLClient to provide asynchronous database operations,
     with support for batch processing and server-side cursors. It uses SQLAlchemy's
     async engine and connection interfaces for non-blocking database operations.
 
@@ -521,7 +521,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
     ) -> None:
         """Load a typed credential using the AUTH_STRATEGIES registry (async).
 
-        Async counterpart of ``BaseSQLClient.load_with_credential()``.
+        Async counterpart of ``SQLClient.load_with_credential()``.
 
         Args:
             credential: A typed Credential instance.
@@ -638,3 +638,8 @@ class AsyncBaseSQLClient(BaseSQLClient):
             # Async connection automatically closed by context manager
 
         logger.info("Query execution completed")
+
+
+# Backward-compat aliases
+BaseSQLClient = SQLClient
+AsyncBaseSQLClient = AsyncSQLClient

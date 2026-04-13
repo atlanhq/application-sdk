@@ -1,6 +1,4 @@
-"""Tests for BaseSQLClient and AsyncBaseSQLClient auth strategy integration."""
-
-from __future__ import annotations
+"""Tests for SQLClient and AsyncSQLClient auth strategy integration."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,7 +7,7 @@ import pytest
 from application_sdk.clients.auth_strategies.basic import BasicAuthStrategy
 from application_sdk.clients.auth_strategies.oauth import OAuthAuthStrategy
 from application_sdk.clients.models import DatabaseConfig
-from application_sdk.clients.sql import AsyncBaseSQLClient, BaseSQLClient
+from application_sdk.clients.sql import AsyncSQLClient, SQLClient
 from application_sdk.common.error_codes import ClientError
 from application_sdk.credentials.types import (
     BasicCredential,
@@ -22,7 +20,7 @@ from application_sdk.credentials.types import (
 # ---------------------------------------------------------------------------
 
 
-class StubSQLClient(BaseSQLClient):
+class StubSQLClient(SQLClient):
     DB_CONFIG = DatabaseConfig(
         template="postgresql://{username}:{password}@localhost:5432/mydb",
         required=["username", "password"],
@@ -32,7 +30,7 @@ class StubSQLClient(BaseSQLClient):
     }
 
 
-class StubMultiAuthClient(BaseSQLClient):
+class StubMultiAuthClient(SQLClient):
     DB_CONFIG = DatabaseConfig(
         template="snowflake://{username}@account/db",
         required=["username"],
@@ -45,7 +43,7 @@ class StubMultiAuthClient(BaseSQLClient):
     }
 
 
-class StubAsyncSQLClient(AsyncBaseSQLClient):
+class StubAsyncSQLClient(AsyncSQLClient):
     DB_CONFIG = DatabaseConfig(
         template="postgresql+asyncpg://{username}:{password}@localhost:5432/mydb",
         required=["username", "password"],
@@ -55,7 +53,7 @@ class StubAsyncSQLClient(AsyncBaseSQLClient):
     }
 
 
-class LegacySQLClient(BaseSQLClient):
+class LegacySQLClient(SQLClient):
     """Client with no AUTH_STRATEGIES — uses legacy get_auth_token path."""
 
     DB_CONFIG = DatabaseConfig(
@@ -79,7 +77,7 @@ def _make_mock_sync_engine():
 
 
 # ---------------------------------------------------------------------------
-# BaseSQLClient.load_with_credential tests
+# SQLClient.load_with_credential tests
 # ---------------------------------------------------------------------------
 
 
@@ -111,7 +109,7 @@ class TestLoadWithCredential:
 
     @pytest.mark.asyncio
     async def test_no_db_config_raises(self):
-        client = BaseSQLClient()
+        client = SQLClient()
         cred = BasicCredential(username="u", password="p")
 
         with pytest.raises(ValueError, match="DB_CONFIG is not configured"):
@@ -124,7 +122,7 @@ class TestLoadWithCredential:
         mock_engine = _make_mock_sync_engine()
         mock_create_engine.return_value = mock_engine
 
-        class ClientWithConnectArgs(BaseSQLClient):
+        class ClientWithConnectArgs(SQLClient):
             DB_CONFIG = DatabaseConfig(
                 template="snowflake://{username}@account/db",
                 required=["username"],
@@ -206,14 +204,14 @@ class TestLegacyLoadUnchanged:
 
 class TestDefaultAuthStrategiesEmpty:
     def test_base_sql_client_has_empty_strategies(self):
-        assert BaseSQLClient.AUTH_STRATEGIES == {}
+        assert SQLClient.AUTH_STRATEGIES == {}
 
     def test_async_base_sql_client_inherits_empty_strategies(self):
-        assert AsyncBaseSQLClient.AUTH_STRATEGIES == {}
+        assert AsyncSQLClient.AUTH_STRATEGIES == {}
 
 
 # ---------------------------------------------------------------------------
-# AsyncBaseSQLClient.load_with_credential tests
+# AsyncSQLClient.load_with_credential tests
 # ---------------------------------------------------------------------------
 
 

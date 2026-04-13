@@ -39,9 +39,9 @@ from azure.core.credentials import TokenCredential
 from azure.core.exceptions import AzureError, ClientAuthenticationError
 from pydantic import BaseModel
 
-from application_sdk.clients import BaseClient
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.clients.azure.auth import AzureAuthProvider
+from application_sdk.clients.client import Client
 from application_sdk.common.error_codes import ClientError
 from application_sdk.common.utils import run_sync
 from application_sdk.observability.logger_adaptor import get_logger
@@ -75,7 +75,7 @@ class HealthStatus(BaseModel):
     overall_health: bool
 
 
-class AzureClient(BaseClient):
+class AzureClient(Client):
     """
     Main Azure client for the application-sdk framework.
 

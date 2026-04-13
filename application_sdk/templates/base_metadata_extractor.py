@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, ClassVar, Optional, Type
 
 from application_sdk.app.base import App
 from application_sdk.app.task import task
-from application_sdk.clients import BaseClient
+from application_sdk.clients.client import Client
 from application_sdk.constants import (
     DEPLOYMENT_OBJECT_STORE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
@@ -73,7 +73,7 @@ class BaseMetadataExtractor(App):
     See module docstring for a usage example.
     """
 
-    client_class: ClassVar[Type[BaseClient]] = BaseClient
+    client_class: ClassVar[Type[Client]] = Client
     handler_class: ClassVar[Type["Handler"]]
     transformer_class: ClassVar[Optional[Type["TransformerInterface"]]] = None
 

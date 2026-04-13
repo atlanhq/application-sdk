@@ -11,7 +11,7 @@ from typing import (
     Union,
 )
 
-from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.clients.sql import SQLClient
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.utils import (
@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 
 
 async def setup_database_connection(
-    sql_client: BaseSQLClient,
+    sql_client: SQLClient,
     database_name: str,
 ) -> None:
     """Setup connection for a specific database.
@@ -87,7 +87,7 @@ def prepare_database_query(
 
 
 async def execute_single_db(
-    sql_client: BaseSQLClient,
+    sql_client: SQLClient,
     prepared_query: Optional[str],
     parquet_output: Optional[ParquetFileWriter],
     write_to_file: bool,
@@ -209,7 +209,7 @@ async def finalize_multidb_results(
 
 
 async def execute_multidb_flow(
-    sql_client: BaseSQLClient,
+    sql_client: SQLClient,
     sql_query: str,
     workflow_args: Dict[str, Any],
     fetch_database_sql: Optional[str],

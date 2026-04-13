@@ -10,17 +10,17 @@ from httpx._types import (
     RequestFiles,
 )
 
-from application_sdk.clients import BaseClient
+from application_sdk.clients.client import Client
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
-class BaseHTTPClient(BaseClient):
+class HTTPClient(Client):
     """
     Base HTTP client for REST API connectors.
 
-    Extends ``BaseClient`` with httpx transport for making HTTP requests.
+    Extends ``Client`` with httpx transport for making HTTP requests.
     Provides GET and POST methods with header merging, retry transport,
     and authentication support.
 
@@ -35,7 +35,7 @@ class BaseHTTPClient(BaseClient):
         in the load() method, similar to how http_headers is set:
 
         Example:
-            >>> class MyClient(BaseHTTPClient):
+            >>> class MyClient(HTTPClient):
             ...     async def load(self, **kwargs):
             ...         # Set up HTTP headers in load method for better modularity
             ...         credentials = kwargs.get("credentials", {})
@@ -54,7 +54,7 @@ class BaseHTTPClient(BaseClient):
             For applications requiring advanced retry logic (e.g., status code-based retries,
             rate limiting, custom backoff strategies), consider using httpx-retries library:
 
-            >>> class MyClient(BaseHTTPClient):
+            >>> class MyClient(HTTPClient):
             ...     async def load(self, **kwargs):
             ...         # Set up headers
             ...         self.http_headers = {"Authorization": f"Bearer {kwargs.get('token')}"}
@@ -291,3 +291,8 @@ class BaseHTTPClient(BaseClient):
             except Exception as e:
                 logger.error("Request failed for %s: %s", url, e)
                 return None
+
+
+# Backward-compat aliases
+BaseClient = Client  # noqa: F811
+BaseHTTPClient = HTTPClient

@@ -1,12 +1,10 @@
-"""Tests for BaseClient shared auth layer."""
-
-from __future__ import annotations
+"""Tests for Client shared auth layer."""
 
 import pytest
 
-from application_sdk.clients import BaseClient
 from application_sdk.clients.auth_strategies.basic import BasicAuthStrategy
 from application_sdk.clients.auth_strategies.oauth import OAuthAuthStrategy
+from application_sdk.clients.client import Client
 from application_sdk.common.error_codes import ClientError
 from application_sdk.credentials.types import (
     BasicCredential,
@@ -15,14 +13,14 @@ from application_sdk.credentials.types import (
 )
 
 
-# BaseClient.load() raises NotImplementedError by default.
+# Client.load() raises NotImplementedError by default.
 # Create a concrete subclass for testing.
-class ConcreteClient(BaseClient):
+class ConcreteClient(Client):
     async def load(self, **kwargs):
         pass
 
 
-class ClientWithStrategies(BaseClient):
+class ClientWithStrategies(Client):
     AUTH_STRATEGIES = {
         BasicCredential: BasicAuthStrategy(),
         OAuthClientCredential: OAuthAuthStrategy(
@@ -34,7 +32,7 @@ class ClientWithStrategies(BaseClient):
         pass
 
 
-class TestBaseClientInit:
+class TestClientInit:
     def test_default_credentials_empty(self):
         client = ConcreteClient()
         assert client.credentials == {}
@@ -159,10 +157,10 @@ class TestBuildUrl:
 
 class TestBackwardCompatAlias:
     def test_add_connection_params_delegates_to_add_url_params(self):
-        """BaseSQLClient.add_connection_params still works after refactor."""
-        from application_sdk.clients.sql import BaseSQLClient
+        """SQLClient.add_connection_params still works after refactor."""
+        from application_sdk.clients.sql import SQLClient
 
-        client = BaseSQLClient()
+        client = SQLClient()
         result = client.add_connection_params(
             "postgresql://localhost/db", {"ssl": "true"}
         )
@@ -171,31 +169,31 @@ class TestBackwardCompatAlias:
 
 class TestInheritanceChain:
     def test_base_sql_client_is_base_client(self):
-        from application_sdk.clients.sql import BaseSQLClient
+        from application_sdk.clients.sql import SQLClient
 
-        assert issubclass(BaseSQLClient, BaseClient)
+        assert issubclass(SQLClient, Client)
 
     def test_base_http_client_is_base_client(self):
-        from application_sdk.clients.base import BaseHTTPClient
+        from application_sdk.clients.base import HTTPClient
 
-        assert issubclass(BaseHTTPClient, BaseClient)
+        assert issubclass(HTTPClient, Client)
 
     def test_async_sql_client_is_base_client(self):
-        from application_sdk.clients.sql import AsyncBaseSQLClient
+        from application_sdk.clients.sql import AsyncSQLClient
 
-        assert issubclass(AsyncBaseSQLClient, BaseClient)
+        assert issubclass(AsyncSQLClient, Client)
 
     def test_azure_client_is_base_client(self):
         from application_sdk.clients.azure.client import AzureClient
 
-        assert issubclass(AzureClient, BaseClient)
+        assert issubclass(AzureClient, Client)
 
     def test_base_http_client_has_resolve_strategy(self):
-        from application_sdk.clients.base import BaseHTTPClient
+        from application_sdk.clients.base import HTTPClient
 
-        assert hasattr(BaseHTTPClient, "_resolve_strategy")
+        assert hasattr(HTTPClient, "_resolve_strategy")
 
     def test_base_http_client_has_build_url(self):
-        from application_sdk.clients.base import BaseHTTPClient
+        from application_sdk.clients.base import HTTPClient
 
-        assert hasattr(BaseHTTPClient, "_build_url")
+        assert hasattr(HTTPClient, "_build_url")
