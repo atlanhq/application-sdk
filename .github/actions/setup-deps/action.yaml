@@ -36,7 +36,8 @@ runs:
     - name: Install dependencies
       shell: bash
       run: |
-        if python -c "import sys; sys.exit(0 if sys.version_info >= (3, 14) else 1)" 2>/dev/null; then
+        PYTHON_MINOR=$(echo "${{ inputs.python-version }}" | cut -d. -f2)
+        if [ "${PYTHON_MINOR}" -ge 14 ] 2>/dev/null; then
           # Python 3.14+: skip dev group (libcst's pyo3 doesn't support 3.14 yet)
           uv sync --all-extras --no-group dev
         else
