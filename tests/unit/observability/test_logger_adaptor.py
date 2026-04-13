@@ -1004,3 +1004,76 @@ class TestTemporalAttributePassthrough:
         tenant_keys = [k for k in otel_record.attributes if k.startswith("tenant.")]
         assert len(temporal_keys) == 0
         assert len(tenant_keys) == 0
+
+
+class TestPython314EventLoopCompat:
+    """Tests for Python 3.14 compatibility where asyncio.get_event_loop()
+    raises RuntimeError when no current event loop exists.
+
+    These tests simulate the Python 3.14 behavior by patching
+    asyncio.get_event_loop to raise RuntimeError, verifying that the
+    logger adapter falls back to a threading-based flush instead.
+    """
+
+    def test_flush_task_starts_via_thread_when_no_event_loop(self):
+        """When no running event loop exists (Python 3.14 behavior),
+        the adapter should fall back to starting the flush in a daemon thread."""
+        AtlanLoggerAdapter._reset_for_testing()
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "LOG_LEVEL": "INFO",
+                "ENABLE_OTLP_LOGS": "false",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+            },
+        ):
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+                True,
+            ):
+                with mock.patch(
+                    "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
+                    side_effect=RuntimeError("no running event loop"),
+                ):
+                    with mock.patch(
+                        "application_sdk.observability.logger_adaptor.threading.Thread"
+                    ) as mock_thread:
+                        mock_thread_instance = mock.MagicMock()
+                        mock_thread.return_value = mock_thread_instance
+
+                        _ = AtlanLoggerAdapter("test_py314")
+
+                        mock_thread.assert_called_once()
+                        _, kwargs = mock_thread.call_args
+                        assert kwargs.get("daemon") is True
+                        mock_thread_instance.start.assert_called_once()
+
+    def test_flush_task_uses_running_loop_when_available(self):
+        """When a running event loop exists, the adapter should create
+        a task on it instead of spawning a thread."""
+        AtlanLoggerAdapter._reset_for_testing()
+        AtlanLoggerAdapter._flush_task_started = False
+        mock_loop = mock.MagicMock()
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "LOG_LEVEL": "INFO",
+                "ENABLE_OTLP_LOGS": "false",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+            },
+        ):
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+                True,
+            ):
+                with mock.patch(
+                    "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
+                    return_value=mock_loop,
+                ):
+                    with mock.patch(
+                        "application_sdk.observability.logger_adaptor.threading.Thread"
+                    ) as mock_thread:
+                        _ = AtlanLoggerAdapter("test_py314_loop")
+
+                        mock_loop.create_task.assert_called_once()
+                        mock_thread.assert_not_called()

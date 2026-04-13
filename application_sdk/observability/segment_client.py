@@ -241,12 +241,12 @@ class SegmentClient:
             return
 
         batch: list["MetricRecord"] = []
-        last_send_time = asyncio.get_event_loop().time()
+        last_send_time = asyncio.get_running_loop().time()
 
         while True:
             try:
                 # Calculate remaining time until batch timeout
-                current_time = asyncio.get_event_loop().time()
+                current_time = asyncio.get_running_loop().time()
                 time_since_last_send = current_time - last_send_time
                 timeout = max(0.1, self._batch_timeout_seconds - time_since_last_send)
 
@@ -261,7 +261,7 @@ class SegmentClient:
                     # Timeout - send batch if we have any events
                     pass
 
-                current_time = asyncio.get_event_loop().time()
+                current_time = asyncio.get_running_loop().time()
 
                 # Send batch if we've reached batch size or timeout
                 should_send = len(batch) >= self._batch_size or (
@@ -272,7 +272,7 @@ class SegmentClient:
                 if should_send and batch:
                     await self._send_batch_to_segment(batch)
                     batch = []
-                    last_send_time = asyncio.get_event_loop().time()
+                    last_send_time = asyncio.get_running_loop().time()
 
             except asyncio.CancelledError:
                 # Worker task cancelled - send remaining batch before exit
