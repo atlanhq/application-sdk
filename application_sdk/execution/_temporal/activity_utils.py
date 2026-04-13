@@ -151,9 +151,11 @@ def auto_heartbeater(fn: F) -> F:
     heartbeat timeout. If no timeout is configured, it defaults to 120 seconds
     (resulting in a 40-second heartbeat interval).
 
-    Supports both async and sync activity functions. For async functions, heartbeats
-    are sent via an asyncio task. For sync functions, heartbeats are sent via a
-    background thread, preserving Temporal's thread pool execution model.
+    Supports both async and sync activity functions. For async activities, the
+    decorated function is offloaded to a thread with its own event loop, keeping
+    the main event loop free to send heartbeats even when the activity makes
+    blocking synchronous calls. For sync activities, heartbeats are sent from a
+    background thread.
 
     Args:
         fn: The activity function to be decorated. Can be sync or async.
@@ -194,11 +196,29 @@ def auto_heartbeater(fn: F) -> F:
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any):
             heartbeat_timeout = _get_heartbeat_timeout()
-            heartbeat_task = asyncio.create_task(
-                send_periodic_heartbeat(heartbeat_timeout.total_seconds() / 3)
+            heartbeat_interval = heartbeat_timeout.total_seconds() / 3
+            loop = asyncio.get_running_loop()
+            # Copy the current context so the activity thread can access
+            # the Temporal activity context (stored in contextvars)
+            ctx = contextvars.copy_context()
+
+            def _run_fn() -> Any:
+                """Run the async function on a dedicated event loop in a thread."""
+                inner_loop = asyncio.new_event_loop()
+                try:
+                    return inner_loop.run_until_complete(fn(*args, **kwargs))
+                finally:
+                    inner_loop.close()
+
+            # Heartbeat as an asyncio task on the main (free) event loop.
+            heartbeat_task = asyncio.ensure_future(
+                send_periodic_heartbeat(heartbeat_interval)
             )
             try:
-                return await fn(*args, **kwargs)
+                # Offload the async function to a thread so the main loop
+                # stays free to process heartbeat tasks even when the
+                # activity makes blocking synchronous calls.
+                return await loop.run_in_executor(None, ctx.run, _run_fn)
             finally:
                 heartbeat_task.cancel()
                 await asyncio.wait([heartbeat_task])
