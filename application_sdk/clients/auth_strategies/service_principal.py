@@ -20,7 +20,10 @@ class ServicePrincipalAuthStrategy:
         return {}
 
     def build_connect_args(self, credential: Credential) -> dict[str, Any]:
-        assert isinstance(credential, ServicePrincipalCredential)
+        if not isinstance(credential, ServicePrincipalCredential):
+            raise TypeError(
+                f"Expected ServicePrincipalCredential, got {type(credential).__name__}"
+            )
         from azure.identity import ClientSecretCredential
 
         azure_credential = ClientSecretCredential(

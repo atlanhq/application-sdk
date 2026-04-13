@@ -51,20 +51,18 @@ class SQLClient(Client):
         connection: Database connection instance.
         engine: SQLAlchemy engine instance.
         credentials (Dict[str, Any]): Database credentials.
-        resolved_credentials (Dict[str, Any]): Resolved credentials after reading from secret manager.
         use_server_side_cursor (bool): Whether to use server-side cursors.
     """
 
     connection = None
     engine = None
-    resolved_credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
     DB_CONFIG: Optional[DatabaseConfig] = None
 
     def __init__(
         self,
         use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
-        credentials: Dict[str, Any] = {},
+        credentials: Dict[str, Any] | None = None,
         chunk_size: int = 5000,
     ):
         """

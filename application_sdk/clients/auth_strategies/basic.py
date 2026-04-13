@@ -18,7 +18,10 @@ class BasicAuthStrategy:
     credential_type = BasicCredential
 
     def build_url_params(self, credential: Credential) -> dict[str, str]:
-        assert isinstance(credential, BasicCredential)
+        if not isinstance(credential, BasicCredential):
+            raise TypeError(
+                f"Expected BasicCredential, got {type(credential).__name__}"
+            )
         return {"password": quote_plus(credential.password)}
 
     def build_connect_args(self, credential: Credential) -> dict[str, Any]:
@@ -28,5 +31,8 @@ class BasicAuthStrategy:
         return {}
 
     def build_headers(self, credential: Credential) -> dict[str, str]:
-        assert isinstance(credential, BasicCredential)
+        if not isinstance(credential, BasicCredential):
+            raise TypeError(
+                f"Expected BasicCredential, got {type(credential).__name__}"
+            )
         return {"Authorization": credential.to_auth_header()}

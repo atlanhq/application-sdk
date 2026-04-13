@@ -20,7 +20,10 @@ class KeypairAuthStrategy:
         return {}
 
     def build_connect_args(self, credential: Credential) -> dict[str, Any]:
-        assert isinstance(credential, CertificateCredential)
+        if not isinstance(credential, CertificateCredential):
+            raise TypeError(
+                f"Expected CertificateCredential, got {type(credential).__name__}"
+            )
         from cryptography.hazmat.primitives import serialization
 
         key_bytes = credential.key_data.encode()

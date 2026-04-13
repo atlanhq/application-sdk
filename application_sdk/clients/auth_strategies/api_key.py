@@ -26,5 +26,8 @@ class ApiKeyAuthStrategy:
         return {}
 
     def build_headers(self, credential: Credential) -> dict[str, str]:
-        assert isinstance(credential, ApiKeyCredential)
+        if not isinstance(credential, ApiKeyCredential):
+            raise TypeError(
+                f"Expected ApiKeyCredential, got {type(credential).__name__}"
+            )
         return credential.to_headers()

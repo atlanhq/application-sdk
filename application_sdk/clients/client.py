@@ -14,7 +14,7 @@ Hierarchy::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional
 
 from application_sdk.common.error_codes import ClientError
 
@@ -35,8 +35,10 @@ class Client:
     own transport logic.
     """
 
-    AUTH_STRATEGIES: Dict[type, "AuthStrategy"] = {}
+    AUTH_STRATEGIES: ClassVar[Dict[type, "AuthStrategy"]] = {}
     """Map of Credential subclass → AuthStrategy instance.
+
+    Override as a class-level dict on each subclass — never mutate at runtime.
 
     Example::
 
@@ -46,10 +48,8 @@ class Client:
         }
     """
 
-    credentials: Dict[str, Any] = {}
-
     def __init__(self, credentials: Dict[str, Any] | None = None) -> None:
-        self.credentials = credentials or {}
+        self.credentials: Dict[str, Any] = credentials or {}
 
     async def load(self, *args: Any, **kwargs: Any) -> None:
         """Establish the client connection.

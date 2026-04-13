@@ -29,7 +29,10 @@ class OAuthAuthStrategy:
         self._url_query_params = url_query_params or {}
 
     def build_url_params(self, credential: Credential) -> dict[str, str]:
-        assert isinstance(credential, OAuthClientCredential)
+        if not isinstance(credential, OAuthClientCredential):
+            raise TypeError(
+                f"Expected OAuthClientCredential, got {type(credential).__name__}"
+            )
         return {"token": credential.access_token}
 
     def build_connect_args(self, credential: Credential) -> dict[str, Any]:
@@ -39,5 +42,8 @@ class OAuthAuthStrategy:
         return dict(self._url_query_params)
 
     def build_headers(self, credential: Credential) -> dict[str, str]:
-        assert isinstance(credential, OAuthClientCredential)
+        if not isinstance(credential, OAuthClientCredential):
+            raise TypeError(
+                f"Expected OAuthClientCredential, got {type(credential).__name__}"
+            )
         return credential.to_headers()

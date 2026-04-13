@@ -25,7 +25,10 @@ class IamUserAuthStrategy:
         self._extra = extra_params or {}
 
     def build_url_params(self, credential: Credential) -> dict[str, str]:
-        assert isinstance(credential, BasicCredential)
+        if not isinstance(credential, BasicCredential):
+            raise TypeError(
+                f"Expected BasicCredential, got {type(credential).__name__}"
+            )
         from urllib.parse import quote_plus
 
         from application_sdk.common.aws_utils import (

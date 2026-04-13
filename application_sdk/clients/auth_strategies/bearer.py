@@ -25,5 +25,8 @@ class BearerTokenAuthStrategy:
         return {}
 
     def build_headers(self, credential: Credential) -> dict[str, str]:
-        assert isinstance(credential, BearerTokenCredential)
+        if not isinstance(credential, BearerTokenCredential):
+            raise TypeError(
+                f"Expected BearerTokenCredential, got {type(credential).__name__}"
+            )
         return {"Authorization": credential.to_auth_header()}
