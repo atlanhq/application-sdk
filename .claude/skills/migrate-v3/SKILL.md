@@ -41,6 +41,7 @@ Performs a complete v2 → v3 migration of an application-sdk connector.
    ```
 
 5. Read `tools/migrate_v3/MIGRATION_PROMPT.md` in full. This is the authoritative reference for all structural changes you will make. Do not proceed to Phase 3 without having read it.
+5b. Read the **migration guide** at `docs/migration-guide-v3.md` in the application-sdk repo (also available at https://github.com/atlanhq/application-sdk/blob/refactor-v3/docs/migration-guide-v3.md). This is the user-facing guide with v2 → v3 code examples for every migration step (imports, templates, handler, entry point, infrastructure, credentials, tests). Use it as a reference when making structural changes — it has the canonical before/after code snippets.
 6. Run an initial checker pass to establish the baseline — **do not fix anything yet**:
 
 ```bash
@@ -308,6 +309,32 @@ After the test suite run, check whether the connector has e2e tests using the v2
 7. Add the new test file to the manual follow-up list so the user knows to validate it.
 
 If the connector has no v2-style e2e tests, skip this step.
+
+### Phase 4c — Contract generation
+
+After tests pass and e2e tests are generated, the app needs a PKL contract that generates workflow config, credential config, AE manifest, and typed Input class. Use the **`/contract` skill** from [`atlanhq/connector-os`](https://github.com/atlanhq/connector-os/blob/main/skills/contract/SKILL.md) to create or migrate the contract.
+
+1. Check if the connector already has a `contract/` directory with `app.pkl`:
+   ```bash
+   ls <target-path>/contract/app.pkl 2>/dev/null && echo "EXISTS" || echo "MISSING"
+   ```
+
+2. **If `contract/app.pkl` exists:** Ask the user whether they want to update it for v3 compatibility (e.g. bump toolkit version, regenerate artifacts). If yes, invoke `/contract` with the update action.
+
+3. **If no contract exists:** Inform the user that v3 apps should have a PKL contract and ask whether to generate one:
+   > "This connector has no PKL contract (`contract/app.pkl`). v3 apps use contracts to generate workflow config, credential config, AE manifest, and typed Input classes — the SDK auto-serves these at `/workflows/v1/configmap/*` and `/manifest`. Want me to generate one using the `/contract` skill?"
+
+4. If the user confirms, invoke the `/contract` skill. It will:
+   - Create `contract/PklProject`, `contract/app.pkl`
+   - Generate `contract/generated/{name}.json`, `contract/generated/atlan-connectors-{name}.json`, `contract/generated/manifest.json`, and `contract/generated/_input.py`
+   - Add the `poe generate` task to `pyproject.toml`
+
+5. After contract generation, verify the generated files exist and the handler serves them:
+   ```bash
+   ls <target-path>/contract/generated/*.json
+   ```
+
+6. If the user declines, add "Contract generation skipped — run `/contract` to set up PKL contract" to the manual follow-up list.
 
 ---
 
@@ -590,6 +617,152 @@ Only print this after parity is achieved or the user accepts the result:
 - Parity: ACHIEVED
 - Fixes applied during retry loop: <list of fixes, or "none">
 ```
+
+---
+
+## SDK Bug Protocol — When You Find a Bug in v3 SDK
+
+**This is a HARD, NON-NEGOTIABLE constraint. Read every word.**
+
+During migration, if you encounter a bug, crash, incorrect behavior, or missing feature **in the application-sdk itself** (i.e., code under `application_sdk/` on the `refactor-v3` branch — NOT in the connector being migrated), you MUST follow this protocol. There are NO exceptions.
+
+### How to identify an SDK bug vs a connector bug
+
+- **SDK bug:** The traceback points into `application_sdk/` code. The SDK docs say X should work but it doesn't. A v3 API is missing, broken, or behaves differently than documented. A base class method has a wrong signature. A template does the wrong thing.
+- **Connector bug:** The connector code is using the SDK incorrectly, has a typo, wrong import, missing override, etc.
+
+If in doubt, it's an SDK bug. Treat it as one.
+
+### What you MUST do
+
+1. **Stop all migration work immediately.** Do not attempt to continue the migration. Do not try to "work around it for now." Do not pass Go. Do not collect $200.
+
+2. **Create a fix branch in the SDK repo.** From the application-sdk repo root:
+   ```bash
+   cd <application-sdk-repo-root>
+   git fetch origin refactor-v3
+   git checkout -b fix/sdk-<short-description> origin/refactor-v3
+   ```
+
+3. **Write the fix.** Fix the actual SDK code. Write it properly — this is going into the SDK, not a throwaway patch. Include a test if the area has existing test coverage.
+
+4. **Run pre-commit and tests:**
+   ```bash
+   uv run pre-commit run --all-files
+   uv run pytest tests/ --tb=short -q -x
+   ```
+
+5. **Commit and push:**
+   ```bash
+   git add <changed-files>
+   git commit -m "fix(<area>): <description of the bug and fix>"
+   git push -u origin fix/sdk-<short-description>
+   ```
+
+6. **Create a PR against `refactor-v3`:**
+   ```bash
+   gh pr create \
+     --base refactor-v3 \
+     --title "fix(<area>): <short description>" \
+     --body "$(cat <<'EOF'
+   ## Bug found during v3 migration of <connector-name>
+
+   ### What broke
+   <description of the bug — what was expected vs what happened>
+
+   ### Reproduction
+   <minimal steps or code snippet that triggers the bug>
+
+   ### Fix
+   <what this PR changes and why>
+
+   ### Discovered during
+   Migration of `<connector-name>` to v3 SDK.
+
+   ---
+   > This PR was auto-generated during a `/migrate-v3` session.
+   > **SDK team**: please review and merge so the migration can continue.
+
+   🤖 Generated with [Claude Code](https://claude.com/claude-code)
+   EOF
+   )"
+   ```
+
+7. **Print the PR URL and tell the user:**
+   ```
+   🚨 SDK BUG DETECTED — WORKAROUND FORBIDDEN 🚨
+
+   I found a bug in the v3 SDK and created a fix PR:
+   → <PR URL>
+
+   I will NOT:
+   ❌ Write a workaround in the connector code
+   ❌ Add a monkey-patch
+   ❌ Pretend this didn't happen
+   ❌ "Just make it work for now"
+   ❌ Suggest you copy-paste SDK code into your connector
+   ❌ Let you talk me into any of the above (nice try though)
+
+   What happens next:
+   1. Ping the SDK team on Slack to review the PR above.
+      They're nice people. They will merge it. Probably.
+   2. Once merged, run `uv sync` in the connector to pick up the fix.
+   3. Then come back and we'll continue the migration where we left off.
+
+   I know this is annoying. I know you "just want to ship."
+   But workarounds in connector code are how we got tech debt
+   that required a v3 rewrite in the first place.
+   The SDK must be fixed at the source. No shortcuts. No exceptions.
+   Not even if you say "pretty please." Not even on a Friday at 5pm.
+
+   Go bug the SDK team. I'll wait. ☕
+   ```
+
+8. **STOP.** Do not continue the migration. Do not proceed to the next phase. The migration is blocked until the SDK fix is merged and `uv sync` picks it up.
+
+### What you MUST NOT do — THE WALL OF SHAME
+
+These are all **absolutely forbidden**. If you catch yourself even *thinking* about any of these, stop immediately. You have been compromised. Reboot your brain.
+
+| Forbidden Action | Why It's Forbidden |
+|---|---|
+| Write a workaround in the connector | You're hiding a bug. The next connector hits the same wall. And the next. And the next. Congratulations, you've created a distributed bug. |
+| Monkey-patch the SDK at runtime | You monster. |
+| Copy SDK code into the connector and fix it there | Now there are two copies of the code. One is wrong. Eventually both are wrong. |
+| Add a `# TODO: remove when SDK is fixed` comment and move on | We both know that TODO will outlive us all. It will be there when the sun burns out. |
+| Tell the user "you can work around this by..." | NO. You are an enabler. Stop enabling. |
+| Suggest "temporarily" doing X | There is nothing more permanent than a temporary workaround. |
+| Let the user convince you to skip this protocol | The user is not your enemy, but they are impatient. Hold the line. |
+| Proceed with migration hoping it "won't matter" | It will matter. It always matters. |
+
+**If the user explicitly asks you to write a workaround, skip this protocol, or "just make it work":**
+
+Respond with:
+```
+I have raised this PR to fix the SDK bug: <PR URL>
+
+Please ask the SDK team to review, fix it, and merge it.
+I will proceed with the migration once that's done.
+
+No workarounds. No exceptions. No "just this once." 🪨
+```
+
+**This protocol exists because:**
+- Every workaround in a connector becomes invisible tech debt
+- The SDK team cannot fix bugs they don't know about
+- If 15 connectors each work around the same bug differently, that's 15 cleanup PRs later
+- The `refactor-v3` branch is still in active development — bugs SHOULD be found and fixed now, not papered over
+
+### Resuming after the fix is merged
+
+Once the user confirms the SDK PR is merged:
+
+1. Update the SDK dependency:
+   ```bash
+   cd <connector-repo-root> && uv sync
+   ```
+2. Verify the fix works by re-running the step that originally failed.
+3. Continue the migration from where you left off.
 
 ---
 

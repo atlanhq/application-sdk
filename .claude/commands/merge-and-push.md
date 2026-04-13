@@ -66,7 +66,7 @@ If yes, **stop and ask the user:**
 - A new capability, config field, or SDK feature was added
 - A public API or interface changed
 - A `docs/` entry is clearly outdated given the changes
-- Module changes require documentation updates per `.cursor/rules/documentation.mdc`
+- Module changes require documentation updates per `docs/standards/documentation.md`
 
 If yes, **stop and ask the user:**
 > "The changes may need a docs update in [specific file]. Do you want me to update the docs before committing? (yes / no / already done)"
@@ -90,7 +90,7 @@ If yes, **stop and ask the user:**
 ### 6. Commit
 
 - Write a concise commit message describing **why** the changes were made.
-- Use Conventional Commits format per `.cursor/rules/commits.mdc`:
+- Use Conventional Commits format per `docs/standards/commits.md`:
   ```bash
   git commit -m "<type>: <short description>"
   ```

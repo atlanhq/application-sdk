@@ -1,0 +1,15 @@
+# Documentation Updates
+
+When modifying SDK code, update corresponding conceptual documentation under `docs/concepts/` to reflect changes.
+
+**Module to Concept Doc Mapping:**
+*   `application_sdk/application/**` -> `docs/concepts/application.md`
+*   `application_sdk/server/**` -> `docs/concepts/server.md`
+*   `application_sdk/handlers/**` -> `docs/concepts/handlers.md`
+*   `application_sdk/clients/**` -> `docs/concepts/clients.md`
+*   `application_sdk/activities/**` -> `docs/concepts/activities.md`
+*   `application_sdk/common/**` or `application_sdk/constants.py` -> `docs/concepts/common.md`
+*   `application_sdk/io/**` -> `docs/concepts/inputs.md` (for readers) AND `docs/concepts/outputs.md` (for writers)
+*   `application_sdk/transformers/**` -> `docs/concepts/transformers.md`
+*   `application_sdk/workflows/**` -> `docs/concepts/workflows.md`
+*   `application_sdk/worker.py` -> `docs/concepts/worker.md`

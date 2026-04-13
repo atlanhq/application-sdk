@@ -3449,7 +3449,7 @@ wheels = [
 
 [[package]]
 name = "pyatlan"
-version = "9.3.1"
+version = "9.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -3465,9 +3465,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/86/ec/bf8732ae58d91431c79f0a27c66e91bc45c3fffb9919a499e60cf342c56f/pyatlan-9.3.1.tar.gz", hash = "sha256:d0da2050881a05cb87772bad32fd00c5e583d1046d8e4b4aefaf097b519ff409", size = 2759384, upload-time = "2026-03-23T08:08:20.39Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/73/fe9bf1789f188bae6e1ecc52b24329052423a6659bd6ad16c98c611f72e3/pyatlan-9.4.0.tar.gz", hash = "sha256:a98373727dcc1df03e8f45b37c4f85bb4366a8fb313ffb1d23f03ef3d95c6c29", size = 3135782, upload-time = "2026-04-10T08:11:34.929Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/b5/2b84f95c0653ad5280f1eb24923adce190ad0af3e8f587382ffe8e28d877/pyatlan-9.3.1-py3-none-any.whl", hash = "sha256:3af2246b54685bb785473b725c86dee4cec7ea2024cb66d5f8d92b473468ec27", size = 4659707, upload-time = "2026-03-23T08:08:22.647Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/86/c2e1026006ac49f78b5643a71d723683987adf59fd5d573aaa38434336ed/pyatlan-9.4.0-py3-none-any.whl", hash = "sha256:70a288ceca3f5a3658f69e8f092d5722a40ec63665e4913b30b46d074bb1f781", size = 4988228, upload-time = "2026-04-10T08:11:33.118Z" },
 ]
 
 [[package]]

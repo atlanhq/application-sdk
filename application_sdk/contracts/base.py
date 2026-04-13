@@ -56,6 +56,7 @@ Evolution:
     Never remove fields or change their types - this breaks running workflows.
 """
 
+import re
 from enum import StrEnum
 from typing import (
     Annotated,
@@ -69,7 +70,7 @@ from typing import (
     runtime_checkable,
 )
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
 from application_sdk.contracts.types import MaxItems  # noqa: TC001
@@ -638,6 +639,107 @@ def validate_payload_safety(cls: type, *, skip_fields: set[str] | None = None) -
         is_forbidden, reason = _is_forbidden_type(field_type)
         if is_forbidden:
             raise PayloadSafetyError(cls.__name__, field_name, field_type, reason)
+
+
+class PublishInputMixin(BaseModel):
+    """Mixin for apps whose workflow output feeds the Publish App.
+
+    The Automation Engine reads these fields via JSONPath
+    (``$.extract.outputs.*``) to pass to the Publish App. Apps that
+    include a ``publish`` step in their AE manifest should use this
+    as a mixin alongside their own output fields.
+
+    ``publish_state_prefix`` and ``current_state_prefix`` are auto-derived
+    from ``connection_qualified_name`` via a model validator. Apps only
+    need to set ``connection_qualified_name`` and ``transformed_data_prefix``.
+
+    Example::
+
+        class MyWorkflowOutput(PublishInputMixin, allow_unbounded_fields=True):
+            custom_field: str = ""
+
+        return MyWorkflowOutput(
+            connection_qualified_name="default/snowflake/123",
+            transformed_data_prefix="artifacts/.../transformed",
+        )
+    """
+
+    PUBLISH_STATE_PREFIX_TEMPLATE: ClassVar[str] = (
+        "persistent-artifacts/apps/atlan-publish-app/state"
+        "/{connection_qn}/publish-state"
+    )
+    CURRENT_STATE_PREFIX_TEMPLATE: ClassVar[str] = (
+        "argo-artifacts/{connection_qn}/current-state"
+    )
+    _SAFE_CONNECTION_QN_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"\A(?!.*(?:^|/)\.\.)(?!.*\.\./)[a-zA-Z0-9/_\-\.]+\Z"
+    )
+
+    # ── Input fields (used to derive output fields) ────────────────
+    output_path: str = ""
+    """SDK output path. Used to derive ``transformed_data_prefix``."""
+
+    output_prefix: str = ""
+    """Prefix to strip from ``output_path`` before deriving transformed prefix."""
+
+    # ── Output fields (read by AE via JSONPath) ──────────────────
+    transformed_data_prefix: str = ""
+    """Object-store-relative path to transformed data files."""
+
+    connection_qualified_name: str = ""
+    """Qualified name of the Atlan connection."""
+
+    publish_state_prefix: str = ""
+    """Auto-derived from ``connection_qualified_name`` if not set."""
+
+    current_state_prefix: str = ""
+    """Auto-derived from ``connection_qualified_name`` if not set."""
+
+    @model_validator(mode="after")
+    def _derive_publish_paths(self) -> "PublishInputMixin":
+        """Auto-derive all publish-related paths."""
+        import posixpath
+
+        # Auto-resolve output_path from Temporal context if not set
+        if not self.output_path:
+            try:
+                from temporalio import workflow as _wf
+
+                from application_sdk.constants import (
+                    APPLICATION_NAME,
+                    WORKFLOW_OUTPUT_PATH_TEMPLATE,
+                )
+
+                self.output_path = WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
+                    application_name=APPLICATION_NAME,
+                    workflow_id=_wf.info().workflow_id,
+                    run_id=_wf.info().run_id,
+                )
+            except Exception:
+                pass  # Not in Temporal context — output_path stays empty
+
+        # Derive transformed_data_prefix from output_path
+        if not self.transformed_data_prefix and self.output_path:
+            relative = self.output_path
+            if self.output_prefix and relative.startswith(self.output_prefix):
+                relative = relative[len(self.output_prefix) :].lstrip("/")
+            result = posixpath.normpath(f"{relative}/transformed")
+            if not result.startswith("..") and not result.startswith("/"):
+                self.transformed_data_prefix = result
+
+        # Derive state prefixes from connection_qualified_name
+        cqn = self.connection_qualified_name
+        if not cqn or not self._SAFE_CONNECTION_QN_RE.match(cqn):
+            return self
+        if not self.publish_state_prefix:
+            self.publish_state_prefix = self.PUBLISH_STATE_PREFIX_TEMPLATE.format(
+                connection_qn=cqn
+            )
+        if not self.current_state_prefix:
+            self.current_state_prefix = self.CURRENT_STATE_PREFIX_TEMPLATE.format(
+                connection_qn=cqn
+            )
+        return self
 
 
 @runtime_checkable

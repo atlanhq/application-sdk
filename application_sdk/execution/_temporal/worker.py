@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 from datetime import timedelta
-from typing import TYPE_CHECKING
 
 from temporalio.client import Client
 from temporalio.common import VersioningBehavior
@@ -29,9 +28,6 @@ from application_sdk.execution.settings import (
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-
-if TYPE_CHECKING:
-    pass
 
 
 class AppWorker:

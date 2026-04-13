@@ -177,3 +177,110 @@ class TestSqlMetadataExtractorSubclass:
             import asyncio
 
             asyncio.run(extractor.fetch_databases(FetchDatabasesInput()))
+
+
+class TestPublishInputMixin:
+    """Tests for PublishInputMixin mixin — auto-derives state prefixes."""
+
+    def test_auto_derives_state_prefixes(self) -> None:
+        from application_sdk.contracts.base import PublishInputMixin
+
+        out = PublishInputMixin(connection_qualified_name="default/snowflake/123")
+        assert "default/snowflake/123" in out.publish_state_prefix
+        assert "default/snowflake/123" in out.current_state_prefix
+
+    def test_empty_connection_yields_empty_prefixes(self) -> None:
+        from application_sdk.contracts.base import PublishInputMixin
+
+        out = PublishInputMixin()
+        assert out.publish_state_prefix == ""
+        assert out.current_state_prefix == ""
+
+    def test_explicit_values_not_overridden(self) -> None:
+        from application_sdk.contracts.base import PublishInputMixin
+
+        out = PublishInputMixin(
+            connection_qualified_name="default/pg/456",
+            publish_state_prefix="custom/publish",
+            current_state_prefix="custom/current",
+        )
+        assert out.publish_state_prefix == "custom/publish"
+        assert out.current_state_prefix == "custom/current"
+
+    def test_unsafe_connection_qn_no_derivation(self) -> None:
+        from application_sdk.contracts.base import PublishInputMixin
+
+        out = PublishInputMixin(connection_qualified_name="../../attack")
+        assert out.publish_state_prefix == ""
+        assert out.current_state_prefix == ""
+
+    def test_used_as_mixin(self) -> None:
+        """Apps use PublishInputMixin as mixin alongside Output."""
+        from application_sdk.contracts.base import Output, PublishInputMixin
+
+        class MyOutput(Output, PublishInputMixin, allow_unbounded_fields=True):
+            records: int = 0
+
+        out = MyOutput(
+            records=100,
+            connection_qualified_name="default/trino/789",
+            transformed_data_prefix="artifacts/transformed",
+        )
+        assert out.records == 100
+        assert out.transformed_data_prefix == "artifacts/transformed"
+        assert "default/trino/789" in out.publish_state_prefix
+
+    def test_output_path_derives_transformed_prefix(self) -> None:
+        """output_path + output_prefix auto-derives transformed_data_prefix."""
+        from application_sdk.contracts.base import PublishInputMixin
+
+        out = PublishInputMixin(
+            connection_qualified_name="default/snowflake/123",
+            output_path="./local/tmp/artifacts/apps/my-app/workflows/wf-1/run-1",
+            output_prefix="./local/tmp/",
+        )
+        assert (
+            out.transformed_data_prefix
+            == "artifacts/apps/my-app/workflows/wf-1/run-1/transformed"
+        )
+
+    def test_output_path_no_prefix_uses_full(self) -> None:
+        from application_sdk.contracts.base import PublishInputMixin
+
+        out = PublishInputMixin(
+            connection_qualified_name="c",
+            output_path="some/path",
+        )
+        assert out.transformed_data_prefix == "some/path/transformed"
+
+    def test_output_path_auto_resolve_outside_temporal(self) -> None:
+        """Outside Temporal context, output_path stays empty — no error."""
+        from application_sdk.contracts.base import PublishInputMixin
+
+        out = PublishInputMixin(
+            connection_qualified_name="default/snowflake/123",
+        )
+        # Auto-resolve fails gracefully outside Temporal
+        assert out.publish_state_prefix != ""
+        assert out.current_state_prefix != ""
+        # transformed_data_prefix empty since output_path couldn't be resolved
+        assert out.transformed_data_prefix == ""
+
+    def test_explicit_transformed_prefix_not_overridden(self) -> None:
+        from application_sdk.contracts.base import PublishInputMixin
+
+        out = PublishInputMixin(
+            connection_qualified_name="c",
+            output_path="some/path",
+            transformed_data_prefix="custom/transformed",
+        )
+        assert out.transformed_data_prefix == "custom/transformed"
+
+    def test_path_traversal_in_output_path_yields_empty(self) -> None:
+        from application_sdk.contracts.base import PublishInputMixin
+
+        out = PublishInputMixin(
+            connection_qualified_name="c",
+            output_path="../../etc/passwd",
+        )
+        assert out.transformed_data_prefix == ""

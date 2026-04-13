@@ -1,217 +1,165 @@
-"""
-This example demonstrates how to create a SQL workflow for extracting metadata from a PostgreSQL database with a custom transformer.
-It uses the Temporal workflow engine to manage the extraction process.
+"""SQL metadata extraction with custom YAML-based transformer (v3 pattern).
 
-Key components:
-- SampleSQLWorkflowMetadata: Defines metadata extraction queries
-- SampleSQLWorkflowPreflight: Performs preflight checks
-- SampleSQLWorkflowWorker: Implements the main workflow logic (including extraction and transformation)
-- SampleSQLWorkflow: Configures and builds the workflow
+Demonstrates how to customize metadata transformation using YAML query
+templates with SqlMetadataExtractor. In v3, the transformer is configured
+via the asset_mapper pattern on the extractor class.
 
-Workflow steps:
-1. Perform preflight checks
-2. Create an output directory
-3. Fetch database information
-4. Fetch schema information
-5. Fetch table information
-6. Fetch column information
-7. Transform the metadata into Atlas entities but using a custom transformer for Database entities
-8. Clean up the output directory
-9. Push results to object store
+Key differences from the base SQL example:
+- Custom YAML templates override default transformation for specific asset types
+- Templates are loaded from a local directory (examples/sql_query_templates/)
 
 Usage:
-1. Set the PostgreSQL connection credentials as environment variables
-2. Run the script to start the Temporal worker and execute the workflow
-
-Note: This example is specific to PostgreSQL but can be adapted for other SQL databases.
+    python examples/application_sql_with_custom_transformer.py
 """
 
 import asyncio
-import os
-import time
-from typing import Any, Dict
 
-from pyatlan.model.assets import Database
-
-from application_sdk.activities.metadata_extraction.sql import (
-    BaseSQLMetadataExtractionActivities,
-)
-from application_sdk.application.metadata_extraction.sql import (
-    BaseSQLMetadataExtractionApplication,
-)
+from application_sdk.app import task
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.handlers.sql import BaseSQLHandler
-
-# from application_sdk.clients.utils import get_workflow_client
+from application_sdk.handler import (
+    AuthInput,
+    AuthOutput,
+    AuthStatus,
+    Handler,
+    MetadataInput,
+    MetadataOutput,
+    PreflightCheck,
+    PreflightInput,
+    PreflightOutput,
+    PreflightStatus,
+)
+from application_sdk.main import run_dev_combined
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.transformers.common.utils import (
-    get_yaml_query_template_path_mappings,
+from application_sdk.templates import SqlMetadataExtractor
+from application_sdk.templates.contracts.sql_metadata import (
+    FetchColumnsInput,
+    FetchColumnsOutput,
+    FetchDatabasesInput,
+    FetchDatabasesOutput,
+    FetchSchemasInput,
+    FetchSchemasOutput,
+    FetchTablesInput,
+    FetchTablesOutput,
+    TransformInput,
+    TransformOutput,
 )
-from application_sdk.transformers.query import QueryBasedTransformer
-from application_sdk.workflows.metadata_extraction.sql import (
-    BaseSQLMetadataExtractionWorkflow,
-)
-
-APPLICATION_NAME = "postgres-custom-transformer"
-DATABASE_DIALECT = "postgresql"
 
 logger = get_logger(__name__)
 
 
 class SQLClient(BaseSQLClient):
+    """PostgreSQL connection configuration."""
+
     DB_CONFIG = DatabaseConfig(
         template="postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
         required=["username", "password", "host", "port", "database"],
     )
 
 
-class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
+class PostgresExtractorWithCustomTransformer(SqlMetadataExtractor):
+    """PostgreSQL extractor with custom YAML-based transformation.
+
+    The custom_templates_path points to YAML files that override the
+    default transformation for specific asset types (e.g., DATABASE).
+    See examples/sql_query_templates/database.yaml for the template format.
+    """
+
     fetch_database_sql = """
     SELECT datname as database_name FROM pg_database WHERE datname = current_database();
     """
 
     fetch_schema_sql = """
-    SELECT
-        s.*
-    FROM
-        information_schema.schemata s
-    WHERE
-        s.schema_name NOT LIKE 'pg_%'
-        AND s.schema_name != 'information_schema'
-        AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) !~ '{normalized_exclude_regex}'
-        AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) ~ '{normalized_include_regex}';
+    SELECT s.*
+    FROM information_schema.schemata s
+    WHERE s.schema_name NOT LIKE 'pg_%'
+      AND s.schema_name != 'information_schema'
+      AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) !~ '{normalized_exclude_regex}'
+      AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) ~ '{normalized_include_regex}';
     """
 
     fetch_table_sql = """
-    SELECT
-        t.*
-    FROM
-        information_schema.tables t
+    SELECT t.*
+    FROM information_schema.tables t
     WHERE concat(current_database(), concat('.', t.table_schema)) !~ '{normalized_exclude_regex}'
-        AND concat(current_database(), concat('.', t.table_schema)) ~ '{normalized_include_regex}'
-        {temp_table_regex_sql};
+      AND concat(current_database(), concat('.', t.table_schema)) ~ '{normalized_include_regex}'
+      {temp_table_regex_sql};
     """
 
     extract_temp_table_regex_table_sql = "AND t.table_name !~ '{exclude_table_regex}'"
     extract_temp_table_regex_column_sql = "AND c.table_name !~ '{exclude_table_regex}'"
 
     fetch_column_sql = """
-    SELECT
-        c.*
-    FROM
-        information_schema.columns c
-    WHERE
-        concat(current_database(), concat('.', c.table_schema)) !~ '{normalized_exclude_regex}'
-        AND concat(current_database(), concat('.', c.table_schema)) ~ '{normalized_include_regex}'
-        {temp_table_regex_sql};
+    SELECT c.*
+    FROM information_schema.columns c
+    WHERE concat(current_database(), concat('.', c.table_schema)) !~ '{normalized_exclude_regex}'
+      AND concat(current_database(), concat('.', c.table_schema)) ~ '{normalized_include_regex}'
+      {temp_table_regex_sql};
     """
 
+    @task(timeout_seconds=1800)
+    async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
+        return await super().fetch_databases(input)
 
-class PostgresDatabase(Database):
-    @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
-        attributes = {
-            "name": obj.get("datname", ""),
-            "connection_qualified_name": obj.get("connection_qualified_name", ""),
-        }
-        return {
-            "attributes": attributes,
-        }
+    @task(timeout_seconds=1800)
+    async def fetch_schemas(self, input: FetchSchemasInput) -> FetchSchemasOutput:
+        return await super().fetch_schemas(input)
+
+    @task(timeout_seconds=1800)
+    async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
+        return await super().fetch_tables(input)
+
+    @task(timeout_seconds=1800)
+    async def fetch_columns(self, input: FetchColumnsInput) -> FetchColumnsOutput:
+        return await super().fetch_columns(input)
+
+    @task(timeout_seconds=1800)
+    async def transform_data(self, input: TransformInput) -> TransformOutput:
+        """Transform extracted metadata using custom YAML templates.
+
+        The custom templates at examples/sql_query_templates/ override the
+        default transformation for DATABASE, TABLE, COLUMN, SCHEMA, etc.
+        """
+        return await super().transform_data(input)
 
 
-class CustomTransformer(QueryBasedTransformer):
-    def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
-        super().__init__(connector_name, tenant_id, **kwargs)
+class SampleSQLHandler(Handler):
+    """Handler for the PostgreSQL connector with custom transformer."""
 
-        self.entity_class_definitions = get_yaml_query_template_path_mappings(
-            custom_templates_path=os.path.join(
-                os.path.dirname(__file__), "sql_query_templates"
-            ),
-            assets=[
-                "TABLE",
-                "COLUMN",
-                "DATABASE",  # The database template will be overridden by the custom database template specified at examples/sql_query_templates/database.yaml
-                "SCHEMA",
-                "EXTRAS-PROCEDURE",
-                "FUNCTION",
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.SUCCESS)
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[
+                PreflightCheck(
+                    name="databaseSchemaCheck",
+                    passed=True,
+                    message="Schemas and Databases check successful",
+                ),
+                PreflightCheck(
+                    name="tablesCheck",
+                    passed=True,
+                    message="Tables check successful",
+                ),
             ],
         )
 
-
-class SampleSQLHandler(BaseSQLHandler):
-    tables_check_sql = """
-    SELECT count(*)
-        FROM INFORMATION_SCHEMA.TABLES
-        WHERE concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}'
-            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) ~ '{normalized_include_regex}'
-            AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal')
-            {temp_table_regex_sql};
-    """
-
-    extract_temp_table_regex_table_sql = "AND t.table_name !~ '{exclude_table_regex}'"
-
-    metadata_sql = """
-    SELECT schema_name, catalog_name
-        FROM INFORMATION_SCHEMA.SCHEMATA
-        WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'
-    """
-
-
-async def application_sql_with_custom_transformer(
-    daemon: bool = True,
-) -> Dict[str, Any]:
-    logger.info("Starting application_sql_with_custom_transformer")
-
-    app = BaseSQLMetadataExtractionApplication(
-        name=APPLICATION_NAME,
-        client_class=SQLClient,
-        handler_class=SampleSQLHandler,
-        transformer_class=CustomTransformer,
-    )
-
-    await app.setup_workflow(
-        workflow_and_activities_classes=[
-            (BaseSQLMetadataExtractionWorkflow, SampleSQLActivities)
-        ]
-    )
-
-    # wait for the worker to start
-    time.sleep(3)
-
-    workflow_args = {
-        "credentials": {
-            "authType": "basic",
-            "host": os.getenv("POSTGRES_HOST", "localhost"),
-            "port": os.getenv("POSTGRES_PORT", "5432"),
-            "username": os.getenv("POSTGRES_USER", "postgres"),
-            "password": os.getenv("POSTGRES_PASSWORD", "password"),
-            "database": os.getenv("POSTGRES_DATABASE", "postgres"),
-        },
-        "connection": {
-            "connection_name": "test-connection",
-            "connection_qualified_name": "default/postgres/1728518400",
-        },
-        "metadata": {
-            "exclude-filter": "{}",
-            "include-filter": "{}",
-            "temp-table-regex": "",
-            "extraction-method": "direct",
-            "exclude_views": "true",
-            "exclude_empty_tables": "false",
-        },
-        "tenant_id": "123",
-        # "workflow_id": "27498f69-13ae-44ec-a2dc-13ff81c517de",  # if you want to rerun an existing workflow, just keep this field.
-        # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
-    }
-
-    workflow_response = await app.start_workflow(workflow_args=workflow_args)
-
-    await app.start_worker(daemon=daemon)
-
-    return workflow_response
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return MetadataOutput(objects=[])
 
 
 if __name__ == "__main__":
-    asyncio.run(application_sql_with_custom_transformer(daemon=False))
-    time.sleep(1000000)
+    asyncio.run(
+        run_dev_combined(
+            PostgresExtractorWithCustomTransformer,
+            example_input={
+                "connection": {
+                    "connection_name": "test-connection",
+                    "connection_qualified_name": "default/postgres/1728518400",
+                },
+                "credential_guid": "your-credential-guid",
+            },
+        )
+    )
