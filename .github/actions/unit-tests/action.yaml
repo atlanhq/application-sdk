@@ -44,10 +44,15 @@ runs:
       env:
         ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK: "false"
       run: |
-        uv run --frozen coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics
-        uv run --frozen coverage xml
-        uv run --frozen coverage html
-        uv run --frozen coverage report --fail-under=${{ inputs.fail-under }}
+        PYTHON_MINOR=$(echo "${{ inputs.python-version }}" | cut -d. -f2)
+        UV_RUN="uv run --frozen"
+        if [ "${PYTHON_MINOR}" -ge 14 ] 2>/dev/null; then
+          UV_RUN="uv run --frozen --no-group dev"
+        fi
+        $UV_RUN coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics
+        $UV_RUN coverage xml
+        $UV_RUN coverage html
+        $UV_RUN coverage report --fail-under=${{ inputs.fail-under }}
 
     - name: Comment Coverage Report on PR
       uses: orgoro/coverage@v3.2
