@@ -215,8 +215,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         if not isinstance(record, MetricRecord):
             return
 
-        # Send to OpenTelemetry if enabled
-        if ENABLE_OTLP_METRICS:
+        # Send to OpenTelemetry if any OTel-based sink is enabled
+        if ENABLE_OTLP_METRICS or ENABLE_PROMETHEUS_METRICS:
             self._send_to_otel(record)
 
         # Send to Segment (client handles enable/disable internally)
