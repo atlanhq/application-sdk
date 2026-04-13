@@ -651,7 +651,13 @@ def create_app_handler_service(
             if "credentials" in body and body["credentials"]:
                 if _secret_store is not None and hasattr(_secret_store, "set"):
                     credential_guid = str(uuid4())
-                    _secret_store.set(credential_guid, json.dumps(body["credentials"]))
+                    # Convert v3 list [{key, value}] to flat dict {key: value}
+                    # so get_secret() returns the same format as production
+                    # (Dapr/Vault), where credentials are stored as flat dicts.
+                    flat_creds = {
+                        p["key"]: p["value"] for p in body["credentials"]
+                    }
+                    _secret_store.set(credential_guid, json.dumps(flat_creds))
                     body["credential_guid"] = credential_guid
                     del body["credentials"]
                     logger.debug(
