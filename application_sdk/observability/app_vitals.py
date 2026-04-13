@@ -13,6 +13,8 @@ Registration order: AFTER ExecutionContextInterceptor and CorrelationContextInte
 
 from __future__ import annotations
 
+import json
+import sys
 import time
 from typing import Any
 
@@ -143,7 +145,37 @@ def _emit_log_event(
     event_name: str,
     attrs: dict[str, Any],
 ) -> None:
-    """Emit a structured log event (Path 1: → otel_logs)."""
+    """Emit a structured log event (Path 1: → otel_logs).
+
+    Also prints a compact JSON summary to stdout so the event is visible
+    in the pod console (kubectl logs) without needing the OTLP pipeline.
+    The Loguru console handler strips extras from its format, so without
+    this print the rich payload would be invisible in pod logs.
+    """
+    # Console visibility — key fields only, one line, greppable prefix.
+    _CONSOLE_KEYS = (
+        "app_name",
+        "tenant_id",
+        "workflow_type",
+        "activity_type",
+        "status",
+        "error_type",
+        "duration_ms",
+        "assets_processed",
+        "workflow_id",
+        "correlation_id",
+    )
+    try:
+        summary = {
+            k: attrs[k]
+            for k in _CONSOLE_KEYS
+            if k in attrs and attrs[k] not in (None, "", [])
+        }
+        sys.stdout.write(f"APP_VITALS | {event_name} | {json.dumps(summary)}\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
     try:
         from application_sdk.observability.logger_adaptor import get_logger
 
