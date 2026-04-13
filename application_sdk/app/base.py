@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 import threading
-from abc import ABC, abstractmethod
+from abc import ABC
 from collections.abc import Callable
 from datetime import datetime
 from typing import (
@@ -58,6 +58,7 @@ except importlib.metadata.PackageNotFoundError:
 
 if TYPE_CHECKING:
     from application_sdk.app.client import WorkflowAppClient
+    from application_sdk.app.entrypoint import EntryPointMetadata
 
 # Type variable for require() method
 T = TypeVar("T")
@@ -442,14 +443,13 @@ class App(ABC):
 
         This is called when a class inherits from App. It:
         1. Derives the app name from the class name if not specified
-        2. Infers input/output types from run() signature
-        3. Applies Temporal decorators
-        4. Registers the app with the AppRegistry
+        2. Scans for @entrypoint methods (Path 1) or infers from run() (Path 2)
+        3. Registers the app with the AppRegistry
 
         Skip registration if:
-        - The class is abstract (has abstract methods)
-        - The class doesn't have a run() method
         - The class was already registered
+        - The class has other abstract methods (besides run)
+        - No valid entry points or run() with proper types found
         """
         super().__init_subclass__(**kwargs)
 
@@ -457,43 +457,75 @@ class App(ABC):
         if cls.__dict__.get("_app_registered", False):
             return
 
-        # Skip abstract classes - check if run() is still abstract
+        app_name = cls.name or _pascal_to_kebab(cls.__name__)
+
+        # Path 1: explicit @entrypoint methods
+        entry_points = _scan_entrypoints(cls)
+        if entry_points:
+            # Only register concrete classes (no unimplemented abstract methods besides run)
+            abstract_methods = {
+                m
+                for m in dir(cls)
+                if getattr(getattr(cls, m, None), "__isabstractmethod__", False)
+            }
+            if abstract_methods - {"run"}:
+                return  # Genuine abstract class with other abstract methods
+
+            first_ep = next(iter(entry_points.values()))
+            _apply_app_registration(
+                cls=cls,
+                name=app_name,
+                version=cls.version,
+                description=cls.description,
+                tags=cls.tags,
+                passthrough_modules=cls.passthrough_modules,
+                input_type=first_ep.input_type,
+                output_type=first_ep.output_type,
+                entry_points=entry_points,
+            )
+            return
+
+        # Path 2: implicit run() — backward compat
         if inspect.isabstract(cls):
             return
 
-        # Skip if run() is not implemented (still abstract)
         run_method = getattr(cls, "run", None)
         if run_method is None:
             return
 
-        # Check if run() is the abstract one from App base class
         if getattr(run_method, "__isabstractmethod__", False):
             return
 
-        # Try to infer types from run() signature
         try:
             hints = get_type_hints(cls.run)
         except Exception:
-            # If we can't get type hints, skip auto-registration
             return
 
         input_type = hints.get("input")
         output_type = hints.get("return")
 
-        # Skip if types aren't available
         if input_type is None or output_type is None:
             return
 
-        # Check if types extend Input/Output base classes
         if not (isinstance(input_type, type) and issubclass(input_type, Input)):
             return
         if not (isinstance(output_type, type) and issubclass(output_type, Output)):
             return
 
-        # Derive name from class name if not specified
-        app_name = cls.name or _pascal_to_kebab(cls.__name__)
+        # Skip if types are the base Input/Output (not narrowed — likely unimplemented template)
+        if input_type is Input or output_type is Output:
+            return
 
-        # Apply the registration logic
+        from application_sdk.app.entrypoint import EntryPointMetadata
+
+        implicit_ep = EntryPointMetadata(
+            name="run",
+            input_type=input_type,
+            output_type=output_type,
+            method_name="run",
+            implicit=True,
+        )
+
         _apply_app_registration(
             cls=cls,
             name=app_name,
@@ -503,6 +535,7 @@ class App(ABC):
             passthrough_modules=cls.passthrough_modules,
             input_type=input_type,
             output_type=output_type,
+            entry_points={"run": implicit_ep},
         )
 
     @property
@@ -737,12 +770,11 @@ class App(ABC):
         """Get the execution ID from current task context."""
         return _get_execution_id_from_task()
 
-    @abstractmethod
     async def run(self, input: Input) -> Output:
         """Execute the App with the given input.
 
         This is the main entry point for App logic. Implement this method
-        with your business logic.
+        with your business logic, or define @entrypoint methods instead.
 
         IMPORTANT: This method must be deterministic. Do not use:
         - datetime.now() or datetime.utcnow() - use self.now() instead
@@ -755,7 +787,9 @@ class App(ABC):
         Returns:
             The typed output dataclass.
         """
-        ...
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement run() or define @entrypoint methods."
+        )
 
     async def call(
         self,
@@ -1289,6 +1323,35 @@ def _register_tasks(cls: type, app_name: str) -> None:
                 task_registry.register(app_name, task_meta_copy)
 
 
+def _scan_entrypoints(cls: type) -> "dict[str, EntryPointMetadata]":
+    """Scan a class for @entrypoint-decorated methods.
+
+    Args:
+        cls: The App class to scan.
+
+    Returns:
+        Dict mapping entry point name to EntryPointMetadata.
+    """
+    from application_sdk.app.entrypoint import (
+        EntryPointMetadata,
+        get_entrypoint_metadata,
+        is_entrypoint,
+    )
+
+    entry_points: dict[str, EntryPointMetadata] = {}
+    for attr_name in dir(cls):
+        if attr_name.startswith("_"):
+            continue
+        attr = getattr(cls, attr_name, None)
+        if attr is None:
+            continue
+        if is_entrypoint(attr):
+            ep_meta = get_entrypoint_metadata(attr)
+            if ep_meta is not None:
+                entry_points[ep_meta.name] = ep_meta
+    return entry_points
+
+
 def _apply_app_registration(
     cls: "type[App]",
     name: str,
@@ -1298,18 +1361,20 @@ def _apply_app_registration(
     passthrough_modules: set[str] | None,
     input_type: type[Input],
     output_type: type[Output],
+    entry_points: "dict[str, EntryPointMetadata] | None" = None,
 ) -> None:
-    """Apply Temporal decorators and register an App class.
+    """Register an App class with the AppRegistry.
 
     Args:
         cls: The App class to register.
-        name: App name (for Temporal workflow).
+        name: App name.
         version: Semantic version string.
         description: Human-readable description.
         tags: Optional tags for categorization.
         passthrough_modules: Modules to pass through sandbox.
         input_type: Input dataclass type.
         output_type: Output dataclass type.
+        entry_points: Entry point metadata keyed by entry point name.
     """
     # Mark as registered to prevent duplicate registration
     cls._app_registered = True
@@ -1317,156 +1382,8 @@ def _apply_app_registration(
     # Set class attributes
     cls._app_name = name
     cls._app_version = version
-
-    # Store the original run method and input/output types for wrapper
-    original_run = cls.run
-    cls._original_run = original_run
     cls._input_type = input_type
     cls._output_type = output_type
-
-    # Create wrapper run method for Temporal execution
-    async def workflow_run_wrapper(self: Any, input_data: Input) -> Output:
-        """Temporal workflow entry point."""
-        from application_sdk.app.client import WorkflowAppClient
-        from application_sdk.app.context import AppContext
-
-        # Get deterministic time for Temporal replay
-        start_time = _safe_now()
-
-        # Use Temporal's workflow run ID as the single source of truth.
-        run_id = workflow.info().run_id
-
-        # Try to get correlation ID from context, fallback to run_id
-        try:
-            with workflow.unsafe.imports_passed_through():
-                from application_sdk.observability.correlation import (
-                    get_correlation_context,
-                )
-            _corr_ctx = get_correlation_context()
-            correlation_id = _corr_ctx.correlation_id if _corr_ctx else run_id
-        except Exception:
-            _safe_log(
-                "warning",
-                "Failed to read correlation context, falling back to run_id",
-                exc_info=True,
-            )
-            correlation_id = run_id
-
-        context = AppContext(
-            app_name=self._app_name,
-            app_version=self._app_version,
-            run_id=run_id,
-            correlation_id=correlation_id,
-            started_at=start_time,
-        )
-        self._context = context
-
-        # Set up client for child app calls and wrap tasks
-        context_data = {
-            "run_id": run_id,
-            "correlation_id": context.correlation_id,
-        }
-        self._client = WorkflowAppClient(context_data)
-        _wrap_instance_tasks(self, context_data)
-
-        # Log app start
-        _safe_log(
-            "info",
-            f"App started | app={self._app_name} run_id={run_id} correlation_id={context.correlation_id}",
-            app_name=self._app_name,
-            run_id=str(run_id),
-            correlation_id=context.correlation_id,
-        )
-
-        # Log input summary for debugging
-        try:
-            if hasattr(input_data, "_log_summary"):
-                input_summary = input_data._log_summary()
-                if input_summary:
-                    _safe_log(
-                        "info",
-                        f"App input | app={self._app_name} run_id={run_id}",
-                        app_name=self._app_name,
-                        run_id=str(run_id),
-                        correlation_id=context.correlation_id,
-                        input=input_summary,
-                    )
-        except Exception:
-            _safe_log("warning", "Failed to log input summary")
-
-        try:
-            result = await self._original_run(input_data)
-            return cast("Output", result)
-
-        except Exception as e:
-            err_parts = f"App failed | app={self._app_name} run_id={run_id} error={e} error_type={type(e).__name__}"
-            _safe_log(
-                "error",
-                err_parts,
-                app_name=self._app_name,
-                run_id=str(run_id),
-                correlation_id=context.correlation_id,
-                error_type=type(e).__name__,
-            )
-
-            if isinstance(e, NonRetryableError):
-                from application_sdk.execution.errors import ApplicationError
-
-                raise ApplicationError(
-                    str(e),
-                    type=type(e).__name__,
-                    non_retryable=True,
-                ) from e
-
-            raise
-
-        finally:
-            # Run the lifecycle hook before clearing state so on_complete()
-            # can still access self.context and _app_state tracked refs.
-            try:
-                await self.on_complete()
-            except Exception:
-                _safe_log(
-                    "warning", "on_complete() hook raised an unexpected exception"
-                )
-
-            end_time = _safe_now()
-            duration_ms = round((end_time - start_time).total_seconds() * 1000, 2)
-
-            _safe_log(
-                "info",
-                f"App completed | app={self._app_name} run_id={run_id} duration_ms={duration_ms}",
-                app_name=self._app_name,
-                run_id=str(run_id),
-                correlation_id=context.correlation_id,
-                duration_ms=duration_ms,
-            )
-
-            # Clean up app-scoped state to prevent memory leaks
-            workflow_id = workflow.info().workflow_id
-            with _app_state_lock:
-                _app_state.pop(workflow_id, None)
-
-            self._context = None
-            self._client = None
-
-    # Set proper name, qualname, and module for Temporal's validation
-    workflow_run_wrapper.__name__ = "run"
-    workflow_run_wrapper.__qualname__ = f"{cls.__name__}.run"
-    workflow_run_wrapper.__module__ = cls.__module__
-
-    # Set type annotations for Temporal deserialization
-    workflow_run_wrapper.__annotations__ = {
-        "input_data": input_type,
-        "return": output_type,
-    }
-
-    # Apply @workflow.run to the wrapper and assign to class
-    decorated_run = workflow.run(workflow_run_wrapper)
-    cls.run = decorated_run
-
-    # Apply @workflow.defn with the app name
-    workflow.defn(name=name)(cls)
 
     # Register with the global app registry
     registry = AppRegistry.get_instance()
@@ -1479,12 +1396,167 @@ def _apply_app_registration(
         description=description,
         tags=tags,
         passthrough_modules=passthrough_modules,
+        entry_points=entry_points or {},
         allow_override=True,
     )
     cls._app_metadata = metadata
 
     # Register all @task decorated methods
     _register_tasks(cls, name)
+
+
+def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
+    """Generate a Temporal workflow class for one entry point.
+
+    Creates a @workflow.defn-decorated class whose run() sets up App context,
+    then calls the entry point method on a fresh App instance.
+
+    Args:
+        app_cls: The App subclass.
+        ep: The entry point to generate a workflow class for.
+
+    Returns:
+        A Temporal workflow class decorated with @workflow.defn.
+    """
+    workflow_name = (
+        app_cls._app_name if ep.implicit else f"{app_cls._app_name}:{ep.name}"
+    )
+    entry_method_name = ep.method_name
+    input_type = ep.input_type
+    output_type = ep.output_type
+    app_name = app_cls._app_name
+    app_version = app_cls._app_version
+
+    async def _run(self_wf: Any, input_data: Input) -> Output:
+        from application_sdk.app.client import WorkflowAppClient
+        from application_sdk.app.context import AppContext
+
+        start_time = _safe_now()
+        run_id = workflow.info().run_id
+
+        try:
+            with workflow.unsafe.imports_passed_through():
+                from application_sdk.observability.correlation import (
+                    get_correlation_context,
+                )
+
+            _corr_ctx = get_correlation_context()
+            correlation_id = _corr_ctx.correlation_id if _corr_ctx else run_id
+        except Exception:
+            _safe_log(
+                "warning",
+                "Failed to read correlation context, falling back to run_id",
+                exc_info=True,
+            )
+            correlation_id = run_id
+
+        context = AppContext(
+            app_name=app_name,
+            app_version=app_version,
+            run_id=run_id,
+            correlation_id=correlation_id,
+            started_at=start_time,
+        )
+        app_instance = app_cls()
+        app_instance._context = context
+
+        context_data = {"run_id": run_id, "correlation_id": context.correlation_id}
+        app_instance._client = WorkflowAppClient(context_data)
+        _wrap_instance_tasks(app_instance, context_data)
+
+        _safe_log(
+            "info",
+            f"App started | app={app_name} run_id={run_id} correlation_id={context.correlation_id}",
+            app_name=app_name,
+            run_id=str(run_id),
+            correlation_id=context.correlation_id,
+        )
+
+        try:
+            if hasattr(input_data, "_log_summary"):
+                input_summary = input_data._log_summary()
+                if input_summary:
+                    _safe_log(
+                        "info",
+                        f"App input | app={app_name} run_id={run_id}",
+                        app_name=app_name,
+                        run_id=str(run_id),
+                        correlation_id=context.correlation_id,
+                        input=input_summary,
+                    )
+        except Exception:
+            _safe_log("warning", "Failed to log input summary")
+
+        try:
+            entry_method = getattr(app_instance, entry_method_name)
+            result = await entry_method(input_data)
+            return cast("Output", result)
+
+        except Exception as e:
+            _safe_log(
+                "error",
+                f"App failed | app={app_name} run_id={run_id} error={e} error_type={type(e).__name__}",
+                app_name=app_name,
+                run_id=str(run_id),
+                correlation_id=context.correlation_id,
+                error_type=type(e).__name__,
+            )
+            if isinstance(e, NonRetryableError):
+                from application_sdk.execution.errors import ApplicationError
+
+                raise ApplicationError(
+                    str(e),
+                    type=type(e).__name__,
+                    non_retryable=True,
+                ) from e
+            raise
+
+        finally:
+            try:
+                await app_instance.on_complete()
+            except Exception:
+                _safe_log(
+                    "warning", "on_complete() hook raised an unexpected exception"
+                )
+
+            end_time = _safe_now()
+            duration_ms = round((end_time - start_time).total_seconds() * 1000, 2)
+            _safe_log(
+                "info",
+                f"App completed | app={app_name} run_id={run_id} duration_ms={duration_ms}",
+                app_name=app_name,
+                run_id=str(run_id),
+                correlation_id=context.correlation_id,
+                duration_ms=duration_ms,
+            )
+
+            workflow_id = workflow.info().workflow_id
+            with _app_state_lock:
+                _app_state.pop(workflow_id, None)
+
+            app_instance._context = None
+            app_instance._client = None
+
+    safe_name = workflow_name.replace("-", "_").replace(":", "_")
+    cls_name = f"_Workflow_{safe_name}"
+
+    # Temporal's _is_unbound_method_on_cls checks:
+    #   fn.__qualname__.rsplit(".", 1)[0] == cls.__name__
+    # so we must set __qualname__ BEFORE applying @workflow.run.
+    _run.__name__ = "run"
+    _run.__qualname__ = f"{cls_name}.run"
+    _run.__module__ = app_cls.__module__
+    _run.__annotations__ = {"input_data": input_type, "return": output_type}
+
+    decorated_run = workflow.run(_run)
+
+    wf_cls = type(cls_name, (), {"run": decorated_run})
+    wf_cls.__module__ = app_cls.__module__
+    wf_cls.__qualname__ = cls_name
+
+    workflow.defn(name=workflow_name)(wf_cls)
+
+    return wf_cls
 
 
 def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> None:
@@ -1592,7 +1664,7 @@ def _create_task_activity_wrapper(
 
         # Execute as activity - pass result_type for proper deserialization
         result: Output = await workflow.execute_activity(
-            task_name,
+            f"{app_name}:{task_name}",
             args=[task_context, input_data],
             start_to_close_timeout=timedelta(seconds=timeout_seconds),
             heartbeat_timeout=heartbeat_timeout,
@@ -1623,7 +1695,9 @@ __all__ = [
     "_apply_app_registration",
     "_create_task_activity_wrapper",
     "_register_tasks",
+    "_scan_entrypoints",
     "_wrap_instance_tasks",
+    "generate_workflow_class",
     "task",
     "FileReference",
 ]

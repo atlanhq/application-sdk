@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from application_sdk.app.entrypoint import EntryPointMetadata
     from application_sdk.app.task import TaskMetadata
 
 from application_sdk.contracts.base import validate_is_contract
@@ -29,6 +30,7 @@ class AppMetadata:
     description: str = ""
     tags: dict[str, str] = field(default_factory=dict)
     passthrough_modules: frozenset[str] = field(default_factory=frozenset)
+    entry_points: "dict[str, EntryPointMetadata]" = field(default_factory=dict)
     deprecated: bool = False
     deprecation_message: str | None = None
 
@@ -114,6 +116,7 @@ class AppRegistry:
         description: str = "",
         tags: dict[str, str] | None = None,
         passthrough_modules: set[str] | None = None,
+        entry_points: "dict[str, EntryPointMetadata] | None" = None,
         allow_override: bool = False,
     ) -> AppMetadata:
         """Register an App.
@@ -127,6 +130,7 @@ class AppRegistry:
             description: Human-readable description.
             tags: Optional tags for categorization.
             passthrough_modules: Modules to pass through sandbox for this App.
+            entry_points: Entry point metadata keyed by entry point name.
             allow_override: If True, allow re-registration (for testing).
 
         Returns:
@@ -156,6 +160,7 @@ class AppRegistry:
             description=description,
             tags=tags or {},
             passthrough_modules=frozenset(passthrough_modules or set()),
+            entry_points=entry_points or {},
         )
 
         self._apps[name][version] = metadata
@@ -271,6 +276,7 @@ class AppRegistry:
             output_type=metadata.output_type,
             description=metadata.description,
             tags=metadata.tags,
+            entry_points=metadata.entry_points,
             deprecated=True,
             deprecation_message=message,
         )

@@ -153,14 +153,15 @@ class TestCreateActivityFromTask:
         assert greet_task.input_type is _ActInput
         assert greet_task.output_type is _ActOutput
 
-    def test_activity_name_matches_task_name(self) -> None:
+    def test_activity_name_is_app_qualified(self) -> None:
         self._make_app_with_task()
         task_registry = TaskRegistry.get_instance()
         tasks = task_registry.get_tasks_for_app("_greeter-app")
         task_meta = tasks[0]
         activity_fn = create_activity_from_task(task_meta)
         defn = getattr(activity_fn, "__temporal_activity_definition")
-        assert defn.name == task_meta.name
+        # Activity names are now qualified as '{app_name}:{task_name}'
+        assert defn.name == f"{task_meta.app_name}:{task_meta.name}"
 
 
 class TestGetAllTaskActivities:
@@ -195,7 +196,7 @@ class TestGetAllTaskActivities:
         # 2 user tasks + 4 framework tasks (upload, download, cleanup_files, cleanup_storage) = 6
         assert len(activities) == 6
 
-    def test_filters_by_app_names(self) -> None:
+    def test_returns_activities_for_all_apps(self) -> None:
         class _AppA(App):
             @task(timeout_seconds=60)
             async def task_a(self, input: _AppAInput) -> _AppAOutput:
@@ -212,17 +213,16 @@ class TestGetAllTaskActivities:
             async def run(self, input: _AppBInput) -> _AppBOutput:
                 return _AppBOutput()
 
-        # Filter to _app-a only (class _AppA → kebab name _app-a)
-        activities = get_all_task_activities(app_names=["_app-a"])
-        app_names_used = [
+        activities = get_all_task_activities()
+        app_names_used = {
             a._task_metadata.app_name  # type: ignore[attr-defined]
             for a in activities
             if hasattr(a, "_task_metadata")
-        ]
-        assert all(name == "_app-a" for name in app_names_used)
-        assert not any(name == "_app-b" for name in app_names_used)
+        }
+        assert "_app-a" in app_names_used
+        assert "_app-b" in app_names_used
 
-    def test_no_filter_returns_all(self) -> None:
+    def test_all_returns_both_apps_tasks(self) -> None:
         class _App1(App):
             @task(timeout_seconds=60)
             async def do_one(self, input: _In1) -> _Out1:
@@ -239,9 +239,9 @@ class TestGetAllTaskActivities:
             async def run(self, input: _In2) -> _Out2:
                 return _Out2()
 
-        activities = get_all_task_activities(app_names=None)
-        # 1 user task per app (2) + 4 framework tasks deduplicated across apps (4) = 6
-        assert len(activities) == 6
+        activities = get_all_task_activities()
+        # 1 user task per app (2) + 4 framework tasks per app (8) = 10
+        # (no dedup — each app has its own qualified activity names)
         activity_names = [
             a._task_metadata.name  # type: ignore[attr-defined]
             for a in activities
@@ -249,13 +249,10 @@ class TestGetAllTaskActivities:
         ]
         assert "do_one" in activity_names
         assert "do_two" in activity_names
-        # Framework tasks appear once (deduped)
-        assert activity_names.count("cleanup_files") == 1
-        assert activity_names.count("upload") == 1
 
 
-class TestExplicitAppNamesFiltering:
-    """Tests for explicit app_names filtering — ensures only declared apps' tasks register."""
+class TestAllAppsActivities:
+    """Tests for get_all_task_activities() — includes all registered apps' tasks."""
 
     def setup_method(self) -> None:
         AppRegistry.reset()
@@ -265,8 +262,8 @@ class TestExplicitAppNamesFiltering:
         AppRegistry.reset()
         TaskRegistry.reset()
 
-    def test_explicit_app_names_excludes_other_apps(self) -> None:
-        """Only tasks from explicitly named apps should be registered."""
+    def test_all_apps_tasks_are_included(self) -> None:
+        """Tasks from all registered apps should be included."""
 
         class _PrimaryApp(App):
             @task(timeout_seconds=60)
@@ -284,18 +281,17 @@ class TestExplicitAppNamesFiltering:
             async def run(self, input: _UnrelatedIn) -> _UnrelatedOut:
                 return _UnrelatedOut()
 
-        # Only register primary app's tasks
-        activities = get_all_task_activities(app_names=["_primary-app"])
+        activities = get_all_task_activities()
         activity_names = [
             a._task_metadata.name  # type: ignore[attr-defined]
             for a in activities
             if hasattr(a, "_task_metadata")
         ]
         assert "primary_task" in activity_names
-        assert "unrelated_task" not in activity_names
+        assert "unrelated_task" in activity_names
 
-    def test_explicit_multi_app_names_includes_both(self) -> None:
-        """Tasks from all explicitly named apps should be registered."""
+    def test_multi_app_all_tasks_included(self) -> None:
+        """Tasks from all registered apps are included."""
 
         class _AppPrimary(App):
             @task(timeout_seconds=60)
@@ -313,17 +309,7 @@ class TestExplicitAppNamesFiltering:
             async def run(self, input: _SecondaryIn) -> _SecondaryOut:
                 return _SecondaryOut()
 
-        class _AppUnwanted(App):
-            @task(timeout_seconds=60)
-            async def unwanted(self, input: _UnrelatedIn) -> _UnrelatedOut:
-                return _UnrelatedOut()
-
-            async def run(self, input: _UnrelatedIn) -> _UnrelatedOut:
-                return _UnrelatedOut()
-
-        activities = get_all_task_activities(
-            app_names=["_app-primary", "_app-secondary"]
-        )
+        activities = get_all_task_activities()
         activity_names = [
             a._task_metadata.name  # type: ignore[attr-defined]
             for a in activities
@@ -331,10 +317,9 @@ class TestExplicitAppNamesFiltering:
         ]
         assert "extract" in activity_names
         assert "lineage" in activity_names
-        assert "unwanted" not in activity_names
 
-    def test_dedup_across_explicit_apps(self) -> None:
-        """Framework tasks (cleanup_files, upload, etc.) should be deduped across explicit apps."""
+    def test_activity_names_are_app_qualified(self) -> None:
+        """Activity names use '{app_name}:{task_name}' format, eliminating name collisions."""
 
         class _DedupPrimary(App):
             @task(timeout_seconds=60)
@@ -352,21 +337,15 @@ class TestExplicitAppNamesFiltering:
             async def run(self, input: _SecondaryIn) -> _SecondaryOut:
                 return _SecondaryOut()
 
-        activities = get_all_task_activities(
-            app_names=["_dedup-primary", "_dedup-secondary"]
-        )
-        activity_names = [
-            a._task_metadata.name  # type: ignore[attr-defined]
+        activities = get_all_task_activities()
+        # Verify qualified names exist in Temporal definitions
+        defn_names = {
+            getattr(a, "__temporal_activity_definition").name
             for a in activities
-            if hasattr(a, "_task_metadata")
-        ]
-        # Both user tasks present
-        assert "task_p" in activity_names
-        assert "task_s" in activity_names
-        # Framework tasks deduped (appear once, not twice)
-        assert activity_names.count("cleanup_files") == 1
-        assert activity_names.count("upload") == 1
-        assert activity_names.count("download") == 1
+            if hasattr(a, "__temporal_activity_definition")
+        }
+        assert "_dedup-primary:task_p" in defn_names
+        assert "_dedup-secondary:task_s" in defn_names
 
 
 class TestLoadExtraAppModules:

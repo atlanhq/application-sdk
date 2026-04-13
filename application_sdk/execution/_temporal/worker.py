@@ -118,7 +118,6 @@ def create_worker(
     client: Client,
     task_queue: str = "application-sdk",
     *,
-    app_names: list[str] | None = None,
     passthrough_modules: set[str] | None = None,
     service_name: str | None = None,
     max_concurrent_activities: int | None = None,
@@ -128,15 +127,14 @@ def create_worker(
     """Create a Temporal worker for registered Apps.
 
     The worker registers:
-    - One workflow per App (named after the app: 'my-pipeline', 'my-loader', etc.)
-    - All @task methods as named activities
+    - One workflow per entry point per App
+    - All @task methods as named activities (qualified as ``{app}:{task}``)
 
     Apps must be imported/registered before creating the worker.
 
     Args:
         client: Temporal client.
         task_queue: Task queue to listen on.
-        app_names: Optional list of App names to include. If None, includes all.
         passthrough_modules: Additional modules to pass through the sandbox.
         service_name: Service name for observability (traces/metrics).
         max_concurrent_activities: Maximum number of concurrent activity executions.
@@ -158,7 +156,7 @@ def create_worker(
         await worker.run()
     """
     app_workflows = get_all_app_workflows()
-    task_activities = get_all_task_activities(app_names=app_names)
+    task_activities = get_all_task_activities()
 
     interceptor_settings = load_interceptor_settings()
 

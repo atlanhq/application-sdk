@@ -180,14 +180,18 @@ class TestAppRegistration:
         assert metadata.version == "2.5.0"
 
     def test_abstract_app_not_registered(self) -> None:
-        """An App subclass without run() implementation is NOT registered."""
-        import inspect
+        """An App subclass that only inherits the default run() is NOT registered.
+
+        Since run() is no longer abstract, inspect.isabstract is False — but the
+        class should still not be registered because input_type is the base Input
+        (not narrowed), which triggers the 'skip if types are base Input/Output'
+        guard in __init_subclass__.
+        """
 
         class AbstractSubApp(App):
-            # No run() implementation — still abstract
+            # No run() override — inherits the default raise NotImplementedError
             pass
 
-        assert inspect.isabstract(AbstractSubApp)
         registry = AppRegistry.get_instance()
         # Should not be registered
         with pytest.raises(Exception):

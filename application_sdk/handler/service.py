@@ -630,16 +630,55 @@ def create_app_handler_service(
 
         body: dict[str, Any] = await request.json()
         explicit_workflow_id: str | None = body.pop("workflow_id", None)
+        workflow_type: str | None = body.pop("workflow_type", None)
         workflow_id = explicit_workflow_id or "(unknown)"
 
         try:
             client = await _get_temporal_client()
 
-            input_type = getattr(app_cls, "_input_type", None)
+            # Resolve entry point and workflow name from workflow_type
+            from application_sdk.app.registry import AppRegistry
+
+            app_meta = AppRegistry.get_instance().get(app_cls._app_name)  # type: ignore[attr-defined]
+            entry_points = app_meta.entry_points
+
+            if workflow_type:
+                if workflow_type not in entry_points:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Unknown workflow_type '{workflow_type}'. "
+                            f"Available: {sorted(entry_points.keys())}"
+                        ),
+                    )
+                ep = entry_points[workflow_type]
+            elif len(entry_points) == 1:
+                ep = next(iter(entry_points.values()))
+            elif len(entry_points) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"workflow_type is required for multi-entry-point app. "
+                        f"Available: {sorted(entry_points.keys())}"
+                    ),
+                )
+            else:
+                # Fallback: no entry_points (shouldn't happen for a registered app)
+                raise HTTPException(
+                    status_code=500, detail="App has no registered entry points."
+                )
+
+            input_type = ep.input_type
+            workflow_name = (
+                app_cls._app_name  # type: ignore[attr-defined]
+                if ep.implicit
+                else f"{app_cls._app_name}:{ep.name}"  # type: ignore[attr-defined]
+            )
+
             if input_type is None:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"App class {app_cls.__name__} does not define _input_type.",
+                    detail=f"App class {app_cls.__name__} entry point has no input type.",
                 )
 
             # Save inline credentials to the secret store and replace with a
@@ -709,7 +748,7 @@ def create_app_handler_service(
             )
 
             handle = await client.start_workflow(
-                app_cls._app_name,  # type: ignore[attr-defined]
+                workflow_name,
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,

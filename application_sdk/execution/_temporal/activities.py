@@ -79,7 +79,7 @@ def create_activity_from_task(
     Returns:
         A decorated Temporal activity function.
     """
-    activity_name = task_metadata.name
+    activity_name = f"{task_metadata.app_name}:{task_metadata.name}"
     input_type = task_metadata.input_type
     output_type = task_metadata.output_type
 
@@ -242,28 +242,13 @@ def create_activity_from_task(
     return decorated
 
 
-def get_all_task_activities(
-    app_names: list[str] | None = None,
-) -> list[Callable[..., Any]]:
-    """Get registered tasks as Temporal activity functions.
-
-    Args:
-        app_names: Optional list of app names to filter by. If None, includes all.
-
-    Returns:
-        List of Temporal activity functions.
-    """
+def get_all_task_activities() -> list[Callable[..., Any]]:
+    """Get all registered tasks as Temporal activity functions."""
     activities: list[Callable[..., Any]] = []
-    seen_names: set[str] = set()
     task_registry = TaskRegistry.get_instance()
 
-    for reg_app_name, task_list in task_registry.get_all_tasks().items():
-        if app_names is not None and reg_app_name not in app_names:
-            continue
+    for task_list in task_registry.get_all_tasks().values():
         for task_meta in task_list:
-            if task_meta.name in seen_names:
-                continue
-            seen_names.add(task_meta.name)
             activity_fn = create_activity_from_task(task_meta)
             activities.append(activity_fn)
 

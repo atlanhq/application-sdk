@@ -104,9 +104,6 @@ class AppConfig:
     handler_module: str | None = None
     """Optional explicit handler module path."""
 
-    extra_app_modules: list[str] | None = None
-    """Additional app modules to register on the worker (comma-separated in env var)."""
-
     # Worker
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"
@@ -175,16 +172,7 @@ class AppConfig:
                 "App module is required. Use --app or set ATLAN_APP_MODULE."
             )
 
-        # Support comma-separated modules: first is primary, rest are extra
-        app_module_parts = [m.strip() for m in app_module_raw.split(",") if m.strip()]
-        if not app_module_parts:
-            raise ValueError(
-                "App module is required. Use --app or set ATLAN_APP_MODULE."
-            )
-        app_module = app_module_parts[0]
-        extra_from_app_module = (
-            app_module_parts[1:] if len(app_module_parts) > 1 else []
-        )
+        app_module = app_module_raw.strip()
 
         service_name = (
             getattr(args, "service_name", None)
@@ -205,15 +193,12 @@ class AppConfig:
         # TemporalWorkflowClient.get_worker_task_queue()), fall back to class-name derivation.
         _default_task_queue = _derive_task_queue(app_module)
 
-        extra_app_modules = extra_from_app_module if extra_from_app_module else None
-
         return cls(
             mode=mode,
             app_module=app_module,
             handler_module=getattr(args, "handler", None)
             or _env("ATLAN_HANDLER_MODULE")
             or None,
-            extra_app_modules=extra_app_modules,
             temporal_host=getattr(args, "temporal_host", None)
             or _env("ATLAN_TEMPORAL_HOST")
             or _v2_temporal_host
@@ -602,8 +587,6 @@ async def run_worker_mode(config: AppConfig) -> None:
         app_class._app_version,  # type: ignore[attr-defined]
     )
 
-    extra_names = _load_extra_app_modules(config.extra_app_modules)
-
     data_converter = create_data_converter_for_app(app_class)
 
     # Acquire auth token if enabled
@@ -643,13 +626,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    # Only register tasks for explicitly loaded apps (primary + extras from ATLAN_APP_MODULE).
-    # app_names=None would include transitive imports (e.g. template base classes like
-    # SqlMetadataExtractor) whose base task implementations shadow connector overrides.
-    registered_app_names = [app_name] + extra_names
-    worker = create_worker(
-        client, task_queue=config.task_queue, app_names=registered_app_names
-    )
+    worker = create_worker(client, task_queue=config.task_queue)
 
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -818,8 +795,6 @@ async def run_combined_mode(config: AppConfig) -> None:
         app_class._app_version,  # type: ignore[attr-defined]
     )
 
-    extra_names = _load_extra_app_modules(config.extra_app_modules)
-
     data_converter = create_data_converter_for_app(app_class)
 
     auth_manager: Any = None
@@ -858,10 +833,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
 
-    registered_app_names = [app_name] + extra_names
-    worker = create_worker(
-        client, task_queue=config.task_queue, app_names=registered_app_names
-    )
+    worker = create_worker(client, task_queue=config.task_queue)
 
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
