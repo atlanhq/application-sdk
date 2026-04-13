@@ -23,8 +23,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.decorators.mcp_tool import mcp_tool
 from application_sdk.server.mcp import MCPServer
+from application_sdk.server.mcp.decorators import mcp_tool
 
 # ---------------------------------------------------------------------------
 # Helpers

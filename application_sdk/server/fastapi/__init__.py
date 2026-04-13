@@ -77,24 +77,24 @@ logger = get_logger(__name__)
 class APIServer(ServerInterface):
     """A FastAPI-based implementation of the ServerInterface.
 
-        This class provides a FastAPI-based web server that handles workflow management,
-        authentication, metadata operations, and event processing. It supports both HTTP and
-        event-based workflow triggers.
+    This class provides a FastAPI-based web server that handles workflow management,
+    authentication, metadata operations, and event processing. It supports both HTTP and
+    event-based workflow triggers.
 
-        Attributes:
-            app (FastAPI): The main FastAPI application instance.
-            workflow_client (Optional[WorkflowClient]): Client for interacting with Temporal workflows.
-            workflow_router (APIRouter): Router for workflow-related endpoints.
-            dapr_router (APIRouter): Router for pub/sub operations.
-            events_router (APIRouter): Router for event handling.
-    workflows (List[WorkflowInterface]): List of registered workflows.
-            event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
-            duckdb_ui (DuckDBUI): Instance of DuckDBUI for handling DuckDB UI functionality.
+    Attributes:
+        app (FastAPI): The main FastAPI application instance.
+        workflow_client (Optional[WorkflowClient]): Client for interacting with Temporal workflows.
+        workflow_router (APIRouter): Router for workflow-related endpoints.
+        dapr_router (APIRouter): Router for pub/sub operations.
+        events_router (APIRouter): Router for event handling.
+        workflows (List[WorkflowInterface]): List of registered workflows.
+        event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
+        duckdb_ui (DuckDBUI): Instance of DuckDBUI for handling DuckDB UI functionality.
 
-        Args:
-            lifespan: Optional lifespan manager for the FastAPI application.
-            handler (Optional[HandlerInterface]): Handler for processing application operations.
-            workflow_client (Optional[WorkflowClient]): Client for Temporal workflow operations.
+    Args:
+        lifespan: Optional lifespan manager for the FastAPI application.
+        handler (Optional[HandlerInterface]): Handler for processing application operations.
+        workflow_client (Optional[WorkflowClient]): Client for Temporal workflow operations.
     """
 
     # Declare class attributes with proper typing

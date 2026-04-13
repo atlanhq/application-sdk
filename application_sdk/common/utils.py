@@ -3,7 +3,6 @@ import glob
 import json
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
 from typing import (
     Any,
     Awaitable,
@@ -560,8 +559,7 @@ def run_sync(func):
 
     async def wrapper(*args, **kwargs):
         loop = asyncio.get_running_loop()
-        with ThreadPoolExecutor() as pool:
-            return await loop.run_in_executor(pool, func, *args, **kwargs)
+        return await loop.run_in_executor(None, func, *args, **kwargs)
 
     return wrapper
 

@@ -56,8 +56,12 @@ class InterceptorSettings:
 
 def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables."""
+    # Prefer TEMPORAL_HOST (v3). Fall back to ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT (v2).
+    _v2_host = os.environ.get("ATLAN_WORKFLOW_HOST", "")
+    _v2_port = os.environ.get("ATLAN_WORKFLOW_PORT", "7233")
+    _v2_default = f"{_v2_host}:{_v2_port}" if _v2_host else "localhost:7233"
     return ExecutionSettings(
-        host=os.environ.get("TEMPORAL_HOST", "localhost:7233"),
+        host=os.environ.get("TEMPORAL_HOST", _v2_default),
         namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"),
         task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", "application-sdk"),
         max_concurrent_activities=int(
