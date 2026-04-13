@@ -618,7 +618,7 @@ async def test_start_intercepts_inline_credentials(
 
 @pytest.mark.integration
 async def test_prometheus_metrics_endpoint():
-    """GET /metrics returns Prometheus exposition format with HTTP metrics."""
+    """G6.13: GET /metrics returns Prometheus exposition format with HTTP metrics."""
     from unittest import mock
 
     from application_sdk.handler.service import create_app_handler_service
@@ -642,7 +642,7 @@ async def test_prometheus_metrics_endpoint():
 
 @pytest.mark.integration
 async def test_prometheus_metrics_not_exposed_when_disabled():
-    """GET /metrics returns 404 when Prometheus is disabled."""
+    """G6.14: GET /metrics returns 404 when Prometheus is disabled."""
     from unittest import mock
 
     from application_sdk.handler.service import create_app_handler_service
