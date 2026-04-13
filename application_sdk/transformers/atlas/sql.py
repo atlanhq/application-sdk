@@ -64,21 +64,21 @@ class Procedure(assets.Procedure):
             ValueError: If any required fields are missing or None.
         """
         try:
-            assert obj.get("procedure_name") is not None, (
-                "Procedure name cannot be None"
-            )
-            assert obj.get("procedure_definition") is not None, (
-                "Procedure definition cannot be None"
-            )
-            assert obj.get("procedure_catalog") is not None, (
-                "Procedure catalog cannot be None"
-            )
-            assert obj.get("procedure_schema") is not None, (
-                "Procedure schema cannot be None"
-            )
-            assert obj.get("connection_qualified_name") is not None, (
-                "Connection qualified name cannot be None"
-            )
+            assert (
+                obj.get("procedure_name") is not None
+            ), "Procedure name cannot be None"
+            assert (
+                obj.get("procedure_definition") is not None
+            ), "Procedure definition cannot be None"
+            assert (
+                obj.get("procedure_catalog") is not None
+            ), "Procedure catalog cannot be None"
+            assert (
+                obj.get("procedure_schema") is not None
+            ), "Procedure schema cannot be None"
+            assert (
+                obj.get("connection_qualified_name") is not None
+            ), "Connection qualified name cannot be None"
 
             procedure_attributes = {}
             procedure_custom_attributes = {}
@@ -502,9 +502,9 @@ class Column(assets.Column):
             assert obj.get("table_catalog") is not None, "Table catalog cannot be None"
             assert obj.get("table_schema") is not None, "Table schema cannot be None"
             assert obj.get("table_name") is not None, "Table name cannot be None"
-            assert obj.get("ordinal_position") is not None, (
-                "Ordinal position cannot be None"
-            )
+            assert (
+                obj.get("ordinal_position") is not None
+            ), "Ordinal position cannot be None"
             assert obj.get("data_type") is not None, "Data type cannot be None"
 
             attributes = {}
@@ -840,30 +840,30 @@ class Function(assets.Function):
             ValueError: If required fields are missing or invalid.
         """
         try:
-            assert "function_name" in obj and obj["function_name"] is not None, (
-                "Function name cannot be None"
-            )
+            assert (
+                "function_name" in obj and obj["function_name"] is not None
+            ), "Function name cannot be None"
             assert (
                 "argument_signature" in obj and obj["argument_signature"] is not None
             ), "Function argument signature cannot be None"
             assert (
                 "function_definition" in obj and obj["function_definition"] is not None
             ), "Function definition cannot be None"
-            assert "is_external" in obj and obj["is_external"] is not None, (
-                "Function is_external name cannot be None"
-            )
-            assert "is_memoizable" in obj and obj["is_memoizable"] is not None, (
-                "Function is_memoizable cannot be None"
-            )
+            assert (
+                "is_external" in obj and obj["is_external"] is not None
+            ), "Function is_external name cannot be None"
+            assert (
+                "is_memoizable" in obj and obj["is_memoizable"] is not None
+            ), "Function is_memoizable cannot be None"
             assert (
                 "function_language" in obj and obj["function_language"] is not None
             ), "Function language cannot be None"
-            assert "function_catalog" in obj and obj["function_catalog"] is not None, (
-                "Function catalog cannot be None"
-            )
-            assert "function_schema" in obj and obj["function_schema"] is not None, (
-                "Function schema cannot be None"
-            )
+            assert (
+                "function_catalog" in obj and obj["function_catalog"] is not None
+            ), "Function catalog cannot be None"
+            assert (
+                "function_schema" in obj and obj["function_schema"] is not None
+            ), "Function schema cannot be None"
 
             function_attributes = {}
             function_custom_attributes = {}
@@ -1071,21 +1071,21 @@ class TagAttachment(assets.TagAttachment):
             ValueError: If required fields are missing or invalid.
         """
         try:
-            assert "tag_name" in obj and obj["tag_name"] is not None, (
-                "Tag name cannot be None"
-            )
-            assert "tag_database" in obj and obj["tag_database"] is not None, (
-                "Tag database cannot be None"
-            )
-            assert "tag_schema" in obj and obj["tag_schema"] is not None, (
-                "Tag schema cannot be None"
-            )
-            assert "object_database" in obj and obj["object_database"] is not None, (
-                "Object database cannot be None"
-            )
-            assert "object_schema" in obj and obj["object_schema"] is not None, (
-                "Object schema cannot be None"
-            )
+            assert (
+                "tag_name" in obj and obj["tag_name"] is not None
+            ), "Tag name cannot be None"
+            assert (
+                "tag_database" in obj and obj["tag_database"] is not None
+            ), "Tag database cannot be None"
+            assert (
+                "tag_schema" in obj and obj["tag_schema"] is not None
+            ), "Tag schema cannot be None"
+            assert (
+                "object_database" in obj and obj["object_database"] is not None
+            ), "Object database cannot be None"
+            assert (
+                "object_schema" in obj and obj["object_schema"] is not None
+            ), "Object schema cannot be None"
 
             tag_attachment_attributes = {}
             tag_attachment_custom_attributes = {}
