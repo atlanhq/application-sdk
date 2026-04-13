@@ -151,6 +151,7 @@ async def upload_file(
     *,
     chunk_size: int = 8 * 1024 * 1024,
     normalize: bool = True,
+    retain_local_copy: bool = True,
 ) -> str:
     """Stream-upload a local file to *key* in the store.
 
@@ -169,6 +170,9 @@ async def upload_file(
             Increased automatically if the file is large enough to exceed
             the 9,900-part safety limit.
         normalize: When ``True`` (default), normalise *key* before use.
+        retain_local_copy: When ``True`` (default), keep the local file after
+            upload.  When ``False``, delete the local file after a successful
+            upload.
 
     Returns:
         Hex-encoded SHA-256 digest of the uploaded file.
@@ -204,7 +208,21 @@ async def upload_file(
             f"Failed to upload file to key '{key}'", key=key, cause=exc
         ) from exc
 
-    return h.hexdigest()
+    digest = h.hexdigest()
+
+    if not retain_local_copy:
+        from application_sdk.constants import TEMPORARY_PATH
+
+        resolved_path = path.resolve()
+        staging_root = Path(TEMPORARY_PATH).resolve()
+        # Only delete files within the staging directory to prevent path traversal
+        if resolved_path.is_relative_to(staging_root):
+            try:
+                resolved_path.unlink(missing_ok=True)
+            except OSError:
+                pass  # best-effort cleanup
+
+    return digest
 
 
 async def download_file(
@@ -491,6 +509,7 @@ async def list_keys(
     prefix: str = "",
     store: "ObjectStore | None" = None,
     *,
+    suffix: str = "",
     normalize: bool = True,
 ) -> list[str]:
     """List all object keys under *prefix*.
@@ -506,6 +525,8 @@ async def list_keys(
             (e.g. ``"artifacts"`` won't match ``"artifacts_backup/"``).
         store: An obstore-compatible store instance, or ``None`` to use the
             store from the current infrastructure context.
+        suffix: Optional file extension or suffix filter.  When set, only
+            keys ending with this string are returned (e.g. ``".parquet"``).
         normalize: When ``True`` (default), normalise *prefix* before use.
             Pass ``False`` to use *prefix* exactly as supplied.
 
@@ -526,7 +547,9 @@ async def list_keys(
         keys: list[str] = []
         for batch in obstore.list(resolved, prefix=prefix or None):
             for item in batch:
-                keys.append(str(item["path"]))
+                key = str(item["path"])
+                if not suffix or key.endswith(suffix):
+                    keys.append(key)
         return sorted(keys)
     except Exception as exc:
         from application_sdk.storage.errors import StorageError
@@ -534,6 +557,42 @@ async def list_keys(
         raise StorageError(
             f"Failed to list keys with prefix '{prefix}'", cause=exc
         ) from exc
+
+
+async def download_prefix(
+    prefix: str,
+    local_dir: "str | Path",
+    store: "ObjectStore | None" = None,
+    *,
+    suffix: str = "",
+    normalize: bool = True,
+) -> list[str]:
+    """Download all objects under *prefix* to a local directory.
+
+    Each key's relative path (after the prefix) is preserved under *local_dir*.
+
+    Args:
+        prefix: Object key prefix to download.
+        local_dir: Local directory to write files into.
+        store: Source store, or ``None`` to use the infrastructure store.
+        suffix: Optional extension filter (e.g. ``".parquet"``).
+        normalize: When ``True`` (default), normalise *prefix* before use.
+
+    Returns:
+        List of local file paths that were downloaded.
+
+    Raises:
+        StorageError: If listing or downloading fails.
+        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    keys = await list_keys(prefix, store, suffix=suffix, normalize=normalize)
+    downloaded: list[str] = []
+    local = Path(local_dir)
+    for key in keys:
+        dest = local / key
+        await download_file(key, dest, store, normalize=False)
+        downloaded.append(str(dest))
+    return downloaded
 
 
 #: v2-compatible alias for :func:`delete`.

@@ -147,6 +147,23 @@ class TestNormalizeIntegration:
         assert "docs/a.txt" in keys
         assert "docs_extra/b.txt" not in keys
 
+    async def test_list_keys_suffix_filter(self, store) -> None:
+        await _put("data/table.parquet", b"p", store, normalize=False)
+        await _put("data/table.json", b"j", store, normalize=False)
+        await _put("data/stats.parquet", b"p2", store, normalize=False)
+
+        parquet_keys = await list_keys("data", store, suffix=".parquet")
+        assert len(parquet_keys) == 2
+        assert "data/table.parquet" in parquet_keys
+        assert "data/stats.parquet" in parquet_keys
+        assert "data/table.json" not in parquet_keys
+
+        json_keys = await list_keys("data", store, suffix=".json")
+        assert json_keys == ["data/table.json"]
+
+        all_keys = await list_keys("data", store)
+        assert len(all_keys) == 3
+
 
 class TestUploadFile:
     async def test_upload_file_roundtrip(self, store, tmp_path) -> None:
@@ -180,6 +197,64 @@ class TestUploadFile:
         await upload_file("exact/key.bin", f, store, normalize=False)
         raw = await _get_bytes("exact/key.bin", store, normalize=False)
         assert raw == b"exact"
+
+    async def test_upload_file_retain_local_copy_true(self, store, tmp_path) -> None:
+        f = tmp_path / "keep.bin"
+        f.write_bytes(b"keep me")
+        await upload_file("keep.bin", f, store, retain_local_copy=True)
+        assert f.exists(), "Local file should be retained"
+
+    async def test_upload_file_retain_local_copy_false_in_staging(
+        self, store, tmp_path
+    ) -> None:
+        from unittest.mock import patch
+
+        # Simulate file inside TEMPORARY_PATH so it's allowed to be deleted
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        f = staging / "delete_me.bin"
+        f.write_bytes(b"delete me")
+
+        with patch("application_sdk.constants.TEMPORARY_PATH", str(staging)):
+            await upload_file("del.bin", f, store, retain_local_copy=False)
+        assert not f.exists(), "Local file should be deleted after upload"
+
+    async def test_upload_file_retain_local_copy_false_outside_staging(
+        self, store, tmp_path
+    ) -> None:
+        from unittest.mock import patch
+
+        # File outside TEMPORARY_PATH should NOT be deleted (path traversal protection)
+        f = tmp_path / "safe.bin"
+        f.write_bytes(b"safe")
+
+        with patch("application_sdk.constants.TEMPORARY_PATH", str(tmp_path / "other")):
+            await upload_file("safe.bin", f, store, retain_local_copy=False)
+        assert f.exists(), "File outside staging should NOT be deleted"
+
+
+class TestDownloadPrefix:
+    async def test_download_prefix_basic(self, store, tmp_path) -> None:
+        await _put("myprefix/a.txt", b"aaa", store, normalize=False)
+        await _put("myprefix/b.txt", b"bbb", store, normalize=False)
+        await _put("other/c.txt", b"ccc", store, normalize=False)
+
+        from application_sdk.storage.ops import download_prefix
+
+        paths = await download_prefix("myprefix", tmp_path, store=store)
+        assert len(paths) == 2
+        assert (tmp_path / "myprefix" / "a.txt").read_bytes() == b"aaa"
+        assert (tmp_path / "myprefix" / "b.txt").read_bytes() == b"bbb"
+
+    async def test_download_prefix_with_suffix_filter(self, store, tmp_path) -> None:
+        await _put("data/file.parquet", b"pq", store, normalize=False)
+        await _put("data/file.json", b"js", store, normalize=False)
+
+        from application_sdk.storage.ops import download_prefix
+
+        paths = await download_prefix("data", tmp_path, store=store, suffix=".parquet")
+        assert len(paths) == 1
+        assert paths[0].endswith("file.parquet")
 
 
 class TestDownloadFile:

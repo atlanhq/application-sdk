@@ -651,10 +651,8 @@ class ParquetFileWriter(Writer):
                     logger.info("No files found under prefix: %s", self.path)
             for path in file_paths:
                 if ENABLE_ATLAN_UPLOAD:
-                    await _upload_file(path, path)
-                await _upload_file(path, path)
-                if not self.retain_local_copy and os.path.exists(path):
-                    os.remove(path)
+                    await _upload_file(path, path, retain_local_copy=True)
+                await _upload_file(path, path, retain_local_copy=self.retain_local_copy)
 
         except Exception as e:
             # Record metrics for failed write

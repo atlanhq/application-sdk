@@ -634,15 +634,9 @@ class Writer(ABC):
         """Upload a file to the object store."""
         retain_local = getattr(self, "retain_local_copy", False)
 
-        # In v3, both upstream and deployment stores resolve from infrastructure
-        # context. When ENABLE_ATLAN_UPLOAD is true we upload twice (same store
-        # in practice, kept for backward compat).
         if ENABLE_ATLAN_UPLOAD:
-            await _upload_file(file_name, file_name)
-        await _upload_file(file_name, file_name)
-
-        if not retain_local and os.path.exists(file_name):
-            os.remove(file_name)
+            await _upload_file(file_name, file_name, retain_local_copy=True)
+        await _upload_file(file_name, file_name, retain_local_copy=retain_local)
 
         self.current_buffer_size_bytes = 0
 

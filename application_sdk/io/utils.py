@@ -8,7 +8,8 @@ from application_sdk.common.error_codes import IOError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.ops import download_file as _download_file
-from application_sdk.storage.ops import list_keys, normalize_key
+from application_sdk.storage.ops import download_prefix as _download_prefix
+from application_sdk.storage.ops import normalize_key
 
 JSON_FILE_EXTENSION = ".json"
 PARQUET_FILE_EXTENSION = ".parquet"
@@ -92,6 +93,11 @@ async def download_files(
 ) -> List[str]:
     """Download files from object store if not available locally.
 
+    .. deprecated::
+        Use :func:`application_sdk.storage.transfer.download` instead, which
+        provides SHA-256 integrity verification and skip-if-exists deduplication.
+        This function will be removed in v3.1.0.
+
     Flow:
     1. Check if files exist locally at self.path
     2. If not, try to download from object store
@@ -153,12 +159,8 @@ async def download_files(
         else:
             # Download entire directory
             prefix = normalize_key(path)
-            keys = await list_keys(prefix)
-            for key in keys:
-                destination_path = os.path.join(isolated_tmp, key)
-                await _download_file(key, destination_path, normalize=False)
-            # Find the actual files in the downloaded directory
             dest_dir = os.path.join(isolated_tmp, prefix)
+            await _download_prefix(prefix, isolated_tmp, suffix=file_extension)
             found_files = find_local_files_by_extension(
                 dest_dir, file_extension, file_names
             )
