@@ -38,7 +38,7 @@ The MCP server is automatically mounted at the root endpoint (`/mcp`) and can be
 Use the `@mcp_tool` decorator to expose tasks as tools:
 
 ```python
-from application_sdk.decorators.mcp_tool import mcp_tool
+from application_sdk.server.mcp.decorators import mcp_tool
 from application_sdk.app import App, Input, Output, task
 
 class FetchInput(Input):
