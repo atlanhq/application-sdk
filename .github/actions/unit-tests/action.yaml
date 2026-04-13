@@ -49,8 +49,9 @@ runs:
         PYTEST_IGNORE=""
         if [ "${PYTHON_MINOR}" -ge 14 ] 2>/dev/null; then
           UV_RUN="uv run --frozen --no-group dev"
-          # Skip tests that require libcst (dev-only, no 3.14 support) or pyatlan pydantic-v1 compat
-          PYTEST_IGNORE="--ignore=tests/unit/tools --ignore=tests/unit/clients/test_atlan_client.py"
+          # Skip tests that require libcst (dev-only, no 3.14 support) or
+          # pyatlan pydantic-v1 compat (upstream fix: atlan-python PR #893)
+          PYTEST_IGNORE="--ignore=tests/unit/tools --ignore=tests/unit/clients/test_atlan_client.py --ignore=tests/unit/credentials/test_atlan_client.py"
         fi
         $UV_RUN coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ $PYTEST_IGNORE -v --full-trace --hypothesis-show-statistics
         $UV_RUN coverage xml
