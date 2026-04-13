@@ -151,19 +151,25 @@ will hit in production before you get to the refactor.
 These guards govern how incremental code is written. Violating any of these
 produces bugs that are difficult to diagnose in production.
 
-### GUARD-IMPL-01: NEVER Persist Marker Before Publish Succeeds
+### GUARD-IMPL-01: Persist Marker Before Publish ONLY If Backfill Exists
 
-The correct ordering is:
+State persistence timing depends on whether the connector has a backfill mechanism:
 
-1. **Extract** -- fetch data from source
-2. **Process** -- normalize, filter, deduplicate
-3. **Transform** -- convert to Atlan entity format
-4. **Upload to Atlan** -- publish entities via the SDK
-5. **Persist incremental state** -- save the marker ONLY after step 4 succeeds
+**With backfill (e.g., Tableau):** Persisting state before publish is SAFE because
+the next run can reconstruct complete output from fresh + backfilled data. Even if
+publish fails, no data is lost — the next run reproduces the same complete output.
+The Tableau implementation persists before publish for this reason.
 
-If you persist the marker before publish and the publish fails, the next run
-will skip the entities that failed to publish. This is **state corruption**
-and requires manual intervention to fix.
+**Without backfill:** State MUST be persisted ONLY after publish succeeds. If the
+marker is advanced before publish and publish fails, the next run will skip entities
+that were never published. This is **state corruption**.
+
+The correct approach depends on the connector:
+- **Backfill present:** Extract → Process → Transform → Persist state → Upload (safe)
+- **No backfill:** Extract → Process → Transform → Upload → Persist state (required)
+
+When in doubt, persist after publish — it is always safe, just slightly less
+efficient (a failed publish causes re-extraction of the delta on the next run).
 
 ### GUARD-IMPL-02: State Persistence Must Be Atomic Per-Connection
 
@@ -496,11 +502,12 @@ Incremental logic WRAPS AROUND existing extraction code. The full extraction
 path must remain intact and functional. Incremental is an optimization layer
 on top of full extraction, not a replacement.
 
-### REFUSE-04: Do NOT Persist State Before Publish Succeeds
+### REFUSE-04: Do NOT Persist State Before Publish Without Backfill
 
-Restating GUARD-IMPL-01 as a hard refusal. This is the single most dangerous
-mistake in incremental extraction. If an agent proposes persisting state at
-any point before upload_to_atlan completes, REFUSE.
+Restating GUARD-IMPL-01 as a hard refusal. If the connector does NOT have a
+backfill mechanism that can reconstruct complete output from cached data,
+persisting state before publish is forbidden. If backfill exists (like Tableau),
+early persistence is safe and acceptable.
 
 ### REFUSE-05: Do NOT Implement Without force_full_extraction Escape Hatch
 
