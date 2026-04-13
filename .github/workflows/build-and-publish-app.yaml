@@ -99,139 +99,24 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Checkout SDK helper scripts
+        # Pull only ``.github/scripts/`` from the SDK at the same SHA this
+        # reusable workflow is running (so the parser stays versioned with the
+        # workflow, not the caller's repo). Sparse checkout keeps it cheap.
+        uses: actions/checkout@v4
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ github.workflow_sha || 'main' }}
+          path: .sdk-workflow
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
       - name: Read atlan.yaml
         id: manifest
-        run: |
-          if [ ! -f atlan.yaml ]; then
-            echo "::error::atlan.yaml not found in repo root"
-            exit 1
-          fi
-
-          python3 - <<'PYEOF'
-          import yaml, sys, os, json, re
-
-          try:
-              with open('atlan.yaml') as f:
-                  d = yaml.safe_load(f) or {}
-          except yaml.YAMLError as e:
-              print(f'::error::atlan.yaml is invalid YAML: {e}', file=sys.stderr)
-              sys.exit(1)
-
-          app_name   = d.get('name', '').lower()
-          app_id     = d.get('app_id', '')
-          build_tag  = d.get('build_tag', 'v1')
-          dockerfile = d.get('dockerfile', './Dockerfile')
-          enable_sdr = 'true' if d.get('self_deployed_runtime', False) else 'false'
-
-          if not app_name:
-              print('::error::atlan.yaml is missing required "name" field', file=sys.stderr)
-              sys.exit(1)
-
-          if build_tag != 'v1':
-              print(f"::error::Unsupported build_tag '{build_tag}'. Only 'v1' is supported by this template version.", file=sys.stderr)
-              sys.exit(1)
-
-          # Serialize deploy config block (if present) for publish
-          deploy_config = ''
-          deploy_val = d.get('deploy')
-          if deploy_val is not None:
-              deploy_config = yaml.dump(deploy_val, default_flow_style=False)
-
-          # Serialize workflow_packages (multi-package native apps, e.g. Teradata
-          # crawler + miner) as a single-line JSON string for the publish curl
-          # body. Absent or empty → emit empty string; the publish step will
-          # omit the field and GM will fall back to App.argo_package_names.
-          #
-          # Validation here fails fast at CI time with annotated errors (better
-          # UX than a publish-time 422 from GM). The same rules are enforced
-          # again by Pydantic on the GM side — this is defence-in-depth, not
-          # duplication for its own sake.
-          workflow_packages = ''
-          wp_val = d.get('workflow_packages')
-          if wp_val:
-              if not isinstance(wp_val, list):
-                  print('::error::atlan.yaml workflow_packages must be a list', file=sys.stderr)
-                  sys.exit(1)
-              required_keys = {'name', 'display_name', 'type', 'generated_dir'}
-              allowed_types = {'connector', 'miner', 'orchestrator', 'utility', 'custom'}
-              name_re = re.compile(r'^[a-z0-9]+(-[a-z0-9]+)*$')
-              seen_names = set()
-              for i, pkg in enumerate(wp_val):
-                  if not isinstance(pkg, dict):
-                      print(f'::error::workflow_packages[{i}] must be a mapping', file=sys.stderr)
-                      sys.exit(1)
-                  missing = required_keys - set(pkg.keys())
-                  if missing:
-                      print(f'::error::workflow_packages[{i}] missing required keys: {sorted(missing)}', file=sys.stderr)
-                      sys.exit(1)
-                  name = pkg.get('name')
-                  if not isinstance(name, str) or not name_re.match(name):
-                      print(f'::error::workflow_packages[{i}].name must be kebab-case (lowercase a-z, 0-9, hyphens); got {name!r}', file=sys.stderr)
-                      sys.exit(1)
-                  if name in seen_names:
-                      print(f'::error::workflow_packages[{i}].name {name!r} is duplicated', file=sys.stderr)
-                      sys.exit(1)
-                  seen_names.add(name)
-                  pkg_type = pkg.get('type')
-                  if pkg_type not in allowed_types:
-                      print(f'::error::workflow_packages[{i}].type must be one of {sorted(allowed_types)}; got {pkg_type!r}', file=sys.stderr)
-                      sys.exit(1)
-                  generated_dir = pkg.get('generated_dir')
-                  if not isinstance(generated_dir, str) or not generated_dir.strip():
-                      print(f'::error::workflow_packages[{i}].generated_dir must be a non-empty string', file=sys.stderr)
-                      sys.exit(1)
-                  display_name = pkg.get('display_name')
-                  if not isinstance(display_name, str) or not display_name.strip():
-                      print(f'::error::workflow_packages[{i}].display_name must be a non-empty string', file=sys.stderr)
-                      sys.exit(1)
-              workflow_packages = json.dumps(wp_val, separators=(',', ':'))
-
-          # Read exact SDK version from uv.lock (non-fatal).
-          # uv.lock contains the precise locked version regardless of how the dep
-          # is specified in pyproject.toml (==, >=, git ref, etc.).
-          sdk_version = ''
-          try:
-              import re as _re
-              re_ver = _re.compile(r'^version\s*=\s*"([^"]+)"')
-              in_sdk_block = False
-              with open('uv.lock') as f:
-                  for line in f:
-                      line = line.rstrip()
-                      if line == 'name = "atlan-application-sdk"':
-                          in_sdk_block = True
-                          continue
-                      if in_sdk_block:
-                          m = re_ver.match(line)
-                          if m:
-                              sdk_version = m.group(1)
-                              break
-                          if line.startswith('name = ') or line.startswith('[['):
-                              break
-          except FileNotFoundError:
-              pass
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-              out.write(f'app_name={app_name}\n')
-              out.write(f'app_id={app_id}\n')
-              out.write(f'build_tag={build_tag}\n')
-              out.write(f'dockerfile={dockerfile}\n')
-              out.write(f'enable_sdr={enable_sdr}\n')
-              out.write(f'sdk_version={sdk_version}\n')
-              # workflow_packages JSON is single-line by construction (separators=(',', ':'))
-              out.write(f'workflow_packages={workflow_packages}\n')
-              # deploy_config may be multiline — use delimiter syntax
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-              out.write(f'deploy_config<<DEPLOY_EOF\n')
-              out.write(f'{deploy_config}\n')
-              out.write(f'DEPLOY_EOF\n')
-
-          print(f'App: {app_name}')
-          print(f'App ID: {app_id}')
-          print(f'Dockerfile: {dockerfile}')
-          print(f'SDR: {enable_sdr}')
-          print(f'SDK version: {sdk_version}')
-          print(f'Workflow packages: {workflow_packages or "(none — falling back to argo_package_names)"}')
-          PYEOF
+        # Inputs validated and outputs written by parse_atlan_yaml.py — see
+        # .sdk-workflow/.github/scripts/parse_atlan_yaml.py for rules.
+        # Unit-tested in tests/test_parse_atlan_yaml.py in the SDK repo.
+        run: python3 .sdk-workflow/.github/scripts/parse_atlan_yaml.py
 
       - name: Validate SDR secrets
         if: steps.manifest.outputs.enable_sdr == 'true'
