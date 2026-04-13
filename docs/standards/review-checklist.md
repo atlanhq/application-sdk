@@ -76,7 +76,7 @@ Review for critical issues first - these take priority over everything else.
 **Critical organization patterns:**
 
 - **File Location Consistency**: Code must be placed in appropriate directories
-  - Decorators belong in `application_sdk/decorators/`, not scattered across modules
+  - Decorators belong next to their consumers (e.g. lock decorators in `execution/`, MCP decorators in `server/mcp/`)
   - Interceptors should be consolidated, not duplicated across files
   - Similar functionality must be grouped together
   - Dead code or "no need" code must be removed immediately
@@ -84,7 +84,7 @@ Review for critical issues first - these take priority over everything else.
 **Import Organization Standards:**
 
 - Imports must be at the top of files (flag any imports inside functions unless required)
-- Import order: standard library → third-party → local application
+- Import order: standard library -> third-party -> local application
 - Group imports by source and separate with blank lines
 - Remove unused imports immediately
 - No circular dependencies between modules
@@ -98,14 +98,13 @@ Review for critical issues first - these take priority over everything else.
 - Files with similar responsibilities should be in the same directory
 
 ```python
-# ❌ REJECT: Poor file organization
-# Having decorators scattered across multiple files
-application_sdk/lock/__init__.py  # Contains decorators
-application_sdk/observability/decorators/  # Contains other decorators
+# REJECT: Poor file organization
+# Decorators far from their consumers
+application_sdk/decorators/locks.py  # Used only by execution/_temporal/
 
-# ✅ REQUIRE: Centralized organization
-application_sdk/decorators/locks.py  # All lock decorators
-application_sdk/decorators/observability_decorator.py  # All observability decorators
+# REQUIRE: Colocate decorators with consumers
+application_sdk/execution/decorators.py  # Lock decorators near lock interceptor
+application_sdk/server/mcp/decorators.py  # MCP decorators near MCP server
 ```
 
 #### Python Code Organization and Style
@@ -157,11 +156,11 @@ application_sdk/decorators/observability_decorator.py  # All observability decor
 - **Parameter inference**: Values that can be inferred (like application name, run ID) should not require explicit passing
 
 ```python
-# ❌ REJECT: Poor configuration management
+# REJECT: Poor configuration management
 max_locks = os.getenv("MAX_LOCKS")  # No validation, no defaults
 REDIS_ERROR = "true"  # Hardcoded, not configurable
 
-# ✅ REQUIRE: Proper configuration management
+# REQUIRE: Proper configuration management
 FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE = os.getenv("FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE", "false").lower() == "true"
 max_locks = int(os.getenv("MAX_LOCKS", "10"))  # Default with validation
 ```
@@ -179,7 +178,7 @@ max_locks = int(os.getenv("MAX_LOCKS", "10"))  # Default with validation
 **Documentation quality standards:**
 
 ```python
-# ✅ DO: Complete documentation
+# DO: Complete documentation
 def create_distributed_lock(
     lock_name: str,
     max_locks: int = 10,
@@ -216,7 +215,7 @@ def create_distributed_lock(
 - No unused imports or dependencies
 - Consistent import ordering within files
 - No circular dependencies between modules
-- Standard library → third-party → local application imports
+- Standard library -> third-party -> local application imports
 - Group imports by source and separate with blank lines
 
 ---
@@ -270,7 +269,7 @@ def create_distributed_lock(
 - **Non-critical operations**: May swallow exceptions to prevent cascading failures
 
 ```python
-# ✅ DO: Proper error handling with SDK exceptions
+# DO: Proper error handling with SDK exceptions
 from application_sdk.common.error_codes import ClientError
 
 try:
@@ -283,7 +282,7 @@ except ValueError as e:
     logger.error(f"Invalid query parameters: {e}")
     raise ClientError(f"Query validation failed: {e}")
 
-# ❌ DON'T: Generic exceptions without context
+# DON'T: Generic exceptions without context
 try:
     result = some_operation()
 except Exception as e:
@@ -343,7 +342,7 @@ except Exception as e:
 - Close resources in finally blocks or context managers
 
 ```python
-# ✅ DO: Identify parallelization opportunities
+# DO: Identify parallelization opportunities
 # Flag this pattern for parallelization suggestion
 for file in files:
     await download_file(file)  # Sequential, could be parallel
@@ -434,7 +433,7 @@ await asyncio.gather(*tasks)  # Parallel processing
 - **Invalid range operations**: Operations like `random.randint(0, max_value-1)` where `max_value` could be 0
 
 ```python
-# ❌ REJECT: Mutable default arguments
+# REJECT: Mutable default arguments
 def bad_function(items: list = []):  # Shared mutable default!
     items.append("new_item")
     return items
@@ -443,7 +442,7 @@ def bad_config(settings: dict = {}):  # Shared mutable default!
     settings["new_key"] = "value"
     return settings
 
-# ✅ REQUIRE: Immutable defaults with None
+# REQUIRE: Immutable defaults with None
 def good_function(items: Optional[list] = None) -> list:
     if items is None:
         items = []
@@ -456,7 +455,7 @@ def good_config(settings: Optional[dict] = None) -> dict:
     settings["new_key"] = "value"
     return settings
 
-# ❌ REJECT: Mixed typing approaches
+# REJECT: Mixed typing approaches
 def bad_typing_mix(
     param1: str,
     param2,  # No type hint
@@ -465,7 +464,7 @@ def bad_typing_mix(
 ):
     pass
 
-# ✅ REQUIRE: Consistent type annotations
+# REQUIRE: Consistent type annotations
 from typing import List, Optional
 from some_module import SomeClass
 
@@ -477,19 +476,19 @@ def good_typing_consistency(
 ) -> dict:
     pass
 
-# ❌ REJECT: Blocking in async code
+# REJECT: Blocking in async code
 async def bad_async_function():
     await some_io_operation()
     time.sleep(5)  # Blocks entire event loop!
     await another_operation()
 
-# ✅ REQUIRE: Proper async patterns
+# REQUIRE: Proper async patterns
 async def good_async_function():
     await some_io_operation()
     await asyncio.sleep(5)  # Non-blocking async sleep
     await another_operation()
 
-# ❌ REJECT: Unreachable code and invalid ranges
+# REJECT: Unreachable code and invalid ranges
 def bad_validation(max_value: int):
     if False:  # Unreachable code
         print("This never executes")
@@ -498,7 +497,7 @@ def bad_validation(max_value: int):
     random_slot = random.randint(0, max_value - 1)  # ValueError if max_value <= 0
     return random_slot
 
-# ✅ REQUIRE: Proper validation and reachable code
+# REQUIRE: Proper validation and reachable code
 def good_validation(max_value: int) -> int:
     if max_value <= 0:
         raise ValueError(f"max_value must be positive, got: {max_value}")
@@ -634,7 +633,7 @@ When flagging any issue, always provide educational context:
 ### Example Educational Feedback:
 
 Instead of: "Don't use string concatenation in loops"
-Provide: "String concatenation in loops creates O(n²) complexity because strings are immutable - each concatenation creates a new string object. In our enterprise SDK processing millions of metadata records, this could cause significant performance degradation and memory issues. Use join() patterns instead, which maintain O(n) complexity. This follows the principle of choosing appropriate data structures for the access pattern and becomes critical when handling large-scale enterprise datasets."
+Provide: "String concatenation in loops creates O(n^2) complexity because strings are immutable - each concatenation creates a new string object. In our enterprise SDK processing millions of metadata records, this could cause significant performance degradation and memory issues. Use join() patterns instead, which maintain O(n) complexity. This follows the principle of choosing appropriate data structures for the access pattern and becomes critical when handling large-scale enterprise datasets."
 
 ### Focus on Growth and Learning:
 

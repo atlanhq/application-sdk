@@ -381,12 +381,12 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             # Start flush task only if Dapr sink is enabled
             if not AtlanLoggerAdapter._flush_task_started:
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
+                    try:
+                        loop = asyncio.get_running_loop()
                         AtlanLoggerAdapter._flush_task = loop.create_task(
                             self._periodic_flush()
                         )
-                    else:
+                    except RuntimeError:
                         threading.Thread(
                             target=self._start_asyncio_flush, daemon=True
                         ).start()

@@ -1,8 +1,3 @@
----
-description: Conventional Commits Standards
-globs:
-alwaysApply: true
----
 # Conventional Commits
 
 This project follows the [Conventional Commits](https://www.conventionalcommits.org/) specification for commit messages.
@@ -114,7 +109,7 @@ This reverts commit abc123def456.
 - **Reference issues**: Link commits to relevant GitHub issues when applicable
 - **Test before committing**: Ensure all tests pass before creating a commit
 - **Review the diff**: Always review your changes before committing
-- **Scan before pushing**: For Dockerfile or dependency changes, run security scans before pushing (see [build-security.mdc](mdc:.cursor/rules/build-security.mdc))
+- **Scan before pushing**: For Dockerfile or dependency changes, run security scans before pushing (see [build-security.md](build-security.md))
 
 ## Tools
 

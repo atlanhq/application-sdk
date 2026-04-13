@@ -35,4 +35,11 @@ runs:
 
     - name: Install dependencies
       shell: bash
-      run: uv sync --all-extras --all-groups
+      run: |
+        PYTHON_MINOR=$(echo "${{ inputs.python-version }}" | cut -d. -f2)
+        if [ "${PYTHON_MINOR}" -ge 14 ] 2>/dev/null; then
+          # Python 3.14+: skip dev group (libcst's pyo3 doesn't support 3.14 yet)
+          uv sync --all-extras --no-group dev
+        else
+          uv sync --all-extras --all-groups
+        fi

@@ -34,7 +34,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from application_sdk.constants import MCP_METADATA_KEY
-from application_sdk.decorators.mcp_tool import mcp_tool
+from application_sdk.server.mcp.decorators import mcp_tool
 
 
 class TestMCPToolDecorator:

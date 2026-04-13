@@ -4,6 +4,8 @@ This module provides classes for transforming SQL metadata into Atlas entities,
 including databases, schemas, tables, columns, functions, and tag attachments.
 """
 
+from __future__ import annotations
+
 import json
 from typing import Any, Dict, Optional, Set, TypeVar, overload
 

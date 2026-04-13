@@ -214,6 +214,7 @@ dependencies = [
     { name = "loguru" },
     { name = "obstore" },
     { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-exporter-prometheus" },
     { name = "pandas" },
     { name = "psutil" },
     { name = "pyarrow" },
@@ -314,6 +315,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'scale-data-generator'", specifier = ">=1.23.5,<2.5.0" },
     { name = "obstore", specifier = ">=0.9.1,<0.10.0" },
     { name = "opentelemetry-exporter-otlp", specifier = "==1.39.1" },
+    { name = "opentelemetry-exporter-prometheus", specifier = "==0.60b1" },
     { name = "orjson", marker = "extra == 'workflows'", specifier = ">=3.11.6,<3.12.0" },
     { name = "pandas", specifier = ">=2.2.3,<2.4.0" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3,<2.4.0" },
@@ -2877,6 +2879,20 @@ wheels = [
 ]
 
 [[package]]
+name = "opentelemetry-exporter-prometheus"
+version = "0.60b1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
+    { name = "prometheus-client" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/14/39/7dafa6fff210737267bed35a8855b6ac7399b9e582b8cf1f25f842517012/opentelemetry_exporter_prometheus-0.60b1.tar.gz", hash = "sha256:a4011b46906323f71724649d301b4dc188aaa068852e814f4df38cc76eac616b", size = 14976, upload-time = "2025-12-11T13:32:42.944Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/0d/4be6bf5477a3eb3d917d2f17d3c0b6720cd6cb97898444a61d43cc983f5c/opentelemetry_exporter_prometheus-0.60b1-py3-none-any.whl", hash = "sha256:49f59178de4f4590e3cef0b8b95cf6e071aae70e1f060566df5546fad773b8fd", size = 13019, upload-time = "2025-12-11T13:32:23.974Z" },
+]
+
+[[package]]
 name = "opentelemetry-proto"
 version = "1.39.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3159,6 +3175,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/40/f1/6d86a29246dfd2e9b6237f0b5823717f60cad94d47ddc26afa916d21f525/pre_commit-4.5.1.tar.gz", hash = "sha256:eb545fcff725875197837263e977ea257a402056661f09dae08e4b149b030a61", size = 198232, upload-time = "2025-12-16T21:14:33.552Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5d/19/fd3ef348460c80af7bb4669ea7926651d1f95c23ff2df18b9d24bab4f3fa/pre_commit-4.5.1-py2.py3-none-any.whl", hash = "sha256:3b3afd891e97337708c1674210f8eba659b52a38ea5f822ff142d10786221f77", size = 226437, upload-time = "2025-12-16T21:14:32.409Z" },
+]
+
+[[package]]
+name = "prometheus-client"
+version = "0.25.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/fb/d9aa83ffe43ce1f19e557c0971d04b90561b0cfd50762aafb01968285553/prometheus_client-0.25.0.tar.gz", hash = "sha256:5e373b75c31afb3c86f1a52fa1ad470c9aace18082d39ec0d2f918d11cc9ba28", size = 86035, upload-time = "2026-04-09T19:53:42.359Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/9b/d4b1e644385499c8346fa9b622a3f030dce14cd6ef8a1871c221a17a67e7/prometheus_client-0.25.0-py3-none-any.whl", hash = "sha256:d5aec89e349a6ec230805d0df882f3807f74fd6c1a2fa86864e3c2279059fed1", size = 64154, upload-time = "2026-04-09T19:53:41.324Z" },
 ]
 
 [[package]]
@@ -3449,7 +3474,7 @@ wheels = [
 
 [[package]]
 name = "pyatlan"
-version = "9.3.1"
+version = "9.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -3465,9 +3490,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/86/ec/bf8732ae58d91431c79f0a27c66e91bc45c3fffb9919a499e60cf342c56f/pyatlan-9.3.1.tar.gz", hash = "sha256:d0da2050881a05cb87772bad32fd00c5e583d1046d8e4b4aefaf097b519ff409", size = 2759384, upload-time = "2026-03-23T08:08:20.39Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/73/fe9bf1789f188bae6e1ecc52b24329052423a6659bd6ad16c98c611f72e3/pyatlan-9.4.0.tar.gz", hash = "sha256:a98373727dcc1df03e8f45b37c4f85bb4366a8fb313ffb1d23f03ef3d95c6c29", size = 3135782, upload-time = "2026-04-10T08:11:34.929Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/b5/2b84f95c0653ad5280f1eb24923adce190ad0af3e8f587382ffe8e28d877/pyatlan-9.3.1-py3-none-any.whl", hash = "sha256:3af2246b54685bb785473b725c86dee4cec7ea2024cb66d5f8d92b473468ec27", size = 4659707, upload-time = "2026-03-23T08:08:22.647Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/86/c2e1026006ac49f78b5643a71d723683987adf59fd5d573aaa38434336ed/pyatlan-9.4.0-py3-none-any.whl", hash = "sha256:70a288ceca3f5a3658f69e8f092d5722a40ec63665e4913b30b46d074bb1f781", size = 4988228, upload-time = "2026-04-10T08:11:33.118Z" },
 ]
 
 [[package]]
