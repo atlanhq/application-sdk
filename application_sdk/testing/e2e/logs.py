@@ -57,7 +57,7 @@ class LogCollector:
         pods = await get_pods(self.namespace, label_selector)
 
         tasks: list[asyncio.Task[None]] = []
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         for pod in pods:
             pod_name: str = pod.get("metadata", {}).get("name", "unknown")

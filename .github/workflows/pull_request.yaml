@@ -97,10 +97,12 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    # Python 3.14 RC may segfault during interpreter shutdown (known CPython issue)
+    continue-on-error: ${{ matrix.python-version == '3.14' }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6.0.2

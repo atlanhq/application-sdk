@@ -34,12 +34,13 @@ Subclass ``SqlMetadataExtractor`` to implement connector-specific logic::
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import ClassVar
 
-from application_sdk.app.base import App
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
+from application_sdk.templates.contracts.base_metadata_extraction import UploadInput
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -59,17 +60,13 @@ from application_sdk.templates.contracts.sql_metadata import (
 
 logger = get_logger(__name__)
 
-if TYPE_CHECKING:
-    pass
 
-
-class SqlMetadataExtractor(App):
+class SqlMetadataExtractor(BaseMetadataExtractor):
     """Base class for SQL metadata extraction apps.
 
-    Subclass this and override the ``@task`` methods to implement
-    connector-specific extraction logic.
+    Inherits ``upload_to_atlan`` from ``BaseMetadataExtractor``.
 
-    The ``run()`` method orchestrates the full extraction: preflight →
+    The ``run()`` method orchestrates the full extraction:
     fetch (databases, schemas, tables, columns) → transform → upload.
     Override ``run()`` to change the orchestration.
 
@@ -79,6 +76,10 @@ class SqlMetadataExtractor(App):
         async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
             ...
     """
+
+    # Prevent auto-registration: SqlMetadataExtractor is a base template, not a
+    # concrete app. Concrete subclasses (e.g. CloudSqlApp) register themselves.
+    _app_registered: ClassVar[bool] = True
 
     @task(timeout_seconds=1800)
     async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
@@ -236,6 +237,15 @@ class SqlMetadataExtractor(App):
                 columns=column_result.total_record_count,
             )
 
+            # Upload extracted data to Atlan
+            if input.output_path:
+                upload_result = await self.upload_to_atlan(
+                    UploadInput(output_path=input.output_path)
+                )
+                records_uploaded = upload_result.migrated_files
+            else:
+                records_uploaded = 0
+
             return ExtractionOutput(
                 workflow_id=workflow_id,
                 success=True,
@@ -243,6 +253,7 @@ class SqlMetadataExtractor(App):
                 schemas_extracted=schema_result.total_record_count,
                 tables_extracted=table_result.total_record_count,
                 columns_extracted=column_result.total_record_count,
+                records_uploaded=records_uploaded,
             )
 
         except Exception as e:

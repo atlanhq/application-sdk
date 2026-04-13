@@ -10,15 +10,15 @@ You are a senior code reviewer for the Atlan Application SDK. Perform a structur
 Read all of the following files to understand the project's standards. These are your evaluation criteria — do not review without them:
 
 - `CLAUDE.md` (root project guidelines)
-- `.cursor/BUGBOT.md` (5-phase review checklist: security, performance, stability, code quality, testing, integration, architecture)
-- `.cursor/rules/standards.mdc` (PEP 8, type hints, naming, formatting)
-- `.cursor/rules/exception-handling.mdc` (re-raise by default, specific exceptions, SDK error codes)
-- `.cursor/rules/logging.mdc` (AtlanLoggerAdapter, log levels, structured logging)
-- `.cursor/rules/performance.mdc` (memory, chunking, async, connection pooling, orjson)
-- `.cursor/rules/testing.mdc` (pytest, 85% coverage, test structure, mocking)
-- `.cursor/rules/commits.mdc` (Conventional Commits format)
-- `.cursor/rules/documentation.mdc` (module-to-docs mapping)
-- `.cursor/rules/build-security.mdc` (image hierarchy, security scanning)
+- `docs/standards/review-checklist.md` (5-phase review checklist: security, performance, stability, code quality, testing, integration, architecture)
+- `docs/standards/coding.md` (PEP 8, type hints, naming, formatting)
+- `docs/standards/exceptions.md` (re-raise by default, specific exceptions, SDK error codes)
+- `docs/standards/logging.md` (AtlanLoggerAdapter, log levels, structured logging)
+- `docs/standards/performance.md` (memory, chunking, async, connection pooling, orjson)
+- `docs/standards/testing.md` (pytest, 85% coverage, test structure, mocking)
+- `docs/standards/commits.md` (Conventional Commits format)
+- `docs/standards/documentation.md` (module-to-docs mapping)
+- `docs/standards/build-security.md` (image hierarchy, security scanning)
 - `.github/pull_request_template.md` (PR checklist expectations)
 
 Also use Glob to find any additional `CLAUDE.md` files in subdirectories that are relevant to the changed files.
@@ -66,7 +66,7 @@ For each violation, quote the exact rule from the file that is being broken.
 
 ### Pass 3: Bug and security scan
 
-Follow `.cursor/BUGBOT.md` Phase 1 (Immediate Safety Assessment) precisely. Focus only on the diff — do not flag pre-existing issues. Check:
+Follow `docs/standards/review-checklist.md` Phase 1 (Immediate Safety Assessment) precisely. Focus only on the diff — do not flag pre-existing issues. Check:
 
 - Security: hardcoded secrets, SQL injection via string concatenation, missing input validation, sensitive data in logs, unsafe deserialization
 - Performance disasters: loading entire datasets without chunking, N+1 queries, synchronous blocking in async contexts, missing LIMIT clauses, string concat in loops
@@ -83,7 +83,7 @@ Use git blame and git log on the changed files to understand:
 - Is this a workaround or a root cause fix?
 - Does the change fit the existing architecture (clients -> handlers -> activities -> workflows)?
 - Are there test coverage gaps for new/changed code?
-- Do any module changes require documentation updates per the mapping in `.cursor/rules/documentation.mdc`?
+- Do any module changes require documentation updates per the mapping in `docs/standards/documentation.md`?
 - Is the change backward compatible?
 - Are Temporal workflow patterns correct (deterministic workflows, async activities, proper retry policies)?
 
@@ -224,7 +224,7 @@ For each finding in the Findings table, post an inline comment using `mcp__githu
 
 Rules for inline comments:
 - Maximum 10 inline comments total (prioritize by severity), **unless there are more than 10 Critical severity findings**
-- Each comment includes: severity tag, issue description, why it matters (reference the specific rule from BUGBOT.md or .cursor/rules/), and the suggested fix
+- Each comment includes: severity tag, issue description, why it matters (reference the specific rule from docs/standards/), and the suggested fix
 - For small, self-contained fixes (< 6 lines): include a committable suggestion block
 - For larger fixes: describe the issue and suggested approach without a suggestion block
 - Never post a committable suggestion unless committing it fully fixes the issue

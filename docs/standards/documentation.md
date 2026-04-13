@@ -1,8 +1,3 @@
----
-description: Update conceptual documentation when SDK code changes to keep docs synchronized with implementation
-globs: application_sdk/**/*.py
-alwaysApply: false
----
 # Documentation Updates
 
 When modifying SDK code, update corresponding conceptual documentation under `docs/concepts/` to reflect changes.

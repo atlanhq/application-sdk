@@ -1,8 +1,3 @@
----
-description: Logging standards and best practices using AtlanLoggerAdapter for structured logging
-globs: application_sdk/**/*.py
-alwaysApply: false
----
 # Logging Guidelines
 
 ## Exceptions

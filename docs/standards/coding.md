@@ -1,8 +1,3 @@
----
-description: Core development standards including code formatting, documentation, testing, logging, exception handling, and performance
-globs: application_sdk/**/*.py
-alwaysApply: true
----
 # Development Standards
 
 This document outlines the development standards for the Application SDK, including code formatting, testing, and logging guidelines.
@@ -53,16 +48,16 @@ This document outlines the development standards for the Application SDK, includ
     - Leave code cleaner than you found it
 
 - **Testing Standards**
-    - testing standards are defined in [testing.mdc](mdc:.cursor/rules/testing.mdc)
+    - Testing standards are defined in [testing.md](testing.md)
 
 - **Logging Standards**
-    - logging standards are defined in [logging.mdc](mdc:.cursor/rules/logging.mdc)
+    - Logging standards are defined in [logging.md](logging.md)
 
 - **Exception Handling**
-    - exception handling standards are defined in [exception-handling.mdc](mdc:.cursor/rules/exception-handling.mdc)
+    - Exception handling standards are defined in [exceptions.md](exceptions.md)
 
 - **Performance Standards**
-    - performance standards are defined in [performance.mdc](mdc:.cursor/rules/performance.mdc)
+    - Performance standards are defined in [performance.md](performance.md)
 
 ## Security, Performance, and Resource Management
 
@@ -71,7 +66,7 @@ This document outlines the development standards for the Application SDK, includ
     - Verify input validation and sanitization logic rigorously.
     - Ensure proper authentication and authorization are enforced.
     - Incorporate automated dependency vulnerability scanning into the CI/CD pipeline.
-    - Avoid logging sensitive information; refer to [logging.mdc](mdc:.cursor/rules/logging.mdc).
+    - Avoid logging sensitive information; refer to [logging.md](logging.md).
 
 - **Performance Optimization**
     - Establish baseline performance metrics for critical components.

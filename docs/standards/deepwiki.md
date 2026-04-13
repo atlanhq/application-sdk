@@ -1,8 +1,3 @@
----
-description: SDK development rules using DeepWiki MCP for verification
-globs:
-alwaysApply: true
----
 # SDK Development with DeepWiki MCP
 
 DeepWiki MCP provides AI-powered documentation and search for public GitHub repositories.
