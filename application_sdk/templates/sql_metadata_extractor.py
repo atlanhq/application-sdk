@@ -34,6 +34,7 @@ Subclass ``SqlMetadataExtractor`` to implement connector-specific logic::
 from __future__ import annotations
 
 import asyncio
+from typing import ClassVar
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
@@ -78,7 +79,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
 
     # Prevent auto-registration: SqlMetadataExtractor is a base template, not a
     # concrete app. Concrete subclasses (e.g. CloudSqlApp) register themselves.
-    _app_registered: bool = True
+    _app_registered: ClassVar[bool] = True
 
     @task(timeout_seconds=1800)
     async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
