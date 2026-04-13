@@ -255,39 +255,37 @@ Each mapper function is a pure function: easy to unit test, no framework depende
 
 ## App (Extractor)
 
-The core of your connector is a `SqlMetadataExtractor` subclass. Override `@task` methods for fetching metadata and transforming it via asset mappers. The `run()` method orchestrates the full pipeline.
+The core of your connector is a `SqlMetadataExtractor` subclass. Declare which entities to extract using `EntityDef`, then implement `@task` methods for each. The base `run()` method handles orchestration automatically --- no need to override it.
 
 ```python
 # app/connector.py
-import asyncio
 from application_sdk.templates import SqlMetadataExtractor
+from application_sdk.templates.entity import EntityDef
 from application_sdk.templates.contracts.sql_metadata import (
-    ExtractionInput,
-    ExtractionOutput,
-    FetchDatabasesInput,
     FetchDatabasesOutput,
-    FetchSchemasInput,
     FetchSchemasOutput,
-    FetchTablesInput,
     FetchTablesOutput,
-    FetchColumnsInput,
     FetchColumnsOutput,
-    TransformInput,
-    TransformOutput,
 )
 from application_sdk.app import task
 from application_sdk.observability.logger_adaptor import get_logger
 
 from app.clients import PostgresClient
-from app.contracts import MyCredential, MetadataConfig, MyFetchInput
-from app.asset_mapper import (
-    map_database, map_schema, map_table, map_column, serialize_entity,
-)
+from app.contracts import MyFetchInput
 
 logger = get_logger(__name__)
 
 
 class PostgresApp(SqlMetadataExtractor):
+    # Declare entities --- grouped by phase, concurrent within each phase.
+    # Phase 1 entities all run in parallel, then phase 2 starts, etc.
+    entities = [
+        EntityDef(name="databases", phase=1),
+        EntityDef(name="schemas",   phase=1),
+        EntityDef(name="tables",    phase=1),
+        EntityDef(name="columns",   phase=1),
+    ]
+
     @task(timeout_seconds=1800)
     async def fetch_databases(self, input: MyFetchInput) -> FetchDatabasesOutput:
         """Fetch the current database name from PostgreSQL."""
@@ -376,55 +374,19 @@ class PostgresApp(SqlMetadataExtractor):
             chunk_count=1,
             total_record_count=len(rows),
         )
-
-    @task(timeout_seconds=3600)
-    async def transform(self, input: TransformInput) -> TransformOutput:
-        """Transform raw extraction results into pyatlan entities using asset mappers."""
-        conn_qn = input.connection_qualified_name
-
-        # Map raw rows to pyatlan entity objects, then serialize for publishing
-        entities = []
-        for db_row in input.databases:
-            entities.append(serialize_entity(map_database(db_row, conn_qn)))
-        for schema_row in input.schemas:
-            entities.append(serialize_entity(map_schema(schema_row, conn_qn, schema_row["database"])))
-        for table_row in input.tables:
-            entities.append(serialize_entity(map_table(table_row, conn_qn)))
-        for col_row in input.columns:
-            entities.append(serialize_entity(map_column(col_row, conn_qn)))
-
-        return TransformOutput(entity_count=len(entities))
-
-    async def run(self, input: ExtractionInput) -> ExtractionOutput:
-        """Orchestrate the full extraction + transformation pipeline."""
-        # Phase 1: Fetch metadata in parallel
-        db_result, schema_result, table_result, col_result = await asyncio.gather(
-            self.fetch_databases(MyFetchInput.from_extraction(input)),
-            self.fetch_schemas(MyFetchInput.from_extraction(input)),
-            self.fetch_tables(MyFetchInput.from_extraction(input)),
-            self.fetch_columns(MyFetchInput.from_extraction(input)),
-        )
-
-        # Phase 2: Transform using asset mappers
-        transform_result = await self.transform(
-            TransformInput(workflow_id=input.workflow_id, connection=input.connection)
-        )
-
-        return ExtractionOutput(
-            databases_extracted=db_result.total_record_count,
-            schemas_extracted=schema_result.total_record_count,
-            tables_extracted=table_result.total_record_count,
-            columns_extracted=col_result.total_record_count,
-        )
 ```
 
 ### What happens under the hood
 
-Each `@task` method becomes a Temporal activity. The `run()` method orchestrates the full pipeline:
+Each `@task` method becomes a Temporal activity. The `entities` list drives orchestration:
 
-1. **Fetch phase** --- fetch databases, schemas, tables, and columns **in parallel** via `asyncio.gather`
-2. **Transform phase** --- map raw results to pyatlan entities using the asset mapper
-3. **Return** --- aggregate counts into an `ExtractionOutput`
+1. Entities are grouped by `phase`. All entities in the same phase run **concurrently** via `asyncio.gather`.
+2. Phase N+1 starts only after all phase N entities complete.
+3. For each entity, `run()` dispatches to `fetch_{name}()` (e.g. `EntityDef(name="databases")` calls `fetch_databases()`).
+4. After all entities complete, results are uploaded to Atlan.
+5. Any result key matching an `ExtractionOutput` field (e.g. `databases_extracted`) is populated automatically.
+
+If `entities` is not set (empty list), the extractor falls back to the default 4 entities: databases, schemas, tables, columns.
 
 ### Available task methods
 
@@ -434,41 +396,58 @@ Each `@task` method becomes a Temporal activity. The `run()` method orchestrates
 | `fetch_schemas` | `FetchSchemasInput` | `FetchSchemasOutput` | Required --- raises `NotImplementedError` |
 | `fetch_tables` | `FetchTablesInput` | `FetchTablesOutput` | Required --- raises `NotImplementedError` |
 | `fetch_columns` | `FetchColumnsInput` | `FetchColumnsOutput` | Required --- raises `NotImplementedError` |
-| `fetch_views` | `FetchViewsInput` | `FetchViewsOutput` | Optional --- add for databases with views |
-| `transform` | `TransformInput` | `TransformOutput` | Override to map raw results via asset mapper |
+| `fetch_procedures` | `FetchProceduresInput` | `FetchProceduresOutput` | Optional --- add `EntityDef(name="procedures")` |
+| `fetch_views` | `FetchViewsInput` | `FetchViewsOutput` | Optional --- add `EntityDef(name="views")` |
+| `transform_data` | `TransformInput` | `TransformOutput` | Override to map raw results via asset mapper |
 
-### Adding custom tasks
+### Adding custom entities
 
-Use `@task` to define additional extraction steps and override `run()` to include them:
+Add new entity types by extending the `entities` list and implementing the matching `fetch_{name}()` method. No need to override `run()`.
 
 ```python
-from application_sdk.templates.contracts.sql_metadata import (
-    FetchViewsInput,
-    FetchViewsOutput,
-)
+from application_sdk.templates.entity import EntityDef
+from application_sdk.templates.contracts.sql_metadata import FetchViewsOutput
 
-class PostgresApp(SqlMetadataExtractor):
+
+class SnowflakeApp(SqlMetadataExtractor):
+    entities = [
+        # Phase 1: core entities (run in parallel)
+        EntityDef(name="databases", phase=1),
+        EntityDef(name="schemas",   phase=1),
+        EntityDef(name="tables",    phase=1),
+        EntityDef(name="columns",   phase=1),
+        # Phase 2: connector-specific entities (run after phase 1)
+        EntityDef(name="stages",  phase=2),
+        EntityDef(name="streams", phase=2),
+        # Disabled entity (skipped at runtime)
+        EntityDef(name="views", phase=1, enabled=False),
+    ]
+
     @task(timeout_seconds=1800)
-    async def fetch_views(self, input: MyFetchInput) -> FetchViewsOutput:
-        """Fetch views from PostgreSQL."""
+    async def fetch_stages(self, input) -> FetchDatabasesOutput:
+        """Fetch Snowflake stages."""
         # ... implementation
-        return FetchViewsOutput(chunk_count=1, total_record_count=len(views))
+        return FetchDatabasesOutput(total_record_count=len(stages))
 
-    async def run(self, input: ExtractionInput) -> ExtractionOutput:
-        """Override run() to include views in the extraction."""
-        result = await super().run(input)
-
-        views_result = await self.fetch_views(
-            MyFetchInput.from_extraction(input)
-        )
-        result.views_extracted = views_result.total_record_count
-
-        # Transform all results (including views) via asset mappers
-        await self.transform(TransformInput(
-            workflow_id=input.workflow_id, connection=input.connection,
-        ))
-        return result
+    @task(timeout_seconds=1800)
+    async def fetch_streams(self, input) -> FetchDatabasesOutput:
+        """Fetch Snowflake streams."""
+        # ... implementation
+        return FetchDatabasesOutput(total_record_count=len(streams))
 ```
+
+### EntityDef fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `str` | (required) | Entity name, used for method dispatch (`fetch_{name}()`) and result key |
+| `sql` | `str` | `""` | SQL query template (for SQL connectors) |
+| `endpoint` | `str` | `""` | REST API endpoint (for API connectors) |
+| `phase` | `int` | `1` | Execution phase --- entities in the same phase run concurrently |
+| `enabled` | `bool` | `True` | Set to `False` to skip this entity |
+| `timeout_seconds` | `int` | `1800` | Task timeout for this entity |
+| `result_key` | `str` | `""` | Key in `ExtractionOutput` for the count (defaults to `{name}_extracted`) |
+| `depends_on` | `tuple[str, ...]` | `()` | Entity names that must complete before this one |
 
 ## Typed Contracts
 
