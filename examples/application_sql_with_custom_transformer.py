@@ -15,8 +15,10 @@ Usage:
 import asyncio
 
 from application_sdk.app import task
+from application_sdk.clients.auth_strategies import BasicAuthStrategy
 from application_sdk.clients.models import DatabaseConfig
-from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.clients.sql import SQLClient
+from application_sdk.credentials.types import BasicCredential
 from application_sdk.handler import (
     AuthInput,
     AuthOutput,
@@ -48,13 +50,17 @@ from application_sdk.templates.contracts.sql_metadata import (
 logger = get_logger(__name__)
 
 
-class SQLClient(BaseSQLClient):
-    """PostgreSQL connection configuration."""
+class PostgresClient(SQLClient):
+    """PostgreSQL connection configuration with auth strategy."""
 
     DB_CONFIG = DatabaseConfig(
         template="postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
         required=["username", "password", "host", "port", "database"],
     )
+
+    AUTH_STRATEGIES = {
+        BasicCredential: BasicAuthStrategy(),
+    }
 
 
 class PostgresExtractorWithCustomTransformer(SqlMetadataExtractor):
