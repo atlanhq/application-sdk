@@ -49,14 +49,6 @@ class TestBaseMetadataExtractorStructure:
     def test_has_upload_to_atlan_task(self) -> None:
         assert is_task(BaseMetadataExtractor.upload_to_atlan)
 
-    def test_has_client_class_attribute(self) -> None:
-        from application_sdk.clients.client import Client
-
-        assert BaseMetadataExtractor.client_class is Client
-
-    def test_has_transformer_class_none_by_default(self) -> None:
-        assert BaseMetadataExtractor.transformer_class is None
-
     def test_upload_to_atlan_accepts_upload_input(self) -> None:
         from typing import get_type_hints
 

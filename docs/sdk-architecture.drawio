@@ -1,0 +1,331 @@
+<mxfile host="app.diagrams.net" modified="2026-04-13T00:00:00.000Z" agent="Claude" version="21.0.0">
+  <diagram id="sdk-arch" name="Application SDK Architecture">
+    <mxGraphModel dx="1900" dy="1400" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1920" pageHeight="1300" math="0" shadow="0" background="#FFFFFF">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ===== HEADER ===== -->
+        <mxCell id="header" value="" style="rounded=0;fillColor=#1B2138;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="0" y="0" width="1920" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="title" value="&lt;font color=&quot;#FFFFFF&quot; style=&quot;font-size:26px;font-family:Inter,Helvetica,Arial;&quot;&gt;&lt;b&gt;Application SDK&lt;/b&gt; &amp;nbsp;Architecture&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="610" y="18" width="400" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="&lt;font color=&quot;#7B8DB5&quot; style=&quot;font-size:13px;font-family:Inter,Helvetica,Arial;&quot;&gt;How a metadata extraction request flows through &lt;b&gt;application_sdk/&lt;/b&gt;&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="540" y="58" width="530" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="flowlabel" value="&lt;font color=&quot;#4FC3F7&quot; style=&quot;font-size:11px;font-family:Inter,Helvetica,Arial;&quot;&gt;FOLLOW THE FLOW &amp;nbsp; 1 → 2 → 3 → 4 → 5 → 6 → 7&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="82" width="360" height="22" as="geometry" />
+        </mxCell>
+
+        <!-- ==================================================================== -->
+        <!-- MAIN FLOW (top row, left to right)                                    -->
+        <!-- ==================================================================== -->
+
+        <!-- ATLAN PLATFORM (start) -->
+        <mxCell id="atlan_s" value="&lt;b style=&quot;font-size:13px;color:#1B2138;&quot;&gt;Atlan Platform&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:10px;&quot;&gt;Sends HTTP request&lt;br&gt;to start a workflow&lt;/font&gt;" style="rounded=14;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#64B5F6;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="150" width="145" height="85" as="geometry" />
+        </mxCell>
+
+        <!-- 1. server/ -->
+        <mxCell id="f_server" value="&lt;font color=&quot;#1565C0&quot; style=&quot;font-size:9px;&quot;&gt;server/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:13px;color:#1B2138;&quot;&gt;HTTP Server&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#555&quot; style=&quot;font-size:10px;&quot;&gt;FastAPI app.&lt;br&gt;Routes requests to&lt;br&gt;handler endpoints.&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#999&quot;&gt;fastapi/ &amp;middot; mcp/ &amp;middot; middleware/&lt;/font&gt;&lt;/font&gt;" style="rounded=14;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64B5F6;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="230" y="130" width="175" height="150" as="geometry" />
+        </mxCell>
+
+        <!-- 2. handler/ -->
+        <mxCell id="f_handler" value="&lt;font color=&quot;#1565C0&quot; style=&quot;font-size:9px;&quot;&gt;handler/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:13px;color:#1B2138;&quot;&gt;Request Handler&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#555&quot; style=&quot;font-size:10px;&quot;&gt;Processes auth checks,&lt;br&gt;preflight validation,&lt;br&gt;and metadata queries.&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#999&quot;&gt;You subclass this.&lt;/font&gt;&lt;/font&gt;" style="rounded=14;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64B5F6;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="460" y="130" width="175" height="150" as="geometry" />
+        </mxCell>
+
+        <!-- 3. app/ -->
+        <mxCell id="f_app" value="&lt;font color=&quot;#2E7D32&quot; style=&quot;font-size:9px;&quot;&gt;app/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:13px;color:#1B2138;&quot;&gt;App (Core)&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#555&quot; style=&quot;font-size:10px;&quot;&gt;Base class you extend.&lt;br&gt;Defines the workflow:&lt;br&gt;which @tasks run&lt;br&gt;and in what order.&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#999&quot;&gt;context &amp;middot; registry &amp;middot; @task&lt;/font&gt;&lt;/font&gt;" style="rounded=14;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#66BB6A;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="690" y="130" width="175" height="155" as="geometry" />
+        </mxCell>
+
+        <!-- 4. execution/ -->
+        <mxCell id="f_exec" value="&lt;font color=&quot;#2E7D32&quot; style=&quot;font-size:9px;&quot;&gt;execution/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:13px;color:#1B2138;&quot;&gt;Temporal Engine&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#555&quot; style=&quot;font-size:10px;&quot;&gt;Runs workflows &amp;amp;&lt;br&gt;activities on Temporal.&lt;br&gt;Crash recovery, retries,&lt;br&gt;heartbeats built in.&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#999&quot;&gt;worker &amp;middot; interceptors &amp;middot; retry&lt;/font&gt;&lt;/font&gt;" style="rounded=14;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#66BB6A;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="920" y="130" width="175" height="155" as="geometry" />
+        </mxCell>
+
+        <!-- 5. clients/ -->
+        <mxCell id="f_clients" value="&lt;font color=&quot;#6A1B9A&quot; style=&quot;font-size:9px;&quot;&gt;clients/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:13px;color:#1B2138;&quot;&gt;Source Clients&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#555&quot; style=&quot;font-size:10px;&quot;&gt;Connects to external&lt;br&gt;data sources. SQL,&lt;br&gt;REST, Azure, Redis.&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#999&quot;&gt;auth_strategies/ &amp;middot; sql &amp;middot; azure/&lt;/font&gt;&lt;/font&gt;" style="rounded=14;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#AB47BC;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1150" y="130" width="175" height="155" as="geometry" />
+        </mxCell>
+
+        <!-- 6. transformers/ -->
+        <mxCell id="f_transform" value="&lt;font color=&quot;#6A1B9A&quot; style=&quot;font-size:9px;&quot;&gt;transformers/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:13px;color:#1B2138;&quot;&gt;Transformers&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#555&quot; style=&quot;font-size:10px;&quot;&gt;Converts raw metadata&lt;br&gt;into Atlas entities&lt;br&gt;(Atlan&amp;rsquo;s format).&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#999&quot;&gt;atlas/ &amp;middot; query/ &amp;middot; common/&lt;/font&gt;&lt;/font&gt;" style="rounded=14;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#AB47BC;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1380" y="130" width="175" height="155" as="geometry" />
+        </mxCell>
+
+        <!-- 7. outputs/ -->
+        <mxCell id="f_outputs" value="&lt;font color=&quot;#6A1B9A&quot; style=&quot;font-size:9px;&quot;&gt;outputs/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:13px;color:#1B2138;&quot;&gt;Output Collector&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#555&quot; style=&quot;font-size:10px;&quot;&gt;Collects results,&lt;br&gt;writes files, uploads&lt;br&gt;to object store.&lt;/font&gt;" style="rounded=14;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#AB47BC;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1610" y="138" width="155" height="135" as="geometry" />
+        </mxCell>
+
+        <!-- ATLAN PLATFORM (end) -->
+        <mxCell id="atlan_e" value="&lt;b style=&quot;font-size:13px;color:#1B2138;&quot;&gt;Atlan Platform&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:10px;&quot;&gt;Metadata received&lt;/font&gt;" style="rounded=14;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#64B5F6;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1810" y="150" width="145" height="85" as="geometry" />
+        </mxCell>
+
+        <!-- ===== STEP BADGES ===== -->
+        <mxCell id="b1" value="&lt;b&gt;1&lt;/b&gt;" style="ellipse;fillColor=#1565C0;strokeColor=none;fontColor=#fff;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="290" y="115" width="28" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="b2" value="&lt;b&gt;2&lt;/b&gt;" style="ellipse;fillColor=#1565C0;strokeColor=none;fontColor=#fff;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="520" y="115" width="28" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="b3" value="&lt;b&gt;3&lt;/b&gt;" style="ellipse;fillColor=#2E7D32;strokeColor=none;fontColor=#fff;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="750" y="115" width="28" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="b4" value="&lt;b&gt;4&lt;/b&gt;" style="ellipse;fillColor=#2E7D32;strokeColor=none;fontColor=#fff;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="980" y="115" width="28" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="b5" value="&lt;b&gt;5&lt;/b&gt;" style="ellipse;fillColor=#6A1B9A;strokeColor=none;fontColor=#fff;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1210" y="115" width="28" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="b6" value="&lt;b&gt;6&lt;/b&gt;" style="ellipse;fillColor=#6A1B9A;strokeColor=none;fontColor=#fff;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="115" width="28" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="b7" value="&lt;b&gt;7&lt;/b&gt;" style="ellipse;fillColor=#6A1B9A;strokeColor=none;fontColor=#fff;fontSize=13;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1660" y="123" width="28" height="28" as="geometry" />
+        </mxCell>
+
+        <!-- ===== FLOW ARROWS ===== -->
+        <mxCell id="a0" style="rounded=1;strokeWidth=2;strokeColor=#90CAF9;exitX=1;exitY=0.5;entryX=0;entryY=0.5;endArrow=blockThin;endFill=1;endSize=7;" edge="1" parent="1" source="atlan_s" target="f_server">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a1" style="rounded=1;strokeWidth=2;strokeColor=#90CAF9;exitX=1;exitY=0.5;entryX=0;entryY=0.5;endArrow=blockThin;endFill=1;endSize=7;" edge="1" parent="1" source="f_server" target="f_handler">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a2" style="rounded=1;strokeWidth=2;strokeColor=#A5D6A7;exitX=1;exitY=0.5;entryX=0;entryY=0.5;endArrow=blockThin;endFill=1;endSize=7;" edge="1" parent="1" source="f_handler" target="f_app">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a3" style="rounded=1;strokeWidth=2;strokeColor=#A5D6A7;exitX=1;exitY=0.5;entryX=0;entryY=0.5;endArrow=blockThin;endFill=1;endSize=7;" edge="1" parent="1" source="f_app" target="f_exec">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a4" style="rounded=1;strokeWidth=2;strokeColor=#CE93D8;exitX=1;exitY=0.5;entryX=0;entryY=0.5;endArrow=blockThin;endFill=1;endSize=7;" edge="1" parent="1" source="f_exec" target="f_clients">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a5" style="rounded=1;strokeWidth=2;strokeColor=#CE93D8;exitX=1;exitY=0.5;entryX=0;entryY=0.5;endArrow=blockThin;endFill=1;endSize=7;" edge="1" parent="1" source="f_clients" target="f_transform">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a6" style="rounded=1;strokeWidth=2;strokeColor=#CE93D8;exitX=1;exitY=0.5;entryX=0;entryY=0.5;endArrow=blockThin;endFill=1;endSize=7;" edge="1" parent="1" source="f_transform" target="f_outputs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a7" style="rounded=1;strokeWidth=2;strokeColor=#90CAF9;exitX=1;exitY=0.5;entryX=0;entryY=0.5;endArrow=blockThin;endFill=1;endSize=7;" edge="1" parent="1" source="f_outputs" target="atlan_e">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== ARROW LABELS ===== -->
+        <mxCell id="l0" value="&lt;font color=&quot;#90CAF9&quot; style=&quot;font-size:9px;&quot;&gt;HTTP&lt;/font&gt;" style="edgeLabel;html=1;" vertex="1" connectable="0" parent="a0">
+          <mxGeometry relative="1" as="geometry"><mxPoint y="-8" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="l1" value="&lt;font color=&quot;#90CAF9&quot; style=&quot;font-size:9px;&quot;&gt;route&lt;/font&gt;" style="edgeLabel;html=1;" vertex="1" connectable="0" parent="a1">
+          <mxGeometry relative="1" as="geometry"><mxPoint y="-8" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="l2" value="&lt;font color=&quot;#A5D6A7&quot; style=&quot;font-size:9px;&quot;&gt;trigger&lt;/font&gt;" style="edgeLabel;html=1;" vertex="1" connectable="0" parent="a2">
+          <mxGeometry relative="1" as="geometry"><mxPoint y="-8" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="l3" value="&lt;font color=&quot;#A5D6A7&quot; style=&quot;font-size:9px;&quot;&gt;workflow&lt;/font&gt;" style="edgeLabel;html=1;" vertex="1" connectable="0" parent="a3">
+          <mxGeometry relative="1" as="geometry"><mxPoint y="-8" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="l4" value="&lt;font color=&quot;#CE93D8&quot; style=&quot;font-size:9px;&quot;&gt;activities&lt;/font&gt;" style="edgeLabel;html=1;" vertex="1" connectable="0" parent="a4">
+          <mxGeometry relative="1" as="geometry"><mxPoint y="-8" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="l5" value="&lt;font color=&quot;#CE93D8&quot; style=&quot;font-size:9px;&quot;&gt;raw metadata&lt;/font&gt;" style="edgeLabel;html=1;" vertex="1" connectable="0" parent="a5">
+          <mxGeometry relative="1" as="geometry"><mxPoint y="-8" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="l6" value="&lt;font color=&quot;#CE93D8&quot; style=&quot;font-size:9px;&quot;&gt;Atlas entities&lt;/font&gt;" style="edgeLabel;html=1;" vertex="1" connectable="0" parent="a6">
+          <mxGeometry relative="1" as="geometry"><mxPoint y="-8" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="l7" value="&lt;font color=&quot;#90CAF9&quot; style=&quot;font-size:9px;&quot;&gt;upload&lt;/font&gt;" style="edgeLabel;html=1;" vertex="1" connectable="0" parent="a7">
+          <mxGeometry relative="1" as="geometry"><mxPoint y="-8" as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- ===== EXTERNAL SOURCES ===== -->
+        <mxCell id="ext_src" value="&lt;b style=&quot;font-size:11px;color:#C62828;&quot;&gt;External Sources&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:10px;&quot;&gt;Snowflake &amp;middot; Postgres &amp;middot; REST APIs&lt;br&gt;Azure Blob &amp;middot; GraphQL &amp;middot; ...&lt;/font&gt;" style="rounded=14;whiteSpace=wrap;html=1;fillColor=#FFEBEE;strokeColor=#EF9A9A;strokeWidth=1;dashed=1;shadow=0;" vertex="1" parent="1">
+          <mxGeometry x="1135" y="320" width="205" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="ext_arrow" style="rounded=1;strokeWidth=1.5;strokeColor=#EF9A9A;exitX=0.5;exitY=0;entryX=0.5;entryY=1;endArrow=blockThin;endFill=1;endSize=5;dashed=1;" edge="1" parent="1" source="ext_src" target="f_clients">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ==================================================================== -->
+        <!-- SECTION DIVIDER                                                       -->
+        <!-- ==================================================================== -->
+        <mxCell id="div1" value="" style="line;strokeWidth=1;strokeColor=#E0E0E0;html=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="420" width="1920" height="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== SECTION LABELS ===== -->
+        <mxCell id="sec_data" value="&lt;font style=&quot;font-size:12px;color:#1B2138;font-family:Inter,Helvetica,Arial;&quot;&gt;&lt;b&gt;DATA &amp;amp; STORAGE&lt;/b&gt;&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="45" y="435" width="200" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="sec_infra" value="&lt;font style=&quot;font-size:12px;color:#1B2138;font-family:Inter,Helvetica,Arial;&quot;&gt;&lt;b&gt;INFRASTRUCTURE&lt;/b&gt;&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="780" y="435" width="200" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="sec_dx" value="&lt;font style=&quot;font-size:12px;color:#1B2138;font-family:Inter,Helvetica,Arial;&quot;&gt;&lt;b&gt;DEVELOPER EXPERIENCE&lt;/b&gt;&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1340" y="435" width="250" height="22" as="geometry" />
+        </mxCell>
+
+        <!-- ==================================================================== -->
+        <!-- DATA & STORAGE ROW                                                    -->
+        <!-- ==================================================================== -->
+
+        <!-- contracts/ -->
+        <mxCell id="s_contracts" value="&lt;font color=&quot;#E65100&quot; style=&quot;font-size:9px;&quot;&gt;contracts/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;Input / Output&lt;br&gt;Models&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;Pydantic schemas for&lt;br&gt;every request &amp;amp; response.&lt;br&gt;Payload size validation.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FFB74D;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="45" y="468" width="170" height="135" as="geometry" />
+        </mxCell>
+
+        <!-- io/ -->
+        <mxCell id="s_io" value="&lt;font color=&quot;#E65100&quot; style=&quot;font-size:9px;&quot;&gt;io/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;File I/O&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;Streaming readers/writers&lt;br&gt;for JSON and Parquet.&lt;br&gt;Batch processing.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FFB74D;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="240" y="468" width="170" height="135" as="geometry" />
+        </mxCell>
+
+        <!-- services/ -->
+        <mxCell id="s_services" value="&lt;font color=&quot;#E65100&quot; style=&quot;font-size:9px;&quot;&gt;services/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;Store APIs&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;&lt;b&gt;objectstore&lt;/b&gt; — file storage&lt;br&gt;&lt;b&gt;statestore&lt;/b&gt; — key/value state&lt;br&gt;&lt;b&gt;secretstore&lt;/b&gt; — credentials&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FFB74D;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="435" y="468" width="170" height="135" as="geometry" />
+        </mxCell>
+
+        <!-- storage/ -->
+        <mxCell id="s_storage" value="&lt;font color=&quot;#E65100&quot; style=&quot;font-size:9px;&quot;&gt;storage/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;Storage Ops&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;Low-level file operations.&lt;br&gt;Upload, download, list,&lt;br&gt;delete. Multi-backend.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FFB74D;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="630" y="468" width="170" height="135" as="geometry" />
+        </mxCell>
+
+        <!-- ==================================================================== -->
+        <!-- INFRASTRUCTURE ROW                                                    -->
+        <!-- ==================================================================== -->
+
+        <!-- infrastructure/ -->
+        <mxCell id="s_infra" value="&lt;font color=&quot;#37474F&quot; style=&quot;font-size:9px;&quot;&gt;infrastructure/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;Dapr + Redis&lt;br&gt;Backends&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;Protocol interfaces for&lt;br&gt;state, secrets, pub/sub.&lt;br&gt;Dapr or direct Redis.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#B0BEC5;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="830" y="468" width="170" height="135" as="geometry" />
+        </mxCell>
+
+        <!-- observability/ -->
+        <mxCell id="s_obs" value="&lt;font color=&quot;#37474F&quot; style=&quot;font-size:9px;&quot;&gt;observability/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;Logs, Metrics,&lt;br&gt;Traces&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;Structured logging,&lt;br&gt;OTEL metrics + traces,&lt;br&gt;correlation IDs.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#B0BEC5;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="1025" y="468" width="170" height="135" as="geometry" />
+        </mxCell>
+
+        <!-- credentials/ -->
+        <mxCell id="s_creds" value="&lt;font color=&quot;#37474F&quot; style=&quot;font-size:9px;&quot;&gt;credentials/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;Credential&lt;br&gt;Manager&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;Resolves API keys,&lt;br&gt;OAuth tokens, certs,&lt;br&gt;keypairs by type.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#B0BEC5;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="468" width="155" height="135" as="geometry" />
+        </mxCell>
+
+        <!-- ==================================================================== -->
+        <!-- DEVELOPER EXPERIENCE ROW                                              -->
+        <!-- ==================================================================== -->
+
+        <!-- templates/ -->
+        <mxCell id="s_templates" value="&lt;font color=&quot;#1565C0&quot; style=&quot;font-size:9px;&quot;&gt;templates/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;App Templates&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;Pre-built App subclasses.&lt;br&gt;SQL extraction, query&lt;br&gt;extraction. Extend them.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#E8EAF6;strokeColor=#9FA8DA;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="468" width="170" height="135" as="geometry" />
+        </mxCell>
+
+        <!-- decorators/ -->
+        <mxCell id="s_deco" value="&lt;font color=&quot;#1565C0&quot; style=&quot;font-size:9px;&quot;&gt;decorators/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;Decorators&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;@task, retry, timeout.&lt;br&gt;Add behavior to&lt;br&gt;functions declaratively.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#E8EAF6;strokeColor=#9FA8DA;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="1595" y="468" width="155" height="135" as="geometry" />
+        </mxCell>
+
+        <!-- common/ -->
+        <mxCell id="s_common" value="&lt;font color=&quot;#1565C0&quot; style=&quot;font-size:9px;&quot;&gt;common/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;Shared Utils&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;Helpers, incremental&lt;br&gt;extraction support.&lt;br&gt;Used everywhere.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#E8EAF6;strokeColor=#9FA8DA;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="1775" y="468" width="155" height="135" as="geometry" />
+        </mxCell>
+
+        <!-- ==================================================================== -->
+        <!-- SECTION DIVIDER 2                                                     -->
+        <!-- ==================================================================== -->
+        <mxCell id="div2" value="" style="line;strokeWidth=1;strokeColor=#E0E0E0;html=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="630" width="1920" height="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== TESTING & DOCS ROW ===== -->
+        <mxCell id="sec_test" value="&lt;font style=&quot;font-size:12px;color:#1B2138;font-family:Inter,Helvetica,Arial;&quot;&gt;&lt;b&gt;TESTING &amp;amp; DOCS&lt;/b&gt;&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="45" y="645" width="200" height="22" as="geometry" />
+        </mxCell>
+
+        <!-- test_utils/ -->
+        <mxCell id="s_testutils" value="&lt;font color=&quot;#00695C&quot; style=&quot;font-size:9px;&quot;&gt;test_utils/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;Test Fixtures&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;Mocks for infra, credentials,&lt;br&gt;state stores. Property-based&lt;br&gt;testing with Hypothesis.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#E0F2F1;strokeColor=#80CBC4;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="45" y="678" width="210" height="115" as="geometry" />
+        </mxCell>
+
+        <!-- testing/ -->
+        <mxCell id="s_testing" value="&lt;font color=&quot;#00695C&quot; style=&quot;font-size:9px;&quot;&gt;testing/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;E2E Test Infra&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;Deploys to Kubernetes.&lt;br&gt;Runs real workflows.&lt;br&gt;Scale data generators.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#E0F2F1;strokeColor=#80CBC4;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="280" y="678" width="210" height="115" as="geometry" />
+        </mxCell>
+
+        <!-- docgen/ -->
+        <mxCell id="s_docgen" value="&lt;font color=&quot;#00695C&quot; style=&quot;font-size:9px;&quot;&gt;docgen/&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;font-size:12px;color:#1B2138;&quot;&gt;Doc Generator&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:10px;&quot;&gt;Reads app metadata,&lt;br&gt;generates API docs&lt;br&gt;automatically.&lt;/font&gt;" style="rounded=12;whiteSpace=wrap;html=1;fillColor=#E0F2F1;strokeColor=#80CBC4;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="515" y="678" width="210" height="115" as="geometry" />
+        </mxCell>
+
+        <!-- ==================================================================== -->
+        <!-- LEGEND                                                                -->
+        <!-- ==================================================================== -->
+        <mxCell id="leg_box" value="" style="rounded=10;fillColor=#FAFAFA;strokeColor=#E0E0E0;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="830" y="660" width="620" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_title" value="&lt;b style=&quot;font-size:11px;color:#1B2138;&quot;&gt;COLOR KEY&lt;/b&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="850" y="668" width="100" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lc1" value="" style="rounded=6;fillColor=#E3F2FD;strokeColor=#64B5F6;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="855" y="698" width="18" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="lt1" value="&lt;font style=&quot;font-size:10px;color:#555;&quot;&gt;&lt;b&gt;Blue border&lt;/b&gt; — HTTP layer (server, handler)&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="882" y="694" width="260" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lc2" value="" style="rounded=6;fillColor=#FFFFFF;strokeColor=#66BB6A;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="855" y="722" width="18" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="lt2" value="&lt;font style=&quot;font-size:10px;color:#555;&quot;&gt;&lt;b&gt;Green border&lt;/b&gt; — Core logic (app, execution/Temporal)&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="882" y="718" width="280" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lc3" value="" style="rounded=6;fillColor=#FFFFFF;strokeColor=#AB47BC;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="855" y="746" width="18" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="lt3" value="&lt;font style=&quot;font-size:10px;color:#555;&quot;&gt;&lt;b&gt;Purple border&lt;/b&gt; — Data pipeline (clients, transformers, outputs)&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="882" y="742" width="330" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lc4" value="" style="rounded=6;fillColor=#FFF3E0;strokeColor=#FFB74D;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="855" y="770" width="18" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="lt4" value="&lt;font style=&quot;font-size:10px;color:#555;&quot;&gt;&lt;b&gt;Orange fill&lt;/b&gt; — Data &amp;amp; storage (contracts, io, services, storage)&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="882" y="766" width="340" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lc5" value="" style="rounded=6;fillColor=#ECEFF1;strokeColor=#B0BEC5;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="1235" y="698" width="18" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="lt5" value="&lt;font style=&quot;font-size:10px;color:#555;&quot;&gt;&lt;b&gt;Grey fill&lt;/b&gt; — Infrastructure (Dapr, observability, credentials)&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1262" y="694" width="330" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lc6" value="" style="rounded=6;fillColor=#E8EAF6;strokeColor=#9FA8DA;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="1235" y="722" width="18" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="lt6" value="&lt;font style=&quot;font-size:10px;color:#555;&quot;&gt;&lt;b&gt;Indigo fill&lt;/b&gt; — DX (templates, decorators, common)&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1262" y="718" width="310" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lc7" value="" style="rounded=6;fillColor=#E0F2F1;strokeColor=#80CBC4;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="1235" y="746" width="18" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="lt7" value="&lt;font style=&quot;font-size:10px;color:#555;&quot;&gt;&lt;b&gt;Teal fill&lt;/b&gt; — Testing &amp;amp; docs (test_utils, testing, docgen)&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1262" y="742" width="330" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- ===== FOOTER ===== -->
+        <mxCell id="footer" value="" style="rounded=0;fillColor=#1B2138;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="0" y="825" width="1920" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="footer_text" value="&lt;font color=&quot;#7B8DB5&quot; style=&quot;font-size:11px;font-family:Inter,Helvetica,Arial;&quot;&gt;Atlan Application SDK &amp;nbsp; | &amp;nbsp; &lt;b style=&quot;color:#fff;&quot;&gt;application_sdk/&lt;/b&gt; &amp;nbsp; | &amp;nbsp; You write the App &amp;mdash; the SDK handles servers, workflows, storage, and observability&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="400" y="828" width="800" height="30" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
