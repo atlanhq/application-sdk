@@ -291,8 +291,3 @@ class HTTPClient(Client):
             except Exception as e:
                 logger.error("Request failed for %s: %s", url, e)
                 return None
-
-
-# Backward-compat aliases
-BaseClient = Client  # noqa: F811
-BaseHTTPClient = HTTPClient

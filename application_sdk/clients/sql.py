@@ -638,8 +638,3 @@ class AsyncSQLClient(SQLClient):
             # Async connection automatically closed by context manager
 
         logger.info("Query execution completed")
-
-
-# Backward-compat aliases
-BaseSQLClient = SQLClient
-AsyncBaseSQLClient = AsyncSQLClient
