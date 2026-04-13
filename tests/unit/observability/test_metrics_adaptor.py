@@ -537,3 +537,48 @@ class TestPrometheusMetrics:
                                 AtlanMetricsAdapter()
                                 call_kwargs = mock_provider.call_args[1]
                                 assert len(call_kwargs["metric_readers"]) == 1
+
+    def test_export_record_sends_to_otel_when_prometheus_only(self):
+        """When only Prometheus is enabled (no OTLP), export_record should
+        still send metrics to OTel instruments so they appear in /metrics."""
+        AtlanMetricsAdapter._flush_task_started = False
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
+            False,
+        ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                True,
+            ):
+                with mock.patch(
+                    "application_sdk.observability.metrics_adaptor.metrics.set_meter_provider"
+                ):
+                    with mock.patch(
+                        "application_sdk.observability.metrics_adaptor.MeterProvider"
+                    ) as mock_provider:
+                        mock_provider.return_value.get_meter.return_value = (
+                            mock.MagicMock()
+                        )
+                        with mock.patch.dict(
+                            "sys.modules",
+                            {
+                                "opentelemetry.exporter.prometheus": mock.MagicMock(
+                                    PrometheusMetricReader=mock.MagicMock()
+                                )
+                            },
+                        ):
+                            adapter = AtlanMetricsAdapter()
+                            with mock.patch.object(
+                                adapter, "_send_to_otel"
+                            ) as mock_send:
+                                record = MetricRecord(
+                                    timestamp=datetime.now().timestamp(),
+                                    name="test_counter",
+                                    value=1.0,
+                                    type=MetricType.COUNTER,
+                                    labels={"path": "/health"},
+                                    description="Test counter",
+                                    unit="count",
+                                )
+                                adapter.export_record(record)
+                                mock_send.assert_called_once_with(record)
