@@ -141,6 +141,11 @@ jobs:
           # crawler + miner) as a single-line JSON string for the publish curl
           # body. Absent or empty → emit empty string; the publish step will
           # omit the field and GM will fall back to App.argo_package_names.
+          #
+          # Validation here fails fast at CI time with annotated errors (better
+          # UX than a publish-time 422 from GM). The same rules are enforced
+          # again by Pydantic on the GM side — this is defence-in-depth, not
+          # duplication for its own sake.
           workflow_packages = ''
           wp_val = d.get('workflow_packages')
           if wp_val:
@@ -148,6 +153,9 @@ jobs:
                   print('::error::atlan.yaml workflow_packages must be a list', file=sys.stderr)
                   sys.exit(1)
               required_keys = {'name', 'display_name', 'type', 'generated_dir'}
+              allowed_types = {'connector', 'miner', 'orchestrator', 'utility', 'custom'}
+              name_re = re.compile(r'^[a-z0-9]+(-[a-z0-9]+)*$')
+              seen_names = set()
               for i, pkg in enumerate(wp_val):
                   if not isinstance(pkg, dict):
                       print(f'::error::workflow_packages[{i}] must be a mapping', file=sys.stderr)
@@ -155,6 +163,26 @@ jobs:
                   missing = required_keys - set(pkg.keys())
                   if missing:
                       print(f'::error::workflow_packages[{i}] missing required keys: {sorted(missing)}', file=sys.stderr)
+                      sys.exit(1)
+                  name = pkg.get('name')
+                  if not isinstance(name, str) or not name_re.match(name):
+                      print(f'::error::workflow_packages[{i}].name must be kebab-case (lowercase a-z, 0-9, hyphens); got {name!r}', file=sys.stderr)
+                      sys.exit(1)
+                  if name in seen_names:
+                      print(f'::error::workflow_packages[{i}].name {name!r} is duplicated', file=sys.stderr)
+                      sys.exit(1)
+                  seen_names.add(name)
+                  pkg_type = pkg.get('type')
+                  if pkg_type not in allowed_types:
+                      print(f'::error::workflow_packages[{i}].type must be one of {sorted(allowed_types)}; got {pkg_type!r}', file=sys.stderr)
+                      sys.exit(1)
+                  generated_dir = pkg.get('generated_dir')
+                  if not isinstance(generated_dir, str) or not generated_dir.strip():
+                      print(f'::error::workflow_packages[{i}].generated_dir must be a non-empty string', file=sys.stderr)
+                      sys.exit(1)
+                  display_name = pkg.get('display_name')
+                  if not isinstance(display_name, str) or not display_name.strip():
+                      print(f'::error::workflow_packages[{i}].display_name must be a non-empty string', file=sys.stderr)
                       sys.exit(1)
               workflow_packages = json.dumps(wp_val, separators=(',', ':'))
 
