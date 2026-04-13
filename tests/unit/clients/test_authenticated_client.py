@@ -184,7 +184,7 @@ class TestInheritanceChain:
         assert issubclass(AsyncSQLClient, Client)
 
     def test_azure_client_is_base_client(self):
-        from application_sdk.clients.azure.client import AzureClient
+        from application_sdk.clients.azure import AzureClient
 
         assert issubclass(AzureClient, Client)
 

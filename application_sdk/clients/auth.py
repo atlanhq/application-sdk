@@ -24,7 +24,7 @@ class AuthStrategy(Protocol):
     variable keyed by the credential type they handle.
     """
 
-    credential_type: type[Credential]
+    credential_type: type
     """The Credential subclass this strategy handles."""
 
     def build_url_params(self, credential: Credential) -> dict[str, str]:
