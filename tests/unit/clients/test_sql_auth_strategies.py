@@ -193,22 +193,10 @@ class TestLegacyLoadUnchanged:
         await client.load({"username": "user", "password": "secret"})
 
         mock_create_engine.assert_called_once()
+        conn_str = mock_create_engine.call_args[0][0]
+        assert "user" in conn_str
+        assert "secret" in conn_str
         assert client.engine is mock_engine
-
-    def test_legacy_get_auth_token_basic(self):
-        client = LegacySQLClient()
-        client.credentials = {"authType": "basic", "password": "secret"}
-        token = client.get_auth_token()
-        assert token == "secret"
-
-    def test_legacy_get_auth_token_unknown_raises(self):
-        from application_sdk.common.error_codes import CommonError
-
-        client = LegacySQLClient()
-        client.credentials = {"authType": "unknown_type"}
-
-        with pytest.raises(CommonError):
-            client.get_auth_token()
 
 
 # ---------------------------------------------------------------------------
