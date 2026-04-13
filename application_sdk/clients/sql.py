@@ -207,9 +207,9 @@ class BaseSQLClient(AuthenticatedClient):
     def get_iam_user_token(self):
         """Get an IAM user token for AWS RDS database authentication.
 
-        This method generates a temporary authentication token for IAM user-based
-        authentication with AWS RDS databases. It requires AWS access credentials
-        and database connection details.
+        .. deprecated::
+            Use ``IamUserAuthStrategy`` with ``load_with_credential()`` instead.
+            This method will be removed when all connectors migrate to typed credentials.
 
         Returns:
             str: A temporary authentication token for database access.
@@ -248,9 +248,9 @@ class BaseSQLClient(AuthenticatedClient):
     def get_iam_role_token(self):
         """Get an IAM role token for AWS RDS database authentication.
 
-        This method generates a temporary authentication token for IAM role-based
-        authentication with AWS RDS databases. It requires an AWS role ARN and
-        database connection details.
+        .. deprecated::
+            Use ``IamRoleAuthStrategy`` with ``load_with_credential()`` instead.
+            This method will be removed when all connectors migrate to typed credentials.
 
         Returns:
             str: A temporary authentication token for database access.
@@ -292,9 +292,9 @@ class BaseSQLClient(AuthenticatedClient):
     def get_auth_token(self) -> str:
         """Get the appropriate authentication token based on auth type.
 
-        This method determines the authentication type from credentials and returns
-        the corresponding token. Supports basic auth, IAM user, and IAM role
-        authentication methods.
+        .. deprecated::
+            Use ``AUTH_STRATEGIES`` with ``load_with_credential()`` instead.
+            This method will be removed when all connectors migrate to typed credentials.
 
         Returns:
             str: URL-encoded authentication token.
@@ -349,9 +349,10 @@ class BaseSQLClient(AuthenticatedClient):
     def get_sqlalchemy_connection_string(self) -> str:
         """Generate a SQLAlchemy connection string for database connection.
 
-        This method constructs a connection string using the configured database
-        parameters and credentials. It handles different authentication methods
-        and includes necessary connection parameters.
+        .. deprecated::
+            Use ``load_with_credential()`` which builds the connection string
+            via ``_build_url()`` and auth strategies.  This method will be
+            removed when all connectors migrate to typed credentials.
 
         Returns:
             str: Complete SQLAlchemy connection string.
