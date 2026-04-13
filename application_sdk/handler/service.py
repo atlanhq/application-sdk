@@ -325,7 +325,7 @@ def create_app_handler_service(
     auth_base_url: str = "",
     auth_scopes: str = "",
     state_store: StateStore | None = None,
-    secret_store: "SecretStore | None" = None,
+    secret_store: SecretStore | None = None,
     storage: ObjectStore | None = None,
     event_triggers: list[EventTriggerConfig] | None = None,
     subscriptions: list[SubscriptionConfig] | None = None,
