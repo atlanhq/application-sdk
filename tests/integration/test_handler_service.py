@@ -128,8 +128,30 @@ def context_handler():
 
 
 @pytest.fixture
+def context_handler_with_secrets(mock_infra):
+    """Create a handler service with secret_store passed directly (not via ContextVar)."""
+    from application_sdk.handler.service import create_app_handler_service
+
+    _, secrets = mock_infra
+    handler = _ContextCapturingHandler()
+    app = create_app_handler_service(
+        handler, app_name="ctx-test-app", secret_store=secrets
+    )
+    return app, handler
+
+
+@pytest.fixture
 async def context_client(context_handler):
     app, handler = context_handler
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        yield c, handler
+
+
+@pytest.fixture
+async def context_client_with_secrets(context_handler_with_secrets):
+    app, handler = context_handler_with_secrets
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as c:
@@ -155,9 +177,9 @@ async def test_handler_context_wiring(context_client):
 
 
 @pytest.mark.integration
-async def test_handler_context_secret_store_access(mock_infra, context_client):
-    """G6.2: HandlerContext.get_secret() reads from the InfrastructureContext secret store."""
-    client, handler = context_client
+async def test_handler_context_secret_store_access(context_client_with_secrets):
+    """G6.2: HandlerContext.get_secret() reads from secret_store passed directly to create_app_handler_service."""
+    client, handler = context_client_with_secrets
 
     resp = await client.post(
         "/workflows/v1/auth",
