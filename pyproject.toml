@@ -43,7 +43,7 @@ application-sdk = "application_sdk.main:main"
 [project.urls]
 Repository = "https://github.com/atlanhq/application-sdk"
 Documentation = "https://github.com/atlanhq/application-sdk/README.md"
-"Changelog" = "https://github.com/atlanhq/application-sdk/blob/main/CHANGELOG.md"
+"Changelog" = "https://github.com/atlanhq/application-sdk/blob/refactor-v3/CHANGELOG.md"
 
 # Optional dependencies for specific functionality - Install using: uv sync --extra workflows
 [project.optional-dependencies]

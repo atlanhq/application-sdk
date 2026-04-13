@@ -66,19 +66,19 @@ class SnowflakeClient(BaseSQLClient):
     )
 ```
 
-### Interaction with Activities
+### Interaction with Tasks
 
-`BaseSQLClient` establishes the connection and holds the SQLAlchemy engine, which is used directly by activities to execute queries.
+`BaseSQLClient` establishes the connection and holds the SQLAlchemy engine, which is used by `@task` methods to execute queries.
 
-*   **Role of `SQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine and the `run_query` method to other components.
-*   **Role of Activities:**
-    *   Activities (e.g., `fetch_tables`, `fetch_columns` in `BaseSQLMetadataExtractionActivities`) orchestrate the process.
-    *   They retrieve the initialized `SQLClient` from the shared activity state.
-    *   They call methods on the `SQLClient` (like `run_query`) to execute queries and get the data.
-    *   They process the resulting data (e.g., save it to Parquet, transform it).
+*   **Role of `SQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine and the `run_query` / `execute_query` methods to other components.
+*   **Role of `@task` methods:**
+    *   Tasks (e.g., `fetch_tables`, `fetch_columns` in your `SqlMetadataExtractor` subclass) orchestrate the extraction process.
+    *   They create a client instance and call `load()` with credentials.
+    *   They call methods on the client (like `execute_query`) to run queries and get data.
+    *   They process the resulting data (e.g., pass to asset mappers for transformation).
 
 **Simplified Flow:**
-`Activity` -> gets `SQLClient` from state -> calls `sql_client.run_query(query=...)` -> receives data -> processes data.
+`@task method` -> creates `SQLClient` -> calls `client.load(credential_ref=...)` -> calls `client.execute_query(query=...)` -> receives data -> maps via asset mapper.
 
 ## Base Client (`base.py`)
 
@@ -232,43 +232,6 @@ The common pattern is to use the `get_workflow_client` utility function.
     *   Takes `workflow_args` (dict) and the `workflow_class`.
     *   Handles storing configuration/credentials securely (StateStore/SecretStore).
     *   Initiates the workflow execution on Temporal.
-
-### Example (Getting and Using `TemporalWorkflowClient`)
-
-```python
-# In your application setup (e.g., examples/application_fastapi.py)
-import asyncio
-# Absolute imports
-from application_sdk.clients.utils import get_workflow_client
-from application_sdk.server.fastapi import Application, HttpWorkflowTrigger
-# Assuming your custom classes are defined
-from my_connector.handlers import MyConnectorHandler
-from my_connector.workflows import MyConnectorWorkflow
-
-async def run_app():
-    # Get the workflow client using the utility function
-    workflow_client = get_workflow_client(application_name="my-connector-queue")
-    await workflow_client.load() # Connect to Temporal
-
-    # Instantiate the FastAPI application, passing the connected client
-    fast_api_app = APIServer(
-        handler=MyConnectorHandler(),
-        workflow_client=workflow_client
-    )
-
-    # Register workflow triggers
-    fast_api_app.register_workflow(
-        MyConnectorWorkflow,
-        [HttpWorkflowTrigger(endpoint="/start", methods=["POST"])]
-    )
-
-    # Start the application server
-    await fast_api_app.start()
-    # await workflow_client.close() # Handle on shutdown
-
-if __name__ == "__main__":
-    asyncio.run(run_app())
-```
 
 ## Summary
 

@@ -1,397 +1,90 @@
-# Server
+# Server (Handler Service)
 
-This module provides the core server framework for building Atlan applications, particularly focusing on integrating with FastAPI to expose web endpoints for interacting with workflows and handlers.
+In v3, the HTTP server is created by the `create_app_handler_service()` function. This replaces the v2 `APIServer` class and its `register_workflow()` / `HttpWorkflowTrigger` pattern.
 
-## Core Concepts
+## Creating the Handler Service
 
-1.  **`ServerInterface` (`application_sdk.server.__init__.py`)**:
-    *   **Purpose:** The abstract base class for all server types within the SDK. It defines a minimal interface, primarily requiring a `start()` method and optionally accepting a `HandlerInterface` instance.
-    *   **Extensibility:** Subclasses must implement the `start()` method to define how the server initializes and begins running (e.g., starting a web server).
-
-2.  **`APIServer` (`application_sdk.server.fastapi.__init__.py`)**:
-    *   **Purpose:** A concrete implementation of `ServerInterface` built on top of the FastAPI web framework. It provides a ready-to-use web server setup with pre-configured endpoints for common operations like health checks, authentication testing, metadata fetching, workflow management, and documentation serving.
-    *   **Components:**
-        *   Integrates with `HandlerInterface` subclasses to perform backend operations.
-        *   Integrates with `WorkflowClient` and `WorkflowInterface` subclasses to manage and trigger Temporal workflows.
-        *   Uses FastAPI's `APIRouter` to organize endpoints.
-        *   Includes default middleware (`LogMiddleware`).
-        *   Sets up documentation generation and serving using `AtlanDocsGenerator`.
-        *   Supports UI templates through `Jinja2Templates`.
-
-3.  **Routers (`application_sdk.server.fastapi.routers/`)**:
-    *   **Purpose:** Organize related API endpoints. The SDK provides a default `server` router (`server.py`) with endpoints like `/health`, `/ready`, and `/shutdown`.
-    *   **Extensibility:** Developers can add custom routers to group their application-specific endpoints.
-
-4.  **Workflow Triggers (`application_sdk.server.fastapi.__init__.py`)**:
-    *   **Purpose:** Define how workflows are initiated.
-        *   `HttpWorkflowTrigger`: Triggers a workflow via an HTTP request to a specific endpoint registered via `register_workflow`. Requires `WorkflowClient` to be configured.
-        *   `EventWorkflowTrigger`: Triggers a workflow based on incoming events
-
-5.  **Models (`application_sdk.server.fastapi.models.py`)**:
-    *   **Purpose:** Defines Pydantic models used for request/response validation and serialization for the default API endpoints (e.g., `TestAuthRequest`, `WorkflowResponse`, `PreflightCheckRequest`, `PreflightCheckResponse`).
-
-6.  **Subscriptions (`application_sdk.server.fastapi.models.py`)**:
-    *   **Purpose:** Configure Dapr pub/sub message subscriptions for event-driven processing without Temporal workflows.
-        *   `Subscription`: Defines a subscription to a Dapr pubsub topic with a handler callback.
-        *   `Subscription.BulkConfig`: Nested class for bulk message processing configuration.
-        *   `Subscription.MessageStatus`: Nested enum for handler response status codes (`SUCCESS`, `RETRY`, `DROP`).
-
-## Usage Patterns
-
-### 1. Using the Default FastAPI Server
-
-For standard use cases where you only need the built-in endpoints to interact with your custom handler and trigger workflows via HTTP, you can instantiate the base `APIServer` class directly.
+The handler service auto-wires routes from your `Handler` methods:
 
 ```python
-# In your main server file (e.g., main.py)
-import asyncio
-from application_sdk.server.fastapi import APIServer
-from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.constants import APPLICATION_NAME
-# Assuming your custom classes are defined in a package 'my_connector'
-from my_connector.handlers import MyConnectorHandler
-from my_connector.workflows import MyConnectorWorkflow
+from application_sdk.handler import create_app_handler_service
+from my_package.handlers import MyHandler
 
-# Instantiate the base Server with your handler
-api_server = APIServer(
-    handler=MyConnectorHandler(),
-    workflow_client=WorkflowClient(application_name=APPLICATION_NAME)
-)
-
-# Register your workflow(s) with HTTP triggers
-api_server.register_workflow(
-    workflow_class=MyConnectorWorkflow,
-    triggers=[
-        HttpWorkflowTrigger(
-            endpoint="/start-extraction",
-            methods=["POST"],
-        )
-    ],
-)
-
-async def main():
-    # Start the FastAPI server
-    await api_server.start()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+app = create_app_handler_service(handler_class=MyHandler)
 ```
 
-This setup provides:
-*   Endpoints defined in `application_sdk.server.fastapi.routers.server` (e.g., `/server/health`)
-*   Endpoints for interacting with the `handler` (e.g., `/workflows/v1/test_auth`, `/workflows/v1/metadata`, `/workflows/v1/preflight_check`)
-*   The endpoint(s) you defined via `HttpWorkflowTrigger` (e.g., `/workflows/v1/start-extraction`)
-*   Documentation served at `/atlandocs`
+When started (via the CLI `--mode handler` or `--mode combined`), this creates a FastAPI application with:
 
-### 2. Adding Custom Endpoints & Triggering Workflows
+- Routes for `test_auth`, `preflight_check`, and `fetch_metadata` derived from your `Handler` subclass
+- Health check endpoints
+- MCP server integration (if configured)
 
-If you need server-specific API endpoints, potentially with custom logic before triggering a workflow, create a new class inheriting from `APIServer` and add your own `APIRouter`.
+## Health Check Endpoints
 
-```python
-# In your main server file (e.g., main.py)
-import asyncio
-import uuid
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
+Every handler service exposes:
 
-from application_sdk.server.fastapi import APIServer
-from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.constants import APPLICATION_NAME
-# Assuming your custom classes are defined elsewhere
-from my_connector.handlers import MyConnectorHandler
-from my_connector.workflows import MyConnectorWorkflow
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/server/health` | GET | Liveness probe |
+| `/server/ready` | GET | Readiness probe |
 
-logger = get_logger(__name__)
+These are registered automatically. No configuration is needed.
 
-# Define Request Model for the Custom Endpoint
-class CustomProcessingRequest(BaseModel):
-    source_system_id: str
-    target_dataset_name: str
-    processing_mode: str = "delta"
-    api_key_secret_ref: str
+## Handler Method Routing
 
-# Define your custom server class
-class MyCustomServer(APIServer):
-    custom_router: APIRouter = APIRouter()
+The service maps your `Handler` methods to HTTP endpoints:
 
-    def register_routers(self):
-        # Include the custom router BEFORE calling super()
-        self.app.include_router(self.custom_router, prefix="/custom-api", tags=["custom-processing"])
-        # Call super() to include default routers
-        super().register_routers()
+| Handler method | HTTP endpoint | Method |
+|---------------|---------------|--------|
+| `test_auth()` | `/workflows/v1/test_auth` | POST |
+| `preflight_check()` | `/workflows/v1/preflight_check` | POST |
+| `fetch_metadata()` | `/workflows/v1/metadata` | POST |
 
-    def register_routes(self):
-        self.custom_router.add_api_route(
-            "/trigger",
-            self.handle_custom_trigger,
-            methods=["POST"],
-            summary="Triggers a tailored processing workflow",
-            status_code=status.HTTP_202_ACCEPTED
-        )
-        # Call super() to register default routes
-        super().register_routes()
+The service layer injects `self.context` into the handler before each request and clears it after. Your handler methods receive typed `Input` objects and return typed `Output` objects.
 
-    async def handle_custom_trigger(self, request_body: CustomProcessingRequest) -> dict:
-        logger.info(f"Received request to process from {request_body.source_system_id} to {request_body.target_dataset_name}")
-        if request_body.processing_mode not in ["delta", "full"]:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid processing_mode.")
+## MCP Server Integration
 
-        if not self.workflow_client:
-            logger.error("Workflow client not initialized.")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Workflow service is not configured.",
-            )
+If your application exposes an MCP (Model Context Protocol) server, the handler service can integrate it. MCP endpoints are wired alongside the standard handler routes.
 
-        workflow_args = {
-            "credentials": { "apiKey": request_body.api_key_secret_ref },
-            "connection": {
-                "source_id": request_body.source_system_id,
-                "target_name": request_body.target_dataset_name,
-            },
-            "parameters": {
-                 "mode": request_body.processing_mode,
-            },
-            "tenant_id": "your-tenant-id",
-            "workflow_id": f"custom-proc-{request_body.source_system_id}-{uuid.uuid4()}"
-        }
+## CLI Usage
 
-        try:
-            workflow_data = await self.workflow_client.start_workflow(
-                workflow_args=workflow_args,
-                workflow_class=MyConnectorWorkflow
-            )
-            return {
-                "message": "Custom processing workflow initiated successfully.",
-                "workflow_id": workflow_data.get("workflow_id"),
-                "run_id": workflow_data.get("run_id"),
-            }
-        except Exception as e:
-             logger.error(f"Failed to start workflow: {e}", exc_info=True)
-             raise HTTPException(
-                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                 detail=f"Failed to initiate workflow execution: {e}",
-             )
-
-# Instantiate and run
-api_server = MyCustomServer(
-    handler=MyConnectorHandler(),
-    workflow_client=WorkflowClient(application_name=APPLICATION_NAME)
-)
-
-async def main():
-    await api_server.start()
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-### 3. Overriding Standard Endpoint Behavior
-
-The `APIServer` class provides default endpoints like `/workflows/v1/test_auth`, `/workflows/v1/metadata`, and `/workflows/v1/preflight_check`. The logic executed by these endpoints is determined by the corresponding methods defined on the handler instance passed to the `APIServer` constructor.
-
-```python
-# In your handler file (e.g., my_connector/handlers.py)
-from typing import Any, Dict, List, Optional
-from application_sdk.handlers import HandlerInterface
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.server.fastapi.models import MetadataType
-
-logger = get_logger(__name__)
-
-class MyConnectorHandler(HandlerInterface):
-    async def load(self, **kwargs: Any) -> None:
-        logger.info("MyConnectorHandler loading...")
-        pass
-
-    async def test_auth(self, **kwargs: Any) -> bool:
-        logger.info("Running custom test_auth logic...")
-        credentials = kwargs.get("credentials", {})
-        api_key = credentials.get("api_key")
-        if api_key and len(api_key) > 10:
-             logger.info("Custom auth successful.")
-             return True
-        else:
-             logger.warning("Custom auth failed.")
-             return False
-
-    async def fetch_metadata(
-        self,
-        metadata_type: Optional[MetadataType] = None,
-        database: Optional[str] = None,
-        **kwargs: Any,
-    ) -> List[Dict[str, str]]:
-        logger.info(f"Running custom fetch_metadata for type: {metadata_type}, database: {database}")
-        if metadata_type == MetadataType.DATABASE:
-             return [{"database_name": "prod_db"}, {"database_name": "staging_db"}]
-        elif metadata_type == MetadataType.SCHEMA and database == "prod_db":
-             return [{"schema_name": "analytics"}, {"schema_name": "reporting"}]
-        else:
-            return []
-
-    async def preflight_check(
-        self, payload: Dict[str, Any], **kwargs: Any
-    ) -> Dict[str, Any]:
-        logger.info("Running custom preflight_check...")
-        connectivity_ok = True
-        perms_ok = True
-
-        return {
-            "success": connectivity_ok and perms_ok,
-            "data": {
-                "connectivityCheck": {"success": connectivity_ok, "message": "System reachable" if connectivity_ok else "System unreachable"},
-                "permissionsCheck": {"success": perms_ok, "message": "Required permissions verified" if perms_ok else "Permissions missing"},
-            },
-            "message": "Custom preflight checks completed."
-        }
-
-# In your main server file:
-from my_connector.handlers import MyConnectorHandler
-
-api_server = APIServer(
-    handler=MyConnectorHandler(),
-    workflow_client=WorkflowClient(application_name=APPLICATION_NAME)
-)
-```
-
-### 4. Using Subscriptions for Message Processing
-
-For event-driven applications that process messages from Dapr pub/sub without Temporal workflows, you can use `Subscription` to define message handlers.
-
-```python
-# In your main server file (e.g., main.py)
-import asyncio
-from typing import Any, Dict
-
-from application_sdk.server.fastapi import APIServer
-from application_sdk.server.fastapi.models import Subscription
-from application_sdk.observability.logger_adaptor import get_logger
-
-logger = get_logger(__name__)
-
-# Define a sync message handler
-def process_message(message: Dict[str, Any]) -> dict:
-    """Process a single message from Dapr pubsub."""
-    event_data = message.get("data", message)
-    logger.info(f"Processing message: {event_data}")
-
-    # Return status using Subscription.MessageStatus enum
-    return {"status": Subscription.MessageStatus.SUCCESS}
-
-# Define an async handler for bulk processing
-async def process_bulk_messages(request: Dict[str, Any]) -> dict:
-    """Process messages in bulk from Dapr pubsub."""
-    if "entries" in request:
-        # Bulk format
-        statuses = []
-        for entry in request.get("entries", []):
-            entry_id = entry.get("entryId", "unknown")
-            # Process each entry
-            statuses.append({"entryId": entry_id, "status": Subscription.MessageStatus.SUCCESS})
-        return {"statuses": statuses}
-    else:
-        # Single message format
-        return {"status": Subscription.MessageStatus.SUCCESS}
-
-async def main():
-    # Define subscriptions with handler callbacks
-    subscription = Subscription(
-        component_name="messaging",      # Dapr pubsub component name
-        topic="events-topic",            # Topic to subscribe to
-        route="events-topic",            # Route path for the handler endpoint
-        handler=process_message,         # Callback function (sync or async)
-        dead_letter_topic="events-dlq",  # Optional dead letter topic
-    )
-
-    bulk_subscription = Subscription(
-        component_name="messaging",
-        topic="bulk-events-topic",
-        route="bulk-events",
-        handler=process_bulk_messages,
-        bulk_config=Subscription.BulkConfig(
-            enabled=True,
-            max_messages_count=100,      # Max messages per batch
-            max_await_duration_ms=1000,  # Max wait time for batch
-        ),
-    )
-
-    # Create server with subscriptions (no workflow_client needed)
-    server = APIServer(
-        subscriptions=[subscription, bulk_subscription],
-    )
-
-    await server.start()
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-This setup:
-*   Registers message handler endpoints at `/subscriptions/v1/{route}`
-*   Configures Dapr subscriptions via `/dapr/subscribe` endpoint
-*   Supports both sync and async handlers
-*   Supports bulk message processing with `Subscription.BulkConfig`
-*   Supports dead letter topics for failed messages
-
-### 5. File Upload & Download
-
-The SDK provides a built-in file upload endpoint and a companion download utility so that workflows and activities can accept files from external clients and process them locally.
-
-#### Uploading a File
-
-The `POST /workflows/v1/file` endpoint is registered automatically on every `APIServer`. Clients send a file via multipart form data:
+In production, run the handler service as a separate pod:
 
 ```bash
-curl -X POST "http://localhost:8000/workflows/v1/file" \
-  -F "file=@/path/to/data.csv" \
-  -F "filename=data.csv" \
-  -F "prefix=workflow_file_upload" \
-  -F "contentType=text/csv"
+application-sdk --mode handler --app my_package.apps:MyExtractor
 ```
 
-The response is a `FileUploadResponse` object whose `key` field identifies the file in the object store.
+For local development, `--mode combined` runs both the handler service and the Temporal worker in one process:
 
-#### Downloading the File in a Workflow or Activity
+```bash
+application-sdk --mode combined --app my_package.apps:MyExtractor
+```
 
-Use `download_file_from_upload_response()` from `application_sdk.common.utils` to
-download the uploaded file to a local temporary path for processing. The function
-accepts the upload response in multiple formats (dict, JSON string, or
-`FileUploadResponse` model).
+## Programmatic Usage
+
+For integration tests or custom setups:
 
 ```python
-from application_sdk.common.utils import download_file_from_upload_response
+from application_sdk.main import run_dev_combined
+from my_package.apps import MyExtractor
+from my_package.handlers import MyHandler
 
-# Inside an activity or workflow step:
-
-# Option 1 — pass the response dict directly
-upload_response = {
-    "key": "workflow_file_upload/977f156b-9c78-4bfc-bd74-f603f18c078a.csv",
-    # ... other fields from the upload endpoint
-}
-local_path = await download_file_from_upload_response(upload_response)
-
-# Option 2 — pass the FileUploadResponse model returned by the upload endpoint
-from application_sdk.server.fastapi.models import FileUploadResponse
-
-response_obj = FileUploadResponse(**upload_response)
-local_path = await download_file_from_upload_response(response_obj)
-
-# Option 3 — pass a JSON string (e.g. from workflow args stored in state)
-import json
-
-json_str = json.dumps(upload_response)
-local_path = await download_file_from_upload_response(json_str)
-
-# Now process the file at local_path
-with open(local_path) as f:
-    data = f.read()
+import asyncio
+asyncio.run(run_dev_combined(MyExtractor, handler_class=MyHandler))
 ```
 
-The file is downloaded to `TEMPORARY_PATH/<key>`, preserving the prefix directory
-structure. This path is local to the activity worker and should be treated as
-ephemeral.
+## Error Handling
 
-## Summary
+Handler methods signal errors by raising `HandlerError`:
 
-The `application_sdk.server` module, especially the `fastapi` sub-package, provides a robust foundation for building web servers that interact with Atlan handlers and Temporal workflows. You can use the default `APIServer` for simple cases, extend it with custom routers for specific API needs, override handler methods to tailor the behavior of standard API endpoints, use `Subscription` for event-driven message processing, and use the built-in file upload endpoint with `download_file_from_upload_response()` for file-based workflows.
+```python
+from application_sdk.handler import Handler, HandlerError
+
+class MyHandler(Handler):
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        if not valid:
+            raise HandlerError("Invalid credentials", http_status=401)
+        ...
+```
+
+The service translates `HandlerError` into a structured HTTP error response with the specified status code.
