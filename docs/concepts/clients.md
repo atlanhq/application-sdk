@@ -32,7 +32,7 @@ Both SQL client classes are typically **subclassed** for specific database types
 1.  **Connection Configuration (`DB_CONFIG` - Class Attribute):**
     *   Define `DB_CONFIG` using the Pydantic model `DatabaseConfig` (`application_sdk.clients.models.DatabaseConfig`).
     *   **`template` (str):** SQLAlchemy connection string template using placeholders (e.g., `{username}`, `{host}`).
-    *   **`required` (list[str]):** Keys that must be present in `credentials`/`credentials.extra`. `{password}` is resolved via `get_auth_token()` depending on `authType`.
+    *   **`required` (list[str]):** Keys that must be present in `credentials`/`credentials.extra`. `{password}` is URL-encoded from `credentials["password"]` by `load()`, or resolved via `AUTH_STRATEGIES` when using `load_with_credential()`.
     *   **`parameters` (list[str], optional):** Optional keys appended as URL query parameters when present in `credentials`/`extra`.
     *   **`defaults` (dict[str, Any], optional):** Default URL parameters always appended unless already in the template.
     *   **`connect_args` (dict[str, Any], optional):** Additional connection arguments to be passed directly to SQLAlchemy's `create_engine` or `create_async_engine`. Useful for driver-specific connection parameters that are not part of the connection URL. Defaults to `{}`.

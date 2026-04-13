@@ -246,6 +246,39 @@ class CertificateCredential(BaseModel, frozen=True):
             )
 
 
+class ServicePrincipalCredential(BaseModel, frozen=True):
+    """Azure Service Principal credential."""
+
+    model_config = ConfigDict(frozen=True)
+
+    tenant_id: str
+    client_id: str
+    client_secret: str
+
+    @property
+    def credential_type(self) -> str:
+        return "service_principal"
+
+    async def validate(self) -> None:  # type: ignore[override]
+        from application_sdk.credentials.errors import CredentialValidationError
+
+        if not self.tenant_id:
+            raise CredentialValidationError(
+                "ServicePrincipalCredential.tenant_id must not be empty",
+                credential_name="service_principal",
+            )
+        if not self.client_id:
+            raise CredentialValidationError(
+                "ServicePrincipalCredential.client_id must not be empty",
+                credential_name="service_principal",
+            )
+        if not self.client_secret:
+            raise CredentialValidationError(
+                "ServicePrincipalCredential.client_secret must not be empty",
+                credential_name="service_principal",
+            )
+
+
 class RawCredential(BaseModel, frozen=True):
     """Wrapper for raw dict credentials (legacy / unknown types).
 
@@ -315,4 +348,12 @@ def _parse_certificate(data: dict[str, Any]) -> CertificateCredential:
         key_data=data.get("key_data", ""),
         ca_data=data.get("ca_data", ""),
         passphrase=data.get("passphrase", ""),
+    )
+
+
+def _parse_service_principal(data: dict[str, Any]) -> ServicePrincipalCredential:
+    return ServicePrincipalCredential(
+        tenant_id=data.get("tenant_id", "") or data.get("tenantId", ""),
+        client_id=data.get("client_id", "") or data.get("clientId", ""),
+        client_secret=data.get("client_secret", "") or data.get("clientSecret", ""),
     )

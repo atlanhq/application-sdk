@@ -23,16 +23,12 @@ from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from application_sdk.clients import ClientInterface
+from application_sdk.clients.client import Client
 from application_sdk.clients.models import DatabaseConfig
-from application_sdk.common.aws_utils import (
-    generate_aws_rds_token_with_iam_role,
-    generate_aws_rds_token_with_iam_user,
-)
-from application_sdk.common.error_codes import ClientError, CommonError
+from application_sdk.common.error_codes import ClientError
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.utils import parse_credentials_extra
-from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
+from application_sdk.constants import USE_SERVER_SIDE_CURSOR
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -42,8 +38,10 @@ if TYPE_CHECKING:
     import pandas as pd
     from sqlalchemy.orm import Session
 
+    from application_sdk.credentials.types import Credential
 
-class BaseSQLClient(ClientInterface):
+
+class SQLClient(Client):
     """SQL client for database operations.
 
     This class provides functionality for connecting to and querying SQL databases,
@@ -53,21 +51,18 @@ class BaseSQLClient(ClientInterface):
         connection: Database connection instance.
         engine: SQLAlchemy engine instance.
         credentials (Dict[str, Any]): Database credentials.
-        resolved_credentials (Dict[str, Any]): Resolved credentials after reading from secret manager.
         use_server_side_cursor (bool): Whether to use server-side cursors.
     """
 
     connection = None
     engine = None
-    credentials: Dict[str, Any] = {}
-    resolved_credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
     DB_CONFIG: Optional[DatabaseConfig] = None
 
     def __init__(
         self,
         use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
-        credentials: Dict[str, Any] = {},
+        credentials: Dict[str, Any] | None = None,
         chunk_size: int = 5000,
     ):
         """
@@ -78,32 +73,57 @@ class BaseSQLClient(ClientInterface):
                 Defaults to USE_SERVER_SIDE_CURSOR.
             credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
         """
+        super().__init__(credentials=credentials)
         self.use_server_side_cursor = use_server_side_cursor
-        self.credentials = credentials
         self.chunk_size = chunk_size
 
     async def load(self, credentials: Dict[str, Any]) -> None:
-        """Load credentials and prepare engine for lazy connections.
+        """Load raw dict credentials and prepare engine for lazy connections.
 
-        This method now only stores credentials and creates the engine without
-        establishing a persistent connection. Connections are created on-demand.
+        Builds the connection string from ``DB_CONFIG.template`` by resolving
+        required parameters from *credentials* (and its ``extra`` sub-dict).
+        The ``password`` parameter is automatically URL-encoded.
+
+        Prefer ``load_with_credential()`` for new connectors — it uses the
+        ``AUTH_STRATEGIES`` pattern and typed credentials.
 
         Args:
-            credentials (Dict[str, Any]): Database connection credentials.
+            credentials: Database connection credentials dict.
 
         Raises:
-            ClientError: If credentials are invalid or engine creation fails
+            ClientError: If credentials are invalid or engine creation fails.
         """
         if not self.DB_CONFIG:
             raise ValueError("DB_CONFIG is not configured for this SQL client.")
 
-        self.credentials = credentials  # Update the instance credentials
+        self.credentials = credentials
+        extra = parse_credentials_extra(credentials)
+
+        # Build connection string from template + credentials
+        param_values: Dict[str, Any] = {}
+        for param in self.DB_CONFIG.required:
+            if param == "password":
+                param_values[param] = quote_plus(str(credentials.get("password") or ""))
+            else:
+                value = credentials.get(param) or extra.get(param)
+                if value is None:
+                    raise ValueError(f"{param} is required")
+                param_values[param] = value
+
+        conn_str = self.DB_CONFIG.template.format(**param_values)
+        if self.DB_CONFIG.defaults:
+            conn_str = self.add_url_params(conn_str, self.DB_CONFIG.defaults)
+        if self.DB_CONFIG.parameters:
+            dynamic = {
+                k: credentials.get(k) or extra.get(k) for k in self.DB_CONFIG.parameters
+            }
+            conn_str = self.add_url_params(conn_str, dynamic)
+
         try:
             from sqlalchemy import create_engine
 
-            # Create engine but no persistent connection
             self.engine = create_engine(
-                self.get_sqlalchemy_connection_string(),
+                conn_str,
                 connect_args=self.DB_CONFIG.connect_args,
                 pool_pre_ping=True,
             )
@@ -112,17 +132,77 @@ class BaseSQLClient(ClientInterface):
             # Wrapped in asyncio.to_thread because SQLAlchemy's synchronous
             # engine.connect() blocks the event loop — critical for Temporal
             # activities where blocking starves the auto-heartbeat.
-            # Capture engine in a local variable so the closure doesn't need to
-            # re-read self.engine (which is typed Optional) and pyright can narrow it.
             _engine = self.engine
 
             def _ping() -> None:
                 with _engine.connect() as _:
-                    pass  # Connection test successful
+                    pass
 
             await asyncio.to_thread(_ping)
+            self.connection = None
 
-            # Don't store persistent connection
+        except Exception as e:
+            logger.error("Error loading SQL client", exc_info=True)
+            if self.engine:
+                self.engine.dispose()
+                self.engine = None
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}")
+
+    async def load_with_credential(
+        self,
+        credential: "Credential",
+        **connection_params: str,
+    ) -> None:
+        """Load a typed credential using the AUTH_STRATEGIES registry.
+
+        This is the strategy-based alternative to ``load(dict)``.  It looks
+        up the strategy for ``type(credential)`` in ``AUTH_STRATEGIES``,
+        builds the connection string and ``connect_args`` from the strategy,
+        and creates the SQLAlchemy engine.
+
+        Args:
+            credential: A typed Credential instance (e.g. BasicCredential).
+            **connection_params: Non-auth URL template params such as
+                ``username``, ``host``, ``port``, ``database``.  These are
+                merged with the strategy's ``build_url_params()`` output
+                to fill ``DB_CONFIG.template``.
+
+        Raises:
+            ClientError: If no strategy is registered for the credential type,
+                or if engine creation / connection test fails.
+        """
+        if not self.DB_CONFIG:
+            raise ValueError("DB_CONFIG is not configured for this SQL client.")
+
+        strategy = self._resolve_strategy(credential)
+        conn_str = self._build_url(
+            self.DB_CONFIG.template,
+            strategy,
+            credential,
+            self.DB_CONFIG.defaults,
+            **connection_params,
+        )
+        connect_args = {
+            **self.DB_CONFIG.connect_args,
+            **strategy.build_connect_args(credential),
+        }
+
+        try:
+            from sqlalchemy import create_engine
+
+            self.engine = create_engine(
+                conn_str,
+                connect_args=connect_args,
+                pool_pre_ping=True,
+            )
+
+            _engine = self.engine
+
+            def _ping() -> None:
+                with _engine.connect() as _:
+                    pass
+
+            await asyncio.to_thread(_ping)
             self.connection = None
 
         except Exception as e:
@@ -139,213 +219,15 @@ class BaseSQLClient(ClientInterface):
             self.engine = None
         self.connection = None  # Should already be None, but ensure cleanup
 
-    def get_iam_user_token(self):
-        """Get an IAM user token for AWS RDS database authentication.
-
-        This method generates a temporary authentication token for IAM user-based
-        authentication with AWS RDS databases. It requires AWS access credentials
-        and database connection details.
-
-        Returns:
-            str: A temporary authentication token for database access.
-
-        Raises:
-            CommonError: If required credentials (username or database) are missing.
-        """
-        extra = parse_credentials_extra(self.credentials)
-        aws_access_key_id = self.credentials.get("username")
-        aws_secret_access_key = self.credentials.get("password")
-        host = self.credentials.get("host")
-        user = extra.get("username")
-        database = extra.get("database")
-        if not user:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: username is required for IAM user authentication"
-            )
-        if not database:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: database is required for IAM user authentication"
-            )
-
-        port = self.credentials.get("port")
-        region = self.credentials.get("region")
-        token = generate_aws_rds_token_with_iam_user(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            host=host,
-            user=user,
-            port=port,
-            region=region,
-        )
-
-        return token
-
-    def get_iam_role_token(self):
-        """Get an IAM role token for AWS RDS database authentication.
-
-        This method generates a temporary authentication token for IAM role-based
-        authentication with AWS RDS databases. It requires an AWS role ARN and
-        database connection details.
-
-        Returns:
-            str: A temporary authentication token for database access.
-
-        Raises:
-            CommonError: If required credentials (aws_role_arn or database) are missing.
-        """
-        extra = parse_credentials_extra(self.credentials)
-        aws_role_arn = extra.get("aws_role_arn")
-        database = extra.get("database")
-        external_id = extra.get("aws_external_id")
-
-        if not aws_role_arn:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: aws_role_arn is required for IAM role authentication"
-            )
-        if not database:
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: database is required for IAM role authentication"
-            )
-
-        session_name = AWS_SESSION_NAME
-        username = self.credentials.get("username")
-        host = self.credentials.get("host")
-        port = self.credentials.get("port")
-        region = self.credentials.get("region")
-
-        token = generate_aws_rds_token_with_iam_role(
-            role_arn=aws_role_arn,
-            host=host,
-            user=username,
-            external_id=external_id,
-            session_name=session_name,
-            port=port,
-            region=region,
-        )
-        return token
-
-    def get_auth_token(self) -> str:
-        """Get the appropriate authentication token based on auth type.
-
-        This method determines the authentication type from credentials and returns
-        the corresponding token. Supports basic auth, IAM user, and IAM role
-        authentication methods.
-
-        Returns:
-            str: URL-encoded authentication token.
-
-        Raises:
-            CommonError: If an invalid authentication type is specified.
-        """
-        authType = self.credentials.get("authType", "basic")  # Default to basic auth
-        token = None
-
-        match authType:
-            case "iam_user":
-                token = self.get_iam_user_token()
-            case "iam_role":
-                token = self.get_iam_role_token()
-            case "basic":
-                token = self.credentials.get("password")
-            case _:
-                raise CommonError(f"{CommonError.CREDENTIALS_PARSE_ERROR}: {authType}")
-
-        # Handle None values and ensure token is a string before encoding
-        encoded_token = quote_plus(str(token or ""))
-        return encoded_token
-
     def add_connection_params(
         self, connection_string: str, source_connection_params: Dict[str, Any]
     ) -> str:
         """Add additional connection parameters to a SQLAlchemy connection string.
 
-        Args:
-            connection_string (str): Base SQLAlchemy connection string.
-            source_connection_params (Dict[str, Any]): Additional connection parameters
-                to append to the connection string.
-
-        Returns:
-            str: Connection string with additional parameters appended.
+        Backward-compatible alias for
+        :meth:`~Client.add_url_params`.
         """
-        for key, value in source_connection_params.items():
-            if "?" not in connection_string:
-                connection_string += "?"
-            else:
-                connection_string += "&"
-            connection_string += f"{key}={value}"
-
-        return connection_string
-
-    def get_supported_sqlalchemy_url(self, sqlalchemy_url: str) -> str:
-        """Update the dialect in the URL if it is different from the installed dialect.
-
-        Args:
-            url (str): The URL to update.
-
-        Returns:
-            str: The updated URL with the dialect.
-        """
-        if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
-        installed_dialect = self.DB_CONFIG.template.split("://")[0]
-        url_dialect = sqlalchemy_url.split("://")[0]
-        if installed_dialect != url_dialect:
-            sqlalchemy_url = sqlalchemy_url.replace(url_dialect, installed_dialect)
-        return sqlalchemy_url
-
-    def get_sqlalchemy_connection_string(self) -> str:
-        """Generate a SQLAlchemy connection string for database connection.
-
-        This method constructs a connection string using the configured database
-        parameters and credentials. It handles different authentication methods
-        and includes necessary connection parameters.
-
-        Returns:
-            str: Complete SQLAlchemy connection string.
-
-        Raises:
-            ValueError: If required connection parameters are missing.
-        """
-        if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
-
-        extra = parse_credentials_extra(self.credentials)
-
-        # TODO: Uncomment this when the native deployment is ready
-        # If the compiled_url is present, use it directly
-        # sqlalchemy_url = extra.get("compiled_url")
-        # if sqlalchemy_url:
-        #     return self.get_supported_sqlalchemy_url(sqlalchemy_url)
-
-        auth_token = self.get_auth_token()
-
-        # Prepare parameters
-        param_values = {}
-        for param in self.DB_CONFIG.required:
-            if param == "password":
-                param_values[param] = auth_token
-            else:
-                value = self.credentials.get(param) or extra.get(param)
-                if value is None:
-                    raise ValueError(f"{param} is required")
-                param_values[param] = value
-
-        # Fill in base template
-        conn_str = self.DB_CONFIG.template.format(**param_values)
-
-        # Append defaults if not already in the template
-        if self.DB_CONFIG.defaults:
-            conn_str = self.add_connection_params(conn_str, self.DB_CONFIG.defaults)
-
-        if self.DB_CONFIG.parameters:
-            parameter_keys = self.DB_CONFIG.parameters
-            parameter_values = {
-                key: self.credentials.get(key) or extra.get(key)
-                for key in parameter_keys
-            }
-            conn_str = self.add_connection_params(conn_str, parameter_values)
-
-        return conn_str
+        return self.add_url_params(connection_string, source_connection_params)
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """Execute a SQL query and return results in batches using lazy connections.
@@ -552,10 +434,10 @@ class BaseSQLClient(ClientInterface):
             raise rewrap(e, "Error reading data(pandas) from SQL") from e
 
 
-class AsyncBaseSQLClient(BaseSQLClient):
+class AsyncSQLClient(SQLClient):
     """Asynchronous SQL client for database operations.
 
-    This class extends BaseSQLClient to provide asynchronous database operations,
+    This class extends SQLClient to provide asynchronous database operations,
     with support for batch processing and server-side cursors. It uses SQLAlchemy's
     async engine and connection interfaces for non-blocking database operations.
 
@@ -570,14 +452,14 @@ class AsyncBaseSQLClient(BaseSQLClient):
     engine: "AsyncEngine"
 
     async def load(self, credentials: Dict[str, Any]) -> None:
-        """Load credentials and prepare async engine for lazy connections.
+        """Load raw dict credentials and prepare async engine for lazy connections.
 
-        This method stores credentials and creates an async engine without establishing
-        a persistent connection. Connections are created on-demand for better memory efficiency.
+        Builds the connection string from ``DB_CONFIG.template`` by resolving
+        required parameters from *credentials*.  Prefer
+        ``load_with_credential()`` for new connectors.
 
         Args:
-            credentials (Dict[str, Any]): Database connection credentials including
-                host, port, username, password, and other connection parameters.
+            credentials: Database connection credentials dict.
 
         Raises:
             ValueError: If credentials are invalid or engine creation fails.
@@ -586,23 +468,41 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.DB_CONFIG:
             raise ValueError("DB_CONFIG is not configured for this SQL client.")
 
+        extra = parse_credentials_extra(credentials)
+
+        param_values: Dict[str, Any] = {}
+        for param in self.DB_CONFIG.required:
+            if param == "password":
+                param_values[param] = quote_plus(str(credentials.get("password") or ""))
+            else:
+                value = credentials.get(param) or extra.get(param)
+                if value is None:
+                    raise ValueError(f"{param} is required")
+                param_values[param] = value
+
+        conn_str = self.DB_CONFIG.template.format(**param_values)
+        if self.DB_CONFIG.defaults:
+            conn_str = self.add_url_params(conn_str, self.DB_CONFIG.defaults)
+        if self.DB_CONFIG.parameters:
+            dynamic = {
+                k: credentials.get(k) or extra.get(k) for k in self.DB_CONFIG.parameters
+            }
+            conn_str = self.add_url_params(conn_str, dynamic)
+
         try:
             from sqlalchemy.ext.asyncio import create_async_engine
 
-            # Create async engine but no persistent connection
             self.engine = create_async_engine(
-                self.get_sqlalchemy_connection_string(),
+                conn_str,
                 connect_args=self.DB_CONFIG.connect_args,
                 pool_pre_ping=True,
             )
             if not self.engine:
                 raise ValueError("Failed to create async engine")
 
-            # Test connection briefly to validate credentials
             async with self.engine.connect() as _:
-                pass  # Connection test successful
+                pass
 
-            # Don't store persistent connection
             self.connection = None
 
         except Exception as e:
@@ -611,6 +511,62 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 await self.engine.dispose()
                 self.engine = None
             raise ValueError(str(e))
+
+    async def load_with_credential(
+        self,
+        credential: "Credential",
+        **connection_params: str,
+    ) -> None:
+        """Load a typed credential using the AUTH_STRATEGIES registry (async).
+
+        Async counterpart of ``SQLClient.load_with_credential()``.
+
+        Args:
+            credential: A typed Credential instance.
+            **connection_params: Non-auth URL template params such as
+                ``username``, ``host``, ``port``, ``database``.
+
+        Raises:
+            ClientError: If no strategy or engine creation fails.
+        """
+        if not self.DB_CONFIG:
+            raise ValueError("DB_CONFIG is not configured for this SQL client.")
+
+        strategy = self._resolve_strategy(credential)
+        conn_str = self._build_url(
+            self.DB_CONFIG.template,
+            strategy,
+            credential,
+            self.DB_CONFIG.defaults,
+            **connection_params,
+        )
+        connect_args = {
+            **self.DB_CONFIG.connect_args,
+            **strategy.build_connect_args(credential),
+        }
+
+        try:
+            from sqlalchemy.ext.asyncio import create_async_engine
+
+            self.engine = create_async_engine(
+                conn_str,
+                connect_args=connect_args,
+                pool_pre_ping=True,
+            )
+            if not self.engine:
+                raise ValueError("Failed to create async engine")
+
+            async with self.engine.connect() as _:
+                pass
+
+            self.connection = None
+
+        except Exception as e:
+            logger.error("Error establishing database connection", exc_info=True)
+            if self.engine:
+                await self.engine.dispose()
+                self.engine = None
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}")
 
     async def close(self) -> None:
         """Close the async database connection and dispose of the engine."""

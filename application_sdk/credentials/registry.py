@@ -52,11 +52,13 @@ class CredentialTypeRegistry:
             BearerTokenCredential,
             CertificateCredential,
             OAuthClientCredential,
+            ServicePrincipalCredential,
             _parse_api_key,
             _parse_basic,
             _parse_bearer_token,
             _parse_certificate,
             _parse_oauth_client,
+            _parse_service_principal,
         )
 
         builtins: list[tuple[str, type, CredentialParser]] = [
@@ -69,6 +71,7 @@ class CredentialTypeRegistry:
             ("git_token", GitTokenCredential, _parse_git_token),
             ("atlan_api_token", AtlanApiToken, _parse_atlan_api_token),
             ("atlan_oauth_client", AtlanOAuthClient, _parse_atlan_oauth_client),
+            ("service_principal", ServicePrincipalCredential, _parse_service_principal),
         ]
         for name, cls, parser in builtins:
             self._registry[name] = (cls, parser)
