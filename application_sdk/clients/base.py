@@ -10,19 +10,19 @@ from httpx._types import (
     RequestFiles,
 )
 
-from application_sdk.clients.authenticated import AuthenticatedClient
+from application_sdk.clients import BaseClient
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
-class BaseClient(AuthenticatedClient):
+class BaseHTTPClient(BaseClient):
     """
-    Base client for non-SQL based applications.
+    Base HTTP client for REST API connectors.
 
-    This class provides a base implementation for clients that need to connect
-    to non-SQL data sources. It implements the ClientInterface and provides
-    basic functionality that can be extended by subclasses.
+    Extends ``BaseClient`` with httpx transport for making HTTP requests.
+    Provides GET and POST methods with header merging, retry transport,
+    and authentication support.
 
     Attributes:
         credentials (Dict[str, Any]): Client credentials for authentication.
@@ -35,7 +35,7 @@ class BaseClient(AuthenticatedClient):
         in the load() method, similar to how http_headers is set:
 
         Example:
-            >>> class MyClient(BaseClient):
+            >>> class MyClient(BaseHTTPClient):
             ...     async def load(self, **kwargs):
             ...         # Set up HTTP headers in load method for better modularity
             ...         credentials = kwargs.get("credentials", {})
@@ -54,7 +54,7 @@ class BaseClient(AuthenticatedClient):
             For applications requiring advanced retry logic (e.g., status code-based retries,
             rate limiting, custom backoff strategies), consider using httpx-retries library:
 
-            >>> class MyClient(BaseClient):
+            >>> class MyClient(BaseHTTPClient):
             ...     async def load(self, **kwargs):
             ...         # Set up headers
             ...         self.http_headers = {"Authorization": f"Bearer {kwargs.get('token')}"}

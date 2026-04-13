@@ -1,12 +1,12 @@
-"""Tests for AuthenticatedClient shared auth layer."""
+"""Tests for BaseClient shared auth layer."""
 
 from __future__ import annotations
 
 import pytest
 
+from application_sdk.clients import BaseClient
 from application_sdk.clients.auth_strategies.basic import BasicAuthStrategy
 from application_sdk.clients.auth_strategies.oauth import OAuthAuthStrategy
-from application_sdk.clients.authenticated import AuthenticatedClient
 from application_sdk.common.error_codes import ClientError
 from application_sdk.credentials.types import (
     BasicCredential,
@@ -15,14 +15,14 @@ from application_sdk.credentials.types import (
 )
 
 
-# AuthenticatedClient is abstract (inherits load from ClientInterface).
+# BaseClient.load() raises NotImplementedError by default.
 # Create a concrete subclass for testing.
-class ConcreteClient(AuthenticatedClient):
+class ConcreteClient(BaseClient):
     async def load(self, **kwargs):
         pass
 
 
-class ClientWithStrategies(AuthenticatedClient):
+class ClientWithStrategies(BaseClient):
     AUTH_STRATEGIES = {
         BasicCredential: BasicAuthStrategy(),
         OAuthClientCredential: OAuthAuthStrategy(
@@ -34,7 +34,7 @@ class ClientWithStrategies(AuthenticatedClient):
         pass
 
 
-class TestAuthenticatedClientInit:
+class TestBaseClientInit:
     def test_default_credentials_empty(self):
         client = ConcreteClient()
         assert client.credentials == {}
@@ -154,7 +154,6 @@ class TestBuildUrl:
             username="user",
             password="from_connection_params",
         )
-        # BasicAuthStrategy URL-encodes the password from the credential
         assert "from_strategy" in url
 
 
@@ -171,27 +170,32 @@ class TestBackwardCompatAlias:
 
 
 class TestInheritanceChain:
-    def test_base_sql_client_is_authenticated_client(self):
+    def test_base_sql_client_is_base_client(self):
         from application_sdk.clients.sql import BaseSQLClient
 
-        assert issubclass(BaseSQLClient, AuthenticatedClient)
+        assert issubclass(BaseSQLClient, BaseClient)
 
-    def test_base_client_is_authenticated_client(self):
-        from application_sdk.clients.base import BaseClient
+    def test_base_http_client_is_base_client(self):
+        from application_sdk.clients.base import BaseHTTPClient
 
-        assert issubclass(BaseClient, AuthenticatedClient)
+        assert issubclass(BaseHTTPClient, BaseClient)
 
-    def test_async_sql_client_is_authenticated_client(self):
+    def test_async_sql_client_is_base_client(self):
         from application_sdk.clients.sql import AsyncBaseSQLClient
 
-        assert issubclass(AsyncBaseSQLClient, AuthenticatedClient)
+        assert issubclass(AsyncBaseSQLClient, BaseClient)
 
-    def test_base_client_has_resolve_strategy(self):
-        from application_sdk.clients.base import BaseClient
+    def test_azure_client_is_base_client(self):
+        from application_sdk.clients.azure.client import AzureClient
 
-        assert hasattr(BaseClient, "_resolve_strategy")
+        assert issubclass(AzureClient, BaseClient)
 
-    def test_base_client_has_build_url(self):
-        from application_sdk.clients.base import BaseClient
+    def test_base_http_client_has_resolve_strategy(self):
+        from application_sdk.clients.base import BaseHTTPClient
 
-        assert hasattr(BaseClient, "_build_url")
+        assert hasattr(BaseHTTPClient, "_resolve_strategy")
+
+    def test_base_http_client_has_build_url(self):
+        from application_sdk.clients.base import BaseHTTPClient
+
+        assert hasattr(BaseHTTPClient, "_build_url")

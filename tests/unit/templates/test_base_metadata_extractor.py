@@ -50,7 +50,7 @@ class TestBaseMetadataExtractorStructure:
         assert is_task(BaseMetadataExtractor.upload_to_atlan)
 
     def test_has_client_class_attribute(self) -> None:
-        from application_sdk.clients.base import BaseClient
+        from application_sdk.clients import BaseClient
 
         assert BaseMetadataExtractor.client_class is BaseClient
 

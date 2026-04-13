@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, ClassVar, Optional, Type
 
 from application_sdk.app.base import App
 from application_sdk.app.task import task
-from application_sdk.clients.base import BaseClient
+from application_sdk.clients import BaseClient
 from application_sdk.constants import (
     DEPLOYMENT_OBJECT_STORE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,

@@ -23,7 +23,7 @@ from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from application_sdk.clients.authenticated import AuthenticatedClient
+from application_sdk.clients import BaseClient
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.common.error_codes import ClientError
 from application_sdk.common.exc_utils import rewrap
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from application_sdk.credentials.types import Credential
 
 
-class BaseSQLClient(AuthenticatedClient):
+class BaseSQLClient(BaseClient):
     """SQL client for database operations.
 
     This class provides functionality for connecting to and querying SQL databases,
@@ -227,7 +227,7 @@ class BaseSQLClient(AuthenticatedClient):
         """Add additional connection parameters to a SQLAlchemy connection string.
 
         Backward-compatible alias for
-        :meth:`~AuthenticatedClient.add_url_params`.
+        :meth:`~BaseClient.add_url_params`.
         """
         return self.add_url_params(connection_string, source_connection_params)
 

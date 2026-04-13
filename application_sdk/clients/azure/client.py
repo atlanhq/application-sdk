@@ -39,7 +39,7 @@ from azure.core.credentials import TokenCredential
 from azure.core.exceptions import AzureError, ClientAuthenticationError
 from pydantic import BaseModel
 
-from application_sdk.clients import ClientInterface
+from application_sdk.clients import BaseClient
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.clients.azure.auth import AzureAuthProvider
 from application_sdk.common.error_codes import ClientError
@@ -75,7 +75,7 @@ class HealthStatus(BaseModel):
     overall_health: bool
 
 
-class AzureClient(ClientInterface):
+class AzureClient(BaseClient):
     """
     Main Azure client for the application-sdk framework.
 
@@ -108,7 +108,7 @@ class AzureClient(ClientInterface):
             max_workers (int): Maximum number of worker threads for async operations.
             **kwargs: Additional keyword arguments passed to service clients.
         """
-        self.credentials = credentials or {}
+        super().__init__(credentials=credentials)
         self.resolved_credentials: Dict[str, Any] = {}
         self.credential: Optional[TokenCredential] = None
         self.auth_provider = AzureAuthProvider()
