@@ -48,6 +48,8 @@ from application_sdk.handler.contracts import (
     AuthInput,
     AuthStatus,
     Credential,
+    EventResponse,
+    EventStatus,
     EventTriggerConfig,
     FileUploadResponse,
     MetadataInput,
@@ -1186,6 +1188,12 @@ def create_app_handler_service(
     _event_triggers: list[EventTriggerConfig] = list(event_triggers or [])
     _subscriptions: list[SubscriptionConfig] = list(subscriptions or [])
 
+    # EventRegistry-based event handlers (from @on_event decorator)
+    from application_sdk.app.event_registry import EventRegistry
+
+    _event_registry = EventRegistry.get_instance()
+    _event_handlers = _event_registry.get_by_app(app_name)
+
     @app.get("/dapr/subscribe")
     async def get_dapr_subscriptions() -> JSONResponse:
         from application_sdk.constants import EVENT_STORE_NAME
@@ -1231,8 +1239,62 @@ def create_app_handler_service(
                 }
             )
 
+        # Append EventRegistry-based subscriptions
+        result.extend(_event_registry.generate_dapr_subscriptions())
+
         return JSONResponse(content=result)
 
+    @app.post("/events/v1/drop")
+    async def drop_event() -> JSONResponse:
+        return JSONResponse(content={"success": False, "status": "DROP"})
+
+    # Register per-event handler routes from EventRegistry (before the
+    # generic {event_id} catch-all so they take priority in routing)
+    for _handler_entry in _event_handlers:
+        _eid = _handler_entry.event_id
+        _wf_name = _handler_entry.workflow_name
+        _input_type = _handler_entry.handler_metadata.input_type
+
+        async def _event_route(
+            request: Request,
+            eid: str = _eid,
+            wf_name: str = _wf_name,
+            input_type: type = _input_type,
+        ) -> dict:
+            body = await request.json()
+            event_data = body.get("data", body)
+
+            handler_entry = _event_registry.get(eid)
+            if handler_entry is None:
+                return EventResponse(
+                    status=EventStatus.DROP, message=f"Unknown event: {eid}"
+                ).model_dump()
+
+            try:
+                client = await _get_temporal_client()
+                input_instance = input_type(**event_data)
+                workflow_id = f"{app_name}-event-{eid}-{uuid4().hex[:8]}"
+
+                await client.start_workflow(
+                    wf_name,
+                    args=[input_instance],
+                    id=workflow_id,
+                    task_queue=_workflow_config.task_queue,
+                )
+                return EventResponse(
+                    status=EventStatus.SUCCESS,
+                    workflow_id=workflow_id,
+                    message="Workflow started",
+                ).model_dump()
+            except Exception as e:
+                logger.warning("Failed to start event workflow %s: %s", wf_name, e)
+                return EventResponse(
+                    status=EventStatus.RETRY, message=str(e)
+                ).model_dump()
+
+        app.add_api_route(f"/events/v1/event/{_eid}", _event_route, methods=["POST"])
+
+    # Generic event trigger catch-all (for EventTriggerConfig-based triggers)
     @app.post("/events/v1/event/{event_id}")
     async def handle_event(event_id: str, request: Request) -> JSONResponse:
         if not _workflow_config.is_configured():
@@ -1299,10 +1361,6 @@ def create_app_handler_service(
                 exc_info=True,
             )
             return JSONResponse(content={"status": "RETRY"}, status_code=500)
-
-    @app.post("/events/v1/drop")
-    async def drop_event() -> JSONResponse:
-        return JSONResponse(content={"success": False, "status": "DROP"})
 
     # Register dynamic subscription routes
     for _sub in _subscriptions:

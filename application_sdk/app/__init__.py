@@ -23,6 +23,8 @@ Usage::
 
 from application_sdk.app.base import App, AppError, NonRetryableError
 from application_sdk.app.context import AppContext
+from application_sdk.app.event import EventHandlerMetadata, is_event_handler, on_event
+from application_sdk.app.event_registry import EventRegistry, RegisteredEventHandler
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata, task
 from application_sdk.contracts.base import Input, Output
@@ -35,11 +37,16 @@ __all__ = [
     "AtlanClientMixin",
     "AppError",
     "AppRegistry",
+    "EventHandlerMetadata",
+    "EventRegistry",
     "Input",
     "NonRetryableError",
     "Output",
+    "RegisteredEventHandler",
     "RetryPolicy",
     "TaskMetadata",
     "TaskRegistry",
+    "is_event_handler",
+    "on_event",
     "task",
 ]
