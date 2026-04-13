@@ -23,10 +23,10 @@ Subclass to implement connector-specific logic::
 
 from __future__ import annotations
 
-from application_sdk.app.base import App
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.sql_query import (
     QueryBatchInput,
     QueryBatchOutput,
@@ -39,11 +39,11 @@ from application_sdk.templates.contracts.sql_query import (
 logger = get_logger(__name__)
 
 
-class SqlQueryExtractor(App):
+class SqlQueryExtractor(BaseMetadataExtractor):
     """Base class for SQL query extraction apps.
 
-    Subclass this and override the ``@task`` methods to implement
-    connector-specific query extraction logic.
+    Inherits ``upload_to_atlan``, ``client_class``, ``handler_class``,
+    and ``transformer_class`` from ``BaseMetadataExtractor``.
 
     The ``run()`` method orchestrates the full extraction:
     get_query_batches → fetch_queries (per batch) → aggregate output.

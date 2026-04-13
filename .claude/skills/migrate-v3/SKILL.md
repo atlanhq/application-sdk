@@ -41,6 +41,7 @@ Performs a complete v2 → v3 migration of an application-sdk connector.
    ```
 
 5. Read `tools/migrate_v3/MIGRATION_PROMPT.md` in full. This is the authoritative reference for all structural changes you will make. Do not proceed to Phase 3 without having read it.
+5b. Read the **migration guide** at `docs/migration-guide-v3.md` in the application-sdk repo (also available at https://github.com/atlanhq/application-sdk/blob/refactor-v3/docs/migration-guide-v3.md). This is the user-facing guide with v2 → v3 code examples for every migration step (imports, templates, handler, entry point, infrastructure, credentials, tests). Use it as a reference when making structural changes — it has the canonical before/after code snippets.
 6. Run an initial checker pass to establish the baseline — **do not fix anything yet**:
 
 ```bash
@@ -308,6 +309,32 @@ After the test suite run, check whether the connector has e2e tests using the v2
 7. Add the new test file to the manual follow-up list so the user knows to validate it.
 
 If the connector has no v2-style e2e tests, skip this step.
+
+### Phase 4c — Contract generation
+
+After tests pass and e2e tests are generated, the app needs a PKL contract that generates workflow config, credential config, AE manifest, and typed Input class. Use the **`/contract` skill** from [`atlanhq/connector-os`](https://github.com/atlanhq/connector-os/blob/main/skills/contract/SKILL.md) to create or migrate the contract.
+
+1. Check if the connector already has a `contract/` directory with `app.pkl`:
+   ```bash
+   ls <target-path>/contract/app.pkl 2>/dev/null && echo "EXISTS" || echo "MISSING"
+   ```
+
+2. **If `contract/app.pkl` exists:** Ask the user whether they want to update it for v3 compatibility (e.g. bump toolkit version, regenerate artifacts). If yes, invoke `/contract` with the update action.
+
+3. **If no contract exists:** Inform the user that v3 apps should have a PKL contract and ask whether to generate one:
+   > "This connector has no PKL contract (`contract/app.pkl`). v3 apps use contracts to generate workflow config, credential config, AE manifest, and typed Input classes — the SDK auto-serves these at `/workflows/v1/configmap/*` and `/manifest`. Want me to generate one using the `/contract` skill?"
+
+4. If the user confirms, invoke the `/contract` skill. It will:
+   - Create `contract/PklProject`, `contract/app.pkl`
+   - Generate `contract/generated/{name}.json`, `contract/generated/atlan-connectors-{name}.json`, `contract/generated/manifest.json`, and `contract/generated/_input.py`
+   - Add the `poe generate` task to `pyproject.toml`
+
+5. After contract generation, verify the generated files exist and the handler serves them:
+   ```bash
+   ls <target-path>/contract/generated/*.json
+   ```
+
+6. If the user declines, add "Contract generation skipped — run `/contract` to set up PKL contract" to the manual follow-up list.
 
 ---
 

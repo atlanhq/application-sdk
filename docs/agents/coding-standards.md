@@ -1,7 +1,7 @@
 # Coding Standards
 
-- Primary coding standards live in `.cursor/rules/standards.mdc` (formatting, naming, docstrings for all functions/classes/modules).
-- Logging, exception, and performance guidance are in `.cursor/rules/logging.mdc`, `.cursor/rules/exception-handling.mdc`, and `.cursor/rules/performance.mdc`.
+- Primary coding standards live in `docs/standards/coding.md` (formatting, naming, docstrings for all functions/classes/modules).
+- Logging, exception, and performance guidance are in `docs/standards/logging.md`, `docs/standards/exceptions.md`, and `docs/standards/performance.md`.
 - Tooling enforcement is defined in `.pre-commit-config.yaml` (ruff, isort, pyright).
 
 ## Key Rules Enforced by Pre-commit

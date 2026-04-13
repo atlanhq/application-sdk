@@ -35,11 +35,9 @@ from __future__ import annotations
 
 import os
 import tempfile
-from typing import TYPE_CHECKING, ClassVar, Optional, Type
 
 from application_sdk.app.base import App
 from application_sdk.app.task import task
-from application_sdk.clients.base import BaseClient
 from application_sdk.constants import (
     DEPLOYMENT_OBJECT_STORE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
@@ -55,27 +53,17 @@ from application_sdk.templates.contracts.base_metadata_extraction import (
     UploadOutput,
 )
 
-if TYPE_CHECKING:
-    from application_sdk.handlers.base import BaseHandler
-    from application_sdk.transformers import TransformerInterface
-
 
 class BaseMetadataExtractor(App):
-    """Base App for non-SQL metadata extraction connectors.
+    """Base App for all metadata extraction connectors.
 
-    Provides:
+    Provides a concrete ``upload_to_atlan`` task that migrates output
+    files from the deployment object store to the upstream (Atlan)
+    object store.
 
-    - Class attributes for plugging in a client, handler, and transformer.
-    - A concrete upload_to_atlan task that migrates output files from the
-      deployment object store to the upstream (Atlan) object store.
-
-    Subclasses must implement run() with their own Input/Output contracts.
+    Subclasses must implement ``run()`` with their own Input/Output contracts.
     See module docstring for a usage example.
     """
-
-    client_class: ClassVar[Type[BaseClient]] = BaseClient
-    handler_class: ClassVar[Type["BaseHandler"]]
-    transformer_class: ClassVar[Optional[Type["TransformerInterface"]]] = None
 
     @task(timeout_seconds=1800)
     async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
