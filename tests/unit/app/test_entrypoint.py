@@ -299,3 +299,59 @@ class TestEntrypointAppRegistration:
         wf_mine = generate_workflow_class(ColonWfApp, ep_mine)
         defn_mine = getattr(wf_mine, "__temporal_workflow_definition")
         assert defn_mine.name == "colon-wf-app:mine-queries"
+
+    def test_entrypoint_with_non_input_type_raises_contract_error(self) -> None:
+        """Defining an App whose @entrypoint has a non-Input input_type raises EntryPointContractError.
+
+        The @entrypoint decorator validates at decoration time, but __init_subclass__
+        re-validates as defense-in-depth (e.g. manually crafted _entrypoint_metadata).
+        Unlike the implicit run() path that silently skips template base classes,
+        explicit @entrypoint decoration is always intentional — so we raise loudly.
+        """
+        import types
+
+        from application_sdk.app.entrypoint import EntryPointContractError
+
+        async def bad_ep(self: object, input: object) -> _EpOutput:
+            return _EpOutput()
+
+        # Manually attach metadata with an invalid input type, bypassing the
+        # decorator's own validation so __init_subclass__ must catch it.
+        bad_ep._entrypoint_metadata = EntryPointMetadata(  # type: ignore[attr-defined]
+            name="bad-ep",
+            input_type=str,  # str does not extend Input
+            output_type=_EpOutput,
+            method_name="bad_ep",
+        )
+
+        with pytest.raises(EntryPointContractError, match="input type"):
+            types.new_class(
+                "BadInputEntrypointApp",
+                (App,),
+                {},
+                lambda ns: ns.update({"process": bad_ep}),
+            )
+
+    def test_entrypoint_with_non_output_type_raises_contract_error(self) -> None:
+        """Defining an App whose @entrypoint has a non-Output output_type raises EntryPointContractError."""
+        import types
+
+        from application_sdk.app.entrypoint import EntryPointContractError
+
+        async def bad_out_ep(self: object, input: _EpInput) -> object:
+            return object()
+
+        bad_out_ep._entrypoint_metadata = EntryPointMetadata(  # type: ignore[attr-defined]
+            name="bad-out-ep",
+            input_type=_EpInput,
+            output_type=str,  # str does not extend Output
+            method_name="bad_out_ep",
+        )
+
+        with pytest.raises(EntryPointContractError, match="output type"):
+            types.new_class(
+                "BadOutputEntrypointApp",
+                (App,),
+                {},
+                lambda ns: ns.update({"process": bad_out_ep}),
+            )

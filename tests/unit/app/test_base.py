@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from application_sdk.app.base import App, AppError, NonRetryableError, _pascal_to_kebab
+from application_sdk.app.entrypoint import EntryPointContractError
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE
@@ -179,13 +180,12 @@ class TestAppRegistration:
         metadata = registry.get("versioned-app")
         assert metadata.version == "2.5.0"
 
-    def test_abstract_app_not_registered(self) -> None:
-        """An App subclass that only inherits the default run() is NOT registered.
+    def test_app_without_run_override_not_registered(self) -> None:
+        """An App subclass that does not override run() is silently NOT registered.
 
-        Since run() is no longer abstract, inspect.isabstract is False — but the
-        class should still not be registered because input_type is the base Input
-        (not narrowed), which triggers the 'skip if types are base Input/Output'
-        guard in __init_subclass__.
+        The class inherits the default raise-NotImplementedError stub. Because
+        'run' is not in its __dict__, __init_subclass__ skips it without error
+        (it may define @entrypoint methods, or be an intermediate base class).
         """
 
         class AbstractSubApp(App):
@@ -193,20 +193,37 @@ class TestAppRegistration:
             pass
 
         registry = AppRegistry.get_instance()
-        # Should not be registered
         with pytest.raises(Exception):
             registry.get("abstract-sub-app")
 
-    def test_app_without_type_hints_not_registered(self) -> None:
-        """An App subclass with run() but no type hints is NOT registered."""
+    def test_app_with_run_but_no_type_hints_raises_contract_error(self) -> None:
+        """An App subclass that overrides run() without type hints raises EntryPointContractError."""
 
-        class NoHintsApp(App):
-            async def run(self, input):  # type: ignore[override]
-                return SimpleOutput()
+        with pytest.raises(EntryPointContractError, match="must have type annotations"):
 
-        registry = AppRegistry.get_instance()
-        with pytest.raises(Exception):
-            registry.get("no-hints-app")
+            class NoHintsApp(App):
+                async def run(self, input):  # type: ignore[override]
+                    return SimpleOutput()
+
+    def test_app_with_run_using_base_input_raises_contract_error(self) -> None:
+        """Overriding run() with the base Input type (not narrowed) raises EntryPointContractError."""
+
+        with pytest.raises(EntryPointContractError, match="concrete subclass of Input"):
+
+            class BaseInputApp(App):
+                async def run(self, input: Input) -> SimpleOutput:  # type: ignore[override]
+                    return SimpleOutput()
+
+    def test_app_with_run_using_base_output_raises_contract_error(self) -> None:
+        """Overriding run() with the base Output type (not narrowed) raises EntryPointContractError."""
+
+        with pytest.raises(
+            EntryPointContractError, match="concrete subclass of Output"
+        ):
+
+            class BaseOutputApp(App):
+                async def run(self, input: SimpleInput) -> Output:  # type: ignore[override]
+                    return Output()
 
     def test_registered_app_has_correct_input_type(self) -> None:
         """After registration, _input_type is set correctly."""
@@ -246,24 +263,20 @@ class TestAppRegistration:
 
         assert VersionApp._app_version == "3.0.0"
 
-    def test_app_with_wrong_input_type_not_registered(self) -> None:
-        """App with non-Input run() parameter is NOT registered."""
+    def test_app_with_wrong_input_type_raises_contract_error(self) -> None:
+        """App that overrides run() with a non-Input parameter raises EntryPointContractError."""
 
-        class BadInputApp(App):
-            async def run(self, input: str) -> SimpleOutput:  # type: ignore[override]
-                return SimpleOutput()
+        with pytest.raises(EntryPointContractError, match="input type"):
 
-        registry = AppRegistry.get_instance()
-        with pytest.raises(Exception):
-            registry.get("bad-input-app")
+            class BadInputApp(App):
+                async def run(self, input: str) -> SimpleOutput:  # type: ignore[override]
+                    return SimpleOutput()
 
-    def test_app_with_wrong_output_type_not_registered(self) -> None:
-        """App with non-Output run() return type is NOT registered."""
+    def test_app_with_wrong_output_type_raises_contract_error(self) -> None:
+        """App that overrides run() with a non-Output return type raises EntryPointContractError."""
 
-        class BadOutputApp(App):
-            async def run(self, input: SimpleInput) -> str:  # type: ignore[override]
-                return "bad"
+        with pytest.raises(EntryPointContractError, match="output type"):
 
-        registry = AppRegistry.get_instance()
-        with pytest.raises(Exception):
-            registry.get("bad-output-app")
+            class BadOutputApp(App):
+                async def run(self, input: SimpleInput) -> str:  # type: ignore[override]
+                    return "bad"

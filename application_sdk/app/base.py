@@ -471,6 +471,30 @@ class App(ABC):
             if abstract_methods - {"run"}:
                 return  # Genuine abstract class with other abstract methods
 
+            # Every entry point must follow the single-dataclass contract:
+            # one Input subclass parameter, one Output subclass return type.
+            # Unlike the implicit run() path (which silently skips template base
+            # classes), explicit @entrypoint decoration is always intentional —
+            # raise loudly so the developer sees the problem immediately.
+            from application_sdk.app.entrypoint import EntryPointContractError
+
+            for ep in entry_points.values():
+                if not (
+                    isinstance(ep.input_type, type) and issubclass(ep.input_type, Input)
+                ):
+                    raise EntryPointContractError(
+                        f"Entry point '{ep.name}' on {cls.__name__}: "
+                        f"input type {ep.input_type!r} must be a subclass of Input."
+                    )
+                if not (
+                    isinstance(ep.output_type, type)
+                    and issubclass(ep.output_type, Output)
+                ):
+                    raise EntryPointContractError(
+                        f"Entry point '{ep.name}' on {cls.__name__}: "
+                        f"output type {ep.output_type!r} must be a subclass of Output."
+                    )
+
             first_ep = next(iter(entry_points.values()))
             _apply_app_registration(
                 cls=cls,
@@ -489,32 +513,57 @@ class App(ABC):
         if inspect.isabstract(cls):
             return
 
-        run_method = getattr(cls, "run", None)
-        if run_method is None:
+        # Only consider an explicitly overridden run(). Classes that do not
+        # override run() inherit the default raise-NotImplementedError stub —
+        # silently skip them (they may define only @entrypoint methods, or they
+        # may be intermediate base classes that are not yet concrete).
+        if "run" not in cls.__dict__:
             return
+
+        run_method = cls.__dict__["run"]
 
         if getattr(run_method, "__isabstractmethod__", False):
             return
 
+        from application_sdk.app.entrypoint import EntryPointContractError
+
         try:
             hints = get_type_hints(cls.run)
         except Exception:
-            return
+            return  # Unresolvable annotations (e.g. forward refs) — skip silently
 
         input_type = hints.get("input")
         output_type = hints.get("return")
 
         if input_type is None or output_type is None:
-            return
+            raise EntryPointContractError(
+                f"run() on {cls.__name__} must have type annotations: "
+                f"async def run(self, input: <Input subclass>) -> <Output subclass>"
+            )
 
         if not (isinstance(input_type, type) and issubclass(input_type, Input)):
-            return
+            raise EntryPointContractError(
+                f"run() on {cls.__name__}: input type {input_type!r} must be "
+                f"a subclass of Input."
+            )
         if not (isinstance(output_type, type) and issubclass(output_type, Output)):
-            return
+            raise EntryPointContractError(
+                f"run() on {cls.__name__}: output type {output_type!r} must be "
+                f"a subclass of Output."
+            )
 
-        # Skip if types are the base Input/Output (not narrowed — likely unimplemented template)
-        if input_type is Input or output_type is Output:
-            return
+        # Using the base Input/Output directly is an error — concrete apps must
+        # define their own narrowed dataclass types.
+        if input_type is Input:
+            raise EntryPointContractError(
+                f"run() on {cls.__name__}: input type must be a concrete subclass "
+                f"of Input, not Input itself. Define a dedicated dataclass."
+            )
+        if output_type is Output:
+            raise EntryPointContractError(
+                f"run() on {cls.__name__}: output type must be a concrete subclass "
+                f"of Output, not Output itself. Define a dedicated dataclass."
+            )
 
         from application_sdk.app.entrypoint import EntryPointMetadata
 
