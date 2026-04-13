@@ -16,6 +16,7 @@ Routes:
     POST /workflows/v1/file - Upload file to object storage
     GET  /health - Health check (k8s liveness probe)
     GET  /server/ready - Readiness probe
+    GET  /metrics - Prometheus metrics endpoint (when enabled)
     GET  / - Serve frontend UI (app/generated/frontend/static/index.html)
 
 Usage::
@@ -41,7 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
-from application_sdk.constants import DEPLOYMENT_NAME
+from application_sdk.constants import DEPLOYMENT_NAME, ENABLE_PROMETHEUS_METRICS
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
@@ -1412,6 +1413,22 @@ def create_app_handler_service(
     @app.get("/server/ready")
     async def ready() -> dict[str, str]:
         return {"status": "ok"}
+
+    # ------------------------------------------------------------------
+    # Prometheus metrics
+    # ------------------------------------------------------------------
+
+    if ENABLE_PROMETHEUS_METRICS:
+
+        @app.get("/metrics")
+        async def prometheus_metrics() -> Response:
+            """Expose application metrics in Prometheus exposition format."""
+            from prometheus_client import REGISTRY, generate_latest
+
+            return Response(
+                content=generate_latest(REGISTRY),
+                media_type="text/plain; version=0.0.4; charset=utf-8",
+            )
 
     # ------------------------------------------------------------------
     # UI routes
