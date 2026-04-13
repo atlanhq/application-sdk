@@ -23,7 +23,7 @@ from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from application_sdk.clients import ClientInterface
+from application_sdk.clients.authenticated import AuthenticatedClient
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
@@ -42,11 +42,10 @@ if TYPE_CHECKING:
     import pandas as pd
     from sqlalchemy.orm import Session
 
-    from application_sdk.clients.auth import AuthStrategy
     from application_sdk.credentials.types import Credential
 
 
-class BaseSQLClient(ClientInterface):
+class BaseSQLClient(AuthenticatedClient):
     """SQL client for database operations.
 
     This class provides functionality for connecting to and querying SQL databases,
@@ -62,23 +61,9 @@ class BaseSQLClient(ClientInterface):
 
     connection = None
     engine = None
-    credentials: Dict[str, Any] = {}
     resolved_credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
     DB_CONFIG: Optional[DatabaseConfig] = None
-
-    AUTH_STRATEGIES: Dict[type, "AuthStrategy"] = {}
-    """Map of Credential subclass → AuthStrategy instance.
-
-    When non-empty, ``load()`` and ``get_sqlalchemy_connection_string()``
-    use strategy-based auth instead of the legacy ``get_auth_token()``
-    match statement.  Example::
-
-        AUTH_STRATEGIES = {
-            BasicCredential: BasicAuthStrategy(),
-            CertificateCredential: KeypairAuthStrategy(),
-        }
-    """
 
     def __init__(
         self,
@@ -94,8 +79,8 @@ class BaseSQLClient(ClientInterface):
                 Defaults to USE_SERVER_SIDE_CURSOR.
             credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
         """
+        super().__init__(credentials=credentials)
         self.use_server_side_cursor = use_server_side_cursor
-        self.credentials = credentials
         self.chunk_size = chunk_size
 
     async def load(self, credentials: Dict[str, Any]) -> None:
@@ -171,33 +156,21 @@ class BaseSQLClient(ClientInterface):
             ClientError: If no strategy is registered for the credential type,
                 or if engine creation / connection test fails.
         """
-        from application_sdk.clients.auth import AuthStrategy  # noqa: F811
-
         if not self.DB_CONFIG:
             raise ValueError("DB_CONFIG is not configured for this SQL client.")
 
-        strategy: Optional[AuthStrategy] = self.AUTH_STRATEGIES.get(type(credential))
-        if strategy is None:
-            raise ClientError(
-                f"{ClientError.SQL_CLIENT_AUTH_ERROR}: "
-                f"No auth strategy registered for {type(credential).__name__}. "
-                f"Available: {[t.__name__ for t in self.AUTH_STRATEGIES]}"
-            )
-
-        # Merge connection params with strategy-provided auth params.
-        # Strategy params (e.g. password) override connection_params if keys overlap.
-        url_params = {**connection_params, **strategy.build_url_params(credential)}
+        strategy = self._resolve_strategy(credential)
+        conn_str = self._build_url(
+            self.DB_CONFIG.template,
+            strategy,
+            credential,
+            self.DB_CONFIG.defaults,
+            **connection_params,
+        )
         connect_args = {
             **self.DB_CONFIG.connect_args,
             **strategy.build_connect_args(credential),
         }
-        query_params = strategy.build_url_query_params(credential)
-
-        conn_str = self.DB_CONFIG.template.format(**url_params)
-        if self.DB_CONFIG.defaults:
-            conn_str = self.add_connection_params(conn_str, self.DB_CONFIG.defaults)
-        if query_params:
-            conn_str = self.add_connection_params(conn_str, query_params)
 
         try:
             from sqlalchemy import create_engine
@@ -351,22 +324,10 @@ class BaseSQLClient(ClientInterface):
     ) -> str:
         """Add additional connection parameters to a SQLAlchemy connection string.
 
-        Args:
-            connection_string (str): Base SQLAlchemy connection string.
-            source_connection_params (Dict[str, Any]): Additional connection parameters
-                to append to the connection string.
-
-        Returns:
-            str: Connection string with additional parameters appended.
+        Backward-compatible alias for
+        :meth:`~AuthenticatedClient.add_url_params`.
         """
-        for key, value in source_connection_params.items():
-            if "?" not in connection_string:
-                connection_string += "?"
-            else:
-                connection_string += "&"
-            connection_string += f"{key}={value}"
-
-        return connection_string
+        return self.add_url_params(connection_string, source_connection_params)
 
     def get_supported_sqlalchemy_url(self, sqlalchemy_url: str) -> str:
         """Update the dialect in the URL if it is different from the installed dialect.
@@ -721,31 +682,21 @@ class AsyncBaseSQLClient(BaseSQLClient):
         Raises:
             ClientError: If no strategy or engine creation fails.
         """
-        from application_sdk.clients.auth import AuthStrategy  # noqa: F811
-
         if not self.DB_CONFIG:
             raise ValueError("DB_CONFIG is not configured for this SQL client.")
 
-        strategy: Optional[AuthStrategy] = self.AUTH_STRATEGIES.get(type(credential))
-        if strategy is None:
-            raise ClientError(
-                f"{ClientError.SQL_CLIENT_AUTH_ERROR}: "
-                f"No auth strategy registered for {type(credential).__name__}. "
-                f"Available: {[t.__name__ for t in self.AUTH_STRATEGIES]}"
-            )
-
-        url_params = {**connection_params, **strategy.build_url_params(credential)}
+        strategy = self._resolve_strategy(credential)
+        conn_str = self._build_url(
+            self.DB_CONFIG.template,
+            strategy,
+            credential,
+            self.DB_CONFIG.defaults,
+            **connection_params,
+        )
         connect_args = {
             **self.DB_CONFIG.connect_args,
             **strategy.build_connect_args(credential),
         }
-        query_params = strategy.build_url_query_params(credential)
-
-        conn_str = self.DB_CONFIG.template.format(**url_params)
-        if self.DB_CONFIG.defaults:
-            conn_str = self.add_connection_params(conn_str, self.DB_CONFIG.defaults)
-        if query_params:
-            conn_str = self.add_connection_params(conn_str, query_params)
 
         try:
             from sqlalchemy.ext.asyncio import create_async_engine

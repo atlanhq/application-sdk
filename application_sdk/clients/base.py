@@ -10,13 +10,13 @@ from httpx._types import (
     RequestFiles,
 )
 
-from application_sdk.clients import ClientInterface
+from application_sdk.clients.authenticated import AuthenticatedClient
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
-class BaseClient(ClientInterface):
+class BaseClient(AuthenticatedClient):
     """
     Base client for non-SQL based applications.
 
@@ -97,7 +97,7 @@ class BaseClient(ClientInterface):
             credentials (Dict[str, Any], optional): Client credentials for authentication. Defaults to {}.
             http_headers (HeaderTypes, optional): HTTP headers for all requests. Defaults to {}.
         """
-        self.credentials = credentials
+        super().__init__(credentials=credentials)
         self.http_headers = http_headers
 
         # Use httpx default transport (no retries on status codes)
