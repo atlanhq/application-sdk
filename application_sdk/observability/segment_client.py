@@ -3,7 +3,7 @@ import base64
 import logging
 import threading
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,9 +17,6 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.models import MetricRecord
 from application_sdk.version import __version__
-
-if TYPE_CHECKING:
-    pass  # Reserved for future type-checking-only imports
 
 
 class SegmentTrackEvent(BaseModel):

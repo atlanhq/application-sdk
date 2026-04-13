@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-from typing import TYPE_CHECKING
 
 from application_sdk.app.base import App
 from application_sdk.app.task import task
@@ -53,9 +52,6 @@ from application_sdk.templates.contracts.base_metadata_extraction import (
     UploadInput,
     UploadOutput,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 class BaseMetadataExtractor(App):
