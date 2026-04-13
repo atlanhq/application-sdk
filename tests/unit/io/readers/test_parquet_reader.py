@@ -52,9 +52,7 @@ async def test_not_download_file_that_exists() -> None:
 
     with (
         patch("os.path.isfile", return_value=True),
-        patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file"
-        ) as mock_download,
+        patch("application_sdk.io.utils._download_file") as mock_download,
     ):
         parquet_input = ParquetFileReader(
             path=path,
@@ -81,9 +79,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
         patch("os.path.isfile", side_effect=[False, True]),
         patch("os.path.isdir", return_value=False),
         patch("glob.glob", return_value=[]),
-        patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file"
-        ) as mock_download,
+        patch("application_sdk.io.utils._download_file") as mock_download,
         patch("uuid.uuid4") as mock_uuid4,
     ):
         mock_uuid4.return_value.hex = _FIXED_HEX
@@ -102,7 +98,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
             "./local/tmp/", _DL_ID, "local/test.parquet"
         )
         mock_download.assert_called_once_with(
-            source=path, destination=expected_destination
+            "local/test.parquet", expected_destination
         )
         # Result should be the actual downloaded file path in temporary directory
         assert result == [expected_destination]

@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 from application_sdk.common.error_codes import IOError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.ops import download_file as _download_file
+from application_sdk.storage.ops import list_keys, normalize_key
 
 JSON_FILE_EXTENSION = ".json"
 PARQUET_FILE_EXTENSION = ".parquet"
@@ -135,42 +136,31 @@ async def download_files(
         isolated_tmp = os.path.join(TEMPORARY_PATH, download_id)
 
         if path.endswith(file_extension):
-            # Single file case (file_names validation already ensures this is valid)
-            source_path = path
-            # Use the normalized store key for the local destination to avoid
-            # double-prefixing when path already starts with TEMPORARY_PATH
-            store_key = ObjectStore.as_store_key(source_path)
+            # Single file case
+            store_key = normalize_key(path)
             destination_path = os.path.join(isolated_tmp, store_key)
-            await ObjectStore.download_file(
-                source=source_path,
-                destination=destination_path,
-            )
+            await _download_file(store_key, destination_path)
             downloaded_paths.append(destination_path)
 
         elif file_names:
-            # Directory with specific files - download each file individually
+            # Directory with specific files - download each individually
             for file_name in file_names:
                 file_path = os.path.join(path, file_name)
-                source_path = file_path
-                store_key = ObjectStore.as_store_key(source_path)
+                store_key = normalize_key(file_path)
                 destination_path = os.path.join(isolated_tmp, store_key)
-                await ObjectStore.download_file(
-                    source=source_path,
-                    destination=destination_path,
-                )
+                await _download_file(store_key, destination_path)
                 downloaded_paths.append(destination_path)
         else:
             # Download entire directory
-            source_path = path
-            store_key = ObjectStore.as_store_key(source_path)
-            destination_path = os.path.join(isolated_tmp, store_key)
-            await ObjectStore.download_prefix(
-                source=source_path,
-                destination=destination_path,
-            )
+            prefix = normalize_key(path)
+            keys = await list_keys(prefix)
+            for key in keys:
+                destination_path = os.path.join(isolated_tmp, key)
+                await _download_file(key, destination_path, normalize=False)
             # Find the actual files in the downloaded directory
+            dest_dir = os.path.join(isolated_tmp, prefix)
             found_files = find_local_files_by_extension(
-                destination_path, file_extension, file_names
+                dest_dir, file_extension, file_names
             )
             downloaded_paths.extend(found_files)
 

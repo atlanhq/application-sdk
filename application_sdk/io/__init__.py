@@ -28,7 +28,7 @@ import orjson
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
-from application_sdk.constants import ENABLE_ATLAN_UPLOAD, UPSTREAM_OBJECT_STORE_NAME
+from application_sdk.constants import ENABLE_ATLAN_UPLOAD
 from application_sdk.io.utils import (
     estimate_dataframe_record_size,
     is_empty_dataframe,
@@ -36,7 +36,7 @@ from application_sdk.io.utils import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.ops import upload_file as _upload_file
 
 logger = get_logger(__name__)
 
@@ -632,21 +632,17 @@ class Writer(ABC):
 
     async def _upload_file(self, file_name: str):
         """Upload a file to the object store."""
-        # Get retain_local_copy from the writer instance, defaulting to False
         retain_local = getattr(self, "retain_local_copy", False)
 
+        # In v3, both upstream and deployment stores resolve from infrastructure
+        # context. When ENABLE_ATLAN_UPLOAD is true we upload twice (same store
+        # in practice, kept for backward compat).
         if ENABLE_ATLAN_UPLOAD:
-            await ObjectStore.upload_file(
-                source=file_name,
-                store_name=UPSTREAM_OBJECT_STORE_NAME,
-                retain_local_copy=True,  # Always retain for the second upload to deployment store
-                destination=file_name,
-            )
-        await ObjectStore.upload_file(
-            source=file_name,
-            destination=file_name,
-            retain_local_copy=retain_local,  # Respect the writer's retain_local_copy setting
-        )
+            await _upload_file(file_name, file_name)
+        await _upload_file(file_name, file_name)
+
+        if not retain_local and os.path.exists(file_name):
+            os.remove(file_name)
 
         self.current_buffer_size_bytes = 0
 
@@ -739,10 +735,7 @@ class Writer(ABC):
 
             destination_file_path = output_file_name
             # Push the file to the object store
-            await ObjectStore.upload_file(
-                source=output_file_name,
-                destination=destination_file_path,
-            )
+            await _upload_file(destination_file_path, output_file_name)
 
             return statistics
         except Exception as e:

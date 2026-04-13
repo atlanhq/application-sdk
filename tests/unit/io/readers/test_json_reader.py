@@ -46,9 +46,7 @@ async def test_not_download_file_that_exists() -> None:
     with (
         patch("os.path.isfile", return_value=True),
         patch("os.path.isdir", return_value=False),
-        patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file"
-        ) as mock_download,
+        patch("application_sdk.io.utils._download_file") as mock_download,
     ):
         json_input = JsonFileReader(path=path)  # No file_names
 
@@ -81,7 +79,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
         patch("os.path.isdir", return_value=True),
         patch("glob.glob", side_effect=[[]]),
         patch(  # Only for initial local check
-            "application_sdk.services.objectstore.ObjectStore.download_file"
+            "application_sdk.io.utils._download_file"
         ) as mock_download,
         patch("uuid.uuid4") as mock_uuid4,
     ):
@@ -94,14 +92,8 @@ async def test_download_file_invoked_for_missing_files() -> None:
 
         # Each file should be attempted to be downloaded
         expected_calls = [
-            call(
-                source=os.path.join(path, "a.json"),
-                destination=expected_dest_a,
-            ),
-            call(
-                source=os.path.join(path, "b.json"),
-                destination=expected_dest_b,
-            ),
+            call("local/a.json", expected_dest_a),
+            call("local/b.json", expected_dest_b),
         ]
         mock_download.assert_has_calls(expected_calls, any_order=True)
         assert result == [expected_dest_a, expected_dest_b]
@@ -117,9 +109,7 @@ async def test_download_file_not_invoked_when_file_present() -> None:
         patch("os.path.isfile", return_value=False),
         patch("os.path.isdir", return_value=True),
         patch("glob.glob", return_value=["/local/exists.json"]),
-        patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file"
-        ) as mock_download,
+        patch("application_sdk.io.utils._download_file") as mock_download,
     ):
         json_input = JsonFileReader(
             path=path, file_names=file_names, dataframe_type=DataframeType.daft
@@ -145,7 +135,7 @@ async def test_download_file_error_propagation() -> None:
         patch("os.path.isdir", return_value=True),
         patch("glob.glob", return_value=[]),
         patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file",
+            "application_sdk.io.utils._download_file",
             side_effect=Exception("Download failed"),
         ),
     ):

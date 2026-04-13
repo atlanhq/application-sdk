@@ -204,9 +204,7 @@ class TestParquetFileWriterWriteDataframe:
     ):
         """Test successful DataFrame writing."""
         with (
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
             patch("pyarrow.parquet.write_table") as mock_write_table,
         ):
             mock_upload.return_value = AsyncMock()
@@ -235,9 +233,7 @@ class TestParquetFileWriterWriteDataframe:
     ):
         """Test DataFrame writing with custom path generation."""
         with (
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
             patch("pyarrow.parquet.write_table") as mock_write_table,
         ):
             mock_upload.return_value = AsyncMock()
@@ -300,9 +296,7 @@ class TestParquetFileWriterWriteDaftDataframe:
         """Test successful daft DataFrame writing."""
         with (
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
         ):
             mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
@@ -340,12 +334,8 @@ class TestParquetFileWriterWriteDaftDataframe:
         """Test daft DataFrame writing with parameter overrides."""
         with (
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.delete_prefix"
-            ) as mock_delete,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
+            patch("application_sdk.io.parquet._delete_prefix") as mock_delete,
         ):
             mock_upload.return_value = AsyncMock()
             mock_delete.return_value = AsyncMock()
@@ -377,16 +367,14 @@ class TestParquetFileWriterWriteDaftDataframe:
             )
 
             # Check that delete_prefix was called for overwrite mode
-            mock_delete.assert_called_once_with(prefix=base_output_path)
+            mock_delete.assert_called_once_with(base_output_path)
 
     @pytest.mark.asyncio
     async def test_write_with_default_parameters(self, base_output_path: str):
         """Test daft DataFrame writing with default parameters (uses method default write_mode='append')."""
         with (
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
         ):
             mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
@@ -419,9 +407,7 @@ class TestParquetFileWriterWriteDaftDataframe:
         """Test that DAPR limit is properly configured."""
         with (
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
         ):
             mock_upload.return_value = AsyncMock()
             mock_ctx.return_value.__enter__ = MagicMock()
@@ -475,9 +461,8 @@ class TestParquetFileWriterMetrics:
     ):
         """Test that metrics are recorded for pandas DataFrame writes."""
         with (
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
+            patch("application_sdk.io._upload_file"),
             patch("application_sdk.io.parquet.get_metrics") as mock_get_metrics,
         ):
             mock_upload.return_value = AsyncMock()
@@ -498,9 +483,7 @@ class TestParquetFileWriterMetrics:
         """Test that metrics are recorded for daft DataFrame writes."""
         with (
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
             patch("application_sdk.io.parquet.get_metrics") as mock_get_metrics,
         ):
             mock_upload.return_value = AsyncMock()
@@ -672,9 +655,7 @@ class TestParquetFileWriterConsolidation:
         with (
             patch("daft.read_parquet") as mock_read,
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
         ):
             # Setup mocks
             mock_upload.return_value = AsyncMock()
@@ -767,9 +748,8 @@ class TestParquetFileWriterConsolidation:
         with (
             patch("daft.read_parquet") as mock_read,
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
+            patch("application_sdk.io._upload_file", new_callable=AsyncMock),
         ):
             # Setup mocks
             mock_upload.return_value = AsyncMock()
@@ -944,9 +924,8 @@ class TestParquetFileWriterConsolidation:
         with (
             patch("daft.read_parquet") as mock_read,
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
+            patch("application_sdk.io._upload_file", new_callable=AsyncMock),
         ):
             # Setup mocks
             mock_upload.return_value = AsyncMock()
@@ -1072,9 +1051,7 @@ class TestParquetFileWriterConsolidation:
         with (
             patch("daft.read_parquet") as mock_read,
             patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.services.objectstore.ObjectStore.upload_file"
-            ) as mock_upload,
+            patch("application_sdk.io.parquet._upload_file") as mock_upload,
         ):
             # Setup mocks
             mock_upload.return_value = AsyncMock()

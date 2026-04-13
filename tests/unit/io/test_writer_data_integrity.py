@@ -60,18 +60,13 @@ class TestWriterDataIntegrity:
 
         object_store: Dict[str, List[str]] = {}
 
-        async def mock_upload(
-            source, destination=None, retain_local_copy=False, **kwargs
-        ):
-            dest = destination or source
-            if os.path.exists(source):
-                with open(source, "r") as f:
-                    object_store[dest] = f.readlines()
-                if not retain_local_copy:
-                    os.remove(source)
+        async def mock_upload(key, local_path, **kwargs):
+            if os.path.exists(local_path):
+                with open(local_path, "r") as f:
+                    object_store[key] = f.readlines()
 
         with patch(
-            "application_sdk.io.ObjectStore.upload_file",
+            "application_sdk.io._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):
@@ -119,18 +114,13 @@ class TestWriterDataIntegrity:
 
         object_store: Dict[str, List[str]] = {}
 
-        async def mock_upload(
-            source, destination=None, retain_local_copy=False, **kwargs
-        ):
-            dest = destination or source
-            if os.path.exists(source):
-                with open(source, "r") as f:
-                    object_store[dest] = f.readlines()
-                if not retain_local_copy:
-                    os.remove(source)
+        async def mock_upload(key, local_path, **kwargs):
+            if os.path.exists(local_path):
+                with open(local_path, "r") as f:
+                    object_store[key] = f.readlines()
 
         with patch(
-            "application_sdk.io.ObjectStore.upload_file",
+            "application_sdk.io._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):
@@ -183,7 +173,7 @@ class TestWriterDataIntegrity:
                 os.remove(source)
 
         with patch(
-            "application_sdk.io.ObjectStore.upload_file",
+            "application_sdk.io._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):
@@ -248,7 +238,7 @@ class TestWriterDataIntegrity:
                 os.remove(source)
 
         with patch(
-            "application_sdk.io.ObjectStore.upload_file",
+            "application_sdk.io._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):

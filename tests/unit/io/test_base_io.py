@@ -72,7 +72,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                "application_sdk.io.utils.list_keys",
                 side_effect=Exception("Object store download failed"),
             ),
         ):
@@ -182,7 +182,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_file",
+                "application_sdk.io.utils._download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
             patch("uuid.uuid4") as mock_uuid4,
@@ -192,13 +192,13 @@ class TestReaderDownloadFiles:
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
-            # as_store_key strips leading "/" so destination uses normalized key
+            # normalize_key strips leading "/" so destination uses normalized key
             # Downloads are isolated under a unique subdirectory
             expected_destination = os.path.join(
                 "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/test.parquet"
             )
             mock_download.assert_called_once_with(
-                source=path, destination=expected_destination
+                "data/test.parquet", expected_destination
             )
             assert result == [expected_destination]
 
@@ -209,16 +209,17 @@ class TestReaderDownloadFiles:
         input_instance = MockReader(path)
         expected_files = ["/data/file1.parquet", "/data/file2.parquet"]
 
-        # as_store_key strips leading "/" so destination uses normalized key
-        # Downloads are isolated under a unique subdirectory
-        expected_destination = os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data")
-
         with (
             patch("os.path.isfile", return_value=False),
             patch("os.path.isdir", return_value=True),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                "application_sdk.io.utils.list_keys",
+                new_callable=AsyncMock,
+                return_value=["data/file1.parquet", "data/file2.parquet"],
+            ) as mock_list,
+            patch(
+                "application_sdk.io.utils._download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
             patch("uuid.uuid4") as mock_uuid4,
@@ -233,9 +234,8 @@ class TestReaderDownloadFiles:
                     input_instance.path, ".parquet", input_instance.file_names
                 )
 
-                mock_download.assert_called_once_with(
-                    source=path, destination=expected_destination
-                )
+                mock_list.assert_called_once_with("data")
+                assert mock_download.call_count == 2
                 assert result == expected_files
 
     @pytest.mark.asyncio
@@ -265,7 +265,7 @@ class TestReaderDownloadFiles:
                 side_effect=[[]],  # Only for initial local check
             ),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_file",
+                "application_sdk.io.utils._download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
             patch("uuid.uuid4") as mock_uuid4,
@@ -278,16 +278,12 @@ class TestReaderDownloadFiles:
             # Should download each specific file
             assert mock_download.call_count == 2
             mock_download.assert_any_call(
-                source=os.path.join(path, "file1.parquet"),
-                destination=os.path.join(
-                    "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file1.parquet"
-                ),
+                "data/file1.parquet",
+                os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file1.parquet"),
             )
             mock_download.assert_any_call(
-                source=os.path.join(path, "file2.parquet"),
-                destination=os.path.join(
-                    "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file2.parquet"
-                ),
+                "data/file2.parquet",
+                os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file2.parquet"),
             )
             assert result == expected_files
 
@@ -302,7 +298,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_file",
+                "application_sdk.io.utils._download_file",
                 new_callable=AsyncMock,
                 side_effect=Exception("Download failed"),
             ),
@@ -323,7 +319,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=True),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                "application_sdk.io.utils.list_keys",
                 new_callable=AsyncMock,
             ),
             patch(
@@ -431,7 +427,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_file",
+                "application_sdk.io.utils._download_file",
                 new_callable=AsyncMock,
                 side_effect=Exception("Download failed"),
             ),
@@ -468,7 +464,12 @@ class TestDownloadFilesIsolation:
             patch("os.path.isfile", return_value=False),
             patch("os.path.isdir", return_value=True),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                "application_sdk.io.utils.list_keys",
+                new_callable=AsyncMock,
+                return_value=["raw/table/data.parquet"],
+            ),
+            patch(
+                "application_sdk.io.utils._download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
             patch(
@@ -491,8 +492,9 @@ class TestDownloadFilesIsolation:
             assert len(results) == 2
             assert mock_download.call_count == 2
 
-            dest1 = mock_download.call_args_list[0].kwargs["destination"]
-            dest2 = mock_download.call_args_list[1].kwargs["destination"]
+            # Check that the two calls used different isolated directories
+            dest1 = mock_download.call_args_list[0][0][1]  # positional arg: local_path
+            dest2 = mock_download.call_args_list[1][0][1]
 
             # Destinations must differ (UUID isolation)
             assert (
