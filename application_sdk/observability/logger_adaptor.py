@@ -52,6 +52,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "url",
         "workflow_id",
         "run_id",
+        "workflow_run_id",  # App Vitals uses this alias alongside run_id
         "workflow_type",
         "namespace",
         "task_queue",
@@ -65,7 +66,41 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "log_type",
         "app_name",
         "trace_id",
+        "span_id",
         "correlation_id",
+        # ── App Vitals ───────────────────────────────────────────────────
+        # Identity
+        "app_version",
+        "tenant_id",
+        # Outcome
+        "status",
+        "error_type",
+        "error_class",
+        "error_message",
+        "is_retriable",
+        "error_cause_chain",
+        # Metric classification
+        "dimension",
+        "source",
+        "metric_name",
+        # Throughput
+        "assets_processed",
+        # Efficiency (per-activity resource deltas)
+        "cpu_seconds",
+        "mem_gb_sec",
+        # Performance timings
+        "schedule_to_start_ms",
+        "timeout_budget_total_ms",
+        "timeout_budget_used_pct",
+        # Workflow summary (app_vitals.wf.summary event)
+        "total_activities",
+        "succeeded_activities",
+        "failed_activities",
+        "total_child_workflows",
+        "first_failure_activity_type",
+        "first_failure_error_type",
+        "bottleneck_activity_type",
+        "bottleneck_duration_ms",
     }
 )
 

@@ -4,6 +4,7 @@ import os
 from opentelemetry.sdk.resources import Resource
 
 from application_sdk.constants import (
+    APP_TENANT_ID,
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
     OBSERVABILITY_DIR,
@@ -93,6 +94,11 @@ def build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource:
         resource_attributes["service.version"] = SERVICE_VERSION
     if OTEL_WF_NODE_NAME:
         resource_attributes["k8s.workflow.node.name"] = OTEL_WF_NODE_NAME
+    # App Vitals: ensure app identity is on every OTLP export
+    if "app.name" not in resource_attributes:
+        resource_attributes["app.name"] = APPLICATION_NAME
+    if "tenant.id" not in resource_attributes:
+        resource_attributes["tenant.id"] = APP_TENANT_ID
     if extra_attrs:
         resource_attributes.update(extra_attrs)
     return Resource.create(resource_attributes)

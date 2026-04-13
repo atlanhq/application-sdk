@@ -256,6 +256,10 @@ ENABLE_OTLP_WORKFLOW_LOGS: bool = (
     os.getenv("ENABLE_OTLP_WORKFLOW_LOGS", "false").lower() == "true"
 )
 
+# App Vitals
+#: Enable App Vitals interceptor for automatic lifecycle metrics
+ENABLE_APP_VITALS: bool = os.getenv("ATLAN_ENABLE_APP_VITALS", "true").lower() == "true"
+
 # OTEL Constants
 #: Node name for workflow telemetry
 OTEL_WF_NODE_NAME = os.getenv("OTEL_WF_NODE_NAME", "")

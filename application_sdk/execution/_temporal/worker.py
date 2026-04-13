@@ -176,6 +176,37 @@ def create_worker(
 
         all_interceptors.append(CorrelationContextInterceptor())
 
+    # Temporal OTel TracingInterceptor — creates spans for workflow/activity
+    # executions. When enabled, our AppVitalsInterceptor picks up real trace_ids
+    # on every event (otherwise trace_id is empty).
+    # Gated behind ATLAN_ENABLE_OTLP_TRACES so apps not using traces pay nothing.
+    import os
+
+    if os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true":
+        try:
+            from temporalio.contrib.opentelemetry import TracingInterceptor
+
+            all_interceptors.append(TracingInterceptor())
+            logger.info(
+                "Temporal OTel TracingInterceptor registered — "
+                "App Vitals events will carry real trace_id/span_id"
+            )
+        except ImportError:
+            logger.warning(
+                "ATLAN_ENABLE_OTLP_TRACES=true but temporalio.contrib.opentelemetry "
+                "is not available; falling back to empty trace_ids"
+            )
+
+    # AppVitalsInterceptor — emits lifecycle metrics on workflow/activity completion.
+    # Must come after ExecutionContext, CorrelationContext, and TracingInterceptor
+    # so ContextVars and span context are set when we emit.
+    from application_sdk.constants import ENABLE_APP_VITALS
+
+    if ENABLE_APP_VITALS:
+        from application_sdk.observability.app_vitals import AppVitalsInterceptor
+
+        all_interceptors.append(AppVitalsInterceptor())
+
     if interceptor_settings.enable_output_interceptor:
         from application_sdk.execution._temporal.interceptors.outputs import (
             OutputInterceptor,
