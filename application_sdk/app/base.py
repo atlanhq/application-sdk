@@ -1605,6 +1605,15 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
     workflow.defn(name=workflow_name)(wf_cls)
 
+    # Temporal's sandbox runner imports the workflow class by name from its
+    # __module__.  Since this class is generated dynamically it's never added
+    # to the module's namespace automatically, so we do it here.
+    import sys
+
+    _src_module = sys.modules.get(app_cls.__module__)
+    if _src_module is not None:
+        setattr(_src_module, cls_name, wf_cls)
+
     return wf_cls
 
 
