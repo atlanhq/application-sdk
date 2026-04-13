@@ -9,7 +9,9 @@ Two modes of heartbeating are supported:
 """
 
 import asyncio
+import concurrent.futures
 import functools
+import os
 import time
 from collections.abc import Callable
 from typing import Any, Protocol, TypeVar
@@ -17,6 +19,27 @@ from typing import Any, Protocol, TypeVar
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+# Dedicated executor for blocking operations dispatched via run_in_thread().
+#
+# Why not None (asyncio's default executor)?
+#   Temporal's Python SDK uses the event loop's default executor for its own
+#   internal scheduling.  Sharing that pool with long-running blocking calls
+#   (database queries, metadata extractions) can exhaust it and deadlock the
+#   worker, especially when multiple activities are running concurrently.
+#
+# Why not a per-call ThreadPoolExecutor?
+#   Creating one per call and calling shutdown(wait=False) leaks threads:
+#   the executor object is detached but live threads are not joined and
+#   accumulate over the lifetime of a worker process.
+#
+# This single instance is created once at module import and intentionally
+# outlives individual calls.  Named threads ("sdk-blocking-N") make it
+# distinguishable from Temporal's "activity-pool-N" threads in stack traces.
+_BLOCKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=min(32, (os.cpu_count() or 1) + 4),
+    thread_name_prefix="sdk-blocking-",
+)
 
 T = TypeVar("T")
 
@@ -167,17 +190,8 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     Returns:
         Result of ``func(*args, **kwargs)``.
     """
-    import concurrent.futures
-
     loop = asyncio.get_running_loop()
-    executor = concurrent.futures.ThreadPoolExecutor(
-        max_workers=4, thread_name_prefix="run_in_thread"
+    return await loop.run_in_executor(
+        _BLOCKING_EXECUTOR,
+        functools.partial(func, *args, **kwargs),
     )
-    try:
-        result = await loop.run_in_executor(
-            executor,
-            functools.partial(func, *args, **kwargs),
-        )
-        return result
-    finally:
-        executor.shutdown(wait=False)
