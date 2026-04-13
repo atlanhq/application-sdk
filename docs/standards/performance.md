@@ -1,7 +1,3 @@
----
-alwaysApply: false
-globs: application_sdk/**/*.py
----
 # Performance Standards
 
 ## Core Principles
@@ -17,7 +13,7 @@ globs: application_sdk/**/*.py
 - **Anti-pattern**: Opening resources without proper cleanup
 - **Correct pattern**: Use context managers or try/finally
 
-**✅ DO: Proper resource management**
+**DO: Proper resource management**
 ```python
 # Using context manager
 with open(filename, 'r') as f:
@@ -33,7 +29,7 @@ finally:
         file_handle.close()
 ```
 
-**❌ DON'T: Resource leaks**
+**DON'T: Resource leaks**
 ```python
 # REJECT: No cleanup
 file_handle = open(filename, 'r')
@@ -46,7 +42,7 @@ data = file_handle.read()
 - **Anti-pattern**: Loading entire dataset into memory
 - **Correct pattern**: Use generators, iterators, or chunked processing
 
-**✅ DO: Chunked processing**
+**DO: Chunked processing**
 ```python
 def process_large_file(filename: str, chunk_size: int = 1000):
     """Process large file in chunks to avoid memory issues."""
@@ -61,7 +57,7 @@ def process_large_file(filename: str, chunk_size: int = 1000):
             yield process_chunk(chunk)
 ```
 
-**❌ DON'T: Load everything into memory**
+**DON'T: Load everything into memory**
 ```python
 # REJECT: Memory intensive
 def process_large_file(filename: str):
@@ -77,7 +73,7 @@ def process_large_file(filename: str):
 - **Anti-pattern**: Creating multiple copies of large DataFrames
 - **Correct pattern**: Use inplace operations and proper dtypes
 
-**✅ DO: Memory-efficient DataFrame operations**
+**DO: Memory-efficient DataFrame operations**
 ```python
 # Use appropriate dtypes
 df = pd.read_csv('large_file.csv', dtype={
@@ -94,7 +90,7 @@ df.reset_index(drop=True, inplace=True)
 filtered_df = df.query('value > 100 and category == "A"')
 ```
 
-**❌ DON'T: Inefficient DataFrame operations**
+**DON'T: Inefficient DataFrame operations**
 ```python
 # REJECT: Creates unnecessary copies
 df = df.dropna()  # Creates copy
@@ -108,7 +104,7 @@ df = df[df['category'] == 'A']  # Creates another copy
 - **Anti-pattern**: Processing entire DataFrame at once
 - **Correct pattern**: Use chunked reading and processing
 
-**✅ DO: Chunked DataFrame processing**
+**DO: Chunked DataFrame processing**
 ```python
 def process_large_dataframe(filename: str, chunk_size: int = 10000):
     """Process large CSV file in chunks."""
@@ -118,7 +114,7 @@ def process_large_dataframe(filename: str, chunk_size: int = 10000):
         yield processed_chunk
 ```
 
-**❌ DON'T: Load entire DataFrame**
+**DON'T: Load entire DataFrame**
 ```python
 # REJECT: Memory intensive for large files
 df = pd.read_csv('very_large_file.csv')  # Loads entire file
@@ -132,7 +128,7 @@ process_dataframe(df)
 - **Anti-pattern**: SELECT * without LIMIT on large tables
 - **Correct pattern**: Use specific columns, LIMIT, and proper WHERE clauses
 
-**✅ DO: Optimized SQL queries**
+**DO: Optimized SQL queries**
 ```python
 # Use specific columns instead of SELECT *
 query = "SELECT id, name, created_at FROM users WHERE status = 'active' LIMIT 1000"
@@ -145,7 +141,7 @@ params = (18, 'New York', 100)
 query = "SELECT * FROM orders WHERE user_id = %s AND created_at > %s"
 ```
 
-**❌ DON'T: Inefficient SQL queries**
+**DON'T: Inefficient SQL queries**
 ```python
 # REJECT: No LIMIT on large table
 query = "SELECT * FROM users"  # Could return millions of rows
@@ -162,7 +158,7 @@ query = f"SELECT * FROM users WHERE name = '{user_input}'"
 - **Anti-pattern**: Creating new connections for each query
 - **Correct pattern**: Reuse connections and use transactions
 
-**✅ DO: Proper connection management**
+**DO: Proper connection management**
 ```python
 # Use connection pooling
 async def execute_queries():
@@ -172,7 +168,7 @@ async def execute_queries():
             await conn.execute("UPDATE counters SET value = value + 1")
 ```
 
-**❌ DON'T: Poor connection management**
+**DON'T: Poor connection management**
 ```python
 # REJECT: Creating new connection for each query
 for query in queries:
@@ -188,7 +184,7 @@ for query in queries:
 - **Anti-pattern**: Using default json module for large datasets
 - **Correct pattern**: Use orjson (already used throughout this codebase)
 
-**✅ DO: Efficient JSON serialization (from objectstore.py)**
+**DO: Efficient JSON serialization (from objectstore.py)**
 ```python
 import orjson  # Much faster than json
 
@@ -199,7 +195,7 @@ file_list = orjson.loads(response_data.decode("utf-8"))
 data = json.dumps({"prefix": prefix}).encode("utf-8") if prefix else ""
 ```
 
-**✅ DO: orjson in I/O operations (from io/json.py)**
+**DO: orjson in I/O operations (from io/json.py)**
 ```python
 # Fast DataFrame to JSON conversion
 for chunk in df.to_pandas(batch_size=chunk_size):
@@ -207,7 +203,7 @@ for chunk in df.to_pandas(batch_size=chunk_size):
         json_line = orjson.dumps(record).decode("utf-8")
 ```
 
-**❌ DON'T: Inefficient serialization**
+**DON'T: Inefficient serialization**
 ```python
 # REJECT: Using default json for large datasets
 import json
@@ -219,10 +215,10 @@ data = json.dumps(large_dict)  # Slower than orjson
 
 #### **Algorithm Efficiency**
 - **Rule**: Use appropriate algorithms and data structures
-- **Anti-pattern**: O(n²) algorithms when O(n) or O(log n) alternatives exist
+- **Anti-pattern**: O(n^2) algorithms when O(n) or O(log n) alternatives exist
 - **Correct pattern**: Choose efficient algorithms and data structures
 
-**✅ DO: Efficient algorithms**
+**DO: Efficient algorithms**
 ```python
 # Use set for O(1) lookups
 def find_duplicates(items):
@@ -239,9 +235,9 @@ def find_duplicates(items):
 squares = [x**2 for x in range(1000)]  # More efficient than loop
 ```
 
-**❌ DON'T: Inefficient algorithms**
+**DON'T: Inefficient algorithms**
 ```python
-# REJECT: O(n²) algorithm
+# REJECT: O(n^2) algorithm
 def find_duplicates(items):
     duplicates = []
     for i, item in enumerate(items):
@@ -255,7 +251,7 @@ def find_duplicates(items):
 - **Anti-pattern**: Using async for CPU-intensive operations
 - **Correct pattern**: Use async for I/O, sync for CPU-bound tasks
 
-**✅ DO: Proper async usage**
+**DO: Proper async usage**
 ```python
 import asyncio
 import aiofiles
@@ -275,7 +271,7 @@ def process_data_cpu_intensive(data):
     return [x * 2 for x in data]
 ```
 
-**❌ DON'T: Misusing async**
+**DON'T: Misusing async**
 ```python
 # REJECT: Using async for CPU-bound operations
 async def process_data_cpu_intensive(data):

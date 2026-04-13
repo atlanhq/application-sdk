@@ -1,7 +1,3 @@
----
-alwaysApply: false
-globs: application_sdk/**/*.py
----
 # Exception Handling Standards
 
 ## Core Principles
@@ -23,7 +19,7 @@ globs: application_sdk/**/*.py
 
 ## Exception Handling Patterns
 
-### **✅ DO: Proper exception handling with re-raising**
+### **DO: Proper exception handling with re-raising**
 ```python
 try:
     result = some_operation()
@@ -39,7 +35,7 @@ except Exception as e:
     raise  # Re-raise to propagate the error
 ```
 
-### **❌ DON'T: Swallowing exceptions**
+### **DON'T: Swallowing exceptions**
 ```python
 try:
     result = some_operation()
@@ -67,7 +63,7 @@ except Exception as e:
 
 ## Common Anti-patterns to Reject
 
-### **❌ Silent Exception Swallowing**
+### **Silent Exception Swallowing**
 ```python
 try:
     operation()
@@ -75,7 +71,7 @@ except Exception:
     pass  # REJECT: Silent failure
 ```
 
-### **❌ Generic Exception Catching Without Re-raising**
+### **Generic Exception Catching Without Re-raising**
 ```python
 try:
     operation()
@@ -83,7 +79,7 @@ except Exception as e:
     logger.error(f"Error: {e}")  # REJECT: Swallows exception
 ```
 
-### **❌ Overly Broad Exception Handling**
+### **Overly Broad Exception Handling**
 ```python
 try:
     operation()
@@ -92,7 +88,7 @@ except Exception as e:  # REJECT: Too broad
     raise
 ```
 
-### **❌ Exception Handling Without Context**
+### **Exception Handling Without Context**
 ```python
 try:
     operation()
@@ -103,7 +99,7 @@ except Exception as e:
 
 ## Best Practices
 
-### **✅ DO: Proper exception handling with context**
+### **DO: Proper exception handling with context**
 ```python
 try:
     result = database_connection.execute_query(query)
@@ -119,7 +115,7 @@ except Exception as e:
     raise
 ```
 
-### **✅ DO: Resource cleanup with exception handling**
+### **DO: Resource cleanup with exception handling**
 ```python
 file_handle = None
 try:
@@ -137,7 +133,7 @@ finally:
             # Don't re-raise cleanup errors
 ```
 
-### **✅ DO: Non-critical operation exception handling**
+### **DO: Non-critical operation exception handling**
 ```python
 try:
     metrics.record_metric("operation_success", 1)
@@ -150,7 +146,7 @@ except Exception as e:
 
 The following patterns are acceptable and used in the codebase:
 
-### **✅ VALID: Signal Handlers and Cleanup Operations**
+### **VALID: Signal Handlers and Cleanup Operations**
 ```python
 # From observability.py - signal handler cleanup
 except Exception as e:
@@ -158,7 +154,7 @@ except Exception as e:
     # Don't re-raise - cleanup failures shouldn't crash the application
 ```
 
-### **✅ VALID: Observability Operations (Metrics, Traces, Events)**
+### **VALID: Observability Operations (Metrics, Traces, Events)**
 ```python
 # From observability_decorator.py - trace recording
 try:
@@ -173,7 +169,7 @@ except Exception as publish_error:
     # Don't re-raise - event publishing is non-critical
 ```
 
-### **✅ VALID: Cleanup in Finally Blocks**
+### **VALID: Cleanup in Finally Blocks**
 ```python
 # From interceptors/cleanup.py - workflow cleanup
 finally:

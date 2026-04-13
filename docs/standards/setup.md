@@ -1,8 +1,3 @@
----
-description: this rule is triggered when the user needs to setup the development environment
-globs:
-alwaysApply: false
----
 # Setup Overview
 
 The Atlan Python Application SDK requires the following components regardless of operating system:
@@ -17,11 +12,11 @@ The Atlan Python Application SDK requires the following components regardless of
 
 Please follow the appropriate guide for your operating system:
 
-- [MAC.md](mdc:docs/setup/MAC.md)
-- [LINUX.md](mdc:docs/setup/LINUX.md)
-- [WINDOWS.md](mdc:docs/setup/WINDOWS.md)
+- [Mac](../setup/MAC.md)
+- [Linux](../setup/LINUX.md)
+- [Windows](../setup/WINDOWS.md)
 
-Once the development environment is setup follow the [getting-started.md](mdc:docs/guides/getting-started.md) to setup project dependencies and run an example
+Once the development environment is setup follow the [Getting Started](../guides/getting-started.md) guide to setup project dependencies and run an example.
 
 ## Need Help?
 
