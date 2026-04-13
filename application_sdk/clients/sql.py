@@ -506,7 +506,7 @@ class BaseSQLClient(ClientInterface):
         else:
             # Run the blocking operation in a thread pool
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                return await asyncio.get_event_loop().run_in_executor(
+                return await asyncio.get_running_loop().run_in_executor(
                     executor, self._execute_query, query, chunksize
                 )
 

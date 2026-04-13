@@ -313,9 +313,8 @@ class AzureClient(ClientInterface):
         )
         # Schedule cleanup but don't wait for it
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self.close())
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.close())
         except RuntimeError:
             # No event loop running, can't schedule async cleanup
             logger.warning("No event loop running, async cleanup not possible")
