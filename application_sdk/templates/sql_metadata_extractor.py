@@ -257,15 +257,16 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             else:
                 records_uploaded = 0
 
+            # Build output dynamically — any result key matching an
+            # ExtractionOutput field gets populated automatically.
+            output_fields = ExtractionOutput.model_fields
+            entity_counts = {k: v for k, v in results.items() if k in output_fields}
+
             return ExtractionOutput(
                 workflow_id=workflow_id,
                 success=True,
-                databases_extracted=results.get("databases_extracted", 0),
-                schemas_extracted=results.get("schemas_extracted", 0),
-                tables_extracted=results.get("tables_extracted", 0),
-                columns_extracted=results.get("columns_extracted", 0),
-                procedures_extracted=results.get("procedures_extracted", 0),
                 records_uploaded=records_uploaded,
+                **entity_counts,
             )
 
         except Exception as e:
