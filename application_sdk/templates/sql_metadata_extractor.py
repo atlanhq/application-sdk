@@ -34,7 +34,6 @@ Subclass ``SqlMetadataExtractor`` to implement connector-specific logic::
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
@@ -60,15 +59,11 @@ from application_sdk.templates.contracts.sql_metadata import (
 
 logger = get_logger(__name__)
 
-if TYPE_CHECKING:
-    pass
-
 
 class SqlMetadataExtractor(BaseMetadataExtractor):
     """Base class for SQL metadata extraction apps.
 
-    Inherits ``upload_to_atlan``, ``client_class``, ``handler_class``,
-    and ``transformer_class`` from ``BaseMetadataExtractor``.
+    Inherits ``upload_to_atlan`` from ``BaseMetadataExtractor``.
 
     The ``run()`` method orchestrates the full extraction:
     fetch (databases, schemas, tables, columns) → transform → upload.
