@@ -174,7 +174,7 @@ class TestInheritanceChain:
         assert issubclass(SQLClient, Client)
 
     def test_base_http_client_is_base_client(self):
-        from application_sdk.clients.base import HTTPClient
+        from application_sdk.clients.http import HTTPClient
 
         assert issubclass(HTTPClient, Client)
 
@@ -189,11 +189,11 @@ class TestInheritanceChain:
         assert issubclass(AzureClient, Client)
 
     def test_base_http_client_has_resolve_strategy(self):
-        from application_sdk.clients.base import HTTPClient
+        from application_sdk.clients.http import HTTPClient
 
         assert hasattr(HTTPClient, "_resolve_strategy")
 
     def test_base_http_client_has_build_url(self):
-        from application_sdk.clients.base import HTTPClient
+        from application_sdk.clients.http import HTTPClient
 
         assert hasattr(HTTPClient, "_build_url")

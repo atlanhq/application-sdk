@@ -6,7 +6,7 @@ import pytest
 from httpx import Headers
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.clients.base import HTTPClient as BaseClient
+from application_sdk.clients.http import HTTPClient as BaseClient
 from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
     sql_credentials_strategy,
 )
@@ -49,7 +49,7 @@ class TestBaseClient:
             await base_client.load(credentials=credentials)
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    @patch("application_sdk.clients.http.httpx.AsyncClient")
     async def test_execute_http_get_request_success(
         self, mock_async_client, base_client
     ):
@@ -81,7 +81,7 @@ class TestBaseClient:
         )
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    @patch("application_sdk.clients.http.httpx.AsyncClient")
     async def test_execute_http_get_request_with_client_headers(
         self, mock_async_client, base_client
     ):
@@ -117,7 +117,7 @@ class TestBaseClient:
         )
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    @patch("application_sdk.clients.http.httpx.AsyncClient")
     async def test_execute_http_get_request_http_status_error(
         self, mock_async_client, base_client
     ):
@@ -136,7 +136,7 @@ class TestBaseClient:
         assert result is None
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    @patch("application_sdk.clients.http.httpx.AsyncClient")
     async def test_execute_http_get_request_general_exception(
         self, mock_async_client, base_client
     ):
@@ -153,7 +153,7 @@ class TestBaseClient:
         assert result is None
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    @patch("application_sdk.clients.http.httpx.AsyncClient")
     async def test_execute_http_get_request_with_auth(
         self, mock_async_client, base_client
     ):
@@ -178,7 +178,7 @@ class TestBaseClient:
         )
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    @patch("application_sdk.clients.http.httpx.AsyncClient")
     async def test_execute_http_post_request_success(
         self, mock_async_client, base_client
     ):
@@ -218,7 +218,7 @@ class TestBaseClient:
         )
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    @patch("application_sdk.clients.http.httpx.AsyncClient")
     async def test_execute_http_post_request_with_files(
         self, mock_async_client, base_client
     ):
@@ -255,7 +255,7 @@ class TestBaseClient:
         )
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    @patch("application_sdk.clients.http.httpx.AsyncClient")
     async def test_execute_http_post_request_http_status_error(
         self, mock_async_client, base_client
     ):
@@ -277,7 +277,7 @@ class TestBaseClient:
         assert result is None
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    @patch("application_sdk.clients.http.httpx.AsyncClient")
     async def test_execute_http_post_request_general_exception(
         self, mock_async_client, base_client
     ):
@@ -297,7 +297,7 @@ class TestBaseClient:
         assert result is None
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    @patch("application_sdk.clients.http.httpx.AsyncClient")
     async def test_execute_http_post_request_with_custom_timeout(
         self, mock_async_client, base_client
     ):
@@ -323,7 +323,7 @@ class TestBaseClient:
         )
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    @patch("application_sdk.clients.http.httpx.AsyncClient")
     async def test_execute_http_post_request_with_verify_false(
         self, mock_async_client, base_client
     ):
