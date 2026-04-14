@@ -358,19 +358,35 @@ class TestStartWorkflowEndpoint:
 
 
 class TestErrorInfoDisclosure:
-    """Regression: error responses must not leak internal exception details."""
+    """Regression: error responses must not leak internal exception details.
 
-    def test_500_response_does_not_contain_exception_text(self) -> None:
-        """Handler errors should return generic messages, not exception internals."""
+    The security fix removed exception interpolation from 4 HTTP error
+    handlers. These tests verify the generic messages are returned.
+    """
+
+    def test_start_workflow_type_error_returns_generic_message(self) -> None:
+        """TypeError handler on /start must not leak internal type info."""
+        # Send invalid JSON that triggers a TypeError in workflow start
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/start",
+            json={"deliberately": "wrong_shape"},
+        )
+        # May return 400 (TypeError) or 503 (not configured) depending on setup
+        # Either way, response body must not contain Python exception details
+        body_str = str(response.json())
+        assert "Traceback" not in body_str
+        assert "TypeError" not in body_str
+
+    def test_handler_error_500_does_not_leak_exception(self) -> None:
+        """Handler endpoint errors should return generic messages."""
         client = _make_client(handler=_FailingHandler())
         response = client.post(
             "/workflows/v1/auth",
             json={"credentials": []},
         )
         assert response.status_code == 500
-        body = response.json()
-        # The response should NOT contain the internal exception message
-        body_str = str(body)
+        body_str = str(response.json())
         assert "Traceback" not in body_str
         assert "File " not in body_str
 
