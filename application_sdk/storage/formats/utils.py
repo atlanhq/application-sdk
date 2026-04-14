@@ -1,13 +1,16 @@
 import glob
 import os
 import uuid
+import warnings
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from application_sdk.common.error_codes import IOError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.ops import download_file as _download_file
+from application_sdk.storage.ops import download_prefix as _download_prefix
+from application_sdk.storage.ops import normalize_key
 
 JSON_FILE_EXTENSION = ".json"
 PARQUET_FILE_EXTENSION = ".parquet"
@@ -91,6 +94,10 @@ async def download_files(
 ) -> List[str]:
     """Download files from object store if not available locally.
 
+    .. deprecated::
+        Use :func:`application_sdk.storage.transfer.download` instead, which
+        provides SHA-256 integrity verification and skip-if-exists deduplication.
+
     Flow:
     1. Check if files exist locally at self.path
     2. If not, try to download from object store
@@ -104,6 +111,12 @@ async def download_files(
         AttributeError: When the reader class doesn't support file operations or _extension
         IOError: When no files found locally or in object store
     """
+    warnings.warn(
+        "download_files() is deprecated. Use application_sdk.storage.transfer.download() "
+        "instead, which provides SHA-256 integrity verification and skip-if-exists deduplication.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # Step 1: Check if files exist locally
     local_files: List[str] = find_local_files_by_extension(
         path, file_extension, file_names
@@ -135,42 +148,27 @@ async def download_files(
         isolated_tmp = os.path.join(TEMPORARY_PATH, download_id)
 
         if path.endswith(file_extension):
-            # Single file case (file_names validation already ensures this is valid)
-            source_path = path
-            # Use the normalized store key for the local destination to avoid
-            # double-prefixing when path already starts with TEMPORARY_PATH
-            store_key = ObjectStore.as_store_key(source_path)
+            # Single file case
+            store_key = normalize_key(path)
             destination_path = os.path.join(isolated_tmp, store_key)
-            await ObjectStore.download_file(
-                source=source_path,
-                destination=destination_path,
-            )
+            await _download_file(store_key, destination_path)
             downloaded_paths.append(destination_path)
 
         elif file_names:
-            # Directory with specific files - download each file individually
+            # Directory with specific files - download each individually
             for file_name in file_names:
                 file_path = os.path.join(path, file_name)
-                source_path = file_path
-                store_key = ObjectStore.as_store_key(source_path)
+                store_key = normalize_key(file_path)
                 destination_path = os.path.join(isolated_tmp, store_key)
-                await ObjectStore.download_file(
-                    source=source_path,
-                    destination=destination_path,
-                )
+                await _download_file(store_key, destination_path)
                 downloaded_paths.append(destination_path)
         else:
             # Download entire directory
-            source_path = path
-            store_key = ObjectStore.as_store_key(source_path)
-            destination_path = os.path.join(isolated_tmp, store_key)
-            await ObjectStore.download_prefix(
-                source=source_path,
-                destination=destination_path,
-            )
-            # Find the actual files in the downloaded directory
+            prefix = normalize_key(path)
+            dest_dir = os.path.join(isolated_tmp, prefix)
+            await _download_prefix(prefix, isolated_tmp, suffix=file_extension)
             found_files = find_local_files_by_extension(
-                destination_path, file_extension, file_names
+                dest_dir, file_extension, file_names
             )
             downloaded_paths.extend(found_files)
 

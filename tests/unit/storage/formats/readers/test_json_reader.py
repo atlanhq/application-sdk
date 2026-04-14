@@ -6,9 +6,10 @@ from unittest.mock import call, patch
 import pytest
 from hypothesis import HealthCheck, given, settings
 
+from application_sdk.common.error_codes import IOError as SDKIOError
 from application_sdk.common.types import DataframeType
-from application_sdk.io.json import JsonFileReader
-from application_sdk.io.utils import download_files
+from application_sdk.storage.formats.json import JsonFileReader
+from application_sdk.storage.formats.utils import download_files
 from application_sdk.testing.hypothesis.strategies.inputs.json_input import (
     json_input_config_strategy,
 )
@@ -46,9 +47,7 @@ async def test_not_download_file_that_exists() -> None:
     with (
         patch("os.path.isfile", return_value=True),
         patch("os.path.isdir", return_value=False),
-        patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file"
-        ) as mock_download,
+        patch("application_sdk.storage.formats.utils._download_file") as mock_download,
     ):
         json_input = JsonFileReader(path=path)  # No file_names
 
@@ -81,7 +80,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
         patch("os.path.isdir", return_value=True),
         patch("glob.glob", side_effect=[[]]),
         patch(  # Only for initial local check
-            "application_sdk.services.objectstore.ObjectStore.download_file"
+            "application_sdk.storage.formats.utils._download_file"
         ) as mock_download,
         patch("uuid.uuid4") as mock_uuid4,
     ):
@@ -94,14 +93,8 @@ async def test_download_file_invoked_for_missing_files() -> None:
 
         # Each file should be attempted to be downloaded
         expected_calls = [
-            call(
-                source=os.path.join(path, "a.json"),
-                destination=expected_dest_a,
-            ),
-            call(
-                source=os.path.join(path, "b.json"),
-                destination=expected_dest_b,
-            ),
+            call("local/a.json", expected_dest_a),
+            call("local/b.json", expected_dest_b),
         ]
         mock_download.assert_has_calls(expected_calls, any_order=True)
         assert result == [expected_dest_a, expected_dest_b]
@@ -117,9 +110,7 @@ async def test_download_file_not_invoked_when_file_present() -> None:
         patch("os.path.isfile", return_value=False),
         patch("os.path.isdir", return_value=True),
         patch("glob.glob", return_value=["/local/exists.json"]),
-        patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file"
-        ) as mock_download,
+        patch("application_sdk.storage.formats.utils._download_file") as mock_download,
     ):
         json_input = JsonFileReader(
             path=path, file_names=file_names, dataframe_type=DataframeType.daft
@@ -134,8 +125,6 @@ async def test_download_file_not_invoked_when_file_present() -> None:
 @pytest.mark.asyncio
 async def test_download_file_error_propagation() -> None:
     """Ensure errors during download are surfaced as application_sdk IOError."""
-    from application_sdk.common.error_codes import IOError as SDKIOError
-
     path = "/local"
     file_names = ["bad.json"]
 
@@ -145,7 +134,7 @@ async def test_download_file_error_propagation() -> None:
         patch("os.path.isdir", return_value=True),
         patch("glob.glob", return_value=[]),
         patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file",
+            "application_sdk.storage.formats.utils._download_file",
             side_effect=Exception("Download failed"),
         ),
     ):
@@ -203,7 +192,9 @@ async def test_read_batches_with_mocked_pandas(monkeypatch) -> None:
 
     # Mock the base Input class method since JsonFileReader calls super().download_files()
     monkeypatch.setattr(
-        "application_sdk.io.json.download_files", dummy_download, raising=False
+        "application_sdk.storage.formats.json.download_files",
+        dummy_download,
+        raising=False,
     )
 
     json_input = JsonFileReader(
@@ -240,7 +231,9 @@ async def test_read_batches_empty_file_list(monkeypatch) -> None:
 
     # Mock the base Input class method since JsonFileReader calls super().download_files()
     monkeypatch.setattr(
-        "application_sdk.io.json.download_files", dummy_download, raising=False
+        "application_sdk.storage.formats.json.download_files",
+        dummy_download,
+        raising=False,
     )
 
     json_input = JsonFileReader(
@@ -293,7 +286,9 @@ async def test_read(monkeypatch) -> None:
 
     # Mock the base Input class method since JsonFileReader calls super().download_files()
     monkeypatch.setattr(
-        "application_sdk.io.json.download_files", dummy_download, raising=False
+        "application_sdk.storage.formats.json.download_files",
+        dummy_download,
+        raising=False,
     )
 
     path = "/tmp"
@@ -322,7 +317,9 @@ async def test_read_no_files(monkeypatch) -> None:
 
     # Mock the base Input class method since JsonFileReader calls super().download_files()
     monkeypatch.setattr(
-        "application_sdk.io.json.download_files", dummy_download, raising=False
+        "application_sdk.storage.formats.json.download_files",
+        dummy_download,
+        raising=False,
     )
 
     json_input = JsonFileReader(
@@ -347,7 +344,9 @@ async def test_read_batches(monkeypatch) -> None:
 
     # Mock the base Input class method since JsonFileReader calls super().download_files()
     monkeypatch.setattr(
-        "application_sdk.io.json.download_files", dummy_download, raising=False
+        "application_sdk.storage.formats.json.download_files",
+        dummy_download,
+        raising=False,
     )
 
     path = "/data"
@@ -388,7 +387,9 @@ async def test_context_manager_calls_close(monkeypatch) -> None:
         return [os.path.join(path, fn) for fn in file_names] if file_names else []
 
     monkeypatch.setattr(
-        "application_sdk.io.json.download_files", dummy_download, raising=False
+        "application_sdk.storage.formats.json.download_files",
+        dummy_download,
+        raising=False,
     )
 
     path = "/data"
@@ -430,7 +431,9 @@ async def test_read_after_close_raises_error(monkeypatch) -> None:
         return [os.path.join(path, fn) for fn in file_names] if file_names else []
 
     monkeypatch.setattr(
-        "application_sdk.io.json.download_files", dummy_download, raising=False
+        "application_sdk.storage.formats.json.download_files",
+        dummy_download,
+        raising=False,
     )
 
     path = "/data"
@@ -484,7 +487,9 @@ async def test_cleanup_on_close_false_retains_files(monkeypatch) -> None:
         return downloaded_files
 
     monkeypatch.setattr(
-        "application_sdk.io.json.download_files", dummy_download, raising=False
+        "application_sdk.storage.formats.json.download_files",
+        dummy_download,
+        raising=False,
     )
 
     path = "/data"
@@ -527,7 +532,9 @@ async def test_cleanup_on_close_true_cleans_files(monkeypatch) -> None:
         return downloaded_files
 
     monkeypatch.setattr(
-        "application_sdk.io.json.download_files", dummy_download, raising=False
+        "application_sdk.storage.formats.json.download_files",
+        dummy_download,
+        raising=False,
     )
 
     path = "/data"
@@ -571,7 +578,9 @@ async def test_downloaded_files_tracked_on_read(monkeypatch) -> None:
         return downloaded_files
 
     monkeypatch.setattr(
-        "application_sdk.io.json.download_files", dummy_download, raising=False
+        "application_sdk.storage.formats.json.download_files",
+        dummy_download,
+        raising=False,
     )
 
     path = "/data"

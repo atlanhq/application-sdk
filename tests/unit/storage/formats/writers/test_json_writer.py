@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.io.json import JsonFileWriter
+from application_sdk.storage.formats.json import JsonFileWriter
 from application_sdk.testing.hypothesis.strategies.outputs.json_output import (
     chunk_size_strategy,
     dataframe_strategy,
@@ -64,9 +64,7 @@ async def test_write_empty(base_output_path: str) -> None:
 @given(df=dataframe_strategy())  # type: ignore
 @pytest.mark.asyncio
 async def test_write_single_chunk(base_output_path: str, df: pd.DataFrame) -> None:
-    with patch(
-        "application_sdk.services.objectstore.ObjectStore.upload_file"
-    ) as mock_push:
+    with patch("application_sdk.storage.formats._upload_file") as mock_push:
         json_output = JsonFileWriter(  # type: ignore
             path=os.path.join(base_output_path, "tests", "raw"),
             chunk_size=len(df)
@@ -96,9 +94,7 @@ async def test_write_single_chunk(base_output_path: str, df: pd.DataFrame) -> No
 async def test_write_multiple_chunks(
     base_output_path: str, df: pd.DataFrame, chunk_size: int
 ) -> None:
-    with patch(
-        "application_sdk.services.objectstore.ObjectStore.upload_file"
-    ) as mock_push:
+    with patch("application_sdk.storage.formats._upload_file") as mock_push:
         json_output = JsonFileWriter(  # type: ignore
             path=os.path.join(base_output_path, "tests", "raw"),
             chunk_size=chunk_size,
