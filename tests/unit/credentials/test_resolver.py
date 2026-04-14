@@ -107,15 +107,14 @@ def _make_vault_patches(vault_return=None, vault_side_effect=None):
     else:
         mock_vault.get_credentials = AsyncMock(return_value=vault_return or {})
 
-    mock_dapr = MagicMock()
-    mock_dapr.__enter__ = MagicMock(return_value=mock_dapr)
-    mock_dapr.__exit__ = MagicMock(return_value=False)
-
     p_vault = patch(
         "application_sdk.infrastructure._dapr.client.DaprCredentialVault",
         MagicMock(return_value=mock_vault),
     )
-    p_dapr = patch("dapr.clients.DaprClient", MagicMock(return_value=mock_dapr))
+    p_dapr = patch(
+        "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+        MagicMock(return_value=MagicMock()),
+    )
     return p_vault, p_dapr, mock_vault
 
 
@@ -163,7 +162,7 @@ class TestGuidResolutionPath:
                 "application_sdk.infrastructure._dapr.client.DaprCredentialVault",
                 MagicMock(return_value=mock_vault),
             ),
-            patch("dapr.clients.DaprClient", MagicMock(return_value=mock_dapr)),
+            patch("application_sdk.infrastructure._dapr.http.AsyncDaprClient", MagicMock(return_value=mock_dapr)),
         ):
             ref = legacy_credential_ref("abc-123")
             raw = await resolver.resolve_raw(ref)

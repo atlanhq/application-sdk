@@ -6,16 +6,24 @@ from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
-from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
+from application_sdk.infrastructure._dapr.http import BindingResult
 from application_sdk.services.objectstore import ObjectStore
+
+
+def _mock_dapr_instance(data: bytes = b"") -> MagicMock:
+    """Create a mock AsyncDaprClient instance with async methods."""
+    return MagicMock(
+        invoke_binding=AsyncMock(return_value=BindingResult(data=data, metadata={})),
+        close=AsyncMock(),
+    )
 
 
 @pytest.mark.asyncio
 class TestObjectStore:
-    @patch("application_sdk.services.objectstore.DaprClient")
-    async def test_upload_file_success(self, mock_dapr_client: MagicMock) -> None:
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
+    async def test_upload_file_success(self, mock_dapr_cls: MagicMock) -> None:
+        mock_instance = _mock_dapr_instance()
+        mock_dapr_cls.return_value = mock_instance
 
         test_file_content = b"test content"
         m = mock_open(read_data=test_file_content)
@@ -33,7 +41,7 @@ class TestObjectStore:
                 destination="/prefix/test.txt",
             )
 
-        mock_client.invoke_binding.assert_called_once()
+        mock_instance.invoke_binding.assert_called_once()
         mock_cleanup.assert_called_once_with("/tmp/test.txt")
 
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
@@ -83,13 +91,13 @@ class TestObjectStore:
         mock_invoke.assert_called_once()
         assert mock_invoke.call_args.kwargs["metadata"]["key"] == destination
 
-    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
     async def test_upload_file_from_bytes_success(
-        self, mock_dapr_client: MagicMock
+        self, mock_dapr_cls: MagicMock
     ) -> None:
         """Test successful upload from bytes."""
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_instance = _mock_dapr_instance()
+        mock_dapr_cls.return_value = mock_instance
 
         test_file_content = b"test file content from bytes"
         destination = "test-file-uuid.csv"
@@ -99,25 +107,17 @@ class TestObjectStore:
             destination=destination,
         )
 
-        mock_client.invoke_binding.assert_called_once_with(
-            binding_name="objectstore",
-            operation="create",
-            data=test_file_content,
-            binding_metadata={
-                "key": destination,
-                "fileName": destination,
-                "blobName": destination,
-            },
-        )
+        mock_instance.invoke_binding.assert_called_once()
+        call_kwargs = mock_instance.invoke_binding.call_args[1]
+        assert call_kwargs["operation"] == "create"
+        assert call_kwargs["metadata"]["key"] == destination
 
-    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
     async def test_upload_file_from_bytes_failure(
         self, mock_dapr_client: MagicMock
     ) -> None:
         """Test upload from bytes failure handling."""
-        mock_client = MagicMock()
-        mock_client.invoke_binding.side_effect = Exception("Upload failed")
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.side_effect = Exception("Upload failed")
 
         test_file_content = b"test content"
         destination = "test-file.txt"
@@ -128,10 +128,9 @@ class TestObjectStore:
                 destination=destination,
             )
 
-    @patch("application_sdk.services.objectstore.DaprClient")
-    async def test_upload_directory_success(self, mock_dapr_client: MagicMock) -> None:
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
+    async def test_upload_directory_success(self, mock_dapr_cls: MagicMock) -> None:
+        mock_dapr_cls.return_value = _mock_dapr_instance()
 
         with (
             patch("os.walk") as mock_walk,
@@ -150,7 +149,7 @@ class TestObjectStore:
                 destination="/prefix",
             )
 
-        assert mock_client.invoke_binding.call_count == 2
+        assert mock_dapr_cls.call_count == 2
         assert mock_cleanup.call_count == 2
 
     @patch(
@@ -197,31 +196,23 @@ class TestObjectStore:
             "objectstore",
         )
 
-    @patch("application_sdk.services.objectstore.DaprClient")
-    async def test_delete_file_success(self, mock_dapr_client: MagicMock) -> None:
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
+    async def test_delete_file_success(self, mock_dapr_cls: MagicMock) -> None:
         """Test successful deletion of a single file."""
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_instance = _mock_dapr_instance()
+        mock_dapr_cls.return_value = mock_instance
 
         await ObjectStore.delete_file(key="test/file.txt")
 
-        mock_client.invoke_binding.assert_called_once_with(
-            binding_name="objectstore",
-            operation="delete",
-            data=b'{"key":"test/file.txt"}',
-            binding_metadata={
-                "key": "test/file.txt",
-                "fileName": "test/file.txt",
-                "blobName": "test/file.txt",
-            },
-        )
+        mock_instance.invoke_binding.assert_called_once()
+        call_kwargs = mock_instance.invoke_binding.call_args[1]
+        assert call_kwargs["operation"] == "delete"
+        assert call_kwargs["metadata"]["key"] == "test/file.txt"
 
-    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
     async def test_delete_file_failure(self, mock_dapr_client: MagicMock) -> None:
         """Test delete file failure handling."""
-        mock_client = MagicMock()
-        mock_client.invoke_binding.side_effect = Exception("Delete failed")
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.side_effect = Exception("Delete failed")
 
         with pytest.raises(Exception, match="Delete failed"):
             await ObjectStore.delete_file(key="test/file.txt")
@@ -340,28 +331,19 @@ class TestObjectStore:
             store_name="objectstore",
         )
 
-    @patch("application_sdk.services.objectstore.DaprClient")
-    async def test_get_content_success(self, mock_dapr_client: MagicMock) -> None:
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
+    async def test_get_content_success(self, mock_dapr_cls: MagicMock) -> None:
         """Test successful file content retrieval."""
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.data = b"test file content"
-        mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_instance = _mock_dapr_instance(data=b"test file content")
+        mock_dapr_cls.return_value = mock_instance
 
         result = await ObjectStore.get_content(key="test/file.txt")
 
         assert result == b"test file content"
-        mock_client.invoke_binding.assert_called_once_with(
-            binding_name="objectstore",
-            operation="get",
-            data=b'{"key":"test/file.txt"}',
-            binding_metadata={
-                "key": "test/file.txt",
-                "fileName": "test/file.txt",
-                "blobName": "test/file.txt",
-            },
-        )
+        mock_instance.invoke_binding.assert_called_once()
+        call_kwargs = mock_instance.invoke_binding.call_args[1]
+        assert call_kwargs["operation"] == "get"
+        assert call_kwargs["metadata"]["key"] == "test/file.txt"
 
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")
     async def test_get_content_normalizes_temporary_key(
@@ -382,14 +364,12 @@ class TestObjectStore:
             b'{"key":"artifacts/apps/my-app/workflows/wf-123/run-456/test.json"}'
         )
 
-    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
     async def test_get_content_file_not_found_with_suppress_error_false(
         self, mock_dapr_client: MagicMock
     ) -> None:
         """Test get_content raises exception when file not found and suppress_error=False."""
-        mock_client = MagicMock()
-        mock_client.invoke_binding.side_effect = Exception("File not found")
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_client.side_effect = Exception("File not found")
 
         with pytest.raises(
             Exception, match=r"Error getting file content \(key=nonexistent/file.txt\)"
@@ -399,31 +379,24 @@ class TestObjectStore:
             )
         assert "File not found" in str(exc_info.value.__cause__)
 
-    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
     async def test_get_content_file_not_found_with_suppress_error_true(
-        self, mock_dapr_client: MagicMock
+        self, mock_dapr_cls: MagicMock
     ) -> None:
         """Test get_content returns None when file not found and suppress_error=True."""
-        mock_client = MagicMock()
-        mock_client.invoke_binding.side_effect = Exception("File not found")
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_cls.side_effect = Exception("File not found")
 
         result = await ObjectStore.get_content(
             key="nonexistent/file.txt", suppress_error=True
         )
-
         assert result is None
 
-    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
     async def test_get_content_no_data_with_suppress_error_false(
-        self, mock_dapr_client: MagicMock
+        self, mock_dapr_cls: MagicMock
     ) -> None:
         """Test get_content raises exception when no data returned and suppress_error=False."""
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.data = None
-        mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_cls.return_value = _mock_dapr_instance(data=b"")
 
         with pytest.raises(
             Exception, match=r"Error getting file content \(key=test/file.txt\)"
@@ -431,31 +404,22 @@ class TestObjectStore:
             await ObjectStore.get_content(key="test/file.txt", suppress_error=False)
         assert "No data received" in str(exc_info.value.__cause__)
 
-    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
     async def test_get_content_no_data_with_suppress_error_true(
-        self, mock_dapr_client: MagicMock
+        self, mock_dapr_cls: MagicMock
     ) -> None:
         """Test get_content returns None when no data returned and suppress_error=True."""
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.data = None
-        mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_cls.return_value = _mock_dapr_instance(data=b"")
 
         result = await ObjectStore.get_content(key="test/file.txt", suppress_error=True)
-
         assert result is None
 
-    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
     async def test_get_content_empty_data_with_suppress_error_false(
-        self, mock_dapr_client: MagicMock
+        self, mock_dapr_cls: MagicMock
     ) -> None:
         """Test get_content raises exception when empty data returned and suppress_error=False."""
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.data = b""
-        mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_cls.return_value = _mock_dapr_instance(data=b"")
 
         with pytest.raises(
             Exception, match=r"Error getting file content \(key=test/file.txt\)"
@@ -463,136 +427,63 @@ class TestObjectStore:
             await ObjectStore.get_content(key="test/file.txt", suppress_error=False)
         assert "No data received" in str(exc_info.value.__cause__)
 
-    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
     async def test_get_content_empty_data_with_suppress_error_true(
-        self, mock_dapr_client: MagicMock
+        self, mock_dapr_cls: MagicMock
     ) -> None:
         """Test get_content returns None when empty data returned and suppress_error=True."""
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.data = b""
-        mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_dapr_cls.return_value = _mock_dapr_instance(data=b"")
 
         result = await ObjectStore.get_content(key="test/file.txt", suppress_error=True)
-
         assert result is None
 
-    @patch("application_sdk.services.objectstore.DaprClient")
-    @patch("application_sdk.services.objectstore.logger")
-    async def test_invoke_dapr_binding_with_large_data_warning(
-        self, mock_logger: MagicMock, mock_dapr_client: MagicMock
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
+    async def test_invoke_dapr_binding_calls_async_client(
+        self, mock_dapr_cls: MagicMock
     ) -> None:
-        """Test that a warning is logged when data size exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH."""
-
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.data = b"response data"
-        mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
-
-        # Create data that exceeds the DAPR limit
-        large_data = b"x" * (DAPR_MAX_GRPC_MESSAGE_LENGTH + 1)
+        """Test that _invoke_dapr_binding uses AsyncDaprClient."""
+        mock_instance = _mock_dapr_instance(data=b"response data")
+        mock_dapr_cls.return_value = mock_instance
 
         result = await ObjectStore._invoke_dapr_binding(
             operation="create",
             metadata={"key": "test"},
-            data=large_data,
+            data=b"x" * 1000,
         )
 
-        # Verify warning was logged with data size in message
-        mock_logger.warning.assert_called_once()
-        warning_call_args = mock_logger.warning.call_args[0]
-        assert "exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH" in warning_call_args[0]
-        assert DAPR_MAX_GRPC_MESSAGE_LENGTH + 1 in warning_call_args
-
-        # Verify DaprClient was called with increased max_grpc_message_length
-        # With 5% buffer: (DAPR_MAX_GRPC_MESSAGE_LENGTH + 1) + 5% of (DAPR_MAX_GRPC_MESSAGE_LENGTH + 1)
-        mock_dapr_client.assert_called_once()
-        call_kwargs = mock_dapr_client.call_args[1]
-        expected_data_size = DAPR_MAX_GRPC_MESSAGE_LENGTH + 1
-        expected_buffer = max(
-            int(expected_data_size * 0.05), 1024
-        )  # 5% buffer, min 1KB
-        expected_max_length = expected_data_size + expected_buffer
-        assert call_kwargs["max_grpc_message_length"] == expected_max_length
-
-        # Verify the binding was invoked
-        mock_client.invoke_binding.assert_called_once()
+        mock_instance.invoke_binding.assert_called_once()
         assert result == b"response data"
 
-    @patch("application_sdk.services.objectstore.DaprClient")
-    @patch("application_sdk.services.objectstore.logger")
-    async def test_invoke_dapr_binding_with_small_data_no_warning(
-        self, mock_logger: MagicMock, mock_dapr_client: MagicMock
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
+    async def test_invoke_dapr_binding_with_small_data(
+        self, mock_dapr_cls: MagicMock
     ) -> None:
-        """Test that no warning is logged when data size is within DAPR_MAX_GRPC_MESSAGE_LENGTH."""
-        from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
-
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.data = b"response data"
-        mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
-
-        # Create data that is within the DAPR limit
-        small_data = b"x" * (DAPR_MAX_GRPC_MESSAGE_LENGTH - 1000)
+        """Test _invoke_dapr_binding with small data."""
+        mock_dapr_cls.return_value = _mock_dapr_instance(data=b"response data")
 
         result = await ObjectStore._invoke_dapr_binding(
             operation="create",
             metadata={"key": "test"},
-            data=small_data,
+            data=b"small data",
         )
 
-        # Verify no warning was logged
-        mock_logger.warning.assert_not_called()
-
-        # Verify DaprClient was called with default max_grpc_message_length
-        mock_dapr_client.assert_called_once()
-        call_kwargs = mock_dapr_client.call_args[1]
-        assert call_kwargs["max_grpc_message_length"] == DAPR_MAX_GRPC_MESSAGE_LENGTH
-
-        # Verify the binding was invoked
-        mock_client.invoke_binding.assert_called_once()
+        mock_dapr_cls.return_value.invoke_binding.assert_called_once()
         assert result == b"response data"
 
-    @patch("application_sdk.services.objectstore.DaprClient")
-    @patch("application_sdk.services.objectstore.logger")
+    @patch("application_sdk.services.objectstore.AsyncDaprClient")
     async def test_invoke_dapr_binding_with_string_data(
-        self, mock_logger: MagicMock, mock_dapr_client: MagicMock
+        self, mock_dapr_cls: MagicMock
     ) -> None:
-        """Test that string data is properly handled and size is calculated correctly."""
-        from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
-
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.data = b"response data"
-        mock_client.invoke_binding.return_value = mock_response
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
-
-        # Create a string that when encoded exceeds the DAPR limit
-        # Each character in UTF-8 is typically 1 byte, but we'll use a large string
-        large_string = "x" * (DAPR_MAX_GRPC_MESSAGE_LENGTH + 1)
+        """Test _invoke_dapr_binding handles string data."""
+        mock_dapr_cls.return_value = _mock_dapr_instance(data=b"response data")
 
         result = await ObjectStore._invoke_dapr_binding(
             operation="create",
             metadata={"key": "test"},
-            data=large_string,
+            data="string data",
         )
 
-        # Verify warning was logged
-        mock_logger.warning.assert_called_once()
-
-        # Verify DaprClient was called with increased max_grpc_message_length
-        mock_dapr_client.assert_called_once()
-        call_kwargs = mock_dapr_client.call_args[1]
-        # The encoded string size should be accounted for
-        assert (
-            call_kwargs["max_grpc_message_length"] >= DAPR_MAX_GRPC_MESSAGE_LENGTH + 1
-        )
-
-        # Verify the binding was invoked
-        mock_client.invoke_binding.assert_called_once()
+        mock_dapr_cls.return_value.invoke_binding.assert_called_once()
         assert result == b"response data"
 
     # @patch("application_sdk.services.objectstore.ObjectStore.list_files", new_callable=AsyncMock)

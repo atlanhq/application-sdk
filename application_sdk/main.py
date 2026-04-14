@@ -70,9 +70,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
-    from dapr.clients import DaprClient
-
     from application_sdk.app.base import App
+    from application_sdk.infrastructure._dapr.http import AsyncDaprClient
     from application_sdk.infrastructure.context import InfrastructureContext
     from application_sdk.infrastructure.secrets import SecretStore
 
@@ -298,8 +297,8 @@ def _parse_all_component_yamls(components_dir: "Path") -> dict[str, dict[str, st
     return result
 
 
-def _log_dapr_components(
-    dapr_client: "DaprClient",
+async def _log_dapr_components(
+    dapr_client: "AsyncDaprClient",
     components_dir: "Path",
 ) -> set[str]:
     """Log registered Dapr components and their safe configuration at startup.
@@ -325,7 +324,7 @@ def _log_dapr_components(
     )
 
     try:
-        metadata = dapr_client.get_metadata()
+        metadata = await dapr_client.get_metadata()
     except Exception:
         logger.warning(
             "Could not query Dapr metadata — component diagnostics unavailable; "
@@ -334,7 +333,11 @@ def _log_dapr_components(
         )
         return set()
 
-    registered = {c.name: c for c in getattr(metadata, "registered_components", [])}
+    # Dapr 1.13: "registeredComponents", Dapr 1.14+: "components"
+    raw_components = metadata.get(
+        "components", metadata.get("registeredComponents", [])
+    )
+    registered = {c["name"]: c for c in raw_components if "name" in c}
     yaml_details = _parse_all_component_yamls(components_dir)
 
     for name, comp in registered.items():
@@ -344,16 +347,16 @@ def _log_dapr_components(
             logger.info(
                 "Dapr component: %s (type=%s, version=%s) — %s",
                 name,
-                comp.type,
-                comp.version,
+                comp.get("type", "unknown"),
+                comp.get("version", "unknown"),
                 detail,
             )
         else:
             logger.info(
                 "Dapr component: %s (type=%s, version=%s)",
                 name,
-                comp.type,
-                comp.version,
+                comp.get("type", "unknown"),
+                comp.get("version", "unknown"),
             )
 
     expected = {
@@ -373,7 +376,7 @@ def _log_dapr_components(
     return set(registered)
 
 
-def _create_infrastructure(
+async def _create_infrastructure(
     credential_stores: "Mapping[str, SecretStore] | None" = None,
 ) -> "InfrastructureContext":
     """Create infrastructure services based on environment.
@@ -407,13 +410,13 @@ def _create_infrastructure(
             DaprBinding,
             DaprSecretStore,
             DaprStateStore,
-            create_dapr_client,
         )
+        from application_sdk.infrastructure._dapr.http import AsyncDaprClient
         from application_sdk.storage import create_store_from_binding
 
-        dapr_client = create_dapr_client()
+        dapr_client = AsyncDaprClient()
         components_dir = Path(os.environ.get("DAPR_COMPONENTS_PATH", "./components"))
-        registered_components = _log_dapr_components(dapr_client, components_dir)
+        registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
         return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
@@ -577,7 +580,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         config.task_queue,
     )
 
-    infra = _create_infrastructure()
+    infra = await _create_infrastructure()
     set_infrastructure(infra)
 
     app_class = load_app_class(config.app_module)
@@ -682,13 +685,15 @@ def run_handler_mode(config: AppConfig) -> None:
     only serves HTTP for the primary app — no Temporal worker, so secondary
     apps don't need to register.
     """
+    import asyncio
+
     from application_sdk.execution._temporal.converter import (
         create_data_converter_for_app,
     )
     from application_sdk.handler import DefaultHandler, run_app_handler_service
     from application_sdk.infrastructure.context import set_infrastructure
 
-    infra = _create_infrastructure()
+    infra = asyncio.run(_create_infrastructure())
     set_infrastructure(infra)
 
     logger.info(
@@ -775,7 +780,7 @@ async def run_combined_mode(config: AppConfig) -> None:
     # Only create infrastructure if not already set (e.g., by run_dev_combined)
     _existing_infra = get_infrastructure()
     if _existing_infra is None:
-        infra = _create_infrastructure()
+        infra = await _create_infrastructure()
         set_infrastructure(infra)
     else:
         infra = _existing_infra
@@ -993,7 +998,7 @@ async def run_dev_combined(
     # Create infrastructure early so run_combined_mode uses it directly
     from application_sdk.infrastructure.context import set_infrastructure
 
-    infra = _create_infrastructure(credential_stores=credential_stores)
+    infra = await _create_infrastructure(credential_stores=credential_stores)
     set_infrastructure(infra)
 
     print(f"\nDev server running at http://{host}:{port}")

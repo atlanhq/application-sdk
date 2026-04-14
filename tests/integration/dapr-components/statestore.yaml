@@ -1,0 +1,7 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  version: v1
+  type: state.in-memory

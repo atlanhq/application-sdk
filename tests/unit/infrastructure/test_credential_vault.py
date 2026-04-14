@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -179,20 +179,19 @@ def _make_mock_dapr_client(
     config_bytes: bytes | None,
     secret_data: dict[str, str],
 ) -> MagicMock:
-    """Build a mock DaprClient that returns *config_bytes* on invoke_binding
+    """Build a mock AsyncDaprClient that returns *config_bytes* on invoke_binding
     and *secret_data* on get_secret."""
+    from application_sdk.infrastructure._dapr.http import BindingResult
+
     mock_client = MagicMock()
 
-    # Binding response
-    binding_response = MagicMock()
-    binding_response.data = config_bytes
-    binding_response.binding_metadata = {}
-    mock_client.invoke_binding.return_value = binding_response
+    # Binding response — AsyncDaprClient returns BindingResult (pydantic model)
+    mock_client.invoke_binding = AsyncMock(
+        return_value=BindingResult(data=config_bytes, metadata={})
+    )
 
-    # Secret response
-    secret_response = MagicMock()
-    secret_response.secret = secret_data
-    mock_client.get_secret.return_value = secret_response
+    # Secret response — AsyncDaprClient returns dict directly
+    mock_client.get_secret = AsyncMock(return_value=secret_data)
 
     return mock_client
 
@@ -280,7 +279,9 @@ class TestDaprCredentialVaultGetCredentials:
     async def test_vault_error_on_binding_failure(self) -> None:
         """Dapr binding error → wrapped in CredentialVaultError."""
         mock_client = MagicMock()
-        mock_client.invoke_binding.side_effect = RuntimeError("Dapr unavailable")
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=RuntimeError("Dapr unavailable")
+        )
 
         vault = self._make_vault(mock_client)
         with pytest.raises(CredentialVaultError):

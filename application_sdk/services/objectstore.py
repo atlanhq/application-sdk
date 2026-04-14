@@ -4,18 +4,19 @@ import os
 import warnings
 from typing import List, Union
 
+import asyncio
+
 import orjson
-from dapr.clients import DaprClient
 from temporalio import activity
 
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import (
-    DAPR_MAX_GRPC_MESSAGE_LENGTH,
     DEPLOYMENT_OBJECT_STORE_NAME,
     TEMPORARY_PATH,
     UPSTREAM_OBJECT_STORE_NAME,
 )
+from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.observability.logger_adaptor import get_logger
 
 warnings.warn(
@@ -613,42 +614,17 @@ class ObjectStore:
         Raises:
             Exception: If there's an error with the Dapr binding operation.
         """
-        # Calculate data size (handle both bytes and str)
-        if isinstance(data, bytes):
-            data_size = len(data)
-        elif isinstance(data, str):
-            data_size = len(data.encode("utf-8"))
-        else:
-            data_size = 0
-
-        # Check if data size exceeds DAPR limit and log warning
-        if data_size > DAPR_MAX_GRPC_MESSAGE_LENGTH:
-            # gRPC adds overhead (headers, metadata, etc.) to messages
-            # Add a buffer of 5% or at least 1KB to account for this overhead
-            grpc_overhead_buffer = max(int(data_size * 0.05), 1024)
-            required_max_length = data_size + grpc_overhead_buffer
-            logger.warning(
-                "Data size %d bytes exceeds DAPR_MAX_GRPC_MESSAGE_LENGTH %d"
-                " (required=%d with %d overhead)",
-                data_size,
-                DAPR_MAX_GRPC_MESSAGE_LENGTH,
-                required_max_length,
-                grpc_overhead_buffer,
-            )
-            # Set max_grpc_message_length to accommodate the data size plus gRPC overhead
-            max_message_length = required_max_length
-        else:
-            # Data is within limit, use default DAPR limit
-            max_message_length = DAPR_MAX_GRPC_MESSAGE_LENGTH
-
-        with DaprClient(max_grpc_message_length=max_message_length) as client:
-            response = client.invoke_binding(
+        client = AsyncDaprClient()
+        try:
+            result = await client.invoke_binding(
                 binding_name=store_name,
                 operation=operation,
-                data=data,
-                binding_metadata=metadata,
+                data=data if isinstance(data, bytes) else (data or "").encode(),
+                metadata=metadata,
             )
-            return response.data
+            return result.data
+        finally:
+            await client.close()
 
     @classmethod
     def _cleanup_local_path(cls, path: str) -> None:
