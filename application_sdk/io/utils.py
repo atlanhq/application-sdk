@@ -1,6 +1,7 @@
 import glob
 import os
 import uuid
+import warnings
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
@@ -96,7 +97,6 @@ async def download_files(
     .. deprecated::
         Use :func:`application_sdk.storage.transfer.download` instead, which
         provides SHA-256 integrity verification and skip-if-exists deduplication.
-        This function will be removed in v3.1.0.
 
     Flow:
     1. Check if files exist locally at self.path
@@ -111,6 +111,12 @@ async def download_files(
         AttributeError: When the reader class doesn't support file operations or _extension
         IOError: When no files found locally or in object store
     """
+    warnings.warn(
+        "download_files() is deprecated. Use application_sdk.storage.transfer.download() "
+        "instead, which provides SHA-256 integrity verification and skip-if-exists deduplication.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # Step 1: Check if files exist locally
     local_files: List[str] = find_local_files_by_extension(
         path, file_extension, file_names
