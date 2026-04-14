@@ -28,7 +28,6 @@ import orjson
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
-from application_sdk.constants import ENABLE_ATLAN_UPLOAD
 from application_sdk.io.utils import (
     estimate_dataframe_record_size,
     is_empty_dataframe,
@@ -633,11 +632,7 @@ class Writer(ABC):
     async def _upload_file(self, file_name: str):
         """Upload a file to the object store."""
         retain_local = getattr(self, "retain_local_copy", False)
-
-        if ENABLE_ATLAN_UPLOAD:
-            await _upload_file(file_name, file_name, retain_local_copy=True)
         await _upload_file(file_name, file_name, retain_local_copy=retain_local)
-
         self.current_buffer_size_bytes = 0
 
     async def _flush_buffer(self, chunk: "pd.DataFrame", chunk_part: int):
@@ -727,9 +722,8 @@ class Writer(ABC):
             with open(output_file_name, "wb") as f:
                 f.write(orjson.dumps(statistics))
 
-            destination_file_path = output_file_name
-            # Push the file to the object store
-            await _upload_file(destination_file_path, output_file_name)
+            # Push the file to the object store (key = local path for consistency)
+            await _upload_file(output_file_name, output_file_name)
 
             return statistics
         except Exception as e:

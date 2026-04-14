@@ -13,7 +13,7 @@ from typing import (
 
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
-from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH, ENABLE_ATLAN_UPLOAD
+from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.io import DataframeType, Reader, WriteMode, Writer
 from application_sdk.io.utils import (
     PARQUET_FILE_EXTENSION,
@@ -650,8 +650,6 @@ class ParquetFileWriter(Writer):
                 except FileNotFoundError:
                     logger.info("No files found under prefix: %s", self.path)
             for path in file_paths:
-                if ENABLE_ATLAN_UPLOAD:
-                    await _upload_file(path, path, retain_local_copy=True)
                 await _upload_file(path, path, retain_local_copy=self.retain_local_copy)
 
         except Exception as e:

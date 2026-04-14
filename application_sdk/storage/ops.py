@@ -43,6 +43,7 @@ to target a specific store instead.
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import os
 from pathlib import Path
@@ -219,8 +220,8 @@ async def upload_file(
         if resolved_path.is_relative_to(staging_root):
             try:
                 resolved_path.unlink(missing_ok=True)
-            except OSError:
-                pass  # best-effort cleanup
+            except OSError as exc:
+                logging.debug("Failed to delete local file %s: %s", resolved_path, exc)
 
     return digest
 
