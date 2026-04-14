@@ -1023,7 +1023,9 @@ class TestPairsToFlat:
                 "database": "PROD",
             },
         }
-        pairs = _flatten_to_pairs(dict(original))  # dict() because _flatten_to_pairs pops extra
+        pairs = _flatten_to_pairs(
+            dict(original)
+        )  # dict() because _flatten_to_pairs pops extra
         restored = _pairs_to_flat(pairs)
         assert restored == original
 
