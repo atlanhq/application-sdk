@@ -142,6 +142,7 @@ def _get_heartbeat_timeout() -> timedelta:
 
 def _start_heartbeat_thread(
     stop_event: threading.Event,
+    thread_failed: threading.Event,
 ) -> threading.Thread:
     """Start a daemon thread that sends heartbeats at regular intervals.
 
@@ -149,25 +150,47 @@ def _start_heartbeat_thread(
     are never blocked by event loop starvation (e.g. sync code running
     inside an async activity).
 
+    If the heartbeat thread exits unexpectedly (e.g. due to a BaseException
+    that escapes the retry logic), it sets ``thread_failed`` so that the
+    calling activity can detect the failure and stop early.
+
     Args:
         stop_event: Threading event used to signal the thread to stop.
+        thread_failed: Threading event set by the thread on unexpected exit.
 
     Returns:
         The started heartbeat thread.
     """
     heartbeat_timeout = _get_heartbeat_timeout()
+    delay = heartbeat_timeout.total_seconds() / 3
     ctx = contextvars.copy_context()
-    heartbeat_thread = threading.Thread(
-        target=ctx.run,
-        args=(
-            send_periodic_heartbeat_sync,
-            heartbeat_timeout.total_seconds() / 3,
-            stop_event,
-        ),
-        daemon=True,
-    )
+
+    def _run_heartbeat():
+        try:
+            ctx.run(send_periodic_heartbeat_sync, delay, stop_event)
+        except BaseException as e:
+            logger.error("Heartbeat thread crashed unexpectedly: %s", e, exc_info=e)
+            thread_failed.set()
+
+    heartbeat_thread = threading.Thread(target=_run_heartbeat, daemon=True)
     heartbeat_thread.start()
     return heartbeat_thread
+
+
+async def _wait_for_thread_failure(
+    thread_failed: threading.Event, check_interval: float = 1.0
+) -> None:
+    """Poll until the heartbeat thread signals an unexpected exit.
+
+    Used as a concurrent task inside the async activity wrapper so that
+    ``asyncio.wait`` can race the activity against heartbeat-thread health.
+
+    Args:
+        thread_failed: Event that the heartbeat thread sets on crash.
+        check_interval: Seconds between polls.
+    """
+    while not thread_failed.is_set():
+        await asyncio.sleep(check_interval)
 
 
 def auto_heartbeater(fn: F) -> F:
@@ -217,9 +240,28 @@ def auto_heartbeater(fn: F) -> F:
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any):
             stop_event = threading.Event()
-            heartbeat_thread = _start_heartbeat_thread(stop_event)
+            thread_failed = threading.Event()
+            heartbeat_thread = _start_heartbeat_thread(stop_event, thread_failed)
             try:
-                return await fn(*args, **kwargs)
+                activity_task = asyncio.ensure_future(fn(*args, **kwargs))
+                monitor_task = asyncio.ensure_future(
+                    _wait_for_thread_failure(thread_failed)
+                )
+                done, pending = await asyncio.wait(
+                    {activity_task, monitor_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for p in pending:
+                    p.cancel()
+                    try:
+                        await p
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                if activity_task in done:
+                    return activity_task.result()
+
+                raise RuntimeError("Heartbeat thread stopped unexpectedly")
             except Exception as e:
                 logger.error("Error in activity: %s", e, exc_info=e)
                 raise
@@ -233,15 +275,19 @@ def auto_heartbeater(fn: F) -> F:
         @wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any):
             stop_event = threading.Event()
-            heartbeat_thread = _start_heartbeat_thread(stop_event)
+            thread_failed = threading.Event()
+            heartbeat_thread = _start_heartbeat_thread(stop_event, thread_failed)
             try:
-                return fn(*args, **kwargs)
+                result = fn(*args, **kwargs)
             except Exception as e:
                 logger.error("Error in activity: %s", e, exc_info=e)
                 raise
             finally:
                 stop_event.set()
                 heartbeat_thread.join(timeout=5)
+            if thread_failed.is_set():
+                raise RuntimeError("Heartbeat thread stopped unexpectedly")
+            return result
 
         return cast(F, sync_wrapper)
 

@@ -352,6 +352,79 @@ class TestAutoHeartbeater:
         result = await test_activity("a", "b", kwarg1="c")
         assert result == "a_b_c"
 
+    @patch("application_sdk.activities.common.utils.activity")
+    async def test_heartbeat_continues_when_event_loop_blocked(self, mock_activity):
+        """Test that heartbeats are sent from a background thread even when
+        the event loop is blocked by synchronous code inside an async activity.
+
+        This is the core scenario the thread-based heartbeater fixes: an async
+        activity that calls blocking (sync) code would starve an asyncio-task
+        heartbeater, but a thread-based heartbeater keeps running.
+        """
+        mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=0.3)
+        heartbeat_count = 0
+
+        def count_heartbeat(*args, **kwargs):
+            nonlocal heartbeat_count
+            heartbeat_count += 1
+
+        mock_activity.heartbeat = count_heartbeat
+
+        @auto_heartbeater
+        async def blocking_async_activity():
+            # Block the event loop — an asyncio-task heartbeater would starve
+            time.sleep(0.5)
+            return "done"
+
+        result = await blocking_async_activity()
+        assert result == "done"
+        # heartbeat_interval = 0.3/3 = 0.1s; activity blocks for 0.5s
+        # Thread-based heartbeater should have sent at least 3 heartbeats
+        assert heartbeat_count >= 3, (
+            f"Expected >= 3 heartbeats during 0.5s event-loop block "
+            f"with 0.1s interval, got {heartbeat_count}"
+        )
+
+    @patch("application_sdk.activities.common.utils.activity")
+    async def test_async_activity_stops_when_heartbeat_thread_crashes(
+        self, mock_activity
+    ):
+        """Test that an async activity is cancelled when the heartbeat thread
+        exits unexpectedly (e.g. a BaseException that escapes the retry logic).
+        """
+        mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=0.3)
+        # SystemExit is a BaseException — it escapes `except Exception` in the
+        # heartbeat loop and triggers the thread_failed event.
+        mock_activity.heartbeat.side_effect = SystemExit("simulated crash")
+
+        @auto_heartbeater
+        async def long_activity():
+            await asyncio.sleep(10)
+            return "should not reach"
+
+        with pytest.raises(RuntimeError, match="Heartbeat thread stopped unexpectedly"):
+            await long_activity()
+
+    @patch("application_sdk.activities.common.utils.activity")
+    def test_sync_activity_stops_when_heartbeat_thread_crashes(self, mock_activity):
+        """Test that a sync activity raises after completion when the heartbeat
+        thread crashed during execution.
+
+        Note: Python cannot safely interrupt a running sync function mid-
+        execution, so the failure is detected after the function returns.
+        """
+        mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=0.3)
+        mock_activity.heartbeat.side_effect = SystemExit("simulated crash")
+
+        @auto_heartbeater
+        def sync_activity():
+            # Give heartbeat thread time to crash (interval = 0.1s)
+            time.sleep(0.5)
+            return "done"
+
+        with pytest.raises(RuntimeError, match="Heartbeat thread stopped unexpectedly"):
+            sync_activity()
+
 
 class TestSendPeriodicHeartbeat:
     """Test cases for send_periodic_heartbeat function."""
