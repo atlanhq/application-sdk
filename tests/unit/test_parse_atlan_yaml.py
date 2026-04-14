@@ -1,6 +1,6 @@
 """Unit tests for .github/scripts/parse_atlan_yaml.py.
 
-The parser is invoked from the Build & Publish reusable workflow to read
+The parser is invoked from the Build & Publish reusable entrypoint to read
 ``atlan.yaml`` (and optionally ``uv.lock``) and emit values that downstream
 jobs forward to GHCR + the marketplace publish endpoint. Validation here
 fails fast at CI time with annotated errors — these tests pin the rules
@@ -51,7 +51,9 @@ def test_parse_minimal_atlan_yaml(tmp_path, monkeypatch):
     assert out["dockerfile"] == "./Dockerfile"
     assert out["build_tag"] == "v1"
     assert out["sdk_version"] == ""  # no uv.lock
-    assert out["workflows"] == ""  # absent → consumers fall back to argo_package_names
+    assert (
+        out["entrypoints"] == ""
+    )  # absent → consumers fall back to argo_package_names
     assert out["deploy_config"] == ""
 
 
@@ -81,7 +83,7 @@ def test_parse_reads_sdk_version_from_uv_lock(tmp_path, monkeypatch):
     assert out["sdk_version"] == "0.1.10"
 
 
-# ── workflows happy path ────────────────────────────────────────────
+# ── entrypoints happy path ────────────────────────────────────────────
 
 
 def _pkg(
@@ -97,18 +99,18 @@ def _pkg(
     }
 
 
-def test_workflows_round_trips_as_compact_json(tmp_path, monkeypatch):
+def test_entrypoints_round_trips_as_compact_json(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     pkgs = [_pkg(), _pkg("teradata-miner", "Teradata Miner", "miner", "miner")]
-    _write(tmp_path, {"name": "teradata", "app_id": "1", "workflows": pkgs})
+    _write(tmp_path, {"name": "teradata", "app_id": "1", "entrypoints": pkgs})
     out = parse_atlan_yaml.parse()
-    # Single line — required because the workflow appends to $GITHUB_OUTPUT
+    # Single line — required because the entrypoint appends to $GITHUB_OUTPUT
     # via simple key=value (multiline values would need delimiter syntax).
-    assert "\n" not in out["workflows"]
-    assert json.loads(out["workflows"]) == pkgs
+    assert "\n" not in out["entrypoints"]
+    assert json.loads(out["entrypoints"]) == pkgs
 
 
-# ── workflows validation rules (must mirror GM Pydantic) ────────────
+# ── entrypoints validation rules (must mirror GM Pydantic) ────────────
 
 
 @pytest.mark.parametrize(
@@ -122,7 +124,7 @@ def test_kebab_case_name_rejected(tmp_path, monkeypatch, bad_name):
         {
             "name": "x",
             "app_id": "1",
-            "workflows": [_pkg(name=bad_name)],
+            "entrypoints": [_pkg(name=bad_name)],
         },
     )
     with pytest.raises(AtlanYamlError):
@@ -137,7 +139,7 @@ def test_type_must_be_in_closed_set(tmp_path, monkeypatch, bad_type):
     monkeypatch.chdir(tmp_path)
     pkg = _pkg()
     pkg["type"] = bad_type
-    _write(tmp_path, {"name": "x", "app_id": "1", "workflows": [pkg]})
+    _write(tmp_path, {"name": "x", "app_id": "1", "entrypoints": [pkg]})
     with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
@@ -149,7 +151,7 @@ def test_duplicate_names_rejected(tmp_path, monkeypatch):
         {
             "name": "x",
             "app_id": "1",
-            "workflows": [_pkg(), _pkg()],  # two identical names
+            "entrypoints": [_pkg(), _pkg()],  # two identical names
         },
     )
     with pytest.raises(AtlanYamlError):
@@ -163,16 +165,16 @@ def test_missing_required_keys_rejected(tmp_path, monkeypatch):
         {
             "name": "x",
             "app_id": "1",
-            "workflows": [{"name": "x", "type": "connector"}],
+            "entrypoints": [{"name": "x", "type": "connector"}],
         },
     )
     with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
 
-def test_workflows_must_be_list(tmp_path, monkeypatch):
+def test_entrypoints_must_be_list(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    _write(tmp_path, {"name": "x", "app_id": "1", "workflows": {"name": "x"}})
+    _write(tmp_path, {"name": "x", "app_id": "1", "entrypoints": {"name": "x"}})
     with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
@@ -180,7 +182,7 @@ def test_workflows_must_be_list(tmp_path, monkeypatch):
 def test_empty_display_name_or_generated_dir_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     pkg = _pkg(display="")
-    _write(tmp_path, {"name": "x", "app_id": "1", "workflows": [pkg]})
+    _write(tmp_path, {"name": "x", "app_id": "1", "entrypoints": [pkg]})
     with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 

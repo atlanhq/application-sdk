@@ -1,7 +1,7 @@
-# Unified build-and-publish workflow for Atlan first-party app repos.
+# Unified build-and-publish entrypoint for Atlan first-party app repos.
 #
 # Combines image build (build-apps-image.yaml) and marketplace publish (publish-app.yaml)
-# into a single workflow to eliminate double builds on push to main.
+# into a single entrypoint to eliminate double builds on push to main.
 #
 # Image tag:  {branch}-{sha7}  (e.g. main-abc1234) — immutable, used by deploy systems
 # Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{sha7}
@@ -10,11 +10,11 @@
 # Build: parallel matrix (amd64 + arm64), merged into a multi-arch manifest.
 # Publish: after build succeeds, registers the version in the Global Marketplace via API.
 #
-# Usage in each app repo (.github/workflows/build-and-publish.yaml):
+# Usage in each app repo (.github/entrypoints/build-and-publish.yaml):
 #
 #   jobs:
 #     build-and-publish:
-#       uses: atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml@main
+#       uses: atlanhq/application-sdk/.github/entrypoints/build-and-publish-app.yaml@main
 #       with:
 #         publish: ${{ github.event.inputs.publish != 'false' }}
 #         channel: ${{ inputs.channel || 'all' }}
@@ -24,7 +24,7 @@
 name: Build & Publish Atlan App
 
 on:
-  workflow_call:
+  entrypoint_call:
     inputs:
       ref:
         description: "Branch or SHA to checkout and build (default: caller's ref)"
@@ -85,7 +85,7 @@ jobs:
       enable_sdr:       ${{ steps.manifest.outputs.enable_sdr }}
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
-      workflows: ${{ steps.manifest.outputs.workflows }}
+      entrypoints: ${{ steps.manifest.outputs.entrypoints }}
       branch:           ${{ steps.tags.outputs.branch }}
       image_tag:        ${{ steps.tags.outputs.image_tag }}
       ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
@@ -101,22 +101,22 @@ jobs:
 
       - name: Checkout SDK helper scripts
         # Pull only ``.github/scripts/`` from the SDK at the same SHA this
-        # reusable workflow is running (so the parser stays versioned with the
-        # workflow, not the caller's repo). Sparse checkout keeps it cheap.
+        # reusable entrypoint is running (so the parser stays versioned with the
+        # entrypoint, not the caller's repo). Sparse checkout keeps it cheap.
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           repository: atlanhq/application-sdk
-          ref: ${{ github.workflow_sha || 'main' }}
-          path: .sdk-workflow
+          ref: ${{ github.entrypoint_sha || 'main' }}
+          path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
 
       - name: Read atlan.yaml
         id: manifest
         # Inputs validated and outputs written by parse_atlan_yaml.py — see
-        # .sdk-workflow/.github/scripts/parse_atlan_yaml.py for rules.
+        # .sdk-entrypoint/.github/scripts/parse_atlan_yaml.py for rules.
         # Unit-tested in tests/test_parse_atlan_yaml.py in the SDK repo.
-        run: python3 .sdk-workflow/.github/scripts/parse_atlan_yaml.py
+        run: python3 .sdk-entrypoint/.github/scripts/parse_atlan_yaml.py
 
       - name: Validate SDR secrets
         if: steps.manifest.outputs.enable_sdr == 'true'
@@ -146,7 +146,7 @@ jobs:
         run: |
           # Resolve SHA from the checked-out HEAD rather than github.sha.
           # github.sha is always the trigger branch (main), not the ref input —
-          # so for workflow_dispatch with a custom ref, github.sha would be wrong.
+          # so for entrypoint_dispatch with a custom ref, github.sha would be wrong.
           SHA=$(git rev-parse HEAD)
           if ! [[ "$REF" =~ ^(refs/heads/|refs/tags/)?[a-zA-Z0-9/_.-]+$ ]]; then
             echo "::error::Invalid ref format: ${REF}"
@@ -297,7 +297,7 @@ jobs:
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
-    uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main
+    uses: atlanhq/application-sdk/.github/entrypoints/build-and-scan.yaml@main
     with:
       image: ${{ needs.prepare.outputs.ghcr_image }}
       snyk_org: partner-images
@@ -320,7 +320,7 @@ jobs:
         with:
           token: ${{ secrets.ORG_PAT_GITHUB }}
           repository: ${{ matrix.repo }}
-          event-type: dispatch_app_builder_workflow
+          event-type: dispatch_app_builder_entrypoint
           client-payload: |-
             {
                 "app_name": "${{ needs.prepare.outputs.app_name }}",
@@ -347,7 +347,7 @@ jobs:
           APP_NAME: ${{ needs.prepare.outputs.app_name }}
           DEPLOY_CONFIG: ${{ needs.prepare.outputs.deploy_config }}
           SDK_VERSION: ${{ needs.prepare.outputs.sdk_version }}
-          WORKFLOWS: ${{ needs.prepare.outputs.workflows }}
+          ENTRYPOINTS: ${{ needs.prepare.outputs.entrypoints }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -375,11 +375,11 @@ jobs:
           if sdk:
               body["sdk_version"] = sdk
 
-          # workflows: native multi-package declarations from atlan.yaml.
-          # Absent → GM falls back to App.argo_package_names for tile expansion.
-          wp = os.environ.get("WORKFLOWS", "").strip()
+          # entrypoints: native multi-package declarations from atlan.yaml.
+          # Absent → GM falls back to App.argo_package_names for entrypoint expansion.
+          wp = os.environ.get("ENTRYPOINTS", "").strip()
           if wp:
-              body["workflows"] = json.loads(wp)
+              body["entrypoints"] = json.loads(wp)
 
           tenants = os.environ.get("TENANTS", "").strip()
           if tenants:
