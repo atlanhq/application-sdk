@@ -432,7 +432,11 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         from application_sdk.execution._temporal.activity_utils import (
             get_object_store_prefix,
         )
-        from application_sdk.storage.ops import download_file, download_prefix, list_keys, upload_file, upload_file_from_bytes, upload_prefix
+        from application_sdk.storage.ops import (
+            download_file,
+            download_prefix,
+            upload_prefix,
+        )
 
         if not input.output_path:
             raise FileNotFoundError(
@@ -588,7 +592,11 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         from application_sdk.execution._temporal.activity_utils import (
             get_object_store_prefix,
         )
-        from application_sdk.storage.ops import download_file, download_prefix, list_keys, upload_file, upload_file_from_bytes, upload_prefix
+        from application_sdk.storage.ops import (
+            download_file,
+            download_prefix,
+            upload_prefix,
+        )
 
         if not input.output_path:
             raise ValueError("output_path is required in ExecuteColumnBatchInput")

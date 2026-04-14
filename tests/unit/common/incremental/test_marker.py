@@ -157,7 +157,6 @@ class TestPersistMarkerToStorage:
         with patch(
             "application_sdk.common.incremental.marker.upload_file"
         ) as mock_store:
-
             result = await persist_marker_to_storage(
                 connection_qualified_name="t/c/123",
                 marker_value="2025-01-15T10:00:00Z",
@@ -178,7 +177,6 @@ class TestPersistMarkerToStorage:
             new_callable=AsyncMock,
             side_effect=Exception("S3 unavailable"),
         ) as mock_store:
-
             with pytest.raises(
                 Exception, match="Failed to upload marker to S3"
             ) as exc_info:

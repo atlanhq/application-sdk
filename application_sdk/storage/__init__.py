@@ -66,6 +66,8 @@ __all__ = [
     "create_memory_store",
     # Core ops
     "upload_file",
+    "upload_file_from_bytes",
+    "upload_prefix",
     "download_file",
     "download_prefix",
     "delete",

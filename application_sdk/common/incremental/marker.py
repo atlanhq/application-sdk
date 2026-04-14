@@ -36,12 +36,9 @@ from application_sdk.common.incremental.helpers import (
     normalize_marker_timestamp,
     prepone_marker_timestamp,
 )
-from application_sdk.constants import (
-    MARKER_TIMESTAMP_FORMAT,
-    UPSTREAM_OBJECT_STORE_NAME,
-)
+from application_sdk.constants import MARKER_TIMESTAMP_FORMAT
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.ops import download_file, download_prefix, list_keys, upload_file, upload_file_from_bytes, upload_prefix
+from application_sdk.storage.ops import upload_file
 
 logger = get_logger(__name__)
 

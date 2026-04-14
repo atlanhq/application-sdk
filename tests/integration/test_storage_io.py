@@ -193,9 +193,7 @@ async def test_upload_prefix_roundtrip(store, tmp_path):
     for i in range(5):
         (src_dir / f"file_{i}.txt").write_text(f"content-{i}")
 
-    uploaded = await upload_prefix(
-        local_dir=src_dir, prefix="batch/run1", store=store
-    )
+    uploaded = await upload_prefix(local_dir=src_dir, prefix="batch/run1", store=store)
     assert len(uploaded) == 5
 
     keys = await list_keys("batch/run1", store)

@@ -93,7 +93,6 @@ class TestDownloadCurrentState:
                 state_dir.mkdir(parents=True)
                 mock_path.return_value = state_dir
 
-
                 _, _, exists, json_count = await download_current_state(
                     connection_qualified_name="t/c/123",
                     application_name="oracle",
@@ -120,7 +119,6 @@ class TestDownloadCurrentState:
                 # Create stale file
                 (state_dir / "stale.json").write_text("{}")
                 mock_path.return_value = state_dir
-
 
                 _, _, exists, json_count = await download_current_state(
                     connection_qualified_name="t/c/123",

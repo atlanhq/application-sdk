@@ -53,13 +53,10 @@ from application_sdk.common.incremental.state.table_scope import (
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnectionManager,
 )
-from application_sdk.constants import (
-    INCREMENTAL_DIFF_SUBPATH_TEMPLATE,
-    UPSTREAM_OBJECT_STORE_NAME,
-)
+from application_sdk.constants import INCREMENTAL_DIFF_SUBPATH_TEMPLATE
 from application_sdk.execution._temporal.activity_utils import get_object_store_prefix
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.ops import download_file, download_prefix, list_keys, upload_file, upload_file_from_bytes, upload_prefix
+from application_sdk.storage.ops import download_prefix, upload_prefix
 
 logger = get_logger(__name__)
 

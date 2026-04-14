@@ -650,8 +650,9 @@ async def upload_prefix(
 
     async def _upload_one(key: str, path: Path) -> None:
         async with sem:
-            await upload_file(key, path, store, normalize=False,
-                              retain_local_copy=retain_local_copy)
+            await upload_file(
+                key, path, store, normalize=False, retain_local_copy=retain_local_copy
+            )
             uploaded.append(key)
 
     await asyncio.gather(*[_upload_one(k, p) for k, p in files])

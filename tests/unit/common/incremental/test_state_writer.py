@@ -260,7 +260,6 @@ class TestDownloadTransformedData:
                     return_value="prefix/transformed",
                 ),
             ):
-
                 result = await download_transformed_data(temp_dir)
 
             assert result == Path(temp_dir) / "transformed"
