@@ -294,6 +294,11 @@ def _load_entrypoint_registry() -> dict[str, str]:
             "atlan.yaml is not valid YAML (%s); entrypoint registry empty", exc
         )
         return {}
+    if not isinstance(data, dict):
+        logger.warning(
+            "atlan.yaml did not parse as a mapping; entrypoint registry empty"
+        )
+        return {}
     packages = data.get("entrypoints") or []
     if not isinstance(packages, list):
         logger.warning(
