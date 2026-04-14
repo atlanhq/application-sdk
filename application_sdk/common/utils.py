@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import glob
 import json
 import os
@@ -558,8 +559,6 @@ def run_sync(func):
     """
 
     async def wrapper(*args, **kwargs):
-        import functools
-
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None, functools.partial(func, *args, **kwargs)
