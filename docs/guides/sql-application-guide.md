@@ -255,12 +255,12 @@ Each mapper function is a pure function: easy to unit test, no framework depende
 
 ## App (Extractor)
 
-The core of your connector is a `SqlMetadataExtractor` subclass. Declare which entities to extract using `EntityDef`, then implement `@task` methods for each. The base `run()` method handles orchestration automatically --- no need to override it.
+The core of your connector is a `SqlMetadataExtractor` subclass. Declare which entities to extract using `ExtractableEntity`, then implement `@task` methods for each. Each entity's `task_name` maps directly to a method on the class --- no naming-convention magic. The base `run()` method handles orchestration automatically --- no need to override it.
 
 ```python
 # app/connector.py
 from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.templates.entity import EntityDef
+from application_sdk.templates.entity import ExtractableEntity
 from application_sdk.templates.contracts.sql_metadata import (
     FetchDatabasesOutput,
     FetchSchemasOutput,
@@ -278,12 +278,12 @@ logger = get_logger(__name__)
 
 class PostgresApp(SqlMetadataExtractor):
     # Declare entities --- grouped by phase, concurrent within each phase.
-    # Phase 1 entities all run in parallel, then phase 2 starts, etc.
+    # Each task_name maps directly to the method that fetches this entity.
     entities = [
-        EntityDef(name="databases", phase=1),
-        EntityDef(name="schemas",   phase=1),
-        EntityDef(name="tables",    phase=1),
-        EntityDef(name="columns",   phase=1),
+        ExtractableEntity(task_name="fetch_databases", phase=1),
+        ExtractableEntity(task_name="fetch_schemas",   phase=1),
+        ExtractableEntity(task_name="fetch_tables",    phase=1),
+        ExtractableEntity(task_name="fetch_columns",   phase=1),
     ]
 
     @task(timeout_seconds=1800)
@@ -382,11 +382,12 @@ Each `@task` method becomes a Temporal activity. The `entities` list drives orch
 
 1. Entities are grouped by `phase`. All entities in the same phase run **concurrently** via `asyncio.gather`.
 2. Phase N+1 starts only after all phase N entities complete.
-3. For each entity, `run()` dispatches to `fetch_{name}()` (e.g. `EntityDef(name="databases")` calls `fetch_databases()`).
+3. For each entity, `run()` dispatches to the method named by `task_name` (e.g. `ExtractableEntity(task_name="fetch_databases")` calls `fetch_databases()`).
 4. After all entities complete, results are uploaded to Atlan.
-5. Any result key matching an `ExtractionOutput` field (e.g. `databases_extracted`) is populated automatically.
+5. Any result key matching an `ExtractionOutput` field (e.g. `databases_extracted`) is populated automatically. Unmatched keys are logged as warnings.
+6. If one entity in a phase fails, sibling entities still run to completion before the error is raised.
 
-If `entities` is not set (empty list), the extractor falls back to the default 4 entities: databases, schemas, tables, columns.
+If `entities` is not set (empty list), the extractor falls back to the default 4 entities: fetch_databases, fetch_schemas, fetch_tables, fetch_columns.
 
 ### Available task methods
 
@@ -396,31 +397,31 @@ If `entities` is not set (empty list), the extractor falls back to the default 4
 | `fetch_schemas` | `FetchSchemasInput` | `FetchSchemasOutput` | Required --- raises `NotImplementedError` |
 | `fetch_tables` | `FetchTablesInput` | `FetchTablesOutput` | Required --- raises `NotImplementedError` |
 | `fetch_columns` | `FetchColumnsInput` | `FetchColumnsOutput` | Required --- raises `NotImplementedError` |
-| `fetch_procedures` | `FetchProceduresInput` | `FetchProceduresOutput` | Optional --- add `EntityDef(name="procedures")` |
-| `fetch_views` | `FetchViewsInput` | `FetchViewsOutput` | Optional --- add `EntityDef(name="views")` |
+| `fetch_procedures` | `FetchProceduresInput` | `FetchProceduresOutput` | Optional --- add `ExtractableEntity(task_name="fetch_procedures")` |
+| `fetch_views` | `FetchViewsInput` | `FetchViewsOutput` | Optional --- add `ExtractableEntity(task_name="fetch_views")` |
 | `transform_data` | `TransformInput` | `TransformOutput` | Override to map raw results via asset mapper |
 
 ### Adding custom entities
 
-Add new entity types by extending the `entities` list and implementing the matching `fetch_{name}()` method. No need to override `run()`.
+Add new entity types by extending the `entities` list and implementing the method named by `task_name`. No need to override `run()`.
 
 ```python
-from application_sdk.templates.entity import EntityDef
+from application_sdk.templates.entity import ExtractableEntity
 from application_sdk.templates.contracts.sql_metadata import FetchViewsOutput
 
 
 class SnowflakeApp(SqlMetadataExtractor):
     entities = [
         # Phase 1: core entities (run in parallel)
-        EntityDef(name="databases", phase=1),
-        EntityDef(name="schemas",   phase=1),
-        EntityDef(name="tables",    phase=1),
-        EntityDef(name="columns",   phase=1),
+        ExtractableEntity(task_name="fetch_databases", phase=1),
+        ExtractableEntity(task_name="fetch_schemas",   phase=1),
+        ExtractableEntity(task_name="fetch_tables",    phase=1),
+        ExtractableEntity(task_name="fetch_columns",   phase=1),
         # Phase 2: connector-specific entities (run after phase 1)
-        EntityDef(name="stages",  phase=2),
-        EntityDef(name="streams", phase=2),
+        ExtractableEntity(task_name="fetch_stages",  phase=2),
+        ExtractableEntity(task_name="fetch_streams", phase=2),
         # Disabled entity (skipped at runtime)
-        EntityDef(name="views", phase=1, enabled=False),
+        ExtractableEntity(task_name="fetch_views", phase=1, enabled=False),
     ]
 
     @task(timeout_seconds=1800)
@@ -436,18 +437,16 @@ class SnowflakeApp(SqlMetadataExtractor):
         return FetchDatabasesOutput(total_record_count=len(streams))
 ```
 
-### EntityDef fields
+### ExtractableEntity fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `name` | `str` | (required) | Entity name, used for method dispatch (`fetch_{name}()`) and result key |
-| `sql` | `str` | `""` | SQL query template (for SQL connectors) |
-| `endpoint` | `str` | `""` | REST API endpoint (for API connectors) |
+| `task_name` | `str` | (required) | Exact method name to call (e.g. `"fetch_databases"`) |
 | `phase` | `int` | `1` | Execution phase --- entities in the same phase run concurrently |
 | `enabled` | `bool` | `True` | Set to `False` to skip this entity |
 | `timeout_seconds` | `int` | `1800` | Task timeout for this entity |
-| `result_key` | `str` | `""` | Key in `ExtractionOutput` for the count (defaults to `{name}_extracted`) |
-| `depends_on` | `tuple[str, ...]` | `()` | Entity names that must complete before this one |
+| `result_key` | `str` | `""` | Key in `ExtractionOutput` for the count (defaults to `{base}_extracted` where base is task_name minus `fetch_` prefix) |
+| `depends_on` | `tuple[str, ...]` | `()` | Task names that must complete before this one (reserved for future use) |
 
 ## Typed Contracts
 

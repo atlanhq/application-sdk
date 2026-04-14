@@ -1,13 +1,13 @@
 """SQL query extraction (mining) example using v3 SqlQueryExtractor template.
 
 Demonstrates how to build a Snowflake query miner by subclassing
-SqlQueryExtractor with declarative EntityDef-driven orchestration.
+SqlQueryExtractor with declarative ExtractableEntity-driven orchestration.
 
 Entity-driven orchestration:
 - Declare entities via the ``entities`` class variable
-- The "queries" entity handles batching internally
+- Each entity's ``task_name`` maps directly to a method on the class
+- The default queries entity handles batching internally
   (get_query_batches → fetch_queries per batch)
-- Custom entities dispatch to fetch_{name}() by convention
 
 Usage:
     python examples/application_sql_miner.py
@@ -40,7 +40,6 @@ from application_sdk.templates.contracts.sql_query import (
     QueryFetchInput,
     QueryFetchOutput,
 )
-from application_sdk.templates.entity import EntityDef
 
 logger = get_logger(__name__)
 
@@ -123,13 +122,11 @@ class SQLClient(BaseSQLClient):
 class SnowflakeQueryExtractor(SqlQueryExtractor):
     """Snowflake query miner.
 
-    Declares a single "queries" entity. The base run() orchestrates
-    the batch loop: get_query_batches → fetch_queries per batch.
+    Uses the default entity (``_fetch_queries_batched``) which
+    orchestrates the batch loop: get_query_batches → fetch_queries
+    per batch.  No need to declare entities explicitly when using
+    the default single-entity query extraction.
     """
-
-    entities = [
-        EntityDef(name="queries", phase=1),
-    ]
 
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:

@@ -6,15 +6,15 @@ Replaces the v2 ``BaseSQLMetadataExtractionWorkflow`` +
 Subclass ``SqlMetadataExtractor`` to implement connector-specific logic::
 
     from application_sdk.templates import SqlMetadataExtractor
-    from application_sdk.templates.entity import EntityDef
+    from application_sdk.templates.entity import ExtractableEntity
 
     class MyExtractor(SqlMetadataExtractor):
         entities = [
-            EntityDef(name="databases", phase=1),
-            EntityDef(name="schemas",   phase=1),
-            EntityDef(name="tables",    phase=1),
-            EntityDef(name="columns",   phase=1),
-            EntityDef(name="stages",    sql="SELECT ...", phase=2),
+            ExtractableEntity(task_name="fetch_databases", phase=1),
+            ExtractableEntity(task_name="fetch_schemas",   phase=1),
+            ExtractableEntity(task_name="fetch_tables",    phase=1),
+            ExtractableEntity(task_name="fetch_columns",   phase=1),
+            ExtractableEntity(task_name="fetch_stages",    phase=2),
         ]
 
         @task(timeout_seconds=1800)
@@ -29,7 +29,6 @@ Or use the legacy class-attribute SQL pattern (still supported)::
 
 from __future__ import annotations
 
-import asyncio
 from typing import ClassVar
 
 from application_sdk.app.task import task
@@ -54,25 +53,29 @@ from application_sdk.templates.contracts.sql_metadata import (
     TransformInput,
     TransformOutput,
 )
-from application_sdk.templates.entity import EntityDef
+from application_sdk.templates.entity import (
+    ExtractableEntity,
+    default_result_key,
+    run_entity_phases,
+)
 
 logger = get_logger(__name__)
 
 # Default entity definitions — the 4 core SQL entity types.
 _DEFAULT_ENTITIES = [
-    EntityDef(name="databases", phase=1),
-    EntityDef(name="schemas", phase=1),
-    EntityDef(name="tables", phase=1),
-    EntityDef(name="columns", phase=1),
+    ExtractableEntity(task_name="fetch_databases", phase=1),
+    ExtractableEntity(task_name="fetch_schemas", phase=1),
+    ExtractableEntity(task_name="fetch_tables", phase=1),
+    ExtractableEntity(task_name="fetch_columns", phase=1),
 ]
 
-# Maps entity name → (InputClass, OutputClass) for built-in entities.
+# Maps task_name → (InputClass, OutputClass) for built-in entities.
 _ENTITY_CONTRACTS: dict[str, tuple[type[ExtractionTaskInput], type]] = {
-    "databases": (FetchDatabasesInput, FetchDatabasesOutput),
-    "schemas": (FetchSchemasInput, FetchSchemasOutput),
-    "tables": (FetchTablesInput, FetchTablesOutput),
-    "columns": (FetchColumnsInput, FetchColumnsOutput),
-    "procedures": (FetchProceduresInput, FetchProceduresOutput),
+    "fetch_databases": (FetchDatabasesInput, FetchDatabasesOutput),
+    "fetch_schemas": (FetchSchemasInput, FetchSchemasOutput),
+    "fetch_tables": (FetchTablesInput, FetchTablesOutput),
+    "fetch_columns": (FetchColumnsInput, FetchColumnsOutput),
+    "fetch_procedures": (FetchProceduresInput, FetchProceduresOutput),
 }
 
 
@@ -90,8 +93,8 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     Entities in the same phase run concurrently.  Phase 2 entities
     start only after all phase 1 entities complete, and so on.
 
-    For each entity, ``run()`` dispatches to ``fetch_{name}()`` if
-    a ``@task`` method with that name exists on the subclass.
+    Each entity's ``task_name`` maps directly to a method on the
+    subclass — no naming-convention magic.
 
     **Legacy class-attribute SQL (still supported):**
 
@@ -100,8 +103,8 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     columns) and dispatches to the existing ``fetch_*`` task methods.
     """
 
-    entities: ClassVar[list[EntityDef]] = []
-    """Override with a list of ``EntityDef`` to declare entities.
+    entities: ClassVar[list[ExtractableEntity]] = []
+    """Override with a list of ``ExtractableEntity`` to declare entities.
     Empty = use defaults (databases, schemas, tables, columns)."""
 
     # ------------------------------------------------------------------
@@ -142,8 +145,9 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     ) -> FetchProceduresOutput:
         """Fetch stored procedures (optional).
 
-        Not called from the base ``run()``.  Include an ``EntityDef``
-        with ``name="procedures"`` in ``entities`` if needed.
+        Not called from the base ``run()``.  Include an
+        ``ExtractableEntity(task_name="fetch_procedures")`` in
+        ``entities`` if needed.
         """
         raise NotImplementedError(
             f"{type(self).__name__} must implement fetch_procedures()."
@@ -160,7 +164,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     # Orchestration
     # ------------------------------------------------------------------
 
-    def _get_entities(self) -> list[EntityDef]:
+    def _get_entities(self) -> list[ExtractableEntity]:
         """Return the effective entity list.
 
         If the subclass sets ``entities``, use that.
@@ -171,24 +175,25 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
 
     async def _fetch_entity(
         self,
-        entity: EntityDef,
+        entity: ExtractableEntity,
         base_input: ExtractionInput,
     ) -> tuple[str, int]:
-        """Dispatch to the correct ``fetch_{name}()`` task method.
+        """Dispatch to the task method specified by ``entity.task_name``.
 
         Returns:
             Tuple of (result_key, record_count).
         """
-        method_name = f"fetch_{entity.name}"
-        method = getattr(self, method_name, None)
+        method = getattr(self, entity.task_name, None)
         if method is None:
             raise NotImplementedError(
-                f"{type(self).__name__} has no fetch_{entity.name}() method "
-                f"for entity '{entity.name}'."
+                f"{type(self).__name__} has no '{entity.task_name}' method "
+                f"for entity with task_name='{entity.task_name}'."
             )
 
         # Build the typed task input
-        input_cls = _ENTITY_CONTRACTS.get(entity.name, (ExtractionTaskInput, None))[0]
+        input_cls = _ENTITY_CONTRACTS.get(
+            entity.task_name, (ExtractionTaskInput, None)
+        )[0]
 
         # Prefer credential_ref; fall back to legacy credential_guid
         cred_ref = base_input.credential_ref
@@ -211,7 +216,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         )
 
         result = await method(task_input)
-        result_key = entity.result_key or f"{entity.name}_extracted"
+        result_key = entity.result_key or default_result_key(entity.task_name)
         count = getattr(result, "total_record_count", 0)
         return (result_key, count)
 
@@ -227,20 +232,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
 
         try:
             entities = self._get_entities()
-
-            # Group by phase
-            phases: dict[int, list[EntityDef]] = {}
-            for entity in entities:
-                phases.setdefault(entity.phase, []).append(entity)
-
-            # Execute phase by phase
-            results: dict[str, int] = {}
-            for phase_num in sorted(phases):
-                phase_results = await asyncio.gather(
-                    *[self._fetch_entity(entity, input) for entity in phases[phase_num]]
-                )
-                for result_key, count in phase_results:
-                    results[result_key] = count
+            results = await run_entity_phases(self, entities, input)
 
             logger.info(
                 "Metadata extraction completed",
@@ -260,7 +252,18 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             # Build output dynamically — any result key matching an
             # ExtractionOutput field gets populated automatically.
             output_fields = ExtractionOutput.model_fields
-            entity_counts = {k: v for k, v in results.items() if k in output_fields}
+            entity_counts = {}
+            for k, v in results.items():
+                if k in output_fields:
+                    entity_counts[k] = v
+                else:
+                    logger.warning(
+                        "Result key '%s' has no matching field in %s — "
+                        "define the field on the output class or set "
+                        "result_key explicitly.",
+                        k,
+                        ExtractionOutput.__name__,
+                    )
 
             return ExtractionOutput(
                 workflow_id=workflow_id,

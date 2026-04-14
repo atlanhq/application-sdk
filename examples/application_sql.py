@@ -1,7 +1,7 @@
 """SQL metadata extraction example using v3 SqlMetadataExtractor template.
 
 Demonstrates how to build a PostgreSQL metadata extractor by subclassing
-SqlMetadataExtractor with declarative EntityDef-driven orchestration.
+SqlMetadataExtractor with declarative ExtractableEntity-driven orchestration.
 
 Key components:
 - PostgresExtractor: Single class with entity definitions and @task methods
@@ -10,9 +10,9 @@ Key components:
 
 Entity-driven orchestration:
 - Declare entities via the ``entities`` class variable
+- Each entity's ``task_name`` maps directly to a method on the class
 - Entities in the same phase run concurrently
 - Phase N+1 starts only after phase N completes
-- For each entity, run() dispatches to fetch_{name}()
 
 Usage:
     python examples/application_sql.py
@@ -49,7 +49,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchTablesInput,
     FetchTablesOutput,
 )
-from application_sdk.templates.entity import EntityDef
+from application_sdk.templates.entity import ExtractableEntity
 
 logger = get_logger(__name__)
 
@@ -66,16 +66,16 @@ class SQLClient(BaseSQLClient):
 class PostgresExtractor(SqlMetadataExtractor):
     """PostgreSQL metadata extractor.
 
-    Declares entities and implements fetch tasks with Postgres-specific SQL.
-    The orchestration (run method) is inherited from SqlMetadataExtractor
-    and dispatches to fetch_{name}() for each entity, grouped by phase.
+    Declares entities with explicit task_name mapping and implements
+    the corresponding @task methods with Postgres-specific SQL.
+    The orchestration (run method) is inherited from SqlMetadataExtractor.
     """
 
     entities = [
-        EntityDef(name="databases", phase=1),
-        EntityDef(name="schemas", phase=1),
-        EntityDef(name="tables", phase=1),
-        EntityDef(name="columns", phase=1),
+        ExtractableEntity(task_name="fetch_databases", phase=1),
+        ExtractableEntity(task_name="fetch_schemas", phase=1),
+        ExtractableEntity(task_name="fetch_tables", phase=1),
+        ExtractableEntity(task_name="fetch_columns", phase=1),
     ]
 
     @task(timeout_seconds=1800)

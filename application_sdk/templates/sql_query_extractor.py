@@ -6,11 +6,12 @@ split with a single typed ``App`` class.
 Subclass to implement connector-specific logic::
 
     from application_sdk.templates import SqlQueryExtractor
-    from application_sdk.templates.entity import EntityDef
+    from application_sdk.templates.entity import ExtractableEntity
 
     class MyQueryExtractor(SqlQueryExtractor):
         entities = [
-            EntityDef(name="queries", phase=1),
+            ExtractableEntity(task_name="_fetch_queries_batched",
+                              result_key="total_queries"),
         ]
 
         @task(timeout_seconds=600)
@@ -22,7 +23,6 @@ Subclass to implement connector-specific logic::
 
 from __future__ import annotations
 
-import asyncio
 from typing import ClassVar
 
 from application_sdk.app.task import task
@@ -37,13 +37,17 @@ from application_sdk.templates.contracts.sql_query import (
     QueryFetchInput,
     QueryFetchOutput,
 )
-from application_sdk.templates.entity import EntityDef
+from application_sdk.templates.entity import (
+    ExtractableEntity,
+    default_result_key,
+    run_entity_phases,
+)
 
 logger = get_logger(__name__)
 
 # Default entity definitions for query extraction.
 _DEFAULT_QUERY_ENTITIES = [
-    EntityDef(name="queries", phase=1),
+    ExtractableEntity(task_name="_fetch_queries_batched", result_key="total_queries"),
 ]
 
 
@@ -58,18 +62,19 @@ class SqlQueryExtractor(BaseMetadataExtractor):
     The ``run()`` method automatically orchestrates all registered
     entities by phase — no need to override ``run()``.
 
-    For the ``queries`` entity, orchestration calls
-    ``get_query_batches()`` then loops ``fetch_queries()`` per batch.
-    Custom entities dispatch to ``fetch_{name}()`` by convention.
+    The default entity (``_fetch_queries_batched``) handles the
+    batch loop: ``get_query_batches()`` then ``fetch_queries()``
+    per batch.  Custom entities dispatch directly to the method
+    named by ``task_name``.
 
     **Default behavior:**
 
     If ``entities`` is not overridden (empty list), the extractor
-    falls back to a single ``queries`` entity.
+    falls back to a single ``_fetch_queries_batched`` entity.
     """
 
-    entities: ClassVar[list[EntityDef]] = []
-    """Override with a list of ``EntityDef`` to declare entities.
+    entities: ClassVar[list[ExtractableEntity]] = []
+    """Override with a list of ``ExtractableEntity`` to declare entities.
     Empty = use default (queries only)."""
 
     # ------------------------------------------------------------------
@@ -100,7 +105,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
     # Orchestration
     # ------------------------------------------------------------------
 
-    def _get_entities(self) -> list[EntityDef]:
+    def _get_entities(self) -> list[ExtractableEntity]:
         """Return the effective entity list.
 
         If the subclass sets ``entities``, use that.
@@ -111,33 +116,30 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
     async def _fetch_entity(
         self,
-        entity: EntityDef,
+        entity: ExtractableEntity,
         base_input: QueryExtractionInput,
-        workflow_args: dict,
     ) -> tuple[str, int]:
-        """Dispatch to the correct fetch method for an entity.
-
-        For the ``queries`` entity, runs the batch loop
-        (get_query_batches → fetch_queries per batch).
-        For other entities, dispatches to ``fetch_{name}()``.
+        """Dispatch to the method specified by ``entity.task_name``.
 
         Returns:
             Tuple of (result_key, count).
         """
-        if entity.name == "queries":
-            return await self._fetch_queries_batched(workflow_args)
-
-        # Standard dispatch for custom entities
-        method_name = f"fetch_{entity.name}"
-        method = getattr(self, method_name, None)
+        method = getattr(self, entity.task_name, None)
         if method is None:
             raise NotImplementedError(
-                f"{type(self).__name__} has no fetch_{entity.name}() method "
-                f"for entity '{entity.name}'."
+                f"{type(self).__name__} has no '{entity.task_name}' method "
+                f"for entity with task_name='{entity.task_name}'."
             )
 
         result = await method(base_input)
-        result_key = entity.result_key or f"{entity.name}_extracted"
+
+        # Internal orchestration methods (like _fetch_queries_batched)
+        # return (result_key, count) directly.
+        if isinstance(result, tuple):
+            return result
+
+        # Standard @task methods return a contract object.
+        result_key = entity.result_key or default_result_key(entity.task_name)
         count = getattr(result, "total_record_count", 0) or getattr(
             result, "queries_fetched", 0
         )
@@ -145,7 +147,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
     async def _fetch_queries_batched(
         self,
-        workflow_args: dict,
+        base_input: QueryExtractionInput,
     ) -> tuple[str, int]:
         """Run the batch loop for query extraction.
 
@@ -155,6 +157,24 @@ class SqlQueryExtractor(BaseMetadataExtractor):
         Returns:
             Tuple of ("total_queries", total_queries_fetched).
         """
+        # Prefer credential_ref; fall back to legacy credential_guid
+        cred_ref = base_input.credential_ref
+        if cred_ref is None and base_input.credential_guid:
+            from application_sdk.credentials import legacy_credential_ref
+
+            cred_ref = legacy_credential_ref(base_input.credential_guid)
+
+        workflow_args = {
+            "workflow_id": base_input.workflow_id,
+            "connection": base_input.connection,
+            "credential_guid": base_input.credential_guid,
+            "credential_ref": cred_ref,
+            "output_prefix": base_input.output_prefix,
+            "output_path": base_input.output_path,
+            "lookback_days": base_input.lookback_days,
+            "batch_size": base_input.batch_size,
+        }
+
         batch_result = await self.get_query_batches(
             QueryBatchInput(workflow_args=workflow_args)
         )
@@ -183,42 +203,8 @@ class SqlQueryExtractor(BaseMetadataExtractor):
         logger.info("Starting SQL query extraction: %s", workflow_id)
 
         try:
-            # Prefer credential_ref; fall back to legacy credential_guid
-            cred_ref = input.credential_ref
-            if cred_ref is None and input.credential_guid:
-                from application_sdk.credentials import legacy_credential_ref
-
-                cred_ref = legacy_credential_ref(input.credential_guid)
-
-            workflow_args = {
-                "workflow_id": workflow_id,
-                "connection": input.connection,
-                "credential_guid": input.credential_guid,
-                "credential_ref": cred_ref,
-                "output_prefix": input.output_prefix,
-                "output_path": input.output_path,
-                "lookback_days": input.lookback_days,
-                "batch_size": input.batch_size,
-            }
-
             entities = self._get_entities()
-
-            # Group by phase
-            phases: dict[int, list[EntityDef]] = {}
-            for entity in entities:
-                phases.setdefault(entity.phase, []).append(entity)
-
-            # Execute phase by phase
-            results: dict[str, int] = {}
-            for phase_num in sorted(phases):
-                phase_results = await asyncio.gather(
-                    *[
-                        self._fetch_entity(entity, input, workflow_args)
-                        for entity in phases[phase_num]
-                    ]
-                )
-                for result_key, count in phase_results:
-                    results[result_key] = count
+            results = await run_entity_phases(self, entities, input)
 
             logger.info(
                 "Query extraction completed",
@@ -229,7 +215,18 @@ class SqlQueryExtractor(BaseMetadataExtractor):
             # Build output dynamically — any result key matching a
             # QueryExtractionOutput field gets populated automatically.
             output_fields = QueryExtractionOutput.model_fields
-            entity_counts = {k: v for k, v in results.items() if k in output_fields}
+            entity_counts = {}
+            for k, v in results.items():
+                if k in output_fields:
+                    entity_counts[k] = v
+                else:
+                    logger.warning(
+                        "Result key '%s' has no matching field in %s — "
+                        "define the field on the output class or set "
+                        "result_key explicitly.",
+                        k,
+                        QueryExtractionOutput.__name__,
+                    )
 
             return QueryExtractionOutput(
                 workflow_id=workflow_id,
