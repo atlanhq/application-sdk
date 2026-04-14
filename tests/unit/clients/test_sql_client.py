@@ -550,7 +550,7 @@ def test_get_sqlalchemy_connection_string_basic_auth(sql_client_with_db_config):
     sql_client_with_db_config.credentials = credentials
 
     conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
-    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=None"
+    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5"
     assert conn_str == expected
 
 
@@ -570,7 +570,7 @@ def test_get_sqlalchemy_connection_string_iam_user(sql_client_with_db_config):
         sql_client_with_db_config, "get_iam_user_token", return_value="iam_token"
     ):
         conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
-        expected = "postgresql+psycopg://aws_access_key:iam_token@rds-instance.region.rds.amazonaws.com:5432/test_db?connect_timeout=5&ssl_mode=None"
+        expected = "postgresql+psycopg://aws_access_key:iam_token@rds-instance.region.rds.amazonaws.com:5432/test_db?connect_timeout=5"
         assert conn_str == expected
 
 
@@ -593,7 +593,7 @@ def test_get_sqlalchemy_connection_string_iam_role(sql_client_with_db_config):
         sql_client_with_db_config, "get_iam_role_token", return_value="iam_token"
     ):
         conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
-        expected = "postgresql+psycopg://db_user:iam_token@rds-instance.region.rds.amazonaws.com:5432/test_db?connect_timeout=5&ssl_mode=None"
+        expected = "postgresql+psycopg://db_user:iam_token@rds-instance.region.rds.amazonaws.com:5432/test_db?connect_timeout=5"
         assert conn_str == expected
 
 
@@ -725,3 +725,23 @@ def test_get_sqlalchemy_connection_string_with_compiled_url_with_invalid_dialect
     conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
     expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
     assert conn_str == expected
+
+
+def test_get_sqlalchemy_connection_string_omits_none_parameters(
+    sql_client_with_db_config,
+):
+    """Parameters missing from credentials should not appear as key=None in the connection string."""
+    credentials = {
+        "username": "test_user",
+        "password": "test_pass",
+        "host": "localhost",
+        "port": 5432,
+        "database": "test_db",
+        "authType": "basic",
+        # ssl_mode intentionally omitted — should NOT appear as ssl_mode=None
+    }
+    sql_client_with_db_config.credentials = credentials
+
+    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
+    assert "None" not in conn_str
+    assert "ssl_mode" not in conn_str
