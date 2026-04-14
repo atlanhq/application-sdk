@@ -50,9 +50,7 @@ async def get_deployment_secret(key: str) -> Any:
                 return secret_data[key]
 
             # Fall back to single-key lookup.
-            logger.debug(
-                "Multi-key bundle lookup missed; trying single-key: %s", key
-            )
+            logger.debug("Multi-key bundle lookup missed; trying single-key: %s", key)
             result = await client.get_secret(DEPLOYMENT_SECRET_STORE_NAME, key)
             single_data = process_secret_data(result)
             if isinstance(single_data, dict):

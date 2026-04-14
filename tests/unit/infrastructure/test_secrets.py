@@ -287,9 +287,7 @@ class TestGetDeploymentSecret:
         bundle = {"DB_HOST": "db.example.com", "DB_PORT": "5432"}
         mock_client = MagicMock(
             get_secret=AsyncMock(
-                return_value={
-                    "ATLAN_DEPLOYMENT_SECRETS": json.dumps(bundle)
-                }
+                return_value={"ATLAN_DEPLOYMENT_SECRETS": json.dumps(bundle)}
             ),
             close=AsyncMock(),
         )
@@ -320,7 +318,11 @@ class TestGetDeploymentSecret:
         mock_client = MagicMock(
             get_secret=AsyncMock(
                 side_effect=[
-                    {"ATLAN_DEPLOYMENT_SECRETS": json.dumps({"OTHER_KEY": "other_value"})},
+                    {
+                        "ATLAN_DEPLOYMENT_SECRETS": json.dumps(
+                            {"OTHER_KEY": "other_value"}
+                        )
+                    },
                     {"DB_PORT": "5432"},
                 ]
             ),

@@ -4,8 +4,6 @@ import os
 import warnings
 from typing import List, Union
 
-import asyncio
-
 import orjson
 from temporalio import activity
 

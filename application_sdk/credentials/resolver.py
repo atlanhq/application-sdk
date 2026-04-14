@@ -167,9 +167,7 @@ class CredentialResolver:
         try:
             dapr_client = AsyncDaprClient()
             vault = DaprCredentialVault(dapr_client)
-            result: dict[str, Any] = await vault.get_credentials(
-                ref.credential_guid
-            )
+            result: dict[str, Any] = await vault.get_credentials(ref.credential_guid)
             return result
         except CredentialNotFoundError:
             raise

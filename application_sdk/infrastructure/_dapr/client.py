@@ -7,7 +7,6 @@ from enum import Enum
 from typing import Any
 
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
-
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.infrastructure.bindings import BindingError, BindingResponse
 from application_sdk.infrastructure.pubsub import MessageHandler, PubSubError
@@ -68,7 +67,6 @@ def _resolve_credentials(
     return credentials
 
 
-
 def create_dapr_secret_store(
     client: AsyncDaprClient,
     store_name: str = "secretstore",
@@ -125,8 +123,8 @@ class DaprStateStore:
                 store_name=self._store_name,
                 key=key,
             )
-            if result.data:
-                return json.loads(result.data)
+            if data:
+                return json.loads(data)
             return None
         except Exception as e:
             raise StateStoreError(
@@ -265,7 +263,6 @@ class DaprPubSub:
                 pubsub_name=self._pubsub_name,
                 topic=topic,
                 data=json.dumps(data),
-                
                 metadata=metadata or {},
             )
         except Exception as e:
@@ -356,9 +353,7 @@ class DaprBinding:
             )
             return BindingResponse(
                 data=result.data if result.data else None,
-                metadata=dict(result.metadata)
-                if result.metadata
-                else {},
+                metadata=dict(result.metadata) if result.metadata else {},
             )
         except Exception as e:
             raise BindingError(
@@ -483,9 +478,7 @@ class DaprCredentialVault:
                         "Failed to fetch secret bundle: %s", key_to_fetch, exc_info=True
                     )
             else:
-                secret_data = await self._fetch_single_key_secrets(
-                    credential_config
-                )
+                secret_data = await self._fetch_single_key_secrets(credential_config)
 
             if credential_source == _CredentialSource.DIRECT:
                 credential_config.update(secret_data)

@@ -162,7 +162,10 @@ class TestGuidResolutionPath:
                 "application_sdk.infrastructure._dapr.client.DaprCredentialVault",
                 MagicMock(return_value=mock_vault),
             ),
-            patch("application_sdk.infrastructure._dapr.http.AsyncDaprClient", MagicMock(return_value=mock_dapr)),
+            patch(
+                "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+                MagicMock(return_value=mock_dapr),
+            ),
         ):
             ref = legacy_credential_ref("abc-123")
             raw = await resolver.resolve_raw(ref)
