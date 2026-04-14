@@ -28,6 +28,7 @@ The pipeline has 10 stages. Execute every one. Do NOT declare "run complete" aft
 - When review feedback is addressed → leave a Linear comment summarizing what was fixed
 - When all gates pass → set ticket to "In Review" (NOT "Done") and leave comment "All gates passed — ready for human merge"
 - **"Done" means MERGED** — only set "Done" when the PR is actually merged into the target branch. Until then, the ticket stays "In Review". The 2026-04-14 run incorrectly set 9 tickets to "Done" while PRs were still open.
+- **Parent ticket follows the same rule** — the parent stays "In Review" until ALL child tickets are resolved (merged, canceled, or needs-human-review). Only then does the parent move to "Done".
 - **Always call `list_issue_statuses` before the first state update** to get exact state names for the workspace
 - **Use Linear comments for decisions/reasoning** — keep the description clean and short, put the narrative in comments so people can follow the thread
 
