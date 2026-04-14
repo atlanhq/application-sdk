@@ -30,7 +30,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Set
 
-from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
@@ -58,6 +57,7 @@ from application_sdk.constants import (
     INCREMENTAL_DIFF_SUBPATH_TEMPLATE,
     UPSTREAM_OBJECT_STORE_NAME,
 )
+from application_sdk.execution._temporal.activity_utils import get_object_store_prefix
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
 

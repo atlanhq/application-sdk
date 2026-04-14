@@ -48,9 +48,9 @@ from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthStatus,
-    Credential,
     EventTriggerConfig,
     FileUploadResponse,
+    HandlerCredential,
     MetadataInput,
     PreflightInput,
     PreflightStatus,
@@ -441,7 +441,7 @@ def create_app_handler_service(
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(LogMiddleware)
 
-    def _create_context(credentials: list[Credential]) -> HandlerContext:
+    def _create_context(credentials: list[HandlerCredential]) -> HandlerContext:
         return HandlerContext(
             app_name=app_name,
             request_id=uuid4(),
@@ -460,7 +460,7 @@ def create_app_handler_service(
         body = _normalize_credentials(await request.json())
         auth_input = AuthInput.model_validate(body)
         credentials = [
-            Credential(key=c.key, value=c.value) for c in auth_input.credentials
+            HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
         context = _create_context(credentials)
         handler._context = context
@@ -515,7 +515,8 @@ def create_app_handler_service(
         body = _normalize_credentials(await request.json())
         preflight_input = PreflightInput.model_validate(body)
         credentials = [
-            Credential(key=c.key, value=c.value) for c in preflight_input.credentials
+            HandlerCredential(key=c.key, value=c.value)
+            for c in preflight_input.credentials
         ]
         context = _create_context(credentials)
         handler._context = context
@@ -584,7 +585,8 @@ def create_app_handler_service(
         body = _normalize_credentials(await request.json())
         metadata_input = MetadataInput.model_validate(body)
         credentials = [
-            Credential(key=c.key, value=c.value) for c in metadata_input.credentials
+            HandlerCredential(key=c.key, value=c.value)
+            for c in metadata_input.credentials
         ]
         context = _create_context(credentials)
         handler._context = context

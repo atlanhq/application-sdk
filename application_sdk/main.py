@@ -157,14 +157,17 @@ class AppConfig:
             val = os.environ.get(key, "").lower()
             return val in ("true", "1", "yes") if val else default
 
-        mode = args.mode or _env("ATLAN_APP_MODE")
-        if not mode:
-            # Fall back to APPLICATION_MODE with value mapping for backwards-compat.
-            # WORKER→worker, SERVER→handler, anything else (LOCAL, unset)→combined
-            _legacy_mode = _env("APPLICATION_MODE").upper()
-            mode = {"WORKER": "worker", "SERVER": "handler"}.get(
-                _legacy_mode, "combined"
-            )
+        _legacy_mode_map = {
+            "WORKER": "worker",
+            "SERVER": "handler",
+            "LOCAL": "combined",
+        }
+        mode = (
+            args.mode
+            or _env("ATLAN_APP_MODE")
+            or _legacy_mode_map.get(_env("APPLICATION_MODE"), "")
+            or "combined"
+        )
 
         app_module_raw = args.app or _env("ATLAN_APP_MODULE")
         if not app_module_raw:

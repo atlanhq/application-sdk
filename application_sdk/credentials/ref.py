@@ -11,9 +11,9 @@ class CredentialRef(BaseModel, frozen=True):
     This is a secret-free identifier — it contains no sensitive data itself.
     Use a CredentialResolver to turn a CredentialRef into a typed Credential.
 
-    The ``credential_guid`` field provides backward compatibility with apps
-    that still use the legacy v2 ``SecretStore.get_credentials(guid)`` path.
-    When non-empty, the resolver uses the legacy resolution path.
+    When ``credential_guid`` is non-empty the resolver first checks the local
+    secret store (for in-process credential injection in combined-mode / local
+    dev), then falls back to ``DaprCredentialVault`` for platform-issued GUIDs.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -28,7 +28,7 @@ class CredentialRef(BaseModel, frozen=True):
     """Which secret store to use (for multi-store setups)."""
 
     credential_guid: str = ""
-    """Legacy credential GUID — non-empty triggers the v2 resolution path."""
+    """Platform-issued credential GUID — non-empty triggers GUID resolution path."""
 
     def __repr__(self) -> str:
         return (
@@ -101,14 +101,19 @@ def atlan_oauth_client_ref(name: str, *, store_name: str = "default") -> Credent
 
 
 def legacy_credential_ref(guid: str, credential_type: str = "unknown") -> CredentialRef:
-    """Create a CredentialRef from a legacy v2 credential GUID.
+    """Create a CredentialRef from a platform-issued credential GUID.
 
-    This bridge factory wraps an existing ``credential_guid`` so that apps
-    using the old pattern can migrate incrementally to CredentialRef without
-    changing their secret-store layout.
+    Wraps a ``credential_guid`` string (issued by the Atlan platform or
+    generated in-process by the handler layer) so that templates and
+    connectors can resolve it through the standard ``CredentialResolver``
+    path.
+
+    The resolver checks the local secret store first (in-process inline
+    credentials), then falls back to ``DaprCredentialVault`` for GUIDs
+    that only exist in the upstream platform secret store.
 
     Args:
-        guid: The legacy credential GUID (passed as ``credential_guid``).
+        guid: The credential GUID.
         credential_type: The credential type hint; defaults to ``"unknown"``
             which causes the resolver to return a ``RawCredential``.
     """
