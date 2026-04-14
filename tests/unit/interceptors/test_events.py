@@ -7,7 +7,7 @@ from unittest import mock
 
 import pytest
 
-from application_sdk.interceptors.events import (
+from application_sdk.execution._temporal.interceptors.events import (
     EventActivityInboundInterceptor,
     EventInterceptor,
     EventWorkflowInboundInterceptor,

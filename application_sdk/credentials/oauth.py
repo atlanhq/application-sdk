@@ -159,15 +159,18 @@ class OAuthTokenService:
                 body: dict = response.json()
         except httpx.HTTPStatusError as exc:
             raise OAuthTokenError(
-                f"Token exchange failed (HTTP {exc.response.status_code}): "
-                f"{exc.response.text}"
+                f"Token exchange failed (HTTP {exc.response.status_code})"
             ) from exc
         except httpx.HTTPError as exc:
             raise OAuthTokenError(f"Token exchange HTTP error: {exc}") from exc
 
         access_token: str = body.get("access_token", "")
         if not access_token:
-            raise OAuthTokenError(f"OAuth exchange returned no access_token: {body}")
+            error = body.get("error", "unknown")
+            error_desc = body.get("error_description", "")
+            raise OAuthTokenError(
+                f"OAuth exchange returned no access_token: error={error}, description={error_desc}"
+            )
 
         expires_in = body.get("expires_in")
         expires_at = ""

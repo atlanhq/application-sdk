@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Dict, List, Union
 from unittest.mock import mock_open, patch
 
+import pytest
+
 from application_sdk.common.error_codes import CommonError
 from application_sdk.common.utils import (
     extract_database_names_from_regex_common,
@@ -934,7 +936,6 @@ class TestParseFilterInput:
 
     def test_invalid_json_strings(self) -> None:
         """Test invalid JSON strings raise CommonError."""
-        import pytest
 
         with pytest.raises(CommonError, match="Invalid filter JSON"):
             parse_filter_input("invalid json")

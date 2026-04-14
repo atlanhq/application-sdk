@@ -1,12 +1,11 @@
 # Request/Response DTOs for workflows
 
 from enum import Enum
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Coroutine, Dict, Optional, Union
 
 from pydantic import BaseModel, Field, RootModel
 
-from application_sdk.interceptors.models import Event, EventFilter
-from application_sdk.workflows import WorkflowInterface
+from application_sdk.contracts.events import Event
 
 
 class TestAuthRequest(RootModel[Dict[str, Any]]):
@@ -226,26 +225,6 @@ class ConfigMapResponse(BaseModel):
         ..., description="Message describing the result of the operation"
     )
     data: Dict[str, Any] = Field(..., description="Configuration map object")
-
-
-class WorkflowTrigger(BaseModel):
-    workflow_class: Optional[Type[WorkflowInterface]] = None
-    model_config = {"arbitrary_types_allowed": True}
-
-
-class HttpWorkflowTrigger(WorkflowTrigger):
-    endpoint: str = "/start"
-    methods: List[str] = ["POST"]
-
-
-class EventWorkflowTrigger(WorkflowTrigger):
-    event_id: str
-    event_type: str
-    event_name: str
-    event_filters: List[EventFilter]
-
-    def should_trigger_workflow(self, event: Event) -> bool:
-        return True
 
 
 class Subscription(BaseModel):

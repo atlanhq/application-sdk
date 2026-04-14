@@ -208,7 +208,7 @@ class TestObjectStore:
         mock_client.invoke_binding.assert_called_once_with(
             binding_name="objectstore",
             operation="delete",
-            data=b'{"key": "test/file.txt"}',
+            data=b'{"key":"test/file.txt"}',
             binding_metadata={
                 "key": "test/file.txt",
                 "fileName": "test/file.txt",
@@ -355,7 +355,7 @@ class TestObjectStore:
         mock_client.invoke_binding.assert_called_once_with(
             binding_name="objectstore",
             operation="get",
-            data=b'{"key": "test/file.txt"}',
+            data=b'{"key":"test/file.txt"}',
             binding_metadata={
                 "key": "test/file.txt",
                 "fileName": "test/file.txt",
@@ -379,7 +379,7 @@ class TestObjectStore:
             "artifacts/apps/my-app/workflows/wf-123/run-456/test.json"
         )
         assert call_kwargs["data"] == (
-            b'{"key": "artifacts/apps/my-app/workflows/wf-123/run-456/test.json"}'
+            b'{"key":"artifacts/apps/my-app/workflows/wf-123/run-456/test.json"}'
         )
 
     @patch("application_sdk.services.objectstore.DaprClient")
@@ -743,7 +743,7 @@ class TestObjectStore:
             "artifacts/apps/my-app/workflows/wf-123/run-456/"
         )
         assert call_kwargs["data"] == (
-            b'{"prefix": "artifacts/apps/my-app/workflows/wf-123/run-456/"}'
+            b'{"prefix":"artifacts/apps/my-app/workflows/wf-123/run-456/"}'
         )
 
     @patch("application_sdk.services.objectstore.ObjectStore._invoke_dapr_binding")

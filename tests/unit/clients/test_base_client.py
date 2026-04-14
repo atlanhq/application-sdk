@@ -7,7 +7,7 @@ from httpx import Headers
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.base import BaseClient
-from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
+from application_sdk.testing.hypothesis.strategies.clients.sql import (
     sql_credentials_strategy,
 )
 

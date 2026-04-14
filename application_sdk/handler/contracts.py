@@ -14,7 +14,6 @@ on ingress (``model_validate``), direct JSON serialization on egress
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -39,10 +38,6 @@ class HandlerCredential(BaseModel):
 
     value: str
     """Credential value (sensitive — never log this directly)."""
-
-
-# Backward-compatible alias — will be removed in a future release
-Credential = HandlerCredential
 
 
 class AuthStatus(SerializableEnum):
@@ -140,74 +135,6 @@ class PreflightOutput(BaseModel):
 
     total_duration_ms: float = 0.0
     """Total time for all checks in milliseconds."""
-
-
-class MetadataField(BaseModel):
-    """A field/column within a metadata object.
-
-    .. deprecated::
-        Retained for backward compatibility. Not used by the new
-        ``SqlMetadataObject`` / ``ApiMetadataObject`` contracts.
-        Will be removed in v3.1.0.
-    """
-
-    name: str
-    """Field name."""
-
-    field_type: str = ""
-    """Data type (e.g., 'VARCHAR', 'INTEGER')."""
-
-    nullable: bool = True
-    """Whether the field allows null values."""
-
-    description: str = ""
-    """Optional field description."""
-
-    def model_post_init(self, __context: Any) -> None:
-        warnings.warn(
-            "MetadataField is deprecated. "
-            "Use SqlMetadataObject or ApiMetadataObject instead. "
-            "Will be removed in v3.1.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-
-class MetadataObject(BaseModel):
-    """A discoverable object (table, view, schema, etc.).
-
-    .. deprecated::
-        Use ``SqlMetadataObject`` for SQL connectors or
-        ``ApiMetadataObject`` for BI/API connectors instead.
-        Will be removed in v3.1.0.
-    """
-
-    name: str
-    """Object name."""
-
-    object_type: str = ""
-    """Object type (e.g., 'TABLE', 'VIEW', 'SCHEMA')."""
-
-    schema: str = ""  # pyright: ignore[reportIncompatibleMethodOverride]
-    """Parent schema name."""
-
-    database: str = ""
-    """Parent database name."""
-
-    description: str = ""
-    """Optional description."""
-
-    fields: list[MetadataField] = []
-    """Fields/columns within this object."""
-
-    def model_post_init(self, __context: Any) -> None:
-        warnings.warn(
-            "MetadataObject is deprecated. "
-            "Use SqlMetadataObject or ApiMetadataObject instead. "
-            "Will be removed in v3.1.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
 
 # ---------------------------------------------------------------------------
