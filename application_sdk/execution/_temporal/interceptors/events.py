@@ -6,7 +6,7 @@ binding is configured.
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional, Type
 
 from temporalio import activity, workflow
@@ -109,7 +109,7 @@ def _enrich_event_metadata(event: Event) -> Event:
         event.metadata = EventMetadata()
 
     event.metadata.application_name = APPLICATION_NAME
-    event.metadata.created_timestamp = int(datetime.now().timestamp())
+    event.metadata.created_timestamp = int(datetime.now(tz=UTC).timestamp())
     event.metadata.topic_name = event.get_topic_name()
 
     try:
