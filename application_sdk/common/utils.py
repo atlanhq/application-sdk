@@ -535,7 +535,7 @@ async def get_file_names(output_path: str, typename: str) -> List[str]:
     """
 
     source = os.path.join(output_path, typename)
-    await download_prefix(source, TEMPORARY_PATH)
+    await download_prefix(prefix=source, local_dir=TEMPORARY_PATH)
 
     file_pattern = os.path.join(output_path, typename, "*.json")
     file_names = glob.glob(file_pattern)
@@ -584,8 +584,8 @@ async def download_file_from_upload_response(
     local_path = os.path.join(TEMPORARY_PATH, key)
 
     await download_file(
-        source=key,
-        destination=local_path,
+        key=key,
+        local_path=local_path,
     )
 
     return local_path

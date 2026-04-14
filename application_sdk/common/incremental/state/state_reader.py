@@ -77,8 +77,8 @@ async def download_current_state(
 
     try:
         await download_prefix(
-            source=current_state_s3_prefix,
-            destination=str(current_state_dir),
+            prefix=current_state_s3_prefix,
+            local_dir=str(current_state_dir),
         )
 
         json_count = count_json_files_recursive(current_state_dir)

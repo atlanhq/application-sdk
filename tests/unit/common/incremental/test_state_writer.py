@@ -252,7 +252,8 @@ class TestDownloadTransformedData:
         with tempfile.TemporaryDirectory() as temp_dir:
             with (
                 patch(
-                    "application_sdk.common.incremental.state.state_writer.upload_prefix"
+                    "application_sdk.common.incremental.state.state_writer.download_prefix",
+                    new_callable=AsyncMock,
                 ) as mock_store,
                 patch(
                     "application_sdk.common.incremental.state.state_writer.get_object_store_prefix",

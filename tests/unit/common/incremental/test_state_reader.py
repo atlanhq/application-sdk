@@ -60,12 +60,13 @@ class TestDownloadCurrentState:
                 mock_path.return_value = state_dir
 
                 # Simulate S3 download creating JSON files
-                async def fake_download(**kwargs):
+                async def fake_download(*args, **kwargs):
                     table_dir = state_dir / "table"
                     table_dir.mkdir(parents=True, exist_ok=True)
                     (table_dir / "chunk-0.json").write_text("{}")
                     (table_dir / "chunk-1.json").write_text("{}")
 
+                mock_store.side_effect = fake_download
 
                 dir_result, prefix, exists, json_count = await download_current_state(
                     connection_qualified_name="t/c/123",

@@ -198,8 +198,8 @@ async def download_marker_from_s3(
     logger.info("Downloading marker from S3: %s", marker_s3_key)
     try:
         await download_file(
-            source=marker_s3_key,
-            destination=str(local_marker_path),
+            key=marker_s3_key,
+            local_path=str(local_marker_path),
         )
         if local_marker_path.exists() and local_marker_path.stat().st_size > 0:
             marker = local_marker_path.read_text(encoding="utf-8").strip()
@@ -256,8 +256,8 @@ async def download_s3_prefix_with_structure(
 
         # Download file from Object Store to local
         await download_file(
-            source=file_path,
-            destination=str(local_file_path),
+            key=file_path,
+            local_path=str(local_file_path),
         )
 
 

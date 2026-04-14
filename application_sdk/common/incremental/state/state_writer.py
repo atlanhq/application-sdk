@@ -120,8 +120,8 @@ async def download_transformed_data(output_path: str) -> Path:
     transformed_dir.mkdir(parents=True, exist_ok=True)
 
     await download_prefix(
-        source=transformed_s3_prefix,
-        destination=str(transformed_dir),
+        prefix=transformed_s3_prefix,
+        local_dir=str(transformed_dir),
     )
 
     return transformed_dir
@@ -261,7 +261,7 @@ async def upload_current_state(
     current_state_s3_prefix = f"{s3_prefix}/current-state"
 
     await upload_prefix(
-        source=str(current_state_dir),
+        local_dir=str(current_state_dir),
         destination=current_state_s3_prefix,
     )
     logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)
@@ -453,7 +453,7 @@ async def create_current_state_snapshot(
 
                 # Upload incremental-diff to S3
                 await upload_prefix(
-                    source=str(incremental_diff_dir),
+                    local_dir=str(incremental_diff_dir),
                     destination=incremental_diff_s3_prefix,
                 )
                 logger.info(
@@ -473,7 +473,7 @@ async def create_current_state_snapshot(
 
     # Step 6: Upload current-state to S3
     await upload_prefix(
-        source=str(current_state_dir),
+        local_dir=str(current_state_dir),
         destination=current_state_s3_prefix,
     )
     logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)

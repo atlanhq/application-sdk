@@ -97,8 +97,8 @@ async def upload_file_to_object_store(
     object_store_key = _build_object_store_key(stored_filename, prefix)
 
     await upload_file_from_bytes(
-        file_content=content_bytes,
-        destination=object_store_key,
+        content=content_bytes,
+        key=object_store_key,
     )
 
     now_ms = int(time.time() * 1000)

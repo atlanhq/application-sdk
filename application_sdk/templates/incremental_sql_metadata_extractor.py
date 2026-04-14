@@ -449,8 +449,8 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
 
         logger.info("Downloading transformed files from S3: %s", transformed_s3_prefix)
         await download_prefix(
-            source=transformed_s3_prefix,
-            destination=str(transformed_dir),
+            prefix=transformed_s3_prefix,
+            local_dir=str(transformed_dir),
         )
 
         batch_size = input.column_batch_size
@@ -554,7 +554,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         batches_s3_prefix = get_object_store_prefix(str(batches_dir))
         logger.info("Uploading batch files to S3: %s", batches_s3_prefix)
         await upload_prefix(
-            source=str(batches_dir),
+            local_dir=str(batches_dir),
             destination=batches_s3_prefix,
             retain_local_copy=True,
         )
@@ -619,8 +619,8 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             batches_s3_prefix = get_object_store_prefix(str(batches_dir))
 
         await download_file(
-            source=f"{batches_s3_prefix}/{batch_filename}",
-            destination=str(batch_file),
+            key=f"{batches_s3_prefix}/{batch_filename}",
+            local_path=str(batch_file),
         )
 
         if not batch_file.exists():
