@@ -287,6 +287,9 @@ jobs:
               with open("/tmp/trivy_results.json") as f:
                   trivy = json.load(f)
               for result in trivy.get("Results", []):
+                  result_type = result.get("Type", "")
+                  # Python lockfiles = app dependency, everything else = base image
+                  is_app = result_type in ("pip", "pipenv", "poetry", "uv", "python-pkg")
                   for vuln in result.get("Vulnerabilities", []):
                       vid = vuln.get("VulnerabilityID")
                       if vid and vid not in all_vulns:
@@ -297,6 +300,7 @@ jobs:
                               "installed": vuln.get("InstalledVersion", ""),
                               "fixed": vuln.get("FixedVersion", ""),
                               "source": "trivy",
+                              "source_type": "app" if is_app else "base_image",
                           }
                           trivy_count += 1
           except Exception as e:
@@ -308,6 +312,7 @@ jobs:
               with open("/tmp/snyk_results.json") as f:
                   snyk = json.load(f)
               if not snyk.get("error"):
+                  # Snyk container scan: top-level vulns are from the image (base_image)
                   for vuln in snyk.get("vulnerabilities", []):
                       vid = vuln.get("id")
                       cves = vuln.get("identifiers", {}).get("CVE", [])
@@ -320,8 +325,10 @@ jobs:
                                   "installed": vuln.get("version", ""),
                                   "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
                                   "source": "snyk",
+                                  "source_type": "base_image",
                               }
                               snyk_count += 1
+                  # Snyk applications section = app dependencies
                   for app in snyk.get("applications", []):
                       for vuln in app.get("vulnerabilities", []):
                           vid = vuln.get("id")
@@ -333,6 +340,7 @@ jobs:
                                   "installed": vuln.get("version", ""),
                                   "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
                                   "source": "snyk",
+                                  "source_type": "app",
                               }
                               snyk_count += 1
           except Exception as e:
@@ -396,7 +404,7 @@ jobs:
           fail_on_findings = os.environ.get("FAIL_ON_FINDINGS", "true").lower() == "true"
 
           # Write fixable app dependencies for auto-fix step
-          fixable = [v for v in new_vulns if v["source_type"] == "app" and v["fixed"]]
+          fixable = [v for v in new_vulns if v.get("source_type", "app") == "app" and v.get("fixed")]
           with open("/tmp/fixable_packages.json", "w") as f:
               json.dump(fixable, f)
           if fixable:
