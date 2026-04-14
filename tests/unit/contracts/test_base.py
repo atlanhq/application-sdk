@@ -17,7 +17,6 @@ from application_sdk.contracts.base import (
     get_contract_fields,
     has_default,
     is_backwards_compatible,
-    validate_is_dataclass,
     validate_payload_safety,
 )
 from application_sdk.contracts.types import FileReference, MaxItems
@@ -399,37 +398,6 @@ class TestConfigHash:
         assert a.config_hash(extra_exclude={"run_id"}) == b.config_hash(
             extra_exclude={"run_id"}
         )
-
-
-# =============================================================================
-# validate_is_dataclass (backward-compat alias for validate_is_contract)
-# =============================================================================
-
-
-class TestValidateIsDataclass:
-    def test_contract_subclass_passes(self) -> None:
-        class GoodInput(Input):
-            x: int = 0
-
-        validate_is_dataclass(GoodInput)  # Should not raise
-
-    def test_non_contract_raises(self) -> None:
-        class NotDC:
-            pass
-
-        with pytest.raises(ContractValidationError) as exc_info:
-            validate_is_dataclass(NotDC)
-
-        assert "NotDC" in str(exc_info.value)
-
-    def test_custom_context_in_error(self) -> None:
-        class NotDC:
-            pass
-
-        with pytest.raises(ContractValidationError) as exc_info:
-            validate_is_dataclass(NotDC, context="my input")
-
-        assert "my input" in str(exc_info.value)
 
 
 # =============================================================================

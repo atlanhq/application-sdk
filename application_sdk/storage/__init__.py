@@ -10,7 +10,7 @@ Public API:
     delete(key, store=None)          → bool           (alias: delete_file)
     exists(key, store=None)          → bool
     delete_prefix(prefix, store=None) → int  (returns count deleted)
-    list_keys(prefix, store=None)    → list[str]      (alias: list_files)
+    list_keys(prefix, suffix=...)    → list[str]      (alias: list_files)
 
 For directory upload/download, use App.upload / App.download (framework tasks)
 or call application_sdk.storage.transfer.upload / .download directly.
@@ -49,6 +49,7 @@ from application_sdk.storage.ops import (
     delete_file,
     delete_prefix,
     download_file,
+    download_prefix,
     exists,
     list_files,
     list_keys,
@@ -64,6 +65,7 @@ __all__ = [
     # Core ops
     "upload_file",
     "download_file",
+    "download_prefix",
     "delete",
     "delete_prefix",
     "exists",

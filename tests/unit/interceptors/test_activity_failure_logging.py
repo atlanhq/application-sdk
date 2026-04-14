@@ -11,7 +11,7 @@ from unittest import mock
 import pytest
 from temporalio.api.common.v1 import Payload
 
-from application_sdk.interceptors.activity_failure_logging import (
+from application_sdk.execution._temporal.interceptors.activity_failure_logging import (
     TaskFailureLoggingInterceptor,
     _TaskFailureLoggingActivityInboundInterceptor,
 )

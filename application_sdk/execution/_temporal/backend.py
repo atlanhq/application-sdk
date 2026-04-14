@@ -43,8 +43,20 @@ class TemporalExecutorBackend:
         context: AppContext,
         retry_policy: RetryPolicy,
         execution_timeout: timedelta | None = None,
+        entry_point: str | None = None,
     ) -> Any:
-        """Execute an App as a Temporal workflow."""
+        """Execute an App as a Temporal workflow.
+
+        Args:
+            app_cls: The App class to execute.
+            input_data: Input data for the workflow.
+            context: App execution context.
+            retry_policy: Retry policy for the workflow.
+            execution_timeout: Optional timeout for the workflow execution.
+            entry_point: Entry point name for multi-entry-point apps.
+                When provided, the workflow name is ``"{app_name}:{entry_point}"``.
+                When omitted, defaults to the app name (single-entry-point apps).
+        """
         from uuid import uuid4
 
         input_data._correlation_id = context.correlation_id
@@ -60,9 +72,25 @@ class TemporalExecutorBackend:
             else f"{prefix}-{short_id}"
         )
 
-        output_type = getattr(app_cls, "_output_type", None)
+        workflow_name = (
+            f"{app_cls._app_name}:{entry_point}" if entry_point else app_cls._app_name
+        )
+        ep_meta = (
+            app_cls._app_metadata.entry_points.get(entry_point) if entry_point else None
+        )
+        if entry_point is not None and ep_meta is None:
+            available = list(app_cls._app_metadata.entry_points)
+            raise ValueError(
+                f"Unknown entry point '{entry_point}' for app '{app_cls._app_name}'. "
+                f"Available: {available}"
+            )
+        output_type = (
+            ep_meta.output_type
+            if ep_meta is not None
+            else getattr(app_cls, "_output_type", None)
+        )
         result = await self._client.execute_workflow(
-            app_cls._app_name,
+            workflow_name,
             args=[input_data],
             id=workflow_id,
             task_queue=self._task_queue,
@@ -79,8 +107,19 @@ class TemporalExecutorBackend:
         *,
         context: AppContext,
         retry_policy: RetryPolicy,
+        entry_point: str | None = None,
     ) -> str:
-        """Start an App workflow without waiting. Returns the workflow ID."""
+        """Start an App workflow without waiting. Returns the workflow ID.
+
+        Args:
+            app_cls: The App class to execute.
+            input_data: Input data for the workflow.
+            context: App execution context.
+            retry_policy: Retry policy for the workflow.
+            entry_point: Entry point name for multi-entry-point apps.
+                When provided, the workflow name is ``"{app_name}:{entry_point}"``.
+                When omitted, defaults to the app name (single-entry-point apps).
+        """
         from uuid import uuid4
 
         input_data._correlation_id = context.correlation_id
@@ -96,8 +135,11 @@ class TemporalExecutorBackend:
             else f"{prefix}-{short_id}"
         )
 
+        workflow_name = (
+            f"{app_cls._app_name}:{entry_point}" if entry_point else app_cls._app_name
+        )
         handle = await self._client.start_workflow(
-            app_cls._app_name,
+            workflow_name,
             args=[input_data],
             id=workflow_id,
             task_queue=self._task_queue,

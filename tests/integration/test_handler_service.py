@@ -656,3 +656,103 @@ async def test_prometheus_metrics_not_exposed_when_disabled():
     ) as client:
         resp = await client.get("/metrics")
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# G6.15–G6.17: Multi-entry-point HTTP routing
+# ---------------------------------------------------------------------------
+# App/Input/Output at module level so Temporal's sandboxed runner can import
+# them.  Routing validation (workflow_type checks) fires before the Temporal
+# call, so G6.16 and G6.17 don't require a running worker.
+
+from application_sdk.app.entrypoint import entrypoint  # noqa: E402
+
+
+class RouteAInput(Input):
+    value: int = 0
+
+
+class RouteAOutput(Output):
+    doubled: int = 0
+
+
+class RouteBInput(Input):
+    value: int = 0
+
+
+class RouteBOutput(Output):
+    tripled: int = 0
+
+
+class MultiRouteApp(App):
+    @entrypoint
+    async def route_a(self, input: RouteAInput) -> RouteAOutput:
+        return RouteAOutput(doubled=input.value * 2)
+
+    @entrypoint
+    async def route_b(self, input: RouteBInput) -> RouteBOutput:
+        return RouteBOutput(tripled=input.value * 3)
+
+
+@pytest.fixture
+async def multi_route_wf_client(temporal_client, task_queue, reregister_app):
+    """Handler service configured with MultiRouteApp for multi-EP routing tests."""
+    from application_sdk.handler import service as svc
+    from application_sdk.handler.service import create_app_handler_service
+
+    reregister_app(MultiRouteApp)
+
+    handler = DefaultHandler()
+    app = create_app_handler_service(
+        handler,
+        app_name="multi-route",
+        app_class=MultiRouteApp,
+        temporal_host="localhost:7233",
+        task_queue=task_queue,
+    )
+    svc._temporal_client = temporal_client
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        yield c
+
+
+@pytest.mark.integration
+async def test_multi_ep_http_routes_correctly(run_worker, multi_route_wf_client):
+    """G6.15: POST /start with workflow_type dispatches to the correct @entrypoint."""
+    client = multi_route_wf_client
+
+    async with run_worker():
+        resp = await client.post(
+            "/workflows/v1/start",
+            json={"workflow_type": "route-a", "value": 7},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["data"]["workflow_id"]
+
+
+@pytest.mark.integration
+async def test_multi_ep_missing_workflow_type_returns_400(multi_route_wf_client):
+    """G6.16: POST /start without workflow_type on a multi-EP app returns HTTP 400."""
+    client = multi_route_wf_client
+
+    resp = await client.post("/workflows/v1/start", json={"value": 1})
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.integration
+async def test_multi_ep_invalid_workflow_type_returns_400(multi_route_wf_client):
+    """G6.17: POST /start with an unknown workflow_type returns HTTP 400."""
+    client = multi_route_wf_client
+
+    resp = await client.post(
+        "/workflows/v1/start",
+        json={"workflow_type": "nonexistent-ep", "value": 1},
+    )
+
+    assert resp.status_code == 400

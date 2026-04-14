@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from application_sdk.contracts.base import Input, Output
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -27,7 +28,9 @@ from application_sdk.handler.contracts import (
     SubscriptionConfig,
 )
 from application_sdk.handler.service import (
+    _flatten_to_pairs,
     _normalize_credentials,
+    _pairs_to_flat,
     _wrap_response,
     create_app_handler_service,
 )
@@ -79,6 +82,23 @@ class _FailingHandler(Handler):
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         raise HandlerError("metadata failed")
+
+
+# ---------------------------------------------------------------------------
+# Module-level contract types for routing tests
+# (locally-defined dataclasses fail get_type_hints() when
+#  'from __future__ import annotations' is active)
+# ---------------------------------------------------------------------------
+
+
+# Plain Pydantic subclasses — @dataclass would generate a conflicting __init__
+# that breaks Pydantic's __pydantic_fields_set__ initialisation.
+class _RoutingInput(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    name: str = ""
+
+
+class _RoutingOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    result: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +375,139 @@ class TestStartWorkflowEndpoint:
         finally:
             AppRegistry.reset()
             TaskRegistry.reset()
+
+
+class TestStartWorkflowRouting:
+    """Tests for /workflows/v1/start entry-point routing logic."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _make_routed_client(self, app_cls: type, *, patch_temporal: bool = True):  # type: ignore[return]
+        """Create a TestClient wired to app_cls with Temporal mocked out."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        handler = _TestHandler()
+        svc = create_app_handler_service(
+            handler,
+            app_name="routing-test",
+            app_class=app_cls,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-123"
+        mock_handle.result_run_id = "run-abc"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        client = TestClient(svc, raise_server_exceptions=False)
+        return client, patcher
+
+    def test_single_ep_no_workflow_type_auto_selects(self) -> None:
+        """Single-entry-point app accepts request with no workflow_type."""
+        # Use module-level types — locally-defined dataclasses can't be resolved
+        # by get_type_hints() because 'from __future__ import annotations' is active.
+        from application_sdk.app.base import App
+
+        class _SingleEpApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher = self._make_routed_client(_SingleEpApp)
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "hello"})
+            assert response.status_code == 200
+        finally:
+            patcher.stop()
+
+    def test_multi_ep_valid_workflow_type_routes_correctly(self) -> None:
+        """Multi-entry-point app with a valid workflow_type returns 200."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher = self._make_routed_client(_MultiEpApp)
+        try:
+            response = client.post(
+                "/workflows/v1/start",
+                json={"workflow_type": "extract", "name": "x"},
+            )
+            assert response.status_code == 200
+        finally:
+            patcher.stop()
+
+    def test_unknown_workflow_type_returns_400(self) -> None:
+        """Providing an unrecognised workflow_type returns 400 without leaking entry point names."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _TwoEpApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher = self._make_routed_client(_TwoEpApp)
+        try:
+            response = client.post(
+                "/workflows/v1/start",
+                json={"workflow_type": "does-not-exist", "name": "x"},
+            )
+            assert response.status_code == 400
+            detail = response.json().get("detail", "")
+            # Entry point names must NOT be exposed to clients
+            assert "extract" not in detail
+            assert "load" not in detail
+        finally:
+            patcher.stop()
+
+    def test_multi_ep_missing_workflow_type_returns_400(self) -> None:
+        """Multi-entry-point app without workflow_type returns 400."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _AnotherMultiEpApp(App):
+            @entrypoint
+            async def step_a(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def step_b(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher = self._make_routed_client(_AnotherMultiEpApp)
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            assert response.status_code == 400
+            detail = response.json().get("detail", "")
+            assert "step-a" not in detail
+            assert "step-b" not in detail
+        finally:
+            patcher.stop()
 
 
 class TestWrapResponse:
@@ -919,6 +1072,123 @@ class TestNormalizeCredentials:
         )
         assert response.status_code == 200
         assert response.json()["data"]["status"] == "success"
+
+
+class TestFlattenToPairs:
+    """Tests for _flatten_to_pairs (flat dict → v3 list)."""
+
+    def test_simple_keys(self) -> None:
+        result = _flatten_to_pairs({"host": "db.example.com", "username": "admin"})
+        keys = {p["key"]: p["value"] for p in result}
+        assert keys == {"host": "db.example.com", "username": "admin"}
+
+    def test_extra_nested(self) -> None:
+        creds = dict(host="db.example.com", extra={"role": "ADMIN", "warehouse": "WH"})
+        result = _flatten_to_pairs(creds)
+        keys = {p["key"]: p["value"] for p in result}
+        assert keys["extra.role"] == "ADMIN"
+        assert keys["extra.warehouse"] == "WH"
+        assert "extra" not in keys
+
+    def test_none_values_skipped(self) -> None:
+        result = _flatten_to_pairs({"host": "db.example.com", "port": None})
+        keys = [p["key"] for p in result]
+        assert "port" not in keys
+
+    def test_empty_dict(self) -> None:
+        assert _flatten_to_pairs({}) == []
+
+    def test_non_dict_extra_dropped(self) -> None:
+        """Non-dict extra values are silently ignored."""
+        result = _flatten_to_pairs({"host": "db.example.com", "extra": "string"})
+        keys = {p["key"] for p in result}
+        assert keys == {"host"}
+
+    def test_mutates_input_extra_key(self) -> None:
+        """_flatten_to_pairs pops 'extra' from the input dict."""
+        creds = {"host": "db.example.com", "extra": {"role": "ADMIN"}}
+        _flatten_to_pairs(creds)
+        assert "extra" not in creds
+
+
+class TestPairsToFlat:
+    """Tests for _pairs_to_flat (v3 list → flat dict)."""
+
+    def test_simple_keys(self) -> None:
+        pairs = [
+            {"key": "host", "value": "db.example.com"},
+            {"key": "username", "value": "admin"},
+        ]
+        result = _pairs_to_flat(pairs)
+        assert result == {"host": "db.example.com", "username": "admin"}
+
+    def test_extra_keys_nested(self) -> None:
+        pairs = [
+            {"key": "host", "value": "db.example.com"},
+            {"key": "extra.role", "value": "ACCOUNTADMIN"},
+            {"key": "extra.warehouse", "value": "MINER_WH"},
+        ]
+        result = _pairs_to_flat(pairs)
+        assert result["host"] == "db.example.com"
+        assert result["extra"] == {"role": "ACCOUNTADMIN", "warehouse": "MINER_WH"}
+        assert "extra.role" not in result
+        assert "extra.warehouse" not in result
+
+    def test_no_extra_keys(self) -> None:
+        pairs = [{"key": "host", "value": "db.example.com"}]
+        result = _pairs_to_flat(pairs)
+        assert "extra" not in result
+        assert result == {"host": "db.example.com"}
+
+    def test_empty_list(self) -> None:
+        assert _pairs_to_flat([]) == {}
+
+    def test_single_extra_key(self) -> None:
+        """A single extra.* key still produces a nested extra dict."""
+        pairs = [
+            {"key": "host", "value": "db.example.com"},
+            {"key": "extra.role", "value": "ADMIN"},
+        ]
+        result = _pairs_to_flat(pairs)
+        assert result == {"host": "db.example.com", "extra": {"role": "ADMIN"}}
+
+    def test_malformed_pair_raises_key_error(self) -> None:
+        """Pairs missing 'key' or 'value' raise KeyError."""
+        import pytest
+
+        with pytest.raises(KeyError):
+            _pairs_to_flat([{"key": "host"}])  # missing "value"
+        with pytest.raises(KeyError):
+            _pairs_to_flat([{"value": "db.example.com"}])  # missing "key"
+
+    def test_round_trip_with_flatten_to_pairs(self) -> None:
+        """_pairs_to_flat reverses _flatten_to_pairs for string values."""
+        original = {
+            "host": "snow.example.com",
+            "authType": "basic",
+            "username": "admin",
+            "password": "secret",
+            "extra": {
+                "role": "ACCOUNTADMIN",
+                "warehouse": "COMPUTE_WH",
+                "database": "PROD",
+            },
+        }
+        pairs = _flatten_to_pairs(
+            dict(original)
+        )  # dict() because _flatten_to_pairs pops extra
+        restored = _pairs_to_flat(pairs)
+        assert restored == original
+
+    def test_round_trip_lossy_for_non_string_values(self) -> None:
+        """Non-string values are stringified by _flatten_to_pairs and stay strings."""
+        original = {"host": "db.example.com", "port": 5432, "ssl": True}
+        pairs = _flatten_to_pairs(dict(original))
+        restored = _pairs_to_flat(pairs)
+        # Values are stringified — not equal to original types
+        assert restored["port"] == "5432"  # int → str
+        assert restored["ssl"] == "true"  # bool → str (json.dumps)
+        assert restored["host"] == "db.example.com"  # str stays str
 
 
 class TestStartCredentialPersistence:

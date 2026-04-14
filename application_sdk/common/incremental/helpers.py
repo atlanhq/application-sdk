@@ -11,7 +11,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import warnings
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -213,30 +212,6 @@ async def download_marker_from_s3(
     except Exception:
         logger.warning("Failed to download marker from S3", exc_info=True)
     return None
-
-
-def is_incremental_run(connection_qualified_name: str) -> bool:
-    """Check if this is an incremental extraction run.
-
-    .. deprecated::
-        Use ``IncrementalRunContext.is_incremental_ready()`` instead.
-        This function only checks if connection_qualified_name is set,
-        which is insufficient for determining incremental readiness.
-
-    Args:
-        connection_qualified_name: The connection qualified name.
-
-    Returns:
-        True if connection_qualified_name is non-empty (deprecated check)
-    """
-    warnings.warn(
-        "is_incremental_run() is deprecated. "
-        "Use IncrementalRunContext.is_incremental_ready() instead. "
-        "This function will be removed in v3.1.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return bool(connection_qualified_name)
 
 
 async def download_s3_prefix_with_structure(
