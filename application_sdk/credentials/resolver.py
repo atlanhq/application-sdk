@@ -92,8 +92,8 @@ class CredentialResolver:
 
         try:
             raw = await self._secret_store.get(ref.name)
-        except SecretNotFoundError:
-            raise CredentialNotFoundError(ref.name)
+        except SecretNotFoundError as exc:
+            raise CredentialNotFoundError(ref.name) from exc
         except Exception as exc:
             from application_sdk.credentials.errors import CredentialError
 
