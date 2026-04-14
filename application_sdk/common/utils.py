@@ -501,7 +501,7 @@ def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
         except json.JSONDecodeError as e:
             raise CommonError(
                 f"{CommonError.CREDENTIALS_PARSE_ERROR}: Invalid JSON in credentials extra field: {e}"
-            )
+            ) from e
 
     return extra  # We know it's a Dict[str, Any] due to the Union type and str check
 
