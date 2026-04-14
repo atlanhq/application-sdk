@@ -55,6 +55,8 @@ from application_sdk.storage.ops import (
     list_keys,
     normalize_key,
     upload_file,
+    upload_file_from_bytes,
+    upload_prefix,
 )
 
 __all__ = [

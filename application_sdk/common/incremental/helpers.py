@@ -24,7 +24,7 @@ from application_sdk.constants import (
     UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.ops import download_file, download_prefix, list_keys, upload_file, upload_file_from_bytes, upload_prefix
 
 logger = get_logger(__name__)
 
@@ -197,10 +197,9 @@ async def download_marker_from_s3(
 
     logger.info("Downloading marker from S3: %s", marker_s3_key)
     try:
-        await ObjectStore.download_file(
+        await download_file(
             source=marker_s3_key,
             destination=str(local_marker_path),
-            store_name=UPSTREAM_OBJECT_STORE_NAME,
         )
         if local_marker_path.exists() and local_marker_path.stat().st_size > 0:
             marker = local_marker_path.read_text(encoding="utf-8").strip()
@@ -233,9 +232,8 @@ async def download_s3_prefix_with_structure(
         Exception: If listing or downloading fails
     """
     # List files under the prefix from Object Store
-    file_list = await ObjectStore.list_files(
+    file_list = await list_keys(
         prefix=s3_prefix,
-        store_name=store_name,
     )
 
     # Normalize source prefix for path stripping
@@ -257,10 +255,9 @@ async def download_s3_prefix_with_structure(
         local_file_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Download file from Object Store to local
-        await ObjectStore.download_file(
+        await download_file(
             source=file_path,
             destination=str(local_file_path),
-            store_name=store_name,
         )
 
 

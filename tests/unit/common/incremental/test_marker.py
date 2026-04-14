@@ -155,9 +155,8 @@ class TestPersistMarkerToStorage:
     async def test_writes_and_uploads_marker(self):
         """Writes marker to local file and uploads to S3."""
         with patch(
-            "application_sdk.common.incremental.marker.ObjectStore"
+            "application_sdk.common.incremental.marker.upload_file"
         ) as mock_store:
-            mock_store.upload_file = AsyncMock()
 
             result = await persist_marker_to_storage(
                 connection_qualified_name="t/c/123",
@@ -169,15 +168,14 @@ class TestPersistMarkerToStorage:
         assert result["marker_timestamp"] == "2025-01-15T10:00:00Z"
         assert "s3_key" in result
         assert "marker.txt" in result["s3_key"]
-        mock_store.upload_file.assert_awaited_once()
+        mock_store.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_s3_upload_failure_raises(self):
         """S3 upload failure propagates the exception."""
         with patch(
-            "application_sdk.common.incremental.marker.ObjectStore"
+            "application_sdk.common.incremental.marker.upload_file"
         ) as mock_store:
-            mock_store.upload_file = AsyncMock(side_effect=Exception("S3 unavailable"))
 
             with pytest.raises(
                 Exception, match="Failed to upload marker to S3"

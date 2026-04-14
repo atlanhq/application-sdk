@@ -19,7 +19,7 @@ from application_sdk.common.error_codes import CommonError
 from application_sdk.constants import TEMPORARY_PATH, UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.ops import download_file, download_prefix, list_keys, upload_file, upload_file_from_bytes, upload_prefix
 
 logger = get_logger(__name__)
 
@@ -535,7 +535,7 @@ async def get_file_names(output_path: str, typename: str) -> List[str]:
     """
 
     source = os.path.join(output_path, typename)
-    await ObjectStore.download_prefix(source, TEMPORARY_PATH)
+    await download_prefix(source, TEMPORARY_PATH)
 
     file_pattern = os.path.join(output_path, typename, "*.json")
     file_names = glob.glob(file_pattern)
@@ -583,10 +583,9 @@ async def download_file_from_upload_response(
 
     local_path = os.path.join(TEMPORARY_PATH, key)
 
-    await ObjectStore.download_file(
+    await download_file(
         source=key,
         destination=local_path,
-        store_name=UPSTREAM_OBJECT_STORE_NAME,
     )
 
     return local_path

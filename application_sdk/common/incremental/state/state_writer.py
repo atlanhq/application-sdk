@@ -59,7 +59,7 @@ from application_sdk.constants import (
 )
 from application_sdk.execution._temporal.activity_utils import get_object_store_prefix
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.ops import download_file, download_prefix, list_keys, upload_file, upload_file_from_bytes, upload_prefix
 
 logger = get_logger(__name__)
 
@@ -119,10 +119,9 @@ async def download_transformed_data(output_path: str) -> Path:
     transformed_dir = Path(transformed_local_path)
     transformed_dir.mkdir(parents=True, exist_ok=True)
 
-    await ObjectStore.download_prefix(
+    await download_prefix(
         source=transformed_s3_prefix,
         destination=str(transformed_dir),
-        store_name=UPSTREAM_OBJECT_STORE_NAME,
     )
 
     return transformed_dir
@@ -261,10 +260,9 @@ async def upload_current_state(
     s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     current_state_s3_prefix = f"{s3_prefix}/current-state"
 
-    await ObjectStore.upload_prefix(
+    await upload_prefix(
         source=str(current_state_dir),
         destination=current_state_s3_prefix,
-        store_name=UPSTREAM_OBJECT_STORE_NAME,
     )
     logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)
 
@@ -454,10 +452,9 @@ async def create_current_state_snapshot(
                 )
 
                 # Upload incremental-diff to S3
-                await ObjectStore.upload_prefix(
+                await upload_prefix(
                     source=str(incremental_diff_dir),
                     destination=incremental_diff_s3_prefix,
-                    store_name=UPSTREAM_OBJECT_STORE_NAME,
                 )
                 logger.info(
                     "Incremental-diff uploaded to S3",
@@ -475,10 +472,9 @@ async def create_current_state_snapshot(
                 close_scope(table_scope)
 
     # Step 6: Upload current-state to S3
-    await ObjectStore.upload_prefix(
+    await upload_prefix(
         source=str(current_state_dir),
         destination=current_state_s3_prefix,
-        store_name=UPSTREAM_OBJECT_STORE_NAME,
     )
     logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)
 

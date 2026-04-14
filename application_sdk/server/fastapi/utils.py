@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.server.fastapi.models import FileUploadResponse
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.ops import download_file, download_prefix, list_keys, upload_file, upload_file_from_bytes, upload_prefix
 
 
 def internal_server_error_handler(_, exc: Exception) -> JSONResponse:
@@ -96,10 +96,9 @@ async def upload_file_to_object_store(
     stored_filename = f"{file_id}{extension}"
     object_store_key = _build_object_store_key(stored_filename, prefix)
 
-    await ObjectStore.upload_file_from_bytes(
+    await upload_file_from_bytes(
         file_content=content_bytes,
         destination=object_store_key,
-        store_name=UPSTREAM_OBJECT_STORE_NAME,
     )
 
     now_ms = int(time.time() * 1000)

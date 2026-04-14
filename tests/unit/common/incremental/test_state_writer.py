@@ -252,16 +252,15 @@ class TestDownloadTransformedData:
         with tempfile.TemporaryDirectory() as temp_dir:
             with (
                 patch(
-                    "application_sdk.common.incremental.state.state_writer.ObjectStore"
+                    "application_sdk.common.incremental.state.state_writer.upload_prefix"
                 ) as mock_store,
                 patch(
                     "application_sdk.common.incremental.state.state_writer.get_object_store_prefix",
                     return_value="prefix/transformed",
                 ),
             ):
-                mock_store.download_prefix = AsyncMock()
 
                 result = await download_transformed_data(temp_dir)
 
             assert result == Path(temp_dir) / "transformed"
-            mock_store.download_prefix.assert_awaited_once()
+            mock_store.assert_awaited_once()
