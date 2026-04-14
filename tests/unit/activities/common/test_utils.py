@@ -12,7 +12,6 @@ from application_sdk.activities.common.utils import (
     auto_heartbeater,
     get_object_store_prefix,
     get_workflow_id,
-    send_periodic_heartbeat,
     send_periodic_heartbeat_sync,
 )
 
@@ -424,65 +423,6 @@ class TestAutoHeartbeater:
 
         with pytest.raises(RuntimeError, match="Heartbeat thread stopped unexpectedly"):
             sync_activity()
-
-
-class TestSendPeriodicHeartbeat:
-    """Test cases for send_periodic_heartbeat function."""
-
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.asyncio.sleep")
-    async def test_send_periodic_heartbeat_success(self, mock_sleep, mock_activity):
-        mock_sleep.return_value = None
-        task = asyncio.create_task(send_periodic_heartbeat(0.1, "test_detail"))
-        await asyncio.sleep(0.01)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        # Just ensure no exception is raised (heartbeat may not be called before cancel)
-
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.asyncio.sleep")
-    async def test_send_periodic_heartbeat_multiple_details(
-        self, mock_sleep, mock_activity
-    ):
-        mock_sleep.return_value = None
-        task = asyncio.create_task(send_periodic_heartbeat(0.1, "detail1", "detail2"))
-        await asyncio.sleep(0.01)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        # Just ensure no exception is raised
-
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.asyncio.sleep")
-    async def test_send_periodic_heartbeat_no_details(self, mock_sleep, mock_activity):
-        mock_sleep.return_value = None
-        task = asyncio.create_task(send_periodic_heartbeat(0.1))
-        await asyncio.sleep(0.01)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        # Just ensure no exception is raised
-
-    @patch("application_sdk.activities.common.utils.activity")
-    @patch("application_sdk.activities.common.utils.asyncio.sleep")
-    async def test_send_periodic_heartbeat_sleep_error(self, mock_sleep, mock_activity):
-        """Test periodic heartbeat when sleep raises an error."""
-        mock_sleep.side_effect = asyncio.CancelledError()
-
-        task = asyncio.create_task(send_periodic_heartbeat(0.1))
-
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        # Heartbeat should not be called if sleep fails
-        mock_activity.heartbeat.assert_not_called()
 
 
 class TestSendPeriodicHeartbeatSync:

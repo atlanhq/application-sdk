@@ -292,43 +292,6 @@ def auto_heartbeater(fn: F) -> F:
         return cast(F, sync_wrapper)
 
 
-async def send_periodic_heartbeat(delay: float, *details: Any) -> None:
-    """Sends heartbeat signals at regular intervals until cancelled.
-
-    This function runs in an infinite loop, sleeping for the specified delay between
-    heartbeats. The heartbeat signals help Temporal track the activity's progress
-    and detect failures.
-
-    Args:
-        delay: The delay between heartbeats in seconds.
-        *details: Optional details to include in the heartbeat signal. These can be
-            used to provide progress information or state that should be available
-            if the activity needs to be retried.
-
-    Note:
-        This function is typically used internally by the @auto_heartbeater decorator
-        and should not need to be called directly in most cases.
-
-    Example:
-        >>> # Send heartbeats every 30 seconds with a status message
-        >>> heartbeat_task = asyncio.create_task(
-        ...     send_periodic_heartbeat(30, "Processing items...")
-        ... )
-        >>> try:
-        ...     await main_task
-        ... finally:
-        ...     heartbeat_task.cancel()
-        ...     await asyncio.wait([heartbeat_task])
-    """
-    # Heartbeat every so often while not cancelled
-    while True:
-        await asyncio.sleep(delay)
-        try:
-            activity.heartbeat(*details)
-        except Exception as e:
-            logger.warning("Heartbeat failed, will retry next interval: %s", e)
-
-
 def send_periodic_heartbeat_sync(
     delay: float, stop_event: threading.Event, *details: Any
 ) -> None:
@@ -351,7 +314,9 @@ def send_periodic_heartbeat_sync(
         sync activity functions and should not need to be called directly.
     """
     consecutive_failures = 0
-    max_backoff_multiplier = 5
+    # Cap backoff at the heartbeat timeout (delay * 3) so we never wait
+    # longer than Temporal's patience window before retrying.
+    max_delay = delay * 3
     current_delay = delay
 
     while not stop_event.wait(timeout=current_delay):
@@ -366,8 +331,7 @@ def send_periodic_heartbeat_sync(
             current_delay = delay
         except Exception as e:
             consecutive_failures += 1
-            backoff_multiplier = min(2**consecutive_failures, max_backoff_multiplier)
-            current_delay = delay * backoff_multiplier
+            current_delay = min(delay * 2**consecutive_failures, max_delay)
             logger.warning(
                 "Heartbeat failed (attempt %d), retrying in %.1fs: %s",
                 consecutive_failures,
