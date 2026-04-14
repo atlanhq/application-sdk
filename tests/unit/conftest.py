@@ -22,9 +22,9 @@ def _safe_patch(target, side_effect=None, mock_obj=None):
 
 @pytest.fixture(autouse=True)
 def mock_secret_store():
-    """Automatically mock SecretStore.get_deployment_secret for all unit tests."""
+    """Automatically mock get_deployment_secret for all unit tests."""
     ctx = _safe_patch(
-        "application_sdk.services.secretstore.SecretStore.get_deployment_secret",
+        "application_sdk.infrastructure.secrets.get_deployment_secret",
         side_effect=lambda key: None,
     )
     yield

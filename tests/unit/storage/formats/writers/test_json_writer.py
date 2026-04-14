@@ -8,7 +8,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.storage.formats.json import JsonFileWriter
-from application_sdk.test_utils.hypothesis.strategies.outputs.json_output import (
+from application_sdk.testing.hypothesis.strategies.outputs.json_output import (
     chunk_size_strategy,
     dataframe_strategy,
     json_output_config_strategy,

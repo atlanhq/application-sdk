@@ -19,7 +19,7 @@ from application_sdk.observability.logger_adaptor import (
     _make_log_record_dict,
     get_logger,
 )
-from application_sdk.test_utils.hypothesis.strategies.common.logger import (
+from application_sdk.testing.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
 )

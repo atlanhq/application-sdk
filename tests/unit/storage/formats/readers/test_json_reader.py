@@ -10,7 +10,7 @@ from application_sdk.common.error_codes import IOError as SDKIOError
 from application_sdk.common.types import DataframeType
 from application_sdk.storage.formats.json import JsonFileReader
 from application_sdk.storage.formats.utils import download_files
-from application_sdk.test_utils.hypothesis.strategies.inputs.json_input import (
+from application_sdk.testing.hypothesis.strategies.inputs.json_input import (
     json_input_config_strategy,
 )
 

@@ -29,7 +29,7 @@ repos:
     hooks:
       - id: sync-requirements-txt
         name: Sync requirements.txt with uv.lock
-        entry: bash -c 'uv export --all-extras --no-hashes > requirements.txt && git add requirements.txt'
+        entry: bash -c 'uv export --no-hashes --frozen > requirements.txt && git add requirements.txt'
         language: system
         files: ^uv\.lock$
         pass_filenames: false

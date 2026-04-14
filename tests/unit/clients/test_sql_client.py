@@ -8,14 +8,11 @@ from hypothesis import HealthCheck, given, settings
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.error_codes import CommonError
-from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
-    metadata_args_strategy,
+from application_sdk.testing.hypothesis.strategies.clients.sql import (
     sql_credentials_strategy,
-    sql_data_strategy,
     sqlalchemy_connect_args_strategy,
 )
-from application_sdk.test_utils.hypothesis.strategies.sql_client import (
+from application_sdk.testing.hypothesis.strategies.sql_client import (
     mock_sql_query_result_strategy,
     sql_connection_string_strategy,
     sql_error_strategy,
@@ -32,14 +29,6 @@ def sql_client():
     )
     client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return client
-
-
-@pytest.fixture
-def handler(sql_client: Any) -> BaseSQLHandler:
-    handler = BaseSQLHandler(sql_client)
-    handler.database_alias_key = "TABLE_CATALOG"
-    handler.schema_alias_key = "TABLE_SCHEMA"
-    return handler
 
 
 @patch("sqlalchemy.create_engine")
@@ -131,139 +120,6 @@ def test_load_property_based(
         assert sql_client.engine == mock_engine
         # BaseSQLClient doesn't store persistent connection
         assert sql_client.connection is None
-
-
-async def test_fetch_metadata(handler: BaseSQLHandler):
-    """Test basic metadata fetching with fixed configuration"""
-    data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    import pandas as pd
-
-    handler.sql_client.get_results = AsyncMock(return_value=pd.DataFrame(data))
-
-    # Sample SQL query
-    handler.metadata_sql = "SELECT * FROM information_schema.tables"
-
-    # Run fetch_metadata
-    result = await handler.prepare_metadata()
-
-    # Assertions
-    assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    handler.sql_client.get_results.assert_called_once_with(
-        "SELECT * FROM information_schema.tables"
-    )
-
-
-@given(args=metadata_args_strategy, data=sql_data_strategy)
-@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-async def test_fetch_metadata_property_based(
-    handler: BaseSQLHandler,
-    args: Dict[str, Any],
-    data: List[Dict[str, Any]],
-):
-    """Property-based test for fetching metadata with various arguments and data"""
-    # Update handler with the test arguments
-    if "database_alias_key" in args:
-        handler.database_alias_key = args["database_alias_key"]
-    if "schema_alias_key" in args:
-        handler.schema_alias_key = args["schema_alias_key"]
-    if "database_result_key" in args:
-        handler.database_result_key = args["database_result_key"]
-    if "schema_result_key" in args:
-        handler.schema_result_key = args["schema_result_key"]
-
-    # Create test data with the required keys
-    test_data: List[Dict[str, str]] = []
-    for row in data:
-        test_row = {
-            handler.database_alias_key: row.get("database", "test_db"),
-            handler.schema_alias_key: row.get("schema", "test_schema"),
-        }
-        test_data.append(test_row)
-
-    import pandas as pd
-
-    handler.sql_client.get_results = AsyncMock(return_value=pd.DataFrame(test_data))
-
-    handler.metadata_sql = args["metadata_sql"]
-
-    # Run prepare_metadata
-    result = await handler.prepare_metadata()
-
-    # Assertions
-    assert len(result) == len(test_data)
-    handler.sql_client.get_results.assert_called_once_with(args["metadata_sql"])
-
-    # Verify the keys in the result
-    for row in result:
-        if handler.database_result_key:
-            assert handler.database_result_key in row
-        if handler.schema_result_key:
-            assert handler.schema_result_key in row
-
-
-async def test_fetch_metadata_without_database_alias_key(handler: BaseSQLHandler):
-    """Test metadata fetching without database alias key"""
-    data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    import pandas as pd
-
-    handler.sql_client.get_results = AsyncMock(return_value=pd.DataFrame(data))
-
-    # Sample SQL query
-    handler.metadata_sql = "SELECT * FROM information_schema.tables"
-
-    # Run fetch_metadata
-    handler.database_alias_key = "TABLE_CATALOG"
-    handler.schema_alias_key = "TABLE_SCHEMA"
-    result = await handler.prepare_metadata()
-
-    # Assertions
-    assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    handler.sql_client.get_results.assert_called_once_with(
-        "SELECT * FROM information_schema.tables"
-    )
-
-
-async def test_fetch_metadata_with_result_keys(handler: BaseSQLHandler):
-    """Test metadata fetching with custom result keys"""
-    data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    import pandas as pd
-
-    handler.sql_client.get_results = AsyncMock(return_value=pd.DataFrame(data))
-
-    # Sample SQL query
-    handler.metadata_sql = "SELECT * FROM information_schema.tables"
-    handler.database_result_key = "DATABASE"
-    handler.schema_result_key = "SCHEMA"
-
-    # Run fetch_metadata
-    result = await handler.prepare_metadata()
-
-    # Assertions
-    assert result == [{"DATABASE": "test_db", "SCHEMA": "test_schema"}]
-    handler.sql_client.get_results.assert_called_once_with(
-        "SELECT * FROM information_schema.tables"
-    )
-
-
-async def test_fetch_metadata_with_error(handler: BaseSQLHandler):
-    """Test error handling in metadata fetching"""
-    handler.sql_client.get_results = AsyncMock(
-        side_effect=Exception("Simulated query failure")
-    )
-
-    # Sample SQL query
-    handler.metadata_sql = "SELECT * FROM information_schema.tables"
-
-    # Run fetch_metadata and expect it to raise an exception
-    with pytest.raises(Exception, match="Simulated query failure"):
-        handler.database_alias_key = ("TABLE_CATALOG",)
-        handler.schema_alias_key = ("TABLE_SCHEMA",)
-        await handler.prepare_metadata()
-
-    # Assertions
-    handler.sql_client.get_results.assert_called_once_with(
-        "SELECT * FROM information_schema.tables"
-    )
 
 
 @pytest.mark.asyncio

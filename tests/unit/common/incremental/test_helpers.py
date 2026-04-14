@@ -5,7 +5,6 @@ Tests cover public functions with real business logic:
 - get_persistent_s3_prefix: S3 path construction from workflow args
 - normalize_marker_timestamp: Nanosecond stripping from timestamps
 - prepone_marker_timestamp: Datetime arithmetic for clock skew handling
-- is_incremental_run: Multi-condition prerequisite check
 - count_json_files_recursive: Recursive file counting
 - copy_directory_parallel: Parallel file copy operations
 """
@@ -21,7 +20,6 @@ from application_sdk.common.incremental.helpers import (
     count_json_files_recursive,
     extract_epoch_id_from_qualified_name,
     get_persistent_s3_prefix,
-    is_incremental_run,
     normalize_marker_timestamp,
     prepone_marker_timestamp,
 )
@@ -156,51 +154,6 @@ class TestPreponeMarkerTimestamp:
         """Invalid timestamp format raises ValueError."""
         with pytest.raises(ValueError):
             prepone_marker_timestamp("not-a-timestamp", 1)
-
-
-# ---------------------------------------------------------------------------
-# is_incremental_run
-# ---------------------------------------------------------------------------
-
-
-class TestIsIncrementalRun:
-    """Tests for is_incremental_run (deprecated — emits DeprecationWarning).
-
-    The function now accepts connection_qualified_name: str and returns True
-    when it is non-empty.  All calls must produce a DeprecationWarning.
-    """
-
-    def test_non_empty_qualified_name_returns_true(self):
-        """Non-empty connection_qualified_name returns True."""
-        import warnings
-
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            result = is_incremental_run("default/oracle/123")
-        assert result is True
-
-    def test_empty_qualified_name_returns_false(self):
-        """Empty string returns False."""
-        import warnings
-
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            result = is_incremental_run("")
-        assert result is False
-
-    def test_emits_deprecation_warning(self):
-        """Calling is_incremental_run always emits a DeprecationWarning."""
-        import warnings
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            is_incremental_run("default/oracle/123")
-
-        deprecation_warnings = [
-            w for w in caught if issubclass(w.category, DeprecationWarning)
-        ]
-        assert len(deprecation_warnings) >= 1
-        assert "deprecated" in str(deprecation_warnings[0].message).lower()
 
 
 # ---------------------------------------------------------------------------
