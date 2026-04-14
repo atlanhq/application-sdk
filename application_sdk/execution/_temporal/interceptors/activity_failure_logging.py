@@ -123,8 +123,3 @@ class TaskFailureLoggingInterceptor(Interceptor):
     ) -> ActivityInboundInterceptor:
         """Wrap task execution with failure logging interceptor."""
         return _TaskFailureLoggingActivityInboundInterceptor(next)
-
-
-# Backwards-compatible alias — v2 code that imports ActivityFailureLoggingInterceptor
-# by name (e.g. clients/temporal.py) continues to work unchanged.
-ActivityFailureLoggingInterceptor = TaskFailureLoggingInterceptor
