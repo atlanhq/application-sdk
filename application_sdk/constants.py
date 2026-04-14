@@ -138,6 +138,18 @@ WORKFLOW_TLS_ENABLED = (
     os.getenv("ATLAN_WORKFLOW_TLS_ENABLED", "false").lower() == "true"
 )
 
+# App Vitals / Release metadata (injected by Local Marketplace into HelmRelease)
+#: Semantic version of the app release (e.g., "1.2.3")
+APPLICATION_VERSION = os.getenv("ATLAN_APPLICATION_VERSION", "")
+#: Release UUID from Global Marketplace
+RELEASE_ID = os.getenv("ATLAN_RELEASE_ID", "")
+#: Release channel (all, beta, staging, specific)
+RELEASE_CHANNEL = os.getenv("ATLAN_RELEASE_CHANNEL", "")
+#: SDK version used to build this app image
+APP_SDK_VERSION = os.getenv("ATLAN_SDK_VERSION", "")
+#: App type from Global Marketplace (connector, system, etc.)
+APP_TYPE = os.getenv("ATLAN_APP_TYPE", "")
+
 # Deployment Secret Store Key Names
 #: Key name for OAuth2 client ID in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_ID_KEY)
 WORKFLOW_AUTH_CLIENT_ID_KEY = os.getenv(

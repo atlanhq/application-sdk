@@ -9,7 +9,15 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from application_sdk.constants import APPLICATION_NAME, WORKER_START_EVENT_VERSION
+from application_sdk.constants import (
+    APP_SDK_VERSION,
+    APP_TYPE,
+    APPLICATION_NAME,
+    APPLICATION_VERSION,
+    RELEASE_CHANNEL,
+    RELEASE_ID,
+    WORKER_START_EVENT_VERSION,
+)
 
 
 class EventTypes(Enum):
@@ -179,6 +187,12 @@ class WorkerStartEventData(BaseModel):
     activity_count: int
     build_id: Optional[str] = None
     use_worker_versioning: bool = False
+    # App vitals metadata (injected by Local Marketplace via env vars)
+    application_version: str = APPLICATION_VERSION
+    release_id: str = RELEASE_ID
+    release_channel: str = RELEASE_CHANNEL
+    sdk_version: str = APP_SDK_VERSION
+    app_type: str = APP_TYPE
 
 
 class WorkerTokenRefreshEventData(BaseModel):
