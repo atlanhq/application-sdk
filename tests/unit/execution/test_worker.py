@@ -154,7 +154,7 @@ class TestCreateWorker:
         # Others should still be present
         assert "TaskFailureLoggingInterceptor" in interceptor_types
 
-    def test_filters_activities_by_app_names(self) -> None:
+    def test_all_registered_apps_activities_included(self) -> None:
         class _FilterAppA(App):
             @task(timeout_seconds=60)
             async def task_alpha(self, input: _FilterIn1) -> _FilterOut1:
@@ -182,15 +182,16 @@ class TestCreateWorker:
             "application_sdk.execution._temporal.worker.Worker",
             side_effect=capture_worker,
         ):
-            create_worker(client, app_names=["_filter-app-a"])
+            create_worker(client)
 
-        # Only _filter-app-a activities should be present
-        user_app_names = [
+        # Activities from both apps should be present
+        user_app_names = {
             a._task_metadata.app_name  # type: ignore[attr-defined]
             for a in activities_used
             if hasattr(a, "_task_metadata")
-        ]
-        assert all(name == "_filter-app-a" for name in user_app_names)
+        }
+        assert "_filter-app-a" in user_app_names
+        assert "_filter-app-b" in user_app_names
 
     def test_passthrough_modules_included_in_sandbox(self) -> None:
         class _SandboxApp(App):

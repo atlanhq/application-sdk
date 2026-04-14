@@ -32,13 +32,13 @@ def _handle_redis_error(e: Exception) -> NoReturn:
         ClientError: Appropriate ClientError based on exception type
     """
     if isinstance(e, ConnectionError):
-        raise ClientError(f"{ClientError.REDIS_CONNECTION_ERROR}: {e}")
+        raise ClientError(f"{ClientError.REDIS_CONNECTION_ERROR}: {e}") from e
     elif isinstance(e, TimeoutError):
-        raise ClientError(f"{ClientError.REDIS_TIMEOUT_ERROR}: {e}")
+        raise ClientError(f"{ClientError.REDIS_TIMEOUT_ERROR}: {e}") from e
     elif isinstance(e, RedisError):
-        raise ClientError(f"{ClientError.REDIS_PROTOCOL_ERROR}: {e}")
+        raise ClientError(f"{ClientError.REDIS_PROTOCOL_ERROR}: {e}") from e
     else:
-        raise ClientError(f"{ClientError.REDIS_CONNECTION_ERROR}: {e}")
+        raise ClientError(f"{ClientError.REDIS_CONNECTION_ERROR}: {e}") from e
 
 
 class LockReleaseResult(Enum):

@@ -340,10 +340,12 @@ class BaseSQLClient(ClientInterface):
         if self.DB_CONFIG.parameters:
             parameter_keys = self.DB_CONFIG.parameters
             parameter_values = {
-                key: self.credentials.get(key) or extra.get(key)
+                key: value
                 for key in parameter_keys
+                if (value := self.credentials.get(key) or extra.get(key)) is not None
             }
-            conn_str = self.add_connection_params(conn_str, parameter_values)
+            if parameter_values:
+                conn_str = self.add_connection_params(conn_str, parameter_values)
 
         return conn_str
 

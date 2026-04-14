@@ -48,9 +48,9 @@ from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthStatus,
-    Credential,
     EventTriggerConfig,
     FileUploadResponse,
+    HandlerCredential,
     MetadataInput,
     PreflightInput,
     PreflightStatus,
@@ -96,6 +96,29 @@ def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
                     {"key": f"extra.{k}", "value": _serialize_credential_value(v)}
                 )
     return pairs
+
+
+def _pairs_to_flat(pairs: list[dict[str, str]]) -> dict[str, Any]:
+    """Convert v3 [{key, value}] pairs to a flat credential dict.
+
+    Reverse of ``_flatten_to_pairs``.  ``extra.*`` keys are nested under
+    an ``extra`` dict so ``parse_credentials_extra()`` works correctly.
+
+    Note: all values remain strings — no type coercion is performed.
+    A round-trip through ``_flatten_to_pairs`` then ``_pairs_to_flat``
+    will stringify non-string values (e.g. ``int 5432`` → ``str "5432"``).
+    """
+    flat: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
+    for p in pairs:
+        key, value = p["key"], p["value"]
+        if key.startswith("extra."):
+            extra[key[len("extra.") :]] = value
+        else:
+            flat[key] = value
+    if extra:
+        flat["extra"] = extra
+    return flat
 
 
 def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
@@ -418,7 +441,7 @@ def create_app_handler_service(
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(LogMiddleware)
 
-    def _create_context(credentials: list[Credential]) -> HandlerContext:
+    def _create_context(credentials: list[HandlerCredential]) -> HandlerContext:
         return HandlerContext(
             app_name=app_name,
             request_id=uuid4(),
@@ -437,7 +460,7 @@ def create_app_handler_service(
         body = _normalize_credentials(await request.json())
         auth_input = AuthInput.model_validate(body)
         credentials = [
-            Credential(key=c.key, value=c.value) for c in auth_input.credentials
+            HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
         context = _create_context(credentials)
         handler._context = context
@@ -492,7 +515,8 @@ def create_app_handler_service(
         body = _normalize_credentials(await request.json())
         preflight_input = PreflightInput.model_validate(body)
         credentials = [
-            Credential(key=c.key, value=c.value) for c in preflight_input.credentials
+            HandlerCredential(key=c.key, value=c.value)
+            for c in preflight_input.credentials
         ]
         context = _create_context(credentials)
         handler._context = context
@@ -561,7 +585,8 @@ def create_app_handler_service(
         body = _normalize_credentials(await request.json())
         metadata_input = MetadataInput.model_validate(body)
         credentials = [
-            Credential(key=c.key, value=c.value) for c in metadata_input.credentials
+            HandlerCredential(key=c.key, value=c.value)
+            for c in metadata_input.credentials
         ]
         context = _create_context(credentials)
         handler._context = context
@@ -630,16 +655,61 @@ def create_app_handler_service(
 
         body: dict[str, Any] = await request.json()
         explicit_workflow_id: str | None = body.pop("workflow_id", None)
+        workflow_type: str | None = body.pop("workflow_type", None)
         workflow_id = explicit_workflow_id or "(unknown)"
 
         try:
             client = await _get_temporal_client()
 
-            input_type = getattr(app_cls, "_input_type", None)
+            # Resolve entry point and workflow name from workflow_type.
+            # Deferred to avoid a circular import at module load time.
+            from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
+
+            app_meta = AppRegistry.get_instance().get(app_cls._app_name)  # type: ignore[attr-defined]
+            entry_points = app_meta.entry_points
+
+            if workflow_type:
+                if workflow_type not in entry_points:
+                    logger.warning(
+                        "Unknown workflow_type '%s' for app %s; available: %s",
+                        workflow_type,
+                        app_name,
+                        sorted(entry_points.keys()),
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid workflow_type.",
+                    )
+                ep = entry_points[workflow_type]
+            elif len(entry_points) == 1:
+                ep = next(iter(entry_points.values()))
+            elif len(entry_points) > 1:
+                logger.warning(
+                    "workflow_type required but not provided for multi-entry-point app %s; available: %s",
+                    app_name,
+                    sorted(entry_points.keys()),
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="workflow_type is required for this app.",
+                )
+            else:
+                # Fallback: no entry_points (shouldn't happen for a registered app)
+                raise HTTPException(
+                    status_code=500, detail="App has no registered entry points."
+                )
+
+            input_type = ep.input_type
+            workflow_name = (
+                app_cls._app_name  # type: ignore[attr-defined]
+                if ep.implicit
+                else f"{app_cls._app_name}:{ep.name}"  # type: ignore[attr-defined]
+            )
+
             if input_type is None:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"App class {app_cls.__name__} does not define _input_type.",
+                    detail=f"App class {app_cls.__name__} entry point has no input type.",
                 )
 
             # Save inline credentials to the secret store and replace with a
@@ -652,10 +722,10 @@ def create_app_handler_service(
             if "credentials" in body and body["credentials"]:
                 if _secret_store is not None and hasattr(_secret_store, "set"):
                     credential_guid = str(uuid4())
-                    # Convert v3 list [{key, value}] to flat dict {key: value}
-                    # so get_secret() returns the same format as production
-                    # (Dapr/Vault), where credentials are stored as flat dicts.
-                    flat_creds = {p["key"]: p["value"] for p in body["credentials"]}
+                    # Convert v3 list [{key, value}] to flat dict so
+                    # get_secret() returns the same format as production
+                    # (Dapr/Vault). extra.* keys nested under "extra".
+                    flat_creds = _pairs_to_flat(body["credentials"])
                     _secret_store.set(credential_guid, json.dumps(flat_creds))
                     body["credential_guid"] = credential_guid
                     del body["credentials"]
@@ -709,7 +779,7 @@ def create_app_handler_service(
             )
 
             handle = await client.start_workflow(
-                app_cls._app_name,  # type: ignore[attr-defined]
+                workflow_name,
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,
@@ -747,6 +817,8 @@ def create_app_handler_service(
                 }
             )
 
+        except HTTPException:
+            raise
         except TypeError as e:
             logger.error(
                 "Invalid workflow input for app %s: %s", app_name, e, exc_info=True

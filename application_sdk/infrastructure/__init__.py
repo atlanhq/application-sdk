@@ -28,6 +28,11 @@ from application_sdk.infrastructure.context import (
     get_infrastructure,
     set_infrastructure,
 )
+from application_sdk.infrastructure.credential_vault import (
+    CredentialVault,
+    CredentialVaultError,
+    InMemoryCredentialVault,
+)
 from application_sdk.infrastructure.pubsub import (
     InMemoryPubSub,
     Message,
@@ -42,6 +47,7 @@ from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStore,
     SecretStoreError,
+    get_deployment_secret,
 )
 from application_sdk.infrastructure.state import (
     InMemoryStateStore,
@@ -60,6 +66,9 @@ __all__ = [
     "LocalCapacityPool",
     "configure_capacity_pool",
     "get_capacity_pool",
+    "CredentialVault",
+    "CredentialVaultError",
+    "InMemoryCredentialVault",
     "InMemoryPubSub",
     "Message",
     "MessageHandler",
@@ -71,6 +80,7 @@ __all__ = [
     "SecretNotFoundError",
     "SecretStore",
     "SecretStoreError",
+    "get_deployment_secret",
     "InMemoryStateStore",
     "StateStore",
     "StateStoreError",
