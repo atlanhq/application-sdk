@@ -567,10 +567,12 @@ async def download_prefix(
     *,
     suffix: str = "",
     normalize: bool = True,
+    max_concurrency: int = 10,
 ) -> list[str]:
     """Download all objects under *prefix* to a local directory.
 
     Each key's relative path (after the prefix) is preserved under *local_dir*.
+    Downloads run concurrently (up to *max_concurrency* at a time).
 
     Args:
         prefix: Object key prefix to download.
@@ -578,6 +580,7 @@ async def download_prefix(
         store: Source store, or ``None`` to use the infrastructure store.
         suffix: Optional extension filter (e.g. ``".parquet"``).
         normalize: When ``True`` (default), normalise *prefix* before use.
+        max_concurrency: Maximum parallel downloads (default 10).
 
     Returns:
         List of local file paths that were downloaded.
@@ -586,14 +589,20 @@ async def download_prefix(
         StorageError: If listing or downloading fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
+    import asyncio
+
     keys = await list_keys(prefix, store, suffix=suffix, normalize=normalize)
-    downloaded: list[str] = []
     local = Path(local_dir)
-    for key in keys:
-        dest = local / key
-        await download_file(key, dest, store, normalize=False)
-        downloaded.append(str(dest))
-    return downloaded
+    destinations = [str(local / key) for key in keys]
+
+    sem = asyncio.Semaphore(max_concurrency)
+
+    async def _download_one(key: str, dest: str) -> None:
+        async with sem:
+            await download_file(key, dest, store, normalize=False)
+
+    await asyncio.gather(*[_download_one(k, d) for k, d in zip(keys, destinations)])
+    return destinations
 
 
 #: v2-compatible alias for :func:`delete`.
