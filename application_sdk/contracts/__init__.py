@@ -9,9 +9,6 @@ and their callers. Using these base classes ensures:
 """
 
 from application_sdk.contracts.base import (
-    validate_is_dataclass,  # backward-compat alias
-)
-from application_sdk.contracts.base import (
     ContractMetadata,
     ContractValidationError,
     HeartbeatDetails,
@@ -61,7 +58,6 @@ __all__ = [
     "has_default",
     "is_backwards_compatible",
     "validate_is_contract",
-    "validate_is_dataclass",  # backward-compat alias
     "validate_payload_safety",
     "BoundedDict",
     "BoundedList",

@@ -302,9 +302,3 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
         "start_to_close_timeout": timedelta(seconds=task_metadata.timeout_seconds),
         "retry_policy": retry_policy,
     }
-
-
-# Re-export for backward compatibility with Phase 2 stub callers
-def create_activities_from_registry() -> list[Any]:
-    """Create activity functions from all registered tasks."""
-    return get_all_task_activities()
