@@ -378,9 +378,9 @@ async def test_read(monkeypatch) -> None:
 
     expected_files = ["/tmp/data/file1.parquet", "/tmp/data/file2.parquet"]
     # Since we have multiple files, pandas.concat returns a CombinedMockDataFrame object
-    assert hasattr(result, "data"), (
-        "Result should be a CombinedMockDataFrame with data attribute"
-    )
+    assert hasattr(
+        result, "data"
+    ), "Result should be a CombinedMockDataFrame with data attribute"
     assert len(result.data) == 200  # 100 rows from each file
     assert call_log == [{"path": expected_files[0]}, {"path": expected_files[1]}]
 
@@ -417,9 +417,9 @@ async def test_read_with_file_names(monkeypatch) -> None:
 
     expected_files = ["/tmp/dir/file1.parquet", "/tmp/dir/file2.parquet"]
     # Since we have multiple files, the mock returns a MockDaftDataFrame object
-    assert hasattr(result, "path"), (
-        "Result should be a MockDaftDataFrame with path attribute"
-    )
+    assert hasattr(
+        result, "path"
+    ), "Result should be a MockDaftDataFrame with path attribute"
     assert result.path == expected_files
     assert call_log == [{"path": expected_files}]
 
@@ -448,9 +448,9 @@ async def test_read_with_input_prefix(monkeypatch) -> None:
 
     expected_files = ["/tmp/data/file1.parquet", "/tmp/data/file2.parquet"]
     # Since we have multiple files, pandas.concat returns a CombinedMockDataFrame object
-    assert hasattr(result, "data"), (
-        "Result should be a CombinedMockDataFrame with data attribute"
-    )
+    assert hasattr(
+        result, "data"
+    ), "Result should be a CombinedMockDataFrame with data attribute"
     assert len(result.data) == 200  # 100 rows from each file
     assert call_log == [{"path": expected_files[0]}, {"path": expected_files[1]}]
 
