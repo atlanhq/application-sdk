@@ -22,9 +22,13 @@ import os
 import shutil
 import tempfile
 from typing import Dict, List, Set
+from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 import pytest
+
+from application_sdk.common.types import DataframeType
+from application_sdk.storage.formats.json import JsonFileWriter
 
 
 class TestWriterDataIntegrity:
@@ -53,25 +57,15 @@ class TestWriterDataIntegrity:
     @pytest.mark.asyncio
     async def test_pandas_writer_no_data_loss(self, temp_dir: str):
         """Verify pandas writer preserves all records across multiple write() calls."""
-        from unittest.mock import AsyncMock, patch
-
-        from application_sdk.common.types import DataframeType
-        from application_sdk.io.json import JsonFileWriter
-
         object_store: Dict[str, List[str]] = {}
 
-        async def mock_upload(
-            source, destination=None, retain_local_copy=False, **kwargs
-        ):
-            dest = destination or source
-            if os.path.exists(source):
-                with open(source, "r") as f:
-                    object_store[dest] = f.readlines()
-                if not retain_local_copy:
-                    os.remove(source)
+        async def mock_upload(key, local_path, **kwargs):
+            if os.path.exists(local_path):
+                with open(local_path, "r") as f:
+                    object_store[key] = f.readlines()
 
         with patch(
-            "application_sdk.io.ObjectStore.upload_file",
+            "application_sdk.storage.formats._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):
@@ -115,22 +109,17 @@ class TestWriterDataIntegrity:
         import daft
 
         from application_sdk.common.types import DataframeType
-        from application_sdk.io.json import JsonFileWriter
+        from application_sdk.storage.formats.json import JsonFileWriter
 
         object_store: Dict[str, List[str]] = {}
 
-        async def mock_upload(
-            source, destination=None, retain_local_copy=False, **kwargs
-        ):
-            dest = destination or source
-            if os.path.exists(source):
-                with open(source, "r") as f:
-                    object_store[dest] = f.readlines()
-                if not retain_local_copy:
-                    os.remove(source)
+        async def mock_upload(key, local_path, **kwargs):
+            if os.path.exists(local_path):
+                with open(local_path, "r") as f:
+                    object_store[key] = f.readlines()
 
         with patch(
-            "application_sdk.io.ObjectStore.upload_file",
+            "application_sdk.storage.formats._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):
@@ -174,7 +163,7 @@ class TestWriterDataIntegrity:
         import daft
 
         from application_sdk.common.types import DataframeType
-        from application_sdk.io.json import JsonFileWriter
+        from application_sdk.storage.formats.json import JsonFileWriter
 
         async def mock_upload(
             source, destination=None, retain_local_copy=False, **kwargs
@@ -183,7 +172,7 @@ class TestWriterDataIntegrity:
                 os.remove(source)
 
         with patch(
-            "application_sdk.io.ObjectStore.upload_file",
+            "application_sdk.storage.formats._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):
@@ -235,7 +224,7 @@ class TestWriterDataIntegrity:
         import daft
 
         from application_sdk.common.types import DataframeType
-        from application_sdk.io.json import JsonFileWriter
+        from application_sdk.storage.formats.json import JsonFileWriter
 
         uploaded_files: List[str] = []
 
@@ -248,7 +237,7 @@ class TestWriterDataIntegrity:
                 os.remove(source)
 
         with patch(
-            "application_sdk.io.ObjectStore.upload_file",
+            "application_sdk.storage.formats._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):

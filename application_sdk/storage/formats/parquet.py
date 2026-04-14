@@ -13,21 +13,18 @@ from typing import (
 
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.file_ops import SafeFileOps
-from application_sdk.constants import (
-    DAPR_MAX_GRPC_MESSAGE_LENGTH,
-    ENABLE_ATLAN_UPLOAD,
-    UPSTREAM_OBJECT_STORE_NAME,
-)
-from application_sdk.io import DataframeType, Reader, WriteMode, Writer
-from application_sdk.io.utils import (
+from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
+from application_sdk.storage.formats import DataframeType, Reader, WriteMode, Writer
+from application_sdk.storage.formats.utils import (
     PARQUET_FILE_EXTENSION,
     download_files,
     is_empty_dataframe,
     path_gen,
 )
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.ops import delete_prefix as _delete_prefix
+from application_sdk.storage.ops import upload_file as _upload_file
 
 logger = get_logger(__name__)
 
@@ -649,22 +646,11 @@ class ParquetFileWriter(Writer):
             if write_mode == WriteMode.OVERWRITE:
                 # Delete the directory from object store
                 try:
-                    await ObjectStore.delete_prefix(prefix=self.path)
+                    await _delete_prefix(self.path)
                 except FileNotFoundError:
                     logger.info("No files found under prefix: %s", self.path)
             for path in file_paths:
-                if ENABLE_ATLAN_UPLOAD:
-                    await ObjectStore.upload_file(
-                        source=path,
-                        store_name=UPSTREAM_OBJECT_STORE_NAME,
-                        destination=path,
-                        retain_local_copy=True,
-                    )
-                await ObjectStore.upload_file(
-                    source=path,
-                    destination=path,
-                    retain_local_copy=self.retain_local_copy,
-                )
+                await _upload_file(path, path, retain_local_copy=self.retain_local_copy)
 
         except Exception as e:
             # Record metrics for failed write
@@ -799,9 +785,8 @@ class ParquetFileWriter(Writer):
                         SafeFileOps.rename(file_path, consolidated_file_path)
 
                         # Upload consolidated file to object store
-                        await ObjectStore.upload_file(
-                            source=consolidated_file_path,
-                            destination=consolidated_file_path,
+                        await _upload_file(
+                            consolidated_file_path, consolidated_file_path
                         )
 
                 # Clean up temp consolidated dir

@@ -6,22 +6,22 @@ import orjson
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
-from application_sdk.io.utils import (
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
+from application_sdk.storage.formats.utils import (
     JSON_FILE_EXTENSION,
     convert_datetime_to_epoch,
     download_files,
     path_gen,
     process_null_fields,
 )
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 
 if TYPE_CHECKING:
     import daft
     import pandas as pd
 
 from application_sdk.common.exc_utils import rewrap
-from application_sdk.io import Reader, Writer
+from application_sdk.storage.formats import Reader, Writer
 
 logger = get_logger(__name__)
 
