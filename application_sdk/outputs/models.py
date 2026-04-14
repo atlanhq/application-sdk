@@ -27,7 +27,7 @@ class Metric(BaseModel):
             compatibility.
 
     Example:
-        >>> from application_sdk.workflows.outputs import get_outputs, Metric
+        >>> from application_sdk.outputs import get_outputs, Metric
         >>> outputs = get_outputs()
         >>> outputs.add_metric(Metric(name="tables-extracted", value=150))
         >>> outputs.add_metric(Metric(name="status", value="completed"))
@@ -59,7 +59,7 @@ class Artifact(BaseModel):
             compatibility.
 
     Example:
-        >>> from application_sdk.workflows.outputs import get_outputs, Artifact
+        >>> from application_sdk.outputs import get_outputs, Artifact
         >>> outputs = get_outputs()
         >>> outputs.add_artifact(Artifact(
         ...     name="debug-logs",

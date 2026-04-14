@@ -12,7 +12,7 @@ import pytest
 from temporalio.api.common.v1 import Payload
 from temporalio.converter import default as default_converter
 
-from application_sdk.interceptors.correlation_context import (
+from application_sdk.execution._temporal.interceptors.correlation_context import (
     ATLAN_HEADER_PREFIX,
     CorrelationContextActivityInboundInterceptor,
     CorrelationContextInterceptor,

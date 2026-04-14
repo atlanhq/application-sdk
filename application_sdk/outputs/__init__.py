@@ -6,7 +6,7 @@ metrics and artifacts that appear in the CUE UI after workflow completion.
 Usage:
     In any activity or workflow code, call get_outputs() and add metrics:
 
-    >>> from application_sdk.workflows.outputs import get_outputs, Metric
+    >>> from application_sdk.outputs import get_outputs, Metric
     >>> outputs = get_outputs()
     >>> outputs.add_metric(Metric(name="tables-extracted", value=150))
 
@@ -28,8 +28,8 @@ import threading
 from collections import defaultdict
 from typing import Dict, List
 
-from application_sdk.workflows.outputs.collector import OutputCollector
-from application_sdk.workflows.outputs.models import Artifact, Metric
+from application_sdk.outputs.collector import OutputCollector
+from application_sdk.outputs.models import Artifact, Metric
 
 _current_outputs: contextvars.ContextVar[OutputCollector | None] = (
     contextvars.ContextVar("workflow_outputs", default=None)
@@ -50,7 +50,7 @@ def get_outputs() -> OutputCollector:
             Creates a new collector if one doesn't exist for this context.
 
     Example:
-        >>> from application_sdk.workflows.outputs import get_outputs, Metric, Artifact
+        >>> from application_sdk.outputs import get_outputs, Metric, Artifact
         >>> outputs = get_outputs()
         >>> outputs.add_metric(Metric(name="tables-extracted", value=150))
         >>> outputs.add_artifact(Artifact(name="debug-logs", path="artifacts/debug.tgz"))
