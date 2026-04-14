@@ -89,7 +89,6 @@ class TestUploadFileToObjectStore:
         )
 
         # Verify ObjectStore was called with upstream object store
-        from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 
         mock_objectstore.assert_called_once()
         call_args = mock_objectstore.call_args
@@ -516,7 +515,6 @@ class TestDownloadFileFromUploadResponse:
         call_args = mock_objectstore.call_args
         assert call_args[1]["key"] == "workflow_file_upload/abc123.csv"
         assert call_args[1]["key"].endswith("workflow_file_upload/abc123.csv")
-        from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 
         assert result.endswith("workflow_file_upload/abc123.csv")
 

@@ -6,7 +6,7 @@ Tests cover public functions with real business logic:
 
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -82,7 +82,7 @@ class TestDownloadCurrentState:
         with (
             patch(
                 "application_sdk.common.incremental.state.state_reader.download_prefix"
-            ) as mock_store,
+            ),
             patch(
                 "application_sdk.common.incremental.state.state_reader."
                 "get_persistent_artifacts_path"
@@ -107,7 +107,7 @@ class TestDownloadCurrentState:
         with (
             patch(
                 "application_sdk.common.incremental.state.state_reader.download_prefix"
-            ) as mock_store,
+            ),
             patch(
                 "application_sdk.common.incremental.state.state_reader."
                 "get_persistent_artifacts_path"
