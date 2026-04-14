@@ -6,7 +6,10 @@ from .base import OutputFormatHandler
 
 class CsvFormatHandler(OutputFormatHandler):
     file_extension = "csv"
-    _writers: Dict[str, csv.DictWriter] = {}
+
+    def __init__(self, output_dir: str) -> None:
+        super().__init__(output_dir)
+        self._writers: Dict[str, csv.DictWriter] = {}
 
     def initialize_file(self, table_name: str) -> None:
         file_path = self.get_file_path(table_name)
