@@ -56,12 +56,10 @@ def _get_event_token_service() -> "OAuthTokenService | None":
         )
         from application_sdk.credentials.oauth import OAuthTokenService
         from application_sdk.credentials.types import OAuthClientCredential
-        from application_sdk.services.secretstore import SecretStore
+        from application_sdk.infrastructure.secrets import get_deployment_secret
 
-        client_id = SecretStore.get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
-        client_secret = SecretStore.get_deployment_secret(
-            WORKFLOW_AUTH_CLIENT_SECRET_KEY
-        )
+        client_id = get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
+        client_secret = get_deployment_secret(WORKFLOW_AUTH_CLIENT_SECRET_KEY)
         token_url = AUTH_URL
 
         if not client_id or not client_secret or not token_url:

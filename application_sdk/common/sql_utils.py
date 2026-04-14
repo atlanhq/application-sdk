@@ -19,8 +19,8 @@ from application_sdk.common.utils import (
     parse_credentials_extra,
     prepare_query,
 )
-from application_sdk.io.parquet import ParquetFileWriter
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage.formats.parquet import ParquetFileWriter
 
 if TYPE_CHECKING:
     import pandas as pd
