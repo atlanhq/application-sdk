@@ -5,7 +5,6 @@ the v3 infrastructure event binding. Falls back silently when no event
 binding is configured.
 """
 
-import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional, Type
 
@@ -235,7 +234,9 @@ async def _publish_event_via_binding(event: Event) -> None:
     event = _enrich_event_metadata(event)
     _send_lifecycle_event_to_segment(event)
 
-    payload = json.dumps(event.model_dump(mode="json")).encode()
+    import orjson  # lazy import: avoid top-level for interceptor module load time
+
+    payload = orjson.dumps(event.model_dump(mode="json"))
     binding_metadata: dict[str, str] = {"content-type": "application/json"}
 
     try:
