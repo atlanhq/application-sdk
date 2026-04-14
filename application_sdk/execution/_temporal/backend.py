@@ -78,6 +78,12 @@ class TemporalExecutorBackend:
         ep_meta = (
             app_cls._app_metadata.entry_points.get(entry_point) if entry_point else None
         )
+        if entry_point is not None and ep_meta is None:
+            available = list(app_cls._app_metadata.entry_points)
+            raise ValueError(
+                f"Unknown entry point '{entry_point}' for app '{app_cls._app_name}'. "
+                f"Available: {available}"
+            )
         output_type = (
             ep_meta.output_type
             if ep_meta is not None

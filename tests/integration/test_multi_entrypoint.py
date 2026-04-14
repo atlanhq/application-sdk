@@ -192,6 +192,9 @@ async def test_non_retryable_error_from_entrypoint_app(
             break
         cause = getattr(cause, "cause", None) or cause.__cause__
     assert cause is not None, "Expected 'multi-ep non-retryable' in exception chain"
+    assert getattr(
+        cause, "non_retryable", False
+    ), "Expected ApplicationError.non_retryable=True — error would be retried"
 
 
 @pytest.mark.integration

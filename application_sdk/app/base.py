@@ -230,6 +230,38 @@ class NonRetryableError(AppError):
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_NON_RETRYABLE
 
 
+class RetryableError(AppError):
+    """Error that may be retried at the workflow level.
+
+    Extend this when raising an error directly from an ``@entrypoint`` method
+    that signals a *transient* failure — one where retrying the entire workflow
+    execution might succeed (e.g. a downstream service that is temporarily
+    unavailable).
+
+    Any exception that does *not* extend ``RetryableError`` (including all
+    native Python exceptions like ``ValueError`` or ``KeyError``) is treated as
+    non-retryable when raised directly from an entry point, because those errors
+    are deterministic: retrying will never change the outcome.
+
+    Note: transient failures that occur *inside* a ``@task`` should use that
+    task's own ``retry_max_attempts`` setting instead of this class, since
+    activity-level retries are cheaper than full workflow retries.
+
+    Example::
+
+        class DownstreamUnavailable(RetryableError):
+            pass
+
+        @entrypoint
+        async def extract(self, input: ExtractInput) -> ExtractOutput:
+            if not await self.probe_downstream():
+                raise DownstreamUnavailable("Downstream API is not ready")
+            ...
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
+
+
 # =============================================================================
 # State Accessors
 # =============================================================================
@@ -1575,6 +1607,12 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             # instead of failing the workflow execution.
             # FailureError subclasses (ActivityError, CancelledError, …) are
             # already handled natively by Temporal and must not be rewrapped.
+            #
+            # All raw exceptions are non-retryable: any Python exception raised
+            # directly from an entrypoint (not through a @task activity) is
+            # deterministic — retrying will never fix a KeyError or TypeError.
+            # Transient failures (network, timeout) should be modelled as @task
+            # activities with their own retry policy, not raised directly here.
             from temporalio.exceptions import FailureError
 
             from application_sdk.execution.errors import ApplicationError
@@ -1584,7 +1622,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             raise ApplicationError(
                 str(e),
                 type=type(e).__name__,
-                non_retryable=isinstance(e, NonRetryableError),
+                non_retryable=not isinstance(e, RetryableError),
             ) from e
 
         finally:
