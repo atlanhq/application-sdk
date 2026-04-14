@@ -723,7 +723,7 @@ class APIServer(ServerInterface):
             return response
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             # Record failed upload
             metrics.record_metric(
                 name="file_uploads_total",
@@ -735,7 +735,7 @@ class APIServer(ServerInterface):
             logger.error("File upload failed", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"File upload failed: {str(e)}",
+                detail="File upload failed",
             )
 
     async def list_configmaps(self):
@@ -774,11 +774,11 @@ class APIServer(ServerInterface):
                 message="Configuration map fetched successfully",
                 data=config_map_data,
             )
-        except Exception as e:
+        except Exception:
             logger.error("Error fetching configuration map", exc_info=True)
             return ConfigMapResponse(
                 success=False,
-                message=f"Failed to fetch configuration map: {e!s}",
+                message="Failed to fetch configuration map",
                 data={},
             )
 

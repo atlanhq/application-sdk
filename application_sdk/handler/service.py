@@ -751,7 +751,7 @@ def create_app_handler_service(
             logger.error(
                 "Invalid workflow input for app %s: %s", app_name, e, exc_info=True
             )
-            raise HTTPException(status_code=400, detail=f"Invalid input: {e}") from None
+            raise HTTPException(status_code=400, detail="Invalid input") from None
         except Exception as e:
             logger.error(
                 "Failed to start workflow %s for app %s: %s",
@@ -761,7 +761,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Failed to start workflow: {e}"
+                status_code=500, detail="Failed to start workflow"
             ) from None
 
     @app.post("/workflows/v1/stop/{workflow_id}/{run_id:path}")
