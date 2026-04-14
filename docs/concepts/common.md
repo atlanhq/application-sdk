@@ -71,8 +71,8 @@ from application_sdk.common.error_codes import ClientError
 
 try:
     validate_input(data)
-except ValidationError:
-    raise ClientError.INPUT_VALIDATION_ERROR
+except ValidationError as e:
+    raise ClientError(f"{ClientError.INPUT_VALIDATION_ERROR}: {e}") from e
 ```
 
 ## SQL Utilities

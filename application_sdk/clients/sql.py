@@ -130,7 +130,7 @@ class BaseSQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}")
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}") from e
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -506,7 +506,7 @@ class BaseSQLClient(ClientInterface):
         else:
             # Run the blocking operation in a thread pool
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                return await asyncio.get_event_loop().run_in_executor(
+                return await asyncio.get_running_loop().run_in_executor(
                     executor, self._execute_query, query, chunksize
                 )
 
@@ -610,7 +610,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise ValueError(str(e))
+            raise ValueError(str(e)) from e
 
     async def close(self) -> None:
         """Close the async database connection and dispose of the engine."""
