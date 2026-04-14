@@ -1,5 +1,48 @@
 # Changelog
 
+## v2.8.5 (April 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.4...v2.8.5
+
+### Features
+
+- add unified build-scan-publish workflow with security gate (#1235) (by @mananjain99 in [b164364](https://github.com/atlanhq/application-sdk/commit/b164364))
+- add custom SSL certificate support for HTTP and Temporal clients (#1253) (by @louisnow in [4bed9d2](https://github.com/atlanhq/application-sdk/commit/4bed9d2))
+
+### Bug Fixes
+
+- remove continue-on-error from reusable workflow job (#1243) (by @hamza-atlan in [9a61307](https://github.com/atlanhq/application-sdk/commit/9a61307))
+- add fail_on_findings input to control security gate behavior (#1244) (by @adityachoudhury-cloud in [af115c3](https://github.com/atlanhq/application-sdk/commit/af115c3))
+- bump Dapr CLI, runtime, and Python SDK to latest versions (#1259) (by @praveenkmr in [3a7ed51](https://github.com/atlanhq/application-sdk/commit/3a7ed51))
+
+
+## v2.8.4 (April 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.3...v2.8.4
+
+### Bug Fixes
+
+- make Snyk scan non-blocking (continue-on-error) (#1222) (by @adityachoudhury-cloud in [3601fd5](https://github.com/atlanhq/application-sdk/commit/3601fd5))
+- stop pushing to app-runtime-base image from main (#1218) (by @fyzanshaik-atlan in [a5adf69](https://github.com/atlanhq/application-sdk/commit/a5adf69))
+- allow complex types in MetricRecord labels (#1231) (by @nishantmunjal7 in [00abc95](https://github.com/atlanhq/application-sdk/commit/00abc95))
+- apply ruff-format to fix pre-commit check failure (#1232) (by @OnkarVO7 in [09132d5](https://github.com/atlanhq/application-sdk/commit/09132d5))
+
+
+## v2.8.3 (April 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.2...v2.8.3
+
+### Features
+
+- add Snyk container scan to unified build-and-publish pipeline (#1192) (by @adityachoudhury-cloud in [0501861](https://github.com/atlanhq/application-sdk/commit/0501861))
+
+### Bug Fixes
+
+- improve sdk version extraction to handle all pyproject.toml formats (#1189) (by @adityachoudhury-cloud in [d12b8b6](https://github.com/atlanhq/application-sdk/commit/d12b8b6))
+- resolve SHA from checked-out HEAD instead of github.sha (#1195) (by @adityachoudhury-cloud in [249d147](https://github.com/atlanhq/application-sdk/commit/249d147))
+- remove time.time_ns calls to prevent Temporal determinism violation (#1203) (by @mothership-ai[bot] in [d0d44b7](https://github.com/atlanhq/application-sdk/commit/d0d44b7))
+
+
 ## v2.8.2 (March 31, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.1...v2.8.2
