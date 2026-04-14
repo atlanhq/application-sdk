@@ -36,7 +36,12 @@ from temporalio.worker import (
 
 from application_sdk.constants import (
     APP_BUILD_ID,
+    APP_RELEASE_CHANNEL,
+    APP_RELEASE_ID,
+    APP_SDK_VERSION,
     APP_TENANT_ID,
+    APP_TYPE,
+    APP_VERSION_SEMVER,
     APPLICATION_NAME,
     DOMAIN_NAME,
 )
@@ -168,7 +173,12 @@ def _build_common_attrs() -> dict[str, str]:
     trace_id, span_id = get_trace_context()
     return {
         "app_name": APPLICATION_NAME,
-        "app_version": APP_BUILD_ID or "",
+        "app_version": APP_VERSION_SEMVER or APP_BUILD_ID or "",
+        "app_build_id": APP_BUILD_ID or "",
+        "release_id": APP_RELEASE_ID,
+        "release_channel": APP_RELEASE_CHANNEL,
+        "sdk_version": APP_SDK_VERSION,
+        "app_type": APP_TYPE,
         "tenant_id": _get_tenant_id(),
         "domain_name": DOMAIN_NAME,
         "pod_name": _get_pod_name(),

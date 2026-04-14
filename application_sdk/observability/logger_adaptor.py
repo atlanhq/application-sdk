@@ -71,6 +71,11 @@ _KNOWN_EXTRA_KEYS = frozenset(
         # ── App Vitals ───────────────────────────────────────────────────
         # Identity
         "app_version",
+        "app_build_id",
+        "release_id",
+        "release_channel",
+        "sdk_version",
+        "app_type",
         "tenant_id",
         "domain_name",
         "pod_name",
