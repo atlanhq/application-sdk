@@ -85,7 +85,7 @@ jobs:
       enable_sdr:       ${{ steps.manifest.outputs.enable_sdr }}
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
-      workflow_packages: ${{ steps.manifest.outputs.workflow_packages }}
+      workflows: ${{ steps.manifest.outputs.workflows }}
       branch:           ${{ steps.tags.outputs.branch }}
       image_tag:        ${{ steps.tags.outputs.image_tag }}
       ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
@@ -347,7 +347,7 @@ jobs:
           APP_NAME: ${{ needs.prepare.outputs.app_name }}
           DEPLOY_CONFIG: ${{ needs.prepare.outputs.deploy_config }}
           SDK_VERSION: ${{ needs.prepare.outputs.sdk_version }}
-          WORKFLOW_PACKAGES: ${{ needs.prepare.outputs.workflow_packages }}
+          WORKFLOWS: ${{ needs.prepare.outputs.workflows }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -375,11 +375,11 @@ jobs:
           if sdk:
               body["sdk_version"] = sdk
 
-          # workflow_packages: native multi-package declarations from atlan.yaml.
+          # workflows: native multi-package declarations from atlan.yaml.
           # Absent → GM falls back to App.argo_package_names for tile expansion.
-          wp = os.environ.get("WORKFLOW_PACKAGES", "").strip()
+          wp = os.environ.get("WORKFLOWS", "").strip()
           if wp:
-              body["workflow_packages"] = json.loads(wp)
+              body["workflows"] = json.loads(wp)
 
           tenants = os.environ.get("TENANTS", "").strip()
           if tenants:
