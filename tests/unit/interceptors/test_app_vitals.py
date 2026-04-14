@@ -132,6 +132,9 @@ class MockWorkflowInfo:
     task_queue: str = "atlan-snowflake"
     namespace: str = "default"
     attempt: int = 1
+    parent: None = None
+    continued_run_id: str | None = None
+    cron_schedule: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +330,7 @@ class TestAppVitalsWorkflowInterceptor:
             ),
         ):
             mock_wf_mod.info.return_value = workflow_info
+            mock_wf_mod.unsafe.is_replaying.return_value = False
 
             result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
@@ -380,6 +384,7 @@ class TestAppVitalsWorkflowInterceptor:
             ),
         ):
             mock_wf_mod.info.return_value = workflow_info
+            mock_wf_mod.unsafe.is_replaying.return_value = False
 
             with pytest.raises(ConnectionError):
                 await interceptor.execute_workflow(MockExecuteWorkflowInput())
@@ -1016,6 +1021,7 @@ class TestWorkflowSummary:
             ),
         ):
             mock_wf_mod.info.return_value = MockWorkflowInfo()
+            mock_wf_mod.unsafe.is_replaying.return_value = False
 
             await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
@@ -1263,6 +1269,7 @@ class TestDurationMetricsUseHistogram:
             ),
         ):
             mock_wf_mod.info.return_value = MockWorkflowInfo()
+            mock_wf_mod.unsafe.is_replaying.return_value = False
 
             await interceptor.execute_workflow(MockExecuteWorkflowInput())
 

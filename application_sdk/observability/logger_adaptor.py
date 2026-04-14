@@ -72,6 +72,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         # Identity
         "app_version",
         "tenant_id",
+        "domain_name",
+        "pod_name",
         # Outcome
         "status",
         "error_type",
@@ -79,6 +81,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "error_message",
         "is_retriable",
         "error_cause_chain",
+        "stack_trace",
+        "error_fingerprint",
         # Metric classification
         "dimension",
         "source",
@@ -92,6 +96,21 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "schedule_to_start_ms",
         "timeout_budget_total_ms",
         "timeout_budget_used_pct",
+        # Retry context
+        "retry_max_attempts",
+        # Payload size
+        "input_payload_bytes",
+        # Workflow hierarchy
+        "parent_workflow_id",
+        "parent_run_id",
+        "continued_run_id",
+        "cron_schedule",
+        # Workflow-level timeout budget
+        "wf_timeout_budget_total_ms",
+        "wf_timeout_budget_used_pct",
+        "history_length",
+        # Workflow summary — activity duration rollup
+        "sum_activity_duration_ms",
         # Workflow summary (app_vitals.wf.summary event)
         "total_activities",
         "succeeded_activities",

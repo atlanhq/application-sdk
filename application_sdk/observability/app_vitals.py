@@ -13,9 +13,12 @@ Registration order: AFTER ExecutionContextInterceptor and CorrelationContextInte
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import sys
 import time
+import traceback
 from typing import Any
 
 from temporalio import activity, workflow
@@ -31,7 +34,12 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
-from application_sdk.constants import APP_BUILD_ID, APP_TENANT_ID, APPLICATION_NAME
+from application_sdk.constants import (
+    APP_BUILD_ID,
+    APP_TENANT_ID,
+    APPLICATION_NAME,
+    DOMAIN_NAME,
+)
 from application_sdk.observability.error_classifier import (
     classify_error,
     extract_cause_chain,
@@ -123,6 +131,33 @@ def _extract_assets_processed(result: Any) -> int | None:
     return None
 
 
+def _get_pod_name() -> str:
+    """Get the pod name from K8s-injected env vars."""
+    return os.environ.get("K8S_POD_NAME", os.environ.get("HOSTNAME", ""))
+
+
+def _format_stack_trace(exc: BaseException) -> str:
+    """Format a full stack trace, truncated to 2000 chars."""
+    try:
+        lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        full = "".join(lines)
+        return full[:2000]
+    except Exception:
+        return ""
+
+
+def _compute_error_fingerprint(
+    activity_type: str, error_type: str, error_class: str
+) -> str:
+    """Deterministic fingerprint for error deduplication.
+
+    Same (activity_type, error_type, error_class) → same fingerprint,
+    enabling GROUP BY fingerprint to count distinct failure modes.
+    """
+    raw = f"{activity_type}:{error_type}:{error_class}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
 def _build_common_attrs() -> dict[str, str]:
     """Build the identity attributes present on every event.
 
@@ -135,6 +170,8 @@ def _build_common_attrs() -> dict[str, str]:
         "app_name": APPLICATION_NAME,
         "app_version": APP_BUILD_ID or "",
         "tenant_id": _get_tenant_id(),
+        "domain_name": DOMAIN_NAME,
+        "pod_name": _get_pod_name(),
         "correlation_id": _get_correlation_id(),
         "trace_id": trace_id,
         "span_id": span_id,
@@ -327,6 +364,12 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         if acts_with_duration:
             bottleneck = max(acts_with_duration, key=lambda a: a["duration_ms"])
 
+        # Sum of all activity durations — if > wf_duration, activities ran in
+        # parallel; if < wf_duration, difference is orchestration overhead.
+        sum_activity_duration_ms = round(
+            sum(a.get("duration_ms", 0) for a in acts_with_duration), 1
+        )
+
         summary: dict[str, Any] = {
             **common,
             "workflow_id": info.workflow_id or "",
@@ -340,6 +383,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             "succeeded_activities": len(succeeded),
             "failed_activities": len(failed),
             "total_child_workflows": len(self._child_workflow_records),
+            "sum_activity_duration_ms": sum_activity_duration_ms,
             "dimension": "reliability",
             "source": "temporal",
             "metric_name": "app_vitals.reliability.wf_summary",
@@ -355,6 +399,11 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         return summary
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
+        # Skip all observability during Temporal replay — replays re-execute
+        # workflow code for determinism, emitting here would double-count.
+        if workflow.unsafe.is_replaying():
+            return await self.next.execute_workflow(input)
+
         start_ns = time.monotonic_ns()
 
         # Emit wf.started event (L2) — enables "currently running" views that
@@ -369,6 +418,10 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "workflow_type": info.workflow_type or "",
                 "task_queue": info.task_queue or "",
                 "namespace": info.namespace or "",
+                "parent_workflow_id": info.parent.workflow_id if info.parent else "",
+                "parent_run_id": info.parent.run_id if info.parent else "",
+                "continued_run_id": info.continued_run_id or "",
+                "cron_schedule": info.cron_schedule or "",
                 "dimension": "reliability",
                 "source": "temporal",
                 "metric_name": "app_vitals.reliability.wf_started",
@@ -383,6 +436,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         error_class = ""
         cause_chain: list[str] = []
         retriable = False
+        stack_trace = ""
 
         try:
             result = await self.next.execute_workflow(input)
@@ -394,6 +448,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             error_class = type(exc).__name__
             cause_chain = extract_cause_chain(exc)
             retriable = is_retriable(exc, error_type)
+            stack_trace = _format_stack_trace(exc)
             raise
         finally:
             duration_ms = (time.monotonic_ns() - start_ns) / 1_000_000
@@ -405,6 +460,25 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
             common = _build_common_attrs()
 
+            # Workflow-level timeout budget — same pattern as activity timeout
+            wf_timeout_budget_total_ms: float | None = None
+            wf_timeout_budget_used_pct: float | None = None
+            execution_timeout = getattr(info, "execution_timeout", None)
+            if execution_timeout is not None:
+                total_ms = execution_timeout.total_seconds() * 1000
+                wf_timeout_budget_total_ms = total_ms
+                if total_ms > 0:
+                    wf_timeout_budget_used_pct = round(
+                        (duration_ms / total_ms) * 100, 2
+                    )
+
+            # History length — proxy for workflow complexity / CaN pressure
+            history_length: int | None = None
+            try:
+                history_length = info.get_current_history_length()
+            except Exception:
+                pass
+
             event_attrs: dict[str, Any] = {
                 **common,
                 "workflow_id": info.workflow_id or "",
@@ -412,6 +486,10 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "workflow_type": info.workflow_type or "",
                 "task_queue": info.task_queue or "",
                 "namespace": info.namespace or "",
+                "parent_workflow_id": info.parent.workflow_id if info.parent else "",
+                "parent_run_id": info.parent.run_id if info.parent else "",
+                "continued_run_id": info.continued_run_id or "",
+                "cron_schedule": info.cron_schedule or "",
                 "status": status,
                 "error_type": error_type,
                 "duration_ms": round(duration_ms, 1),
@@ -419,10 +497,22 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 "source": "temporal",
                 "metric_name": "app_vitals.reliability.wf_completed",
             }
+            if wf_timeout_budget_total_ms is not None:
+                event_attrs["wf_timeout_budget_total_ms"] = round(
+                    wf_timeout_budget_total_ms, 1
+                )
+                event_attrs["wf_timeout_budget_used_pct"] = wf_timeout_budget_used_pct
+            if history_length is not None:
+                event_attrs["history_length"] = history_length
             if error_message:
                 event_attrs["error_message"] = error_message
                 event_attrs["error_class"] = error_class
                 event_attrs["is_retriable"] = retriable
+                event_attrs["error_fingerprint"] = _compute_error_fingerprint(
+                    info.workflow_type or "", error_type, error_class
+                )
+                if stack_trace:
+                    event_attrs["stack_trace"] = stack_trace
                 if cause_chain:
                     event_attrs["error_cause_chain"] = cause_chain
 
@@ -483,6 +573,15 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
         start_ns = time.monotonic_ns()
         start_resource = sample()
 
+        # Measure input payload size — sum of serialized arg bytes.
+        input_payload_bytes: int | None = None
+        try:
+            input_payload_bytes = sum(
+                len(p.data) for p in (input.args or []) if hasattr(p, "data")
+            )
+        except Exception:
+            pass
+
         try:
             info = activity.info()
         except Exception:
@@ -497,6 +596,7 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
         # without waiting for completion. Carries full context for drill-down.
         try:
             started_common = _build_common_attrs()
+            retry_policy = getattr(info, "retry_policy", None)
             started_attrs: dict[str, Any] = {
                 **started_common,
                 "workflow_id": info.workflow_id or "",
@@ -505,12 +605,17 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
                 "activity_type": info.activity_type or "",
                 "task_queue": info.task_queue or "",
                 "attempt": info.attempt,
+                "retry_max_attempts": (
+                    retry_policy.maximum_attempts if retry_policy else 0
+                ),
                 "dimension": "reliability",
                 "source": "temporal",
                 "metric_name": "app_vitals.reliability.activity_started",
             }
             if schedule_to_start_ms is not None:
                 started_attrs["schedule_to_start_ms"] = round(schedule_to_start_ms, 1)
+            if input_payload_bytes is not None:
+                started_attrs["input_payload_bytes"] = input_payload_bytes
             _emit_log_event("app_vitals.act.started", started_attrs)
         except Exception:
             pass  # never block activity on observability
@@ -521,6 +626,7 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
         error_class = ""
         cause_chain: list[str] = []
         retriable = False
+        stack_trace = ""
         assets_processed: int | None = None
 
         try:
@@ -534,6 +640,7 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
             error_class = type(exc).__name__
             cause_chain = extract_cause_chain(exc)
             retriable = is_retriable(exc, error_type)
+            stack_trace = _format_stack_trace(exc)
             raise
         finally:
             duration_ms = (time.monotonic_ns() - start_ns) / 1_000_000
@@ -558,6 +665,7 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
 
             common = _build_common_attrs()
 
+            retry_policy = getattr(info, "retry_policy", None)
             event_attrs: dict[str, Any] = {
                 **common,
                 "workflow_id": info.workflow_id or "",
@@ -566,6 +674,9 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
                 "activity_type": info.activity_type or "",
                 "task_queue": info.task_queue or "",
                 "attempt": info.attempt,
+                "retry_max_attempts": (
+                    retry_policy.maximum_attempts if retry_policy else 0
+                ),
                 "namespace": getattr(info, "namespace", ""),
                 "status": status,
                 "error_type": error_type,
@@ -578,6 +689,11 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
                 event_attrs["error_message"] = error_message
                 event_attrs["error_class"] = error_class
                 event_attrs["is_retriable"] = retriable
+                event_attrs["error_fingerprint"] = _compute_error_fingerprint(
+                    info.activity_type or "", error_type, error_class
+                )
+                if stack_trace:
+                    event_attrs["stack_trace"] = stack_trace
                 if cause_chain:
                     event_attrs["error_cause_chain"] = cause_chain
 
@@ -593,6 +709,8 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
 
             if assets_processed is not None:
                 event_attrs["assets_processed"] = assets_processed
+            if input_payload_bytes is not None:
+                event_attrs["input_payload_bytes"] = input_payload_bytes
 
             _emit_log_event("app_vitals.act.completed", event_attrs)
 
