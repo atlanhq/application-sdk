@@ -47,7 +47,45 @@ Multiple agents sharing the same working directory will stomp on each other's ch
 ### 6. Tell discovery agents to return findings in their response text, not write files
 Subagents frequently lack Write/Bash permissions. Instruct them to return JSON in their response message. The orchestrator (you) writes the findings files.
 
-### 7. SDLC enforcement for EVERY fix — pre-commit, existing tests, TDD
+### 7. Holistic context review BEFORE writing any fix — never patch a symptom
+**This is the most important guardrail.** Before writing a single line of fix code, answer these questions:
+
+**Step 0a: Understand the file, not just the line**
+Read the FULL file the finding is in (not just the flagged function). Ask:
+- Is this file a utils/helpers dumping ground? (Multiple unrelated domains, 500+ lines, functions that should live in domain-specific modules)
+- How many different concerns does this file mix? (SQL filters + credential parsing + thread handling + file I/O = dumping ground)
+- If it IS a dumping ground → the fix is NOT "patch the function" — it's "move the function to its correct home or replace it with the v3 equivalent"
+
+**Step 0b: Check if v3 already has a replacement**
+Before fixing broken code, search for whether v3 already solved this problem correctly elsewhere:
+```
+Grep for the function's PURPOSE (not its name) across:
+- application_sdk/execution/     (thread handling, workers, retry)
+- application_sdk/infrastructure/ (state, secrets, pub/sub)
+- application_sdk/storage/        (file I/O, object store)
+- application_sdk/credentials/    (credential handling)
+- application_sdk/app/            (app lifecycle, context)
+```
+If a v3 replacement exists → the fix is "migrate callers to the v3 API and deprecate/delete the legacy function." Do NOT patch the legacy function.
+
+**Step 0c: Check who actually calls this function**
+```bash
+grep -rn "from.*import.*<function_name>\|<module>.<function_name>" application_sdk/ tests/
+```
+- If zero consumers → delete the function, don't fix it
+- If only 1-2 consumers → consider inlining or migrating them directly
+- If the consumers are all in deprecated modules → the fix is on the v3 migration path, not a point patch
+
+**Step 0d: Decide the right fix scope**
+Based on 0a-0c, the fix is ONE of:
+1. **Migrate callers to v3 replacement** — if v3 already has a better API (e.g., `run_in_thread` exists, so migrate Azure clients there and delete `run_sync`)
+2. **Move to correct module** — if the function is fine but lives in the wrong place (e.g., SQL functions in `common/utils.py` should be in `common/sql_utils.py`)
+3. **Holistic refactor** — if the finding reveals a dumping-ground file that needs decomposition (create a Linear ticket for the cleanup, and fix the finding as part of that broader work)
+4. **Point fix** — ONLY if the function is in the right place, has no v3 replacement, and the bug is genuinely just a code error
+
+**The 2026-04-14 run violated this guardrail on PR #1308:** `run_sync` was broken, but the right fix was to migrate the 2 Azure callers to `execution/heartbeat.run_in_thread` (which uses a dedicated executor, safer than `run_sync`'s default executor) and delete `run_sync`. Instead, the pipeline patched `run_sync` with `functools.partial` — fixing the symptom while leaving the architectural debt. A human reviewer (Chris) caught this and flagged the entire `common/utils.py` as a dumping ground that needs holistic review. The pipeline should have seen this first.
+
+### 7b. SDLC enforcement for EVERY fix — pre-commit, existing tests, TDD
 This is the full checklist for fix agents. EVERY fix PR MUST complete ALL steps:
 
 **Step A: Pre-commit**
@@ -111,6 +149,12 @@ The test quality reviewer in SDK Review must flag as Critical:
 ### 13. Cross-model review is mandatory
 Claude writes the fixes. Codex (Architecture + Code Quality) and Claude (Security + Test Quality) review. Codex MUST also evaluate design trade-offs and flag workarounds that need holistic design solutions.
 
+### 13b. SDK Review MUST check "is this the right fix or just a patch?"
+Every SDK Review agent (especially Architecture and Code Quality) must ask:
+- **Is the PR patching a function that shouldn't exist here?** Check if the file is a utils/helpers dumping ground. If the function belongs in a domain-specific module or has a v3 replacement, flag the PR as `needs-changes` with verdict: "Migrate callers to [v3 API] instead of patching legacy code."
+- **Does v3 already solve this?** Search for the function's purpose in `execution/`, `infrastructure/`, `storage/`, `credentials/`, `app/`. If a v3 equivalent exists, the PR should migrate, not patch.
+- **Is the fix addressing the root cause or a symptom?** A point fix on a function in a 600-line multi-domain utils file is almost certainly a symptom fix. Flag it.
+
 ### 14. Inline PR comments must be resolved
 Reviewers post line-level comments via GitHub API. The fix loop must address EACH inline comment and reply with what was done. All comment threads must be resolved before marking ready-to-merge.
 
@@ -169,6 +213,17 @@ The 2026-04-09 retrospective found 12 improvements. Zero were committed to rule 
 
 ### 23. Every stage must log a checkpoint before proceeding
 Print `[Stage N/10 complete] → Proceeding to Stage N+1` after each stage finishes. This makes premature stops visible in the conversation. If a user sees `[Stage 5/10 complete]` as the last checkpoint, they know stages 6-10 didn't run. This was added because the 2026-04-14 run had no visible stage markers — it silently stopped and printed a final banner.
+
+### 24. Check CI status on EVERY PR before approving or labeling ready-to-merge
+After pushing a PR and before any review/approval step, wait for CI and verify it passes:
+```bash
+gh pr checks {pr_number} --repo atlanhq/application-sdk --watch
+```
+If any check fails:
+1. Read the failure logs: `gh run view {run_id} --repo atlanhq/application-sdk --log-failed`
+2. If the failure is in your changed code → fix it, push, wait for CI again
+3. If the failure is a flaky/infra issue (e.g., segfault during teardown with all tests passing, timeout on a specific OS) → re-run the failed job: `gh run rerun {run_id} --repo atlanhq/application-sdk --failed`
+4. **NEVER label a PR `ready-to-merge` while CI is red.** The 2026-04-14 run labeled PR #1309 as ready-to-merge with a failing `Unit Tests (3.14, macOS-latest)` check that was never investigated.
 
 ---
 
