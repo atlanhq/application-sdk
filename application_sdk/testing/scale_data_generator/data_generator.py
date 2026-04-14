@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-import duckdb
 import faker
 
 from .config_loader import ConfigLoader, OutputFormat
@@ -131,6 +130,7 @@ class DataGenerator:
 
     def generate_duckdb_tables(self, output_dir: str) -> None:
         """Generate DuckDB tables from the generated data."""
+        import duckdb  # lazy import: heavy dependency
 
         # the duckDB filename should be the database name:
         database_config = self.config_loader.get_database()
