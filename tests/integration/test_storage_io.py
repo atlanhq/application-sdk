@@ -22,6 +22,8 @@ from application_sdk.storage.ops import (
     download_prefix,
     list_keys,
     upload_file,
+    upload_file_from_bytes,
+    upload_prefix,
 )
 
 
@@ -176,3 +178,81 @@ async def test_download_files_emits_deprecation_warning(store, staging):
         dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
         assert len(dep_warnings) >= 1
         assert "storage.transfer.download" in str(dep_warnings[0].message)
+
+
+# ------------------------------------------------------------------
+# upload_prefix (parallel directory upload)
+# ------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_upload_prefix_roundtrip(store, tmp_path):
+    """Upload a directory, list keys, download and verify."""
+    src_dir = tmp_path / "upload_src"
+    src_dir.mkdir()
+    for i in range(5):
+        (src_dir / f"file_{i}.txt").write_text(f"content-{i}")
+
+    uploaded = await upload_prefix(
+        local_dir=src_dir, prefix="batch/run1", store=store
+    )
+    assert len(uploaded) == 5
+
+    keys = await list_keys("batch/run1", store)
+    assert len(keys) == 5
+
+    dest_dir = tmp_path / "download_dest"
+    paths = await download_prefix("batch/run1", dest_dir, store)
+    assert len(paths) == 5
+    for i in range(5):
+        downloaded = dest_dir / f"batch/run1/file_{i}.txt"
+        assert downloaded.read_text() == f"content-{i}"
+
+
+@pytest.mark.integration
+async def test_upload_prefix_with_retain_local_false(store, staging):
+    """Upload with retain_local_copy=False deletes source files."""
+    src_dir = staging / "ephemeral_dir"
+    src_dir.mkdir()
+    (src_dir / "a.txt").write_text("aaa")
+    (src_dir / "b.txt").write_text("bbb")
+
+    await upload_prefix(
+        local_dir=src_dir, prefix="ephemeral", store=store, retain_local_copy=False
+    )
+
+    # Local files should be deleted
+    assert not (src_dir / "a.txt").exists()
+    assert not (src_dir / "b.txt").exists()
+
+    # But they should exist in the store
+    keys = await list_keys("ephemeral", store)
+    assert len(keys) == 2
+
+
+# ------------------------------------------------------------------
+# upload_file_from_bytes
+# ------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_upload_file_from_bytes_roundtrip(store, tmp_path):
+    """Upload bytes directly, then download and verify."""
+    content = b"hello from bytes upload"
+    sha = await upload_file_from_bytes("bytes/test.bin", content, store)
+    assert len(sha) == 64  # hex SHA-256
+
+    dest = tmp_path / "downloaded.bin"
+    await download_file("bytes/test.bin", dest, store)
+    assert dest.read_bytes() == content
+
+
+@pytest.mark.integration
+async def test_upload_file_from_bytes_empty(store, tmp_path):
+    """Upload empty bytes."""
+    sha = await upload_file_from_bytes("bytes/empty.bin", b"", store)
+    assert len(sha) == 64
+
+    dest = tmp_path / "empty.bin"
+    await download_file("bytes/empty.bin", dest, store)
+    assert dest.read_bytes() == b""
