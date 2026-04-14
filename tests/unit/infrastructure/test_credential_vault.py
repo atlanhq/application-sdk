@@ -8,18 +8,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from application_sdk.infrastructure.credential_vault import (
-    CredentialVault,
-    CredentialVaultError,
-    InMemoryCredentialVault,
-)
 from application_sdk.infrastructure._dapr.client import (
     DaprCredentialVault,
     _handle_single_key_secret,
     _process_secret_data,
     _resolve_credentials,
 )
-
+from application_sdk.infrastructure.credential_vault import (
+    CredentialVault,
+    CredentialVaultError,
+    InMemoryCredentialVault,
+)
 
 # ---------------------------------------------------------------------------
 # InMemoryCredentialVault
@@ -212,14 +211,11 @@ class TestDaprCredentialVaultGetCredentials:
     async def test_direct_multi_key_mode(self) -> None:
         """DIRECT source + multi-key bundle → bundle merged into config."""
         config = {"credentialSource": "direct", "host": "db.example.com"}
-        secret_bundle = {"password": "secret_pass"}
         mock_client = _make_mock_dapr_client(
             config_bytes=json.dumps(config).encode(),
             secret_data={"password": "secret_pass"},
         )
-        with patch(
-            "application_sdk.constants.DEPLOYMENT_NAME", "production"
-        ):
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
             vault = self._make_vault(mock_client)
             result = await vault.get_credentials("my-guid")
 
@@ -271,15 +267,15 @@ class TestDaprCredentialVaultGetCredentials:
             return await original_fetch(self_, guid)
 
         with (
-            patch.object(DaprCredentialVault, "_fetch_credential_config", _capturing_fetch),
+            patch.object(
+                DaprCredentialVault, "_fetch_credential_config", _capturing_fetch
+            ),
             patch("application_sdk.constants.DEPLOYMENT_NAME", "local"),
         ):
             vault = self._make_vault(mock_client)
             await vault.get_credentials("abc-123")
 
-        assert captured == ["abc-123"], (
-            f"Expected string guid, got: {captured}"
-        )
+        assert captured == ["abc-123"], f"Expected string guid, got: {captured}"
 
     @pytest.mark.asyncio
     async def test_vault_error_on_binding_failure(self) -> None:

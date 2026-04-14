@@ -17,14 +17,17 @@ class CredentialResolver:
 
     Supports two resolution paths:
 
-    1. **New path** (``credential_guid`` is empty): Calls
+    1. **Named path** (``credential_guid`` is empty): Calls
        ``secret_store.get(ref.name)`` → parses JSON → looks up parser in
        registry → returns typed Credential.
 
-    2. **GUID path** (``credential_guid`` is non-empty): Uses
-       ``DaprCredentialVault.get_credentials(guid)`` to fetch and resolve the
-       credential from the upstream store → if ``credential_type != "unknown"``
-       parses into typed Credential, otherwise wraps in ``RawCredential``.
+    2. **GUID path** (``credential_guid`` is non-empty): First checks
+       ``secret_store.get(ref.name)`` to cover in-process inline credentials
+       stored by the handler layer (combined-mode / local dev). If not found
+       there, uses ``DaprCredentialVault.get_credentials(guid)`` to resolve
+       platform-issued GUIDs from the upstream store. → if
+       ``credential_type != "unknown"`` parses into typed Credential, otherwise
+       wraps in ``RawCredential``.
     """
 
     def __init__(
@@ -123,7 +126,25 @@ class CredentialResolver:
         return self._registry.parse(ref.credential_type, data)
 
     async def _resolve_by_guid(self, ref: "CredentialRef") -> dict[str, Any]:
-        """Resolve credentials by GUID using DaprCredentialVault."""
+        """Resolve credentials by GUID.
+
+        Checks the local secret store first (covers in-process credential
+        injection from handler/service.py in combined-mode and local dev), then
+        falls back to DaprCredentialVault for production platform-issued GUIDs.
+        """
+
+        # Local store check — handler/service.py stores inline credentials here
+        # under the same UUID that becomes ref.name / ref.credential_guid.
+        try:
+            raw = await self._secret_store.get(ref.name)
+            data: dict[str, Any] = json.loads(raw)
+            return data
+        except Exception:
+            # SecretNotFoundError (key absent), json.JSONDecodeError (bad
+            # format), or store-unavailable — fall through to DaprCredentialVault.
+            pass
+
+        # Fall back to DaprCredentialVault for platform-issued GUIDs.
         from dapr.clients import DaprClient
 
         from application_sdk.credentials.errors import CredentialNotFoundError

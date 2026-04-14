@@ -120,11 +120,25 @@ def _make_vault_patches(vault_return=None, vault_side_effect=None):
 
 
 class TestGuidResolutionPath:
-    """Tests for the GUID-based resolution path using DaprCredentialVault.
+    """Tests for the GUID-based resolution path.
 
-    The resolver delegates GUID resolution to DaprCredentialVault.  These
-    tests mock the vault so no real Dapr connection is required.
+    The resolver checks the local secret store first (in-process inline
+    credentials), then falls back to DaprCredentialVault for platform GUIDs.
     """
+
+    @pytest.mark.asyncio
+    async def test_local_store_takes_precedence_over_vault(self, store, resolver):
+        """Inline credentials stored in the local secret store are resolved
+        directly — DaprCredentialVault is never called."""
+        import json
+
+        store.set("guid-abc", json.dumps({"host": "local.example.com", "port": 5432}))
+        ref = legacy_credential_ref("guid-abc")
+        # No Dapr mock needed — local store should return before Dapr is reached.
+        raw = await resolver.resolve_raw(ref)
+
+        assert raw["host"] == "local.example.com"
+        assert raw["port"] == 5432
 
     @pytest.mark.asyncio
     async def test_get_credentials_receives_string_not_dict(self, store, resolver):
@@ -190,9 +204,9 @@ class TestGuidResolutionPath:
     async def test_vault_error_raises_credential_not_found(
         self, store, resolver, method
     ):
-        """When DaprCredentialVault raises, resolver re-raises as CredentialNotFoundError.
+        """When the GUID is absent from the local store AND DaprCredentialVault
+        raises, the resolver re-raises as CredentialNotFoundError.
 
-        Verifies the error does NOT silently fall through to the v3 store.
         Tests both resolve_raw() and resolve() paths.
         """
         p_vault, p_dapr, _ = _make_vault_patches(
