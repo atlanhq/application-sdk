@@ -26,6 +26,7 @@ from application_sdk.constants import (
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     OTEL_RESOURCE_ATTRIBUTES,
     OTEL_WF_NODE_NAME,
+    PUBLISHED_AT,
     RELEASE_CHANNEL,
     RELEASE_ID,
     SEGMENT_API_URL,
@@ -153,6 +154,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 resource_attributes["app.sdk_version"] = APP_SDK_VERSION
             if APP_TYPE:
                 resource_attributes["app.type"] = APP_TYPE
+            if PUBLISHED_AT:
+                resource_attributes["app.published_at"] = PUBLISHED_AT
 
             # Add workflow node name if running in Argo
             if workflow_node_name:

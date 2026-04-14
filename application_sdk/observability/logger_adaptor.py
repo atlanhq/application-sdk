@@ -36,6 +36,7 @@ from application_sdk.constants import (
     OTEL_RESOURCE_ATTRIBUTES,
     OTEL_WF_NODE_NAME,
     OTEL_WORKFLOW_LOGS_ENDPOINT,
+    PUBLISHED_AT,
     RELEASE_CHANNEL,
     RELEASE_ID,
     SERVICE_NAME,
@@ -454,6 +455,8 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     resource_attributes["app.sdk_version"] = APP_SDK_VERSION
                 if APP_TYPE:
                     resource_attributes["app.type"] = APP_TYPE
+                if PUBLISHED_AT:
+                    resource_attributes["app.published_at"] = PUBLISHED_AT
                 workflow_node_name = OTEL_WF_NODE_NAME
                 if workflow_node_name:
                     resource_attributes["k8s.workflow.node.name"] = workflow_node_name

@@ -149,6 +149,8 @@ RELEASE_CHANNEL = os.getenv("ATLAN_RELEASE_CHANNEL", "")
 APP_SDK_VERSION = os.getenv("ATLAN_SDK_VERSION", "")
 #: App type from Global Marketplace (connector, system, etc.)
 APP_TYPE = os.getenv("ATLAN_APP_TYPE", "")
+#: Release publication timestamp from Global Marketplace (ISO 8601)
+PUBLISHED_AT = os.getenv("ATLAN_PUBLISHED_AT", "")
 
 # Deployment Secret Store Key Names
 #: Key name for OAuth2 client ID in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_ID_KEY)

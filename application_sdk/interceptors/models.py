@@ -14,6 +14,7 @@ from application_sdk.constants import (
     APP_TYPE,
     APPLICATION_NAME,
     APPLICATION_VERSION,
+    PUBLISHED_AT,
     RELEASE_CHANNEL,
     RELEASE_ID,
     WORKER_START_EVENT_VERSION,
@@ -193,6 +194,7 @@ class WorkerStartEventData(BaseModel):
     release_channel: str = RELEASE_CHANNEL
     sdk_version: str = APP_SDK_VERSION
     app_type: str = APP_TYPE
+    published_at: str = PUBLISHED_AT
 
 
 class WorkerTokenRefreshEventData(BaseModel):
