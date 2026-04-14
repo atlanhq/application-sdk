@@ -192,7 +192,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "2.8.2"
+version = "2.8.5"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -277,6 +277,7 @@ test = [
     { name = "mock" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "trustme" },
 ]
 
 [package.metadata]
@@ -287,7 +288,7 @@ requires-dist = [
     { name = "azure-storage-file-datalake", marker = "extra == 'azure'", specifier = ">=12.19.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6,<1.43.0" },
     { name = "daft", marker = "extra == 'daft'", specifier = ">=0.7.1,<0.8.0" },
-    { name = "dapr", marker = "extra == 'workflows'", specifier = "==1.16.0" },
+    { name = "dapr", marker = "extra == 'workflows'", specifier = "==1.17.4" },
     { name = "duckdb", specifier = ">=1.1.3,<1.5.0" },
     { name = "duckdb-engine", specifier = ">=0.17.0,<0.18.0" },
     { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=37.1.0,<39.1.0" },
@@ -340,6 +341,7 @@ test = [
     { name = "mock", specifier = ">=5.1.0,<5.3.0" },
     { name = "pytest", specifier = ">=8.3.3,<9.1.0" },
     { name = "pytest-asyncio", specifier = ">=0.26.0,<1.4.0" },
+    { name = "trustme", specifier = ">=1.2.1,<1.3.0" },
 ]
 
 [[package]]
@@ -990,7 +992,7 @@ wheels = [
 
 [[package]]
 name = "dapr"
-version = "1.16.0"
+version = "1.17.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1000,9 +1002,9 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a4/b1/d39ba15d453b67b93d53ec56de7eb9324cb8bbf0599afcb2c0ade990b7ae/dapr-1.16.0.tar.gz", hash = "sha256:c7e3d005552a598d07608d0d502b2bc432e86678f94b2beccc13a096b9198684", size = 122467, upload-time = "2025-09-17T10:59:57.138Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/08/eff49e440b004d954c71747e9640789b779a8eed568cdf6de254194cb3cd/dapr-1.17.4.tar.gz", hash = "sha256:f5739045e5d96d91a4f59cc026d6b39b5c27f8705957e9d05eae780cfbe42461", size = 172207, upload-time = "2026-03-25T13:38:02.867Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c7/3e/de39e18e14d07882fcff028227c2dbe7fa202f09413127d4de32b03e0884/dapr-1.16.0-py3-none-any.whl", hash = "sha256:076dd559a0b450eae24b1c2ae779c9299ed3e06a05c1f72719a6613af8d19ced", size = 166710, upload-time = "2025-09-17T10:59:55.473Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/c1/2f67dd9b0c74a09dec0c6dae53e26526a6f61b95a947932201c8b8181adf/dapr-1.17.4-py3-none-any.whl", hash = "sha256:2e9517cd46b2e12de27215d6ecd90c04d79c953eb0d41cf63b0acaa8079a544a", size = 242986, upload-time = "2026-03-25T13:38:01.744Z" },
 ]
 
 [[package]]
@@ -4546,6 +4548,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a8/4b/29b4ef32e036bb34e4ab51796dd745cdba7ed47ad142a9f4a1eb8e0c744d/tqdm-4.67.1.tar.gz", hash = "sha256:f8aef9c52c08c13a65f30ea34f4e5aac3fd1a34959879d7e59e63027286627f2", size = 169737, upload-time = "2024-11-24T20:12:22.481Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl", hash = "sha256:26445eca388f82e72884e0d580d5464cd801a3ea01e63e5601bdff9ba6a48de2", size = 78540, upload-time = "2024-11-24T20:12:19.698Z" },
+]
+
+[[package]]
+name = "trustme"
+version = "1.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "idna" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4b/c5/931476f4cf1cd9e736f32651005078061a50dc164a2569fb874e00eb2786/trustme-1.2.1.tar.gz", hash = "sha256:6528ba2bbc7f2db41f33825c8dd13e3e3eb9d334ba0f909713c8c3139f4ae47f", size = 26844, upload-time = "2025-01-02T01:55:32.632Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b5/f3/c34dbabf6da5eda56fe923226769d40e11806952cd7f46655dd06e10f018/trustme-1.2.1-py3-none-any.whl", hash = "sha256:d768e5fc57c86dfc5ec9365102e9b092541cd6954b35d8c1eea01a84f35a762a", size = 16530, upload-time = "2025-01-02T01:55:30.181Z" },
 ]
 
 [[package]]
