@@ -404,7 +404,14 @@ jobs:
           fail_on_findings = os.environ.get("FAIL_ON_FINDINGS", "true").lower() == "true"
 
           # Write fixable app dependencies for auto-fix step
-          fixable = [v for v in new_vulns if v.get("source_type", "app") == "app" and v.get("fixed")]
+          # Only fix Python packages (skip Go/Rust/system packages)
+          go_prefixes = ("github.com/", "golang.org/", "google.golang.org/", "go.opentelemetry.io/", "go.")
+          fixable = [
+              v for v in new_vulns
+              if v.get("source_type", "app") == "app"
+              and v.get("fixed")
+              and not v.get("package", "").startswith(go_prefixes)
+          ]
           with open("/tmp/fixable_packages.json", "w") as f:
               json.dump(fixable, f)
           if fixable:
