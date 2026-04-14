@@ -310,6 +310,9 @@ METRICS_CLEANUP_ENABLED = (
     os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
 )
 METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
+ENABLE_PROMETHEUS_METRICS = (
+    os.getenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "false").lower() == "true"
+)
 
 # Segment Configuration
 #: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch

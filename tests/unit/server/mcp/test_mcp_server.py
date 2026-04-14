@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from application_sdk.activities import ActivitiesInterface
-from application_sdk.decorators.mcp_tool import mcp_tool
 from application_sdk.server.mcp import MCPServer
+from application_sdk.server.mcp.decorators import mcp_tool
 from application_sdk.workflows import WorkflowInterface
 
 

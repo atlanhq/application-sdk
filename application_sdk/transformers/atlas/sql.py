@@ -124,7 +124,7 @@ class Procedure(assets.Procedure):
                 "entity_class": Procedure,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Procedure Entity: {str(e)}")
+            raise ValueError(f"Error creating Procedure Entity: {str(e)}") from e
 
 
 class Database(assets.Database):
@@ -176,7 +176,7 @@ class Database(assets.Database):
                 "entity_class": Database,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Database Entity: {str(e)}")
+            raise ValueError(f"Error creating Database Entity: {str(e)}") from e
 
 
 class Schema(assets.Schema):
@@ -245,7 +245,7 @@ class Schema(assets.Schema):
                 "entity_class": Schema,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Schema Entity: {str(e)}")
+            raise ValueError(f"Error creating Schema Entity: {str(e)}") from e
 
 
 class Table(assets.Table):
@@ -477,7 +477,7 @@ class Table(assets.Table):
                 "entity_class": table_type,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Table Entity: {str(e)}")
+            raise ValueError(f"Error creating Table Entity: {str(e)}") from e
 
 
 class Column(assets.Column):
@@ -623,7 +623,7 @@ class Column(assets.Column):
                 "character_octet_length",
                 "is_auto_increment",
                 "is_generated",
-                "num_prec_radix" "extra_info",
+                "num_prec_radixextra_info",
                 "buffer_length",
                 "column_size",
             ]
@@ -644,7 +644,7 @@ class Column(assets.Column):
                 "entity_class": Column,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Column Entity: {str(e)}")
+            raise ValueError(f"Error creating Column Entity: {str(e)}") from e
 
 
 class Function(assets.Function):
@@ -925,7 +925,7 @@ class Function(assets.Function):
                 "entity_class": Function,
             }
         except AssertionError as e:
-            raise ValueError(f"Error creating Function Entity: {str(e)}")
+            raise ValueError(f"Error creating Function Entity: {str(e)}") from e
 
 
 class TagAttachment(assets.TagAttachment):
@@ -1208,4 +1208,4 @@ class TagAttachment(assets.TagAttachment):
                 "entity_class": TagAttachment,
             }
         except Exception as e:
-            raise ValueError(f"Error creating TagAttachment Entity: {str(e)}")
+            raise ValueError(f"Error creating TagAttachment Entity: {str(e)}") from e

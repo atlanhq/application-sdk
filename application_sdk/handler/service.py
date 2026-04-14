@@ -16,6 +16,7 @@ Routes:
     POST /workflows/v1/file - Upload file to object storage
     GET  /health - Health check (k8s liveness probe)
     GET  /server/ready - Readiness probe
+    GET  /metrics - Prometheus metrics endpoint (when enabled)
     GET  / - Serve frontend UI (app/generated/frontend/static/index.html)
 
 Usage::
@@ -41,7 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
-from application_sdk.constants import DEPLOYMENT_NAME
+from application_sdk.constants import DEPLOYMENT_NAME, ENABLE_PROMETHEUS_METRICS
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
@@ -56,7 +57,6 @@ from application_sdk.handler.contracts import (
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
-from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -146,6 +146,7 @@ if TYPE_CHECKING:
     from temporalio.converter import DataConverter
 
     from application_sdk.app.base import App
+    from application_sdk.infrastructure.secrets import SecretStore
     from application_sdk.infrastructure.state import StateStore
 
 
@@ -240,6 +241,7 @@ _temporal_client: Client | None = None
 _workflow_config: WorkflowClientConfig = WorkflowClientConfig()
 _handler_auth_manager: Any | None = None
 _state_store: StateStore | None = None
+_secret_store: SecretStore | None = None
 _storage: ObjectStore | None = None
 
 # Directory where generated contract JSON files are stored
@@ -324,6 +326,7 @@ def create_app_handler_service(
     auth_base_url: str = "",
     auth_scopes: str = "",
     state_store: StateStore | None = None,
+    secret_store: SecretStore | None = None,
     storage: ObjectStore | None = None,
     event_triggers: list[EventTriggerConfig] | None = None,
     subscriptions: list[SubscriptionConfig] | None = None,
@@ -344,6 +347,11 @@ def create_app_handler_service(
         task_queue: Task queue name (default: "{app_name}-queue").
         data_converter: Optional custom Temporal DataConverter.
         state_store: Optional state store for workflow config persistence.
+        secret_store: Optional secret store for credential interception.
+            When provided, the ``/start`` handler stores inline credentials
+            here and replaces them with a ``credential_guid`` so secrets
+            never travel over Temporal.  Passed directly to avoid ContextVar
+            propagation issues with uvicorn ASGI request handlers.
         storage: Optional obstore store for file uploads.
         title: OpenAPI title.
         description: OpenAPI description.
@@ -355,9 +363,10 @@ def create_app_handler_service(
     Returns:
         Configured FastAPI application.
     """
-    global _workflow_config, _state_store, _storage
+    global _workflow_config, _state_store, _secret_store, _storage
 
     _state_store = state_store
+    _secret_store = secret_store
     _storage = storage
     _workflow_config = WorkflowClientConfig(
         host=temporal_host,
@@ -410,16 +419,13 @@ def create_app_handler_service(
     app.add_middleware(LogMiddleware)
 
     def _create_context(credentials: list[Credential]) -> HandlerContext:
-        from application_sdk.infrastructure.context import get_infrastructure
-
-        infra = get_infrastructure()
         return HandlerContext(
             app_name=app_name,
             request_id=uuid4(),
             started_at=datetime.now(UTC),
             _credentials=credentials,
-            _secret_store=infra.secret_store if infra else None,
-            _state_store=infra.state_store if infra else None,
+            _secret_store=_secret_store,
+            _state_store=_state_store,
         )
 
     # ------------------------------------------------------------------
@@ -636,19 +642,21 @@ def create_app_handler_service(
                     detail=f"App class {app_cls.__name__} does not define _input_type.",
                 )
 
-            # Save inline credentials to the v3 secret store and replace
-            # with a credential_guid so raw secrets never travel over Temporal.
-            # Normalize to v3 list format first (same as auth/preflight),
-            # then store. Apps use their Pydantic credential model to
-            # convert back to the shape they need.
-            # Only works with writable stores (InMemorySecretStore in local dev).
+            # Save inline credentials to the secret store and replace with a
+            # credential_guid so raw secrets never travel over Temporal.
+            # Uses the closure-captured _secret_store (passed directly to
+            # create_app_handler_service) instead of get_infrastructure()
+            # because ContextVar does not propagate to uvicorn ASGI request
+            # handlers.
             body = _normalize_credentials(body)
             if "credentials" in body and body["credentials"]:
-                infra = get_infrastructure()
-                secret_store = infra.secret_store if infra else None
-                if secret_store is not None and hasattr(secret_store, "set"):
+                if _secret_store is not None and hasattr(_secret_store, "set"):
                     credential_guid = str(uuid4())
-                    secret_store.set(credential_guid, json.dumps(body["credentials"]))
+                    # Convert v3 list [{key, value}] to flat dict {key: value}
+                    # so get_secret() returns the same format as production
+                    # (Dapr/Vault), where credentials are stored as flat dicts.
+                    flat_creds = {p["key"]: p["value"] for p in body["credentials"]}
+                    _secret_store.set(credential_guid, json.dumps(flat_creds))
                     body["credential_guid"] = credential_guid
                     del body["credentials"]
                     logger.debug(
@@ -1405,6 +1413,22 @@ def create_app_handler_service(
     @app.get("/server/ready")
     async def ready() -> dict[str, str]:
         return {"status": "ok"}
+
+    # ------------------------------------------------------------------
+    # Prometheus metrics
+    # ------------------------------------------------------------------
+
+    if ENABLE_PROMETHEUS_METRICS:
+
+        @app.get("/metrics")
+        async def prometheus_metrics() -> Response:
+            """Expose application metrics in Prometheus exposition format."""
+            from prometheus_client import REGISTRY, generate_latest
+
+            return Response(
+                content=generate_latest(REGISTRY),
+                media_type="text/plain; version=0.0.4; charset=utf-8",
+            )
 
     # ------------------------------------------------------------------
     # UI routes
