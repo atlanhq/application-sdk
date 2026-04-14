@@ -1,6 +1,8 @@
+import contextlib
 import os
+import shutil
 from pathlib import Path
-from typing import Generator
+from typing import Generator, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -10,6 +12,7 @@ import pytest
 
 from application_sdk.common.types import DataframeType
 from application_sdk.io.parquet import ParquetFileWriter
+from application_sdk.io.utils import path_gen
 
 
 @pytest.fixture
@@ -62,10 +65,6 @@ def consolidation_dataframes() -> Generator[pd.DataFrame, None, None]:
 @pytest.fixture
 def mock_consolidation_files():
     """Create a reusable context manager for mocking consolidation files with proper cleanup."""
-    import contextlib
-    import shutil
-    from typing import List
-    from unittest.mock import MagicMock
 
     @contextlib.contextmanager
     def _create_mock_files(base_path: str, file_names: List[str]):
@@ -159,8 +158,6 @@ class TestParquetFileWriterPathGen:
 
     def test_path_gen_with_markers(self, base_output_path: str):
         """Test path generation with start and end markers."""
-        from application_sdk.io.utils import path_gen
-
         path = path_gen(
             start_marker="start_123", end_marker="end_456", extension=".parquet"
         )
@@ -169,16 +166,12 @@ class TestParquetFileWriterPathGen:
 
     def test_path_gen_without_chunk_start(self, base_output_path: str):
         """Test path generation without chunk count."""
-        from application_sdk.io.utils import path_gen
-
         path = path_gen(chunk_part=5, extension=".parquet")
 
         assert path == "5.parquet"
 
     def test_path_gen_with_chunk_count(self, base_output_path: str):
         """Test path generation with chunk count."""
-        from application_sdk.io.utils import path_gen
-
         path = path_gen(chunk_count=10, chunk_part=3, extension=".parquet")
 
         assert path == "chunk-10-part3.parquet"

@@ -1,6 +1,8 @@
 """Unit tests for the base Reader and Writer classes."""
 
 import os
+import tempfile
+from pathlib import Path
 from typing import List
 from unittest.mock import AsyncMock, patch
 
@@ -8,7 +10,7 @@ import pytest
 
 from application_sdk.common.error_codes import IOError as SDKIOError
 from application_sdk.io import Reader
-from application_sdk.io.utils import download_files
+from application_sdk.io.utils import download_files, find_local_files_by_extension
 
 # Fixed UUID used in tests so download paths are deterministic
 _FIXED_UUID_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
@@ -501,11 +503,6 @@ class TestDownloadFilesIsolation:
         named chunk-0.parquet regardless of directory.
         After fix: matching uses relative paths.
         """
-        import tempfile
-        from pathlib import Path
-
-        from application_sdk.io.utils import find_local_files_by_extension
-
         with tempfile.TemporaryDirectory() as tmp:
             table_dir = Path(tmp) / "table"
             schema_dir = Path(tmp) / "schema"

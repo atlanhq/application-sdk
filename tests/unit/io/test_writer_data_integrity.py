@@ -22,9 +22,13 @@ import os
 import shutil
 import tempfile
 from typing import Dict, List, Set
+from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 import pytest
+
+from application_sdk.common.types import DataframeType
+from application_sdk.io.json import JsonFileWriter
 
 
 class TestWriterDataIntegrity:
@@ -53,11 +57,6 @@ class TestWriterDataIntegrity:
     @pytest.mark.asyncio
     async def test_pandas_writer_no_data_loss(self, temp_dir: str):
         """Verify pandas writer preserves all records across multiple write() calls."""
-        from unittest.mock import AsyncMock, patch
-
-        from application_sdk.common.types import DataframeType
-        from application_sdk.io.json import JsonFileWriter
-
         object_store: Dict[str, List[str]] = {}
 
         async def mock_upload(key, local_path, **kwargs):

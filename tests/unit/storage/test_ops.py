@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+from unittest.mock import patch
 
 import pytest
 
+import application_sdk.constants as constants
+from application_sdk.storage.errors import StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import (
     _get_bytes,
@@ -13,6 +16,7 @@ from application_sdk.storage.ops import (
     _put,
     delete,
     download_file,
+    download_prefix,
     list_keys,
     normalize_key,
     upload_file,
@@ -207,28 +211,24 @@ class TestUploadFile:
     async def test_upload_file_retain_local_copy_false_in_staging(
         self, store, tmp_path
     ) -> None:
-        from unittest.mock import patch
-
         # Simulate file inside TEMPORARY_PATH so it's allowed to be deleted
         staging = tmp_path / "staging"
         staging.mkdir()
         f = staging / "delete_me.bin"
         f.write_bytes(b"delete me")
 
-        with patch("application_sdk.constants.TEMPORARY_PATH", str(staging)):
+        with patch.object(constants, "TEMPORARY_PATH", str(staging)):
             await upload_file("del.bin", f, store, retain_local_copy=False)
         assert not f.exists(), "Local file should be deleted after upload"
 
     async def test_upload_file_retain_local_copy_false_outside_staging(
         self, store, tmp_path
     ) -> None:
-        from unittest.mock import patch
-
         # File outside TEMPORARY_PATH should NOT be deleted (path traversal protection)
         f = tmp_path / "safe.bin"
         f.write_bytes(b"safe")
 
-        with patch("application_sdk.constants.TEMPORARY_PATH", str(tmp_path / "other")):
+        with patch.object(constants, "TEMPORARY_PATH", str(tmp_path / "other")):
             await upload_file("safe.bin", f, store, retain_local_copy=False)
         assert f.exists(), "File outside staging should NOT be deleted"
 
@@ -239,8 +239,6 @@ class TestDownloadPrefix:
         await _put("myprefix/b.txt", b"bbb", store, normalize=False)
         await _put("other/c.txt", b"ccc", store, normalize=False)
 
-        from application_sdk.storage.ops import download_prefix
-
         paths = await download_prefix("myprefix", tmp_path, store=store)
         assert len(paths) == 2
         assert (tmp_path / "myprefix" / "a.txt").read_bytes() == b"aaa"
@@ -249,8 +247,6 @@ class TestDownloadPrefix:
     async def test_download_prefix_with_suffix_filter(self, store, tmp_path) -> None:
         await _put("data/file.parquet", b"pq", store, normalize=False)
         await _put("data/file.json", b"js", store, normalize=False)
-
-        from application_sdk.storage.ops import download_prefix
 
         paths = await download_prefix("data", tmp_path, store=store, suffix=".parquet")
         assert len(paths) == 1
@@ -263,8 +259,6 @@ class TestDownloadPrefix:
                 f"batch/file_{i}.txt", f"content_{i}".encode(), store, normalize=False
             )
 
-        from application_sdk.storage.ops import download_prefix
-
         paths = await download_prefix("batch", tmp_path, store=store, max_concurrency=3)
         assert len(paths) == 8
         for i in range(8):
@@ -274,8 +268,6 @@ class TestDownloadPrefix:
 
     async def test_download_prefix_empty(self, store, tmp_path) -> None:
         """Empty prefix returns no files."""
-        from application_sdk.storage.ops import download_prefix
-
         paths = await download_prefix("nonexistent", tmp_path, store=store)
         assert paths == []
 
@@ -287,8 +279,6 @@ class TestDownloadPrefix:
 
         for i in range(6):
             await _put(f"sem/f_{i}.txt", b"x", store, normalize=False)
-
-        from application_sdk.storage.ops import download_prefix
 
         max_active = 0
         active = 0
@@ -313,8 +303,6 @@ class TestDownloadPrefix:
 
 class TestDownloadFile:
     async def test_download_file_missing_key_raises(self, store, tmp_path) -> None:
-        from application_sdk.storage.errors import StorageNotFoundError
-
         with pytest.raises(StorageNotFoundError):
             await download_file("no/such/key.bin", tmp_path / "out.bin", store)
 

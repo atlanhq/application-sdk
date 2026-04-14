@@ -6,6 +6,7 @@ from unittest.mock import call, patch
 import pytest
 from hypothesis import HealthCheck, given, settings
 
+from application_sdk.common.error_codes import IOError as SDKIOError
 from application_sdk.common.types import DataframeType
 from application_sdk.io.json import JsonFileReader
 from application_sdk.io.utils import download_files
@@ -124,8 +125,6 @@ async def test_download_file_not_invoked_when_file_present() -> None:
 @pytest.mark.asyncio
 async def test_download_file_error_propagation() -> None:
     """Ensure errors during download are surfaced as application_sdk IOError."""
-    from application_sdk.common.error_codes import IOError as SDKIOError
-
     path = "/local"
     file_names = ["bad.json"]
 
