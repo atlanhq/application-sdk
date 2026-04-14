@@ -428,15 +428,10 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             download_s3_prefix_with_structure,
             get_persistent_artifacts_path,
         )
-        from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
         from application_sdk.execution._temporal.activity_utils import (
             get_object_store_prefix,
         )
-        from application_sdk.storage.ops import (
-            download_file,
-            download_prefix,
-            upload_prefix,
-        )
+        from application_sdk.storage.ops import download_prefix, upload_prefix
 
         if not input.output_path:
             raise FileNotFoundError(
@@ -588,15 +583,10 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         import json
         import pathlib
 
-        from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
         from application_sdk.execution._temporal.activity_utils import (
             get_object_store_prefix,
         )
-        from application_sdk.storage.ops import (
-            download_file,
-            download_prefix,
-            upload_prefix,
-        )
+        from application_sdk.storage.ops import download_file
 
         if not input.output_path:
             raise ValueError("output_path is required in ExecuteColumnBatchInput")
