@@ -1,6 +1,5 @@
 """Unified object store interface for the application."""
 
-import json
 import os
 import warnings
 from typing import List, Union
@@ -138,11 +137,7 @@ class ObjectStore:
             if normalized_prefix and not normalized_prefix.endswith("/"):
                 query_prefix = normalized_prefix + "/"
 
-            data = (
-                json.dumps({"prefix": query_prefix}).encode("utf-8")
-                if normalized_prefix
-                else ""
-            )
+            data = orjson.dumps({"prefix": query_prefix}) if normalized_prefix else ""
 
             response_data = await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_LIST_OPERATION,
@@ -222,7 +217,7 @@ class ObjectStore:
         """
         normalized_key = cls.as_store_key(key)
         try:
-            data = json.dumps({"key": normalized_key}).encode("utf-8")
+            data = orjson.dumps({"key": normalized_key})
 
             response_data = await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_GET_OPERATION,
@@ -282,7 +277,7 @@ class ObjectStore:
             Exception: If there's an error deleting the file from the object store.
         """
         normalized_key = cls.as_store_key(key)
-        data = json.dumps({"key": normalized_key}).encode("utf-8")
+        data = orjson.dumps({"key": normalized_key})
 
         await cls._invoke_dapr_binding(
             operation=cls.OBJECT_DELETE_OPERATION,

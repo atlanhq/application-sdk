@@ -4,7 +4,6 @@ This module provides the EventStore class for publishing application events
 to a pub/sub system with automatic fallback to HTTP binding.
 """
 
-import json
 import time
 import warnings
 from datetime import datetime
@@ -268,7 +267,9 @@ class EventStore:
             # Send lifecycle events to Segment (non-blocking)
             cls._send_lifecycle_event_to_segment(event)
 
-            payload = json.dumps(event.model_dump(mode="json"))
+            import orjson  # lazy import: heavy dependency
+
+            payload = orjson.dumps(event.model_dump(mode="json"))
 
             # Prepare binding metadata with auth token for HTTP bindings
             binding_metadata = {"content-type": "application/json"}
