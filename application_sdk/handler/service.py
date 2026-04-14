@@ -97,6 +97,26 @@ def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
     return pairs
 
 
+def _pairs_to_flat(pairs: list[dict[str, str]]) -> dict[str, Any]:
+    """Convert v3 [{key, value}] pairs back to a flat credential dict.
+
+    Reverse of ``_flatten_to_pairs``.  Keys prefixed with ``extra.`` are
+    collected into a nested ``extra`` dict so that
+    ``parse_credentials_extra(result)`` works correctly.
+    """
+    flat: dict[str, Any] = {}
+    extra: dict[str, str] = {}
+    for p in pairs:
+        key, value = p["key"], p["value"]
+        if key.startswith("extra."):
+            extra[key[len("extra."):]] = value
+        else:
+            flat[key] = value
+    if extra:
+        flat["extra"] = extra
+    return flat
+
+
 def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize v2 credential formats to v3 list[{key, value}] format.
 
@@ -654,9 +674,8 @@ def create_app_handler_service(
                     # Convert v3 list [{key, value}] to flat dict {key: value}
                     # so get_secret() returns the same format as production
                     # (Dapr/Vault), where credentials are stored as flat dicts.
-                    flat_creds = {
-                        p["key"]: p["value"] for p in body["credentials"]
-                    }
+                    # extra.* keys are nested under an "extra" dict.
+                    flat_creds = _pairs_to_flat(body["credentials"])
                     _secret_store.set(credential_guid, json.dumps(flat_creds))
                     body["credential_guid"] = credential_guid
                     del body["credentials"]
