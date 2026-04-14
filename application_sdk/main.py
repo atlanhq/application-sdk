@@ -761,6 +761,7 @@ def run_handler_mode(config: AppConfig) -> None:
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
         state_store=infra.state_store,
+        secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
     )
@@ -907,6 +908,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
         state_store=infra.state_store,
+        secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
     )

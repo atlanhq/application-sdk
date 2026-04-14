@@ -453,8 +453,8 @@ class App(ABC):
         """
         super().__init_subclass__(**kwargs)
 
-        # Skip if already registered
-        if getattr(cls, "_app_registered", False):
+        # Skip if already registered (check own __dict__ only, not inherited)
+        if cls.__dict__.get("_app_registered", False):
             return
 
         # Skip abstract classes - check if run() is still abstract

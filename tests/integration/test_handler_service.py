@@ -42,6 +42,7 @@ def _reset_service_globals():
     svc._temporal_client = None
     svc._workflow_config = svc.WorkflowClientConfig()
     svc._state_store = None
+    svc._secret_store = None
     svc._storage = None
     _infrastructure_ctx.set(None)
 
@@ -50,6 +51,7 @@ def _reset_service_globals():
     svc._temporal_client = None
     svc._workflow_config = svc.WorkflowClientConfig()
     svc._state_store = None
+    svc._secret_store = None
     svc._storage = None
     _infrastructure_ctx.set(None)
 
@@ -128,8 +130,30 @@ def context_handler():
 
 
 @pytest.fixture
+def context_handler_with_secrets(mock_infra):
+    """Create a handler service with secret_store passed directly (not via ContextVar)."""
+    from application_sdk.handler.service import create_app_handler_service
+
+    _, secrets = mock_infra
+    handler = _ContextCapturingHandler()
+    app = create_app_handler_service(
+        handler, app_name="ctx-test-app", secret_store=secrets
+    )
+    return app, handler
+
+
+@pytest.fixture
 async def context_client(context_handler):
     app, handler = context_handler
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        yield c, handler
+
+
+@pytest.fixture
+async def context_client_with_secrets(context_handler_with_secrets):
+    app, handler = context_handler_with_secrets
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as c:
@@ -155,9 +179,9 @@ async def test_handler_context_wiring(context_client):
 
 
 @pytest.mark.integration
-async def test_handler_context_secret_store_access(mock_infra, context_client):
-    """G6.2: HandlerContext.get_secret() reads from the InfrastructureContext secret store."""
-    client, handler = context_client
+async def test_handler_context_secret_store_access(context_client_with_secrets):
+    """G6.2: HandlerContext.get_secret() reads from secret_store passed directly to create_app_handler_service."""
+    client, handler = context_client_with_secrets
 
     resp = await client.post(
         "/workflows/v1/auth",
@@ -318,6 +342,18 @@ class TrivialOutput(Output):
 
 class TrivialApp(App):
     async def run(self, input: TrivialInput) -> TrivialOutput:
+        return TrivialOutput(greeting=f"Hello, {input.name}!")
+
+
+class CredentialAwareInput(Input):
+    """Input for G6.12: carries credential_guid so we can verify it reaches Temporal."""
+
+    name: str = "world"
+    credential_guid: str = ""
+
+
+class CredentialAwareApp(App):
+    async def run(self, input: CredentialAwareInput) -> TrivialOutput:
         return TrivialOutput(greeting=f"Hello, {input.name}!")
 
 
@@ -490,3 +526,133 @@ async def test_start_saves_config_to_state_store(run_worker, trivial_wf_client):
     # Safety guard: credentials must never be persisted to the state store,
     # even if a migrating connector accidentally passes them in the /start body
     assert "credentials" not in saved
+
+
+@pytest.fixture
+async def credential_wf_client(temporal_client, task_queue, reregister_app):
+    """Handler service configured with CredentialAwareApp and a live InMemorySecretStore."""
+    from application_sdk.handler import service as svc
+    from application_sdk.handler.service import create_app_handler_service
+    from application_sdk.infrastructure.secrets import InMemorySecretStore
+
+    reregister_app(CredentialAwareApp)
+
+    secret_store = InMemorySecretStore()
+    handler = DefaultHandler()
+    app = create_app_handler_service(
+        handler,
+        app_name="cred-aware",
+        app_class=CredentialAwareApp,
+        temporal_host="localhost:7233",
+        task_queue=task_queue,
+        secret_store=secret_store,
+    )
+    svc._temporal_client = temporal_client
+
+    return app, secret_store
+
+
+@pytest.mark.integration
+async def test_start_intercepts_inline_credentials(
+    run_worker, credential_wf_client, temporal_client
+):
+    """G6.12: POST /start with inline credentials intercepts them into the secret store,
+    replaces with a UUID credential_guid, and dispatches to Temporal without raw credentials.
+
+    Verifies:
+    - credentials are stored in the secret store under a freshly generated UUID
+    - stored format is a flat dict {key: value}, matching production Dapr/Vault format
+    - Temporal start event payload carries credential_guid (not raw credentials)
+    """
+    import json
+
+    app, secret_store = credential_wf_client
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        async with run_worker():
+            resp = await client.post(
+                "/workflows/v1/start",
+                json={
+                    "name": "cred-test",
+                    "credentials": [{"key": "password", "value": "s3cr3t"}],
+                },
+            )
+
+    assert resp.status_code == 200
+    wf_id = resp.json()["data"]["workflow_id"]
+    assert wf_id
+
+    # Secret store must have exactly one entry — the intercepted credential
+    stored_names = await secret_store.list_names()
+    assert len(stored_names) == 1
+    credential_guid = stored_names[0]
+
+    # The key must be a valid UUID
+    UUID(credential_guid)
+
+    # Stored value must be flat dict {key: value}, not the v3 list [{key, value}]
+    stored = json.loads(await secret_store.get(credential_guid))
+    assert stored == {"password": "s3cr3t"}
+
+    # Confirm the Temporal workflow start event carries credential_guid and no raw
+    # credentials. CredentialAwareInput declares credential_guid as a named field,
+    # so the UUID propagates through Pydantic into the serialised Temporal payload.
+    handle = temporal_client.get_workflow_handle(wf_id)
+    history = await handle.fetch_history()
+    start_payload_data = b"".join(
+        p.data
+        for p in history.events[
+            0
+        ].workflow_execution_started_event_attributes.input.payloads
+    )
+    assert credential_guid.encode() in start_payload_data
+    assert b'"credentials"' not in start_payload_data
+
+
+# ---------------------------------------------------------------------------
+# Prometheus /metrics endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_prometheus_metrics_endpoint():
+    """G6.13: GET /metrics returns Prometheus exposition format with HTTP metrics."""
+    from unittest import mock
+
+    from application_sdk.handler.service import create_app_handler_service
+
+    handler = DefaultHandler()
+    with mock.patch("application_sdk.handler.service.ENABLE_PROMETHEUS_METRICS", True):
+        app = create_app_handler_service(handler, app_name="prom-test-app")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Verify /metrics endpoint exists and returns 200
+        resp = await client.get("/metrics")
+        assert resp.status_code == 200
+        assert "text/plain" in resp.headers["content-type"]
+
+        body = resp.text
+        # Should contain standard prometheus_client metrics
+        assert "python_info" in body
+
+
+@pytest.mark.integration
+async def test_prometheus_metrics_not_exposed_when_disabled():
+    """G6.14: GET /metrics returns 404 when Prometheus is disabled."""
+    from unittest import mock
+
+    from application_sdk.handler.service import create_app_handler_service
+
+    handler = DefaultHandler()
+    with mock.patch("application_sdk.handler.service.ENABLE_PROMETHEUS_METRICS", False):
+        app = create_app_handler_service(handler, app_name="no-prom-app")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/metrics")
+        assert resp.status_code == 404

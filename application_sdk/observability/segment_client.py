@@ -3,7 +3,7 @@ import base64
 import logging
 import threading
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,9 +17,6 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.models import MetricRecord
 from application_sdk.version import __version__
-
-if TYPE_CHECKING:
-    pass  # Reserved for future type-checking-only imports
 
 
 class SegmentTrackEvent(BaseModel):
@@ -241,12 +238,12 @@ class SegmentClient:
             return
 
         batch: list["MetricRecord"] = []
-        last_send_time = asyncio.get_event_loop().time()
+        last_send_time = asyncio.get_running_loop().time()
 
         while True:
             try:
                 # Calculate remaining time until batch timeout
-                current_time = asyncio.get_event_loop().time()
+                current_time = asyncio.get_running_loop().time()
                 time_since_last_send = current_time - last_send_time
                 timeout = max(0.1, self._batch_timeout_seconds - time_since_last_send)
 
@@ -261,7 +258,7 @@ class SegmentClient:
                     # Timeout - send batch if we have any events
                     pass
 
-                current_time = asyncio.get_event_loop().time()
+                current_time = asyncio.get_running_loop().time()
 
                 # Send batch if we've reached batch size or timeout
                 should_send = len(batch) >= self._batch_size or (
@@ -272,7 +269,7 @@ class SegmentClient:
                 if should_send and batch:
                     await self._send_batch_to_segment(batch)
                     batch = []
-                    last_send_time = asyncio.get_event_loop().time()
+                    last_send_time = asyncio.get_running_loop().time()
 
             except asyncio.CancelledError:
                 # Worker task cancelled - send remaining batch before exit
