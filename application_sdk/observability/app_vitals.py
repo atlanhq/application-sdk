@@ -95,15 +95,15 @@ def _get_correlation_id() -> str:
 def _extract_assets_processed(result: Any) -> int | None:
     """Extract the assets_processed count from an activity return value.
 
-    Convention (RFC DESIGN.md §4.1 — universal throughput denominator):
+    Convention (RFC DESIGN.md §4.1 - universal throughput denominator):
     apps can expose their "unit of value" as one of these attribute names
-    on the return value:
-        - ``assets_processed`` (explicit, preferred)
-        - ``total_record_count`` (used by SqlMetadataExtractor subclasses)
-        - ``record_count`` / ``records_processed`` (alternate conventions)
+    on the return value. Recognised names checked in order:
+    ``assets_processed`` (explicit, preferred),
+    ``total_record_count`` (SqlMetadataExtractor subclasses),
+    ``record_count``, ``records_processed`` (alternate conventions).
 
     Returns None if no recognised attribute is present or the value isn't
-    a positive integer-like. No exceptions are raised — extraction is
+    a positive integer-like. No exceptions are raised - extraction is
     best-effort.
     """
     if result is None:
