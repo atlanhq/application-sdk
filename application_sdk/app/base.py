@@ -1566,16 +1566,26 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                 correlation_id=context.correlation_id,
                 error_type=type(e).__name__,
             )
-            if isinstance(e, NonRetryableError):
-                # deferred import: circular dependency
-                from application_sdk.execution.errors import ApplicationError
+            # deferred import: circular dependency
+            # Raw Python exceptions (e.g. ValueError raised directly in an
+            # entrypoint) must be wrapped in ApplicationError so Temporal
+            # treats them as a clean workflow execution failure.  Without this,
+            # Temporal sees a non-FailureError and marks the workflow *task*
+            # as failed, causing the server to retry the task indefinitely
+            # instead of failing the workflow execution.
+            # FailureError subclasses (ActivityError, CancelledError, …) are
+            # already handled natively by Temporal and must not be rewrapped.
+            from temporalio.exceptions import FailureError
 
-                raise ApplicationError(
-                    str(e),
-                    type=type(e).__name__,
-                    non_retryable=True,
-                ) from e
-            raise
+            from application_sdk.execution.errors import ApplicationError
+
+            if isinstance(e, FailureError):
+                raise
+            raise ApplicationError(
+                str(e),
+                type=type(e).__name__,
+                non_retryable=isinstance(e, NonRetryableError),
+            ) from e
 
         finally:
             try:
