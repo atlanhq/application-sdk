@@ -5,6 +5,7 @@ import inspect
 import os
 import re
 import shutil
+import sys
 import threading
 from abc import ABC
 from collections.abc import Callable
@@ -476,6 +477,7 @@ class App(ABC):
             # Unlike the implicit run() path (which silently skips template base
             # classes), explicit @entrypoint decoration is always intentional —
             # raise loudly so the developer sees the problem immediately.
+            # deferred import: circular dependency (entrypoint imports App)
             from application_sdk.app.entrypoint import EntryPointContractError
 
             for ep in entry_points.values():
@@ -525,6 +527,7 @@ class App(ABC):
         if getattr(run_method, "__isabstractmethod__", False):
             return
 
+        # deferred import: circular dependency (entrypoint imports App)
         from application_sdk.app.entrypoint import EntryPointContractError
 
         try:
@@ -565,6 +568,7 @@ class App(ABC):
                 f"of Output, not Output itself. Define a dedicated dataclass."
             )
 
+        # deferred import: circular dependency (entrypoint imports App)
         from application_sdk.app.entrypoint import EntryPointMetadata
 
         implicit_ep = EntryPointMetadata(
@@ -1381,6 +1385,7 @@ def _scan_entrypoints(cls: type) -> "dict[str, EntryPointMetadata]":
     Returns:
         Dict mapping entry point name to EntryPointMetadata.
     """
+    # deferred import: circular dependency (entrypoint imports App)
     from application_sdk.app.entrypoint import (
         EntryPointMetadata,
         get_entrypoint_metadata,
@@ -1454,6 +1459,12 @@ def _apply_app_registration(
     _register_tasks(cls, name)
 
 
+# Cache generated workflow classes keyed by (app_cls, entry_point_name) so
+# generate_workflow_class() is idempotent across repeated calls (e.g. tests
+# or worker re-creation) and never registers the same Temporal workflow twice.
+_workflow_class_cache: dict[tuple[type, str], type] = {}
+
+
 def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
     """Generate a Temporal workflow class for one entry point.
 
@@ -1467,6 +1478,10 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     Returns:
         A Temporal workflow class decorated with @workflow.defn.
     """
+    cache_key = (app_cls, ep.name)
+    if cache_key in _workflow_class_cache:
+        return _workflow_class_cache[cache_key]
+
     workflow_name = (
         app_cls._app_name if ep.implicit else f"{app_cls._app_name}:{ep.name}"
     )
@@ -1477,6 +1492,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     app_version = app_cls._app_version
 
     async def _run(self, input_data: Input) -> Output:
+        # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
         from application_sdk.app.client import WorkflowAppClient
         from application_sdk.app.context import AppContext
 
@@ -1515,7 +1531,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
         _safe_log(
             "info",
-            f"App started | app={app_name} run_id={run_id} correlation_id={context.correlation_id}",
+            "App started",
             app_name=app_name,
             run_id=str(run_id),
             correlation_id=context.correlation_id,
@@ -1527,7 +1543,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                 if input_summary:
                     _safe_log(
                         "info",
-                        f"App input | app={app_name} run_id={run_id}",
+                        "App input",
                         app_name=app_name,
                         run_id=str(run_id),
                         correlation_id=context.correlation_id,
@@ -1544,13 +1560,14 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         except Exception as e:
             _safe_log(
                 "error",
-                f"App failed | app={app_name} run_id={run_id} error={e} error_type={type(e).__name__}",
+                "App failed",
                 app_name=app_name,
                 run_id=str(run_id),
                 correlation_id=context.correlation_id,
                 error_type=type(e).__name__,
             )
             if isinstance(e, NonRetryableError):
+                # deferred import: circular dependency
                 from application_sdk.execution.errors import ApplicationError
 
                 raise ApplicationError(
@@ -1572,7 +1589,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             duration_ms = round((end_time - start_time).total_seconds() * 1000, 2)
             _safe_log(
                 "info",
-                f"App completed | app={app_name} run_id={run_id} duration_ms={duration_ms}",
+                "App completed",
                 app_name=app_name,
                 run_id=str(run_id),
                 correlation_id=context.correlation_id,
@@ -1608,12 +1625,12 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     # Temporal's sandbox runner imports the workflow class by name from its
     # __module__.  Since this class is generated dynamically it's never added
     # to the module's namespace automatically, so we do it here.
-    import sys
 
     _src_module = sys.modules.get(app_cls.__module__)
     if _src_module is not None:
         setattr(_src_module, cls_name, wf_cls)
 
+    _workflow_class_cache[cache_key] = wf_cls
     return wf_cls
 
 

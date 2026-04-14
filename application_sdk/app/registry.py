@@ -1,5 +1,7 @@
 """App and Task discovery and registration."""
 
+import types
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -30,9 +32,16 @@ class AppMetadata:
     description: str = ""
     tags: dict[str, str] = field(default_factory=dict)
     passthrough_modules: frozenset[str] = field(default_factory=frozenset)
-    entry_points: "dict[str, EntryPointMetadata]" = field(default_factory=dict)
+    entry_points: "Mapping[str, EntryPointMetadata]" = field(default_factory=dict)
     deprecated: bool = False
     deprecation_message: str | None = None
+
+    def __post_init__(self) -> None:
+        # Freeze entry_points so callers cannot mutate it post-construction.
+        # frozen=True prevents direct assignment; object.__setattr__ bypasses that.
+        object.__setattr__(
+            self, "entry_points", types.MappingProxyType(self.entry_points)
+        )
 
     @property
     def qualified_name(self) -> str:

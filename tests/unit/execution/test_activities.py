@@ -242,6 +242,7 @@ class TestGetAllTaskActivities:
         activities = get_all_task_activities()
         # 1 user task per app (2) + 4 framework tasks per app (8) = 10
         # (no dedup — each app has its own qualified activity names)
+        assert len(activities) == 10
         activity_names = [
             a._task_metadata.name  # type: ignore[attr-defined]
             for a in activities

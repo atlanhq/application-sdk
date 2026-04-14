@@ -208,6 +208,13 @@ def entrypoint(
     def decorator(fn: F) -> F:
         fn_name = getattr(fn, "__name__", repr(fn))
         ep_name = name or _method_name_to_kebab(fn_name)
+        # Validate custom name is a safe identifier (defense-in-depth: it becomes
+        # part of a dynamically generated class name and a Temporal workflow name).
+        if name is not None and not ep_name.replace("-", "_").isidentifier():
+            raise EntryPointContractError(
+                f"Entry point name '{ep_name}' is not a valid identifier. "
+                "Use only letters, digits, hyphens, and underscores."
+            )
         input_type, output_type = _validate_entrypoint_signature(fn)
         fn._entrypoint_metadata = EntryPointMetadata(  # type: ignore[attr-defined]
             name=ep_name,

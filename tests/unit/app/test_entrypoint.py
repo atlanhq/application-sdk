@@ -14,7 +14,7 @@ from application_sdk.app.entrypoint import (
     get_entrypoint_metadata,
     is_entrypoint,
 )
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppRegistry
 from application_sdk.contracts.base import Input, Output
 
 # ---------------------------------------------------------------------------
@@ -172,13 +172,9 @@ class TestEntrypointContractErrors:
 class TestEntrypointAppRegistration:
     """Tests for App subclass auto-registration with @entrypoint methods."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
+    @pytest.fixture(autouse=True)
+    def _reset_registries(self, clean_app_registry, clean_task_registry) -> None:  # type: ignore[no-untyped-def]
+        pass
 
     def test_app_with_entrypoint_auto_registers(self) -> None:
         """An App with @entrypoint methods registers in the AppRegistry."""
@@ -355,3 +351,35 @@ class TestEntrypointAppRegistration:
                 {},
                 lambda ns: ns.update({"process": bad_out_ep}),
             )
+
+    def test_entrypoint_missing_return_annotation_raises_contract_error(self) -> None:
+        """@entrypoint without a return type annotation raises EntryPointContractError."""
+        with pytest.raises(EntryPointContractError, match="return type"):
+
+            @entrypoint
+            async def no_return(self: object, input: _EpInput):  # type: ignore[return]
+                return _EpOutput()
+
+    def test_entrypoint_custom_name_invalid_identifier_raises_contract_error(
+        self,
+    ) -> None:
+        """@entrypoint(name=...) with an invalid identifier raises EntryPointContractError."""
+        with pytest.raises(EntryPointContractError, match="valid identifier"):
+
+            @entrypoint(name="bad name with spaces!")
+            async def bad_named(self: object, input: _EpInput) -> _EpOutput:  # type: ignore[misc]
+                return _EpOutput()
+
+    def test_entry_points_on_metadata_are_immutable(self) -> None:
+        """AppMetadata.entry_points is a read-only MappingProxyType."""
+        import types
+
+        class ImmutableEpApp(App):
+            @entrypoint
+            async def work(self, input: _EpInput) -> _EpOutput:
+                return _EpOutput()
+
+        meta = AppRegistry.get_instance().get("immutable-ep-app")
+        assert isinstance(meta.entry_points, types.MappingProxyType)
+        with pytest.raises(TypeError):
+            meta.entry_points["injected"] = meta.entry_points["work"]  # type: ignore[index]

@@ -659,31 +659,37 @@ def create_app_handler_service(
         try:
             client = await _get_temporal_client()
 
-            # Resolve entry point and workflow name from workflow_type
-            from application_sdk.app.registry import AppRegistry
+            # Resolve entry point and workflow name from workflow_type.
+            # Deferred to avoid a circular import at module load time.
+            from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
 
             app_meta = AppRegistry.get_instance().get(app_cls._app_name)  # type: ignore[attr-defined]
             entry_points = app_meta.entry_points
 
             if workflow_type:
                 if workflow_type not in entry_points:
+                    logger.warning(
+                        "Unknown workflow_type '%s' for app %s; available: %s",
+                        workflow_type,
+                        app_name,
+                        sorted(entry_points.keys()),
+                    )
                     raise HTTPException(
                         status_code=400,
-                        detail=(
-                            f"Unknown workflow_type '{workflow_type}'. "
-                            f"Available: {sorted(entry_points.keys())}"
-                        ),
+                        detail="Invalid workflow_type.",
                     )
                 ep = entry_points[workflow_type]
             elif len(entry_points) == 1:
                 ep = next(iter(entry_points.values()))
             elif len(entry_points) > 1:
+                logger.warning(
+                    "workflow_type required but not provided for multi-entry-point app %s; available: %s",
+                    app_name,
+                    sorted(entry_points.keys()),
+                )
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        f"workflow_type is required for multi-entry-point app. "
-                        f"Available: {sorted(entry_points.keys())}"
-                    ),
+                    detail="workflow_type is required for this app.",
                 )
             else:
                 # Fallback: no entry_points (shouldn't happen for a registered app)
@@ -809,6 +815,8 @@ def create_app_handler_service(
                 }
             )
 
+        except HTTPException:
+            raise
         except TypeError as e:
             logger.error(
                 "Invalid workflow input for app %s: %s", app_name, e, exc_info=True
