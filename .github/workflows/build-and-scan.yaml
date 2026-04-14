@@ -42,6 +42,11 @@ on:
         required: false
         type: boolean
         default: true
+      auto_fix:
+        description: "Auto-fix app dependency vulnerabilities by updating packages on the PR branch"
+        required: false
+        type: boolean
+        default: false
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -390,6 +395,15 @@ jobs:
 
           fail_on_findings = os.environ.get("FAIL_ON_FINDINGS", "true").lower() == "true"
 
+          # Write fixable app dependencies for auto-fix step
+          fixable = [v for v in new_vulns if v["source_type"] == "app" and v["fixed"]]
+          with open("/tmp/fixable_packages.json", "w") as f:
+              json.dump(fixable, f)
+          if fixable:
+              print(f"Auto-fixable app dependencies: {len(fixable)}")
+              for v in fixable:
+                  print(f"  {v['package']}@{v['installed']} -> {v['fixed']}")
+
           blockers = new_vulns + expired
           if blockers:
               status = "Failed" if fail_on_findings else "Warning"
@@ -422,6 +436,15 @@ jobs:
                   f.write(summary)
               print(f"GATE PASSED: All {len(unique)} vulnerabilities are allowlisted")
           PYEOF
+
+      - name: Upload fixable packages
+        if: always()
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: fixable-packages
+          path: /tmp/fixable_packages.json
+          retention-days: 1
 
       - name: Comment on PR
         if: always() && github.event_name == 'pull_request'
@@ -457,3 +480,112 @@ jobs:
                 body: body,
               });
             }
+
+  # ── Auto-fix: update vulnerable app dependencies on the PR branch ──────────
+  auto-fix:
+    name: Auto-fix Vulnerabilities
+    needs: [security-gate]
+    if: always() && inputs.auto_fix && github.event_name == 'pull_request' && needs.security-gate.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Download fixable packages
+        uses: actions/download-artifact@v4
+        with:
+          name: fixable-packages
+          path: /tmp
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Auto-fix vulnerable packages
+        id: fix
+        run: |
+          python3 - <<'PYEOF'
+          import json, subprocess, sys
+
+          with open("/tmp/fixable_packages.json") as f:
+              fixable = json.load(f)
+
+          if not fixable:
+              print("No fixable app dependencies found")
+              sys.exit(0)
+
+          fixed = []
+          failed = []
+
+          for v in fixable:
+              pkg = v["package"]
+              target = v["fixed"].split(",")[0].strip()
+              print(f"Updating {pkg} -> {target}...")
+
+              result = subprocess.run(
+                  ["uv", "lock", "--upgrade-package", pkg],
+                  capture_output=True, text=True
+              )
+
+              if result.returncode == 0:
+                  fixed.append(f"{pkg} -> {target}")
+                  print(f"  Updated {pkg}")
+              else:
+                  failed.append(f"{pkg}: {result.stderr[:200]}")
+                  print(f"  Failed to update {pkg}: {result.stderr[:200]}")
+
+          import os
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"fixed_count={len(fixed)}\n")
+              f.write(f"failed_count={len(failed)}\n")
+
+          if fixed:
+              summary = "### Auto-fixed packages\n" + "\n".join(f"- {p}" for p in fixed)
+              if failed:
+                  summary += "\n\n### Failed to update\n" + "\n".join(f"- {p}" for p in failed)
+              with open("/tmp/fix_summary.md", "w") as f:
+                  f.write(summary)
+
+          print(f"\nDone: {len(fixed)} fixed, {len(failed)} failed")
+          PYEOF
+
+      - name: Commit fixes
+        if: steps.fix.outputs.fixed_count > 0
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add uv.lock pyproject.toml 2>/dev/null || true
+          if ! git diff --staged --quiet; then
+            git commit -m "fix(security): auto-update vulnerable dependencies
+
+          Updated packages with known CRITICAL/HIGH CVEs to their fixed versions.
+          This commit was created automatically by the security scan workflow."
+            git push
+            echo "Fixes committed and pushed — checks will re-run automatically"
+          else
+            echo "No lockfile changes to commit"
+          fi
+
+      - name: Comment fix summary on PR
+        if: steps.fix.outputs.fixed_count > 0 && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body;
+            try {
+              body = fs.readFileSync('/tmp/fix_summary.md', 'utf8');
+            } catch {
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body,
+            });
