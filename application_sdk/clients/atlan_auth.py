@@ -105,7 +105,9 @@ class AtlanAuthClient:
         # Refresh token
         logger.info("Refreshing OAuth2 token")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as session:
             async with session.post(
                 self.auth_url,
                 data={
