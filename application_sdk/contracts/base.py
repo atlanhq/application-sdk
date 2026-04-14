@@ -785,10 +785,6 @@ def validate_is_contract(cls: type, context: str = "contract") -> None:
         )
 
 
-# Backward-compatible alias
-validate_is_dataclass = validate_is_contract
-
-
 def get_contract_fields(cls: type) -> dict[str, type]:
     """Get the fields and their types from a contract class.
 

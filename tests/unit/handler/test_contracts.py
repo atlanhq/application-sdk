@@ -9,9 +9,7 @@ from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
     AuthStatus,
-    Credential,
-    MetadataField,
-    MetadataObject,
+    HandlerCredential,
     MetadataOutput,
     PreflightCheck,
     PreflightOutput,
@@ -21,14 +19,14 @@ from application_sdk.handler.contracts import (
 )
 
 
-class TestCredential:
+class TestHandlerCredential:
     def test_frozen(self):
-        cred = Credential(key="api_key", value="secret")
+        cred = HandlerCredential(key="api_key", value="secret")
         with pytest.raises((AttributeError, TypeError, ValidationError)):
             cred.key = "other"  # type: ignore[misc]
 
     def test_fields(self):
-        cred = Credential(key="token", value="abc123")
+        cred = HandlerCredential(key="token", value="abc123")
         assert cred.key == "token"
         assert cred.value == "abc123"
 
@@ -49,7 +47,7 @@ class TestAuthInput:
         assert inp.timeout_seconds == 30
 
     def test_with_credentials(self):
-        creds = [Credential(key="k", value="v")]
+        creds = [HandlerCredential(key="k", value="v")]
         inp = AuthInput(credentials=creds, connection_id="conn-1", timeout_seconds=60)
         assert len(inp.credentials) == 1
         assert inp.timeout_seconds == 60
@@ -197,25 +195,3 @@ class TestMetadataOutput:
                 title="P",
                 children=["not-an-object"],  # type: ignore[list-item]
             )
-
-    def test_legacy_metadata_object_still_works(self):
-        """Deprecated MetadataObject is still importable and functional."""
-        with pytest.warns(DeprecationWarning, match="MetadataObject is deprecated"):
-            obj = MetadataObject(
-                name="users",
-                object_type="TABLE",
-                schema="public",
-                fields=[MetadataField(name="id", field_type="INTEGER")],
-            )
-        assert obj.name == "users"
-        assert obj.fields[0].name == "id"
-
-    def test_deprecated_metadata_field_warns(self):
-        """MetadataField emits DeprecationWarning on instantiation."""
-        with pytest.warns(DeprecationWarning, match="MetadataField is deprecated"):
-            MetadataField(name="col1")
-
-    def test_deprecated_metadata_object_warns(self):
-        """MetadataObject emits DeprecationWarning on instantiation."""
-        with pytest.warns(DeprecationWarning, match="MetadataObject is deprecated"):
-            MetadataObject(name="tbl")

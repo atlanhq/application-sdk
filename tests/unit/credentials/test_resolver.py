@@ -93,181 +93,126 @@ class TestNewPath:
         assert raw["api_key"] == "secret"
 
 
-class TestLegacyPath:
-    """Tests for the legacy credential_guid resolution path (v3 fallback).
+def _make_vault_patches(vault_return=None, vault_side_effect=None):
+    """Build mock DaprCredentialVault + DaprClient patches for resolver tests.
 
-    When Dapr/v2 SecretStore is unavailable (mocked as ImportError), the resolver
-    falls back to the v3 store keyed by the GUID.
+    DaprCredentialVault and DaprClient are lazy-imported inside _resolve_by_guid,
+    so they must be patched at their source modules, not on the resolver module.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_vault = MagicMock()
+    if vault_side_effect is not None:
+        mock_vault.get_credentials = AsyncMock(side_effect=vault_side_effect)
+    else:
+        mock_vault.get_credentials = AsyncMock(return_value=vault_return or {})
+
+    mock_dapr = MagicMock()
+    mock_dapr.__enter__ = MagicMock(return_value=mock_dapr)
+    mock_dapr.__exit__ = MagicMock(return_value=False)
+
+    p_vault = patch(
+        "application_sdk.infrastructure._dapr.client.DaprCredentialVault",
+        MagicMock(return_value=mock_vault),
+    )
+    p_dapr = patch("dapr.clients.DaprClient", MagicMock(return_value=mock_dapr))
+    return p_vault, p_dapr, mock_vault
+
+
+class TestGuidResolutionPath:
+    """Tests for the GUID-based resolution path.
+
+    The resolver checks the local secret store first (in-process inline
+    credentials), then falls back to DaprCredentialVault for platform GUIDs.
     """
 
     @pytest.mark.asyncio
-    async def test_legacy_ref_with_unknown_type_returns_raw(
-        self, store, resolver, monkeypatch
-    ):
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "application_sdk.services.secretstore",
-            None,  # causes ImportError in the resolver
-        )
-        store.set("abc-123", json.dumps({"username": "u", "password": "p"}))
-        ref = legacy_credential_ref("abc-123")
-        cred = await resolver.resolve(ref)
-        assert isinstance(cred, RawCredential)
-        assert cred.get("username") == "u"
+    async def test_local_store_takes_precedence_over_vault(self, store, resolver):
+        """Inline credentials stored in the local secret store are resolved
+        directly — DaprCredentialVault is never called."""
+        import json
 
-    @pytest.mark.asyncio
-    async def test_legacy_ref_with_known_type_parses(
-        self, store, resolver, monkeypatch
-    ):
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "application_sdk.services.secretstore",
-            None,
-        )
-        store.set("abc-123", json.dumps({"api_key": "secret"}))
-        ref = legacy_credential_ref("abc-123", credential_type="api_key")
-        cred = await resolver.resolve(ref)
-        assert isinstance(cred, ApiKeyCredential)
-        assert cred.api_key == "secret"
-
-    @pytest.mark.asyncio
-    async def test_legacy_raw_returns_dict(self, store, resolver, monkeypatch):
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "application_sdk.services.secretstore",
-            None,
-        )
-        store.set("abc-123", json.dumps({"username": "u", "password": "p"}))
-        ref = legacy_credential_ref("abc-123")
-        raw = await resolver.resolve_raw(ref)
-        assert isinstance(raw, dict)
-        assert raw["username"] == "u"
-
-
-class TestLegacyV2SecretStorePath:
-    """Tests for the legacy path when v2 SecretStore IS available.
-
-    Verifies that _resolve_legacy_raw passes the credential_guid as a bare
-    string to V2SecretStore.get_credentials, not wrapped in a dict.
-    """
-
-    async def test_get_credentials_receives_string_not_dict(
-        self, store, resolver, monkeypatch
-    ):
-        """The resolver must pass credential_guid as a string to get_credentials.
-
-        Regression test: previously passed {"credential_guid": guid} (a dict),
-        which caused StateStore.get_state to miss the credential lookup.
-        """
-        captured_args = []
-        expected_creds = {
-            "host": "db.example.com",
-            "port": 1025,
-            "username": "u",
-            "password": "p",
-        }
-
-        class FakeV2SecretStore:
-            @classmethod
-            async def get_credentials(cls, credential_guid):
-                captured_args.append(credential_guid)
-                return expected_creds
-
-        # Inject fake v2 SecretStore module
-        import types
-
-        fake_module = types.ModuleType("application_sdk.services.secretstore")
-        fake_module.SecretStore = FakeV2SecretStore
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "application_sdk.services.secretstore",
-            fake_module,
-        )
-
-        ref = legacy_credential_ref("abc-123")
+        store.set("guid-abc", json.dumps({"host": "local.example.com", "port": 5432}))
+        ref = legacy_credential_ref("guid-abc")
+        # No Dapr mock needed — local store should return before Dapr is reached.
         raw = await resolver.resolve_raw(ref)
 
-        assert len(captured_args) == 1
-        assert (
-            captured_args[0] == "abc-123"
-        ), f"get_credentials should receive a string, got {type(captured_args[0])}: {captured_args[0]}"
-        assert isinstance(raw, dict)
+        assert raw["host"] == "local.example.com"
+        assert raw["port"] == 5432
+
+    @pytest.mark.asyncio
+    async def test_get_credentials_receives_string_not_dict(self, store, resolver):
+        """Regression: resolver must pass the GUID as a plain string, not a dict."""
+        from unittest.mock import MagicMock, patch
+
+        captured: list = []
+        expected_creds = {"host": "db.example.com", "port": 1025}
+
+        async def _capture(guid):
+            captured.append(guid)
+            return expected_creds
+
+        mock_vault = MagicMock()
+        mock_vault.get_credentials = _capture
+        mock_dapr = MagicMock()
+        mock_dapr.__enter__ = MagicMock(return_value=mock_dapr)
+        mock_dapr.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch(
+                "application_sdk.infrastructure._dapr.client.DaprCredentialVault",
+                MagicMock(return_value=mock_vault),
+            ),
+            patch("dapr.clients.DaprClient", MagicMock(return_value=mock_dapr)),
+        ):
+            ref = legacy_credential_ref("abc-123")
+            raw = await resolver.resolve_raw(ref)
+
+        assert captured == ["abc-123"], f"Expected string guid, got: {captured}"
         assert raw["host"] == "db.example.com"
 
-    async def test_resolve_legacy_returns_typed_credential(
-        self, store, resolver, monkeypatch
+    @pytest.mark.asyncio
+    async def test_resolve_returns_typed_credential_for_known_type(
+        self, store, resolver
     ):
-        """Legacy path with v2 SecretStore returns typed credential when type is known."""
-        import types
-
-        class FakeV2SecretStore:
-            @classmethod
-            async def get_credentials(cls, credential_guid):
-                return {"api_key": "secret-from-heracles"}
-
-        fake_module = types.ModuleType("application_sdk.services.secretstore")
-        fake_module.SecretStore = FakeV2SecretStore
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "application_sdk.services.secretstore",
-            fake_module,
+        """Vault returns dict → resolver parses into typed credential."""
+        p_vault, p_dapr, _ = _make_vault_patches(
+            vault_return={"api_key": "secret-from-vault"}
         )
-
-        ref = legacy_credential_ref("abc-123", credential_type="api_key")
-        cred = await resolver.resolve(ref)
+        with p_vault, p_dapr:
+            ref = legacy_credential_ref("abc-123", credential_type="api_key")
+            cred = await resolver.resolve(ref)
 
         assert isinstance(cred, ApiKeyCredential)
-        assert cred.api_key == "secret-from-heracles"
+        assert cred.api_key == "secret-from-vault"
 
-    async def test_resolve_legacy_unknown_type_returns_raw(
-        self, store, resolver, monkeypatch
-    ):
-        """Legacy path with v2 SecretStore wraps in RawCredential for unknown type."""
-        import types
-
-        class FakeV2SecretStore:
-            @classmethod
-            async def get_credentials(cls, credential_guid):
-                return {"host": "db.example.com", "username": "u", "password": "p"}
-
-        fake_module = types.ModuleType("application_sdk.services.secretstore")
-        fake_module.SecretStore = FakeV2SecretStore
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "application_sdk.services.secretstore",
-            fake_module,
+    @pytest.mark.asyncio
+    async def test_resolve_unknown_type_returns_raw_credential(self, store, resolver):
+        """Vault returns dict, unknown type → resolver wraps in RawCredential."""
+        p_vault, p_dapr, _ = _make_vault_patches(
+            vault_return={"host": "db.example.com", "username": "u"}
         )
-
-        ref = legacy_credential_ref("abc-123")  # credential_type="unknown"
-        cred = await resolver.resolve(ref)
+        with p_vault, p_dapr:
+            ref = legacy_credential_ref("abc-123")
+            cred = await resolver.resolve(ref)
 
         assert isinstance(cred, RawCredential)
         assert cred.get("host") == "db.example.com"
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("method", ["resolve_raw", "resolve"])
-    async def test_v2_store_error_raises_credential_not_found(
-        self, store, resolver, monkeypatch, method
+    async def test_vault_error_raises_credential_not_found(
+        self, store, resolver, method
     ):
-        """When v2 SecretStore raises, resolver re-raises as CredentialNotFoundError.
+        """When the GUID is absent from the local store AND DaprCredentialVault
+        raises, the resolver re-raises as CredentialNotFoundError.
 
-        This verifies the error does NOT silently fall through to the v3 store.
         Tests both resolve_raw() and resolve() paths.
         """
-        import types
-
-        class FakeV2SecretStore:
-            @classmethod
-            async def get_credentials(cls, credential_guid):
-                raise RuntimeError("Dapr state store unavailable")
-
-        fake_module = types.ModuleType("application_sdk.services.secretstore")
-        fake_module.SecretStore = FakeV2SecretStore
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "application_sdk.services.secretstore",
-            fake_module,
+        p_vault, p_dapr, _ = _make_vault_patches(
+            vault_side_effect=RuntimeError("Dapr state store unavailable")
         )
-
-        ref = legacy_credential_ref("abc-123")
-        with pytest.raises(CredentialNotFoundError):
-            await getattr(resolver, method)(ref)
+        with p_vault, p_dapr:
+            ref = legacy_credential_ref("abc-123")
+            with pytest.raises(CredentialNotFoundError):
+                await getattr(resolver, method)(ref)
