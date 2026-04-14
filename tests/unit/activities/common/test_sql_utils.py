@@ -7,7 +7,7 @@ import pytest
 
 from application_sdk.activities.common import sql_utils
 from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.io.parquet import ParquetFileWriter
+from application_sdk.storage.formats.parquet import ParquetFileWriter
 
 
 class TestFinalizeMultidbResults:

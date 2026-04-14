@@ -15,8 +15,8 @@ from application_sdk.infrastructure.context import (
     InfrastructureContext,
     set_infrastructure,
 )
-from application_sdk.io.utils import download_files
 from application_sdk.storage.factory import create_local_store
+from application_sdk.storage.formats.utils import download_files
 from application_sdk.storage.ops import (
     download_file,
     download_prefix,

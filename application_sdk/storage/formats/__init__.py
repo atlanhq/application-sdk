@@ -28,13 +28,13 @@ import orjson
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
-from application_sdk.io.utils import (
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import MetricType
+from application_sdk.storage.formats.utils import (
     estimate_dataframe_record_size,
     is_empty_dataframe,
     path_gen,
 )
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.storage.ops import upload_file as _upload_file
 
 logger = get_logger(__name__)

@@ -9,8 +9,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from application_sdk.common.error_codes import IOError as SDKIOError
-from application_sdk.io import Reader
-from application_sdk.io.utils import download_files, find_local_files_by_extension
+from application_sdk.storage.formats import Reader
+from application_sdk.storage.formats.utils import (
+    download_files,
+    find_local_files_by_extension,
+)
 
 # Fixed UUID used in tests so download paths are deterministic
 _FIXED_UUID_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
@@ -74,7 +77,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.io.utils._download_prefix",
+                "application_sdk.storage.formats.utils._download_prefix",
                 side_effect=Exception("Object store download failed"),
             ),
         ):
@@ -184,7 +187,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.io.utils._download_file",
+                "application_sdk.storage.formats.utils._download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
             patch("uuid.uuid4") as mock_uuid4,
@@ -216,7 +219,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=True),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.io.utils._download_prefix",
+                "application_sdk.storage.formats.utils._download_prefix",
                 new_callable=AsyncMock,
                 return_value=["data/file1.parquet", "data/file2.parquet"],
             ) as mock_download_prefix,
@@ -224,7 +227,7 @@ class TestReaderDownloadFiles:
         ):
             mock_uuid4.return_value.hex = _FIXED_UUID_HEX
             with patch(
-                "application_sdk.io.utils.find_local_files_by_extension",
+                "application_sdk.storage.formats.utils.find_local_files_by_extension",
                 side_effect=[[], expected_files],
             ):
                 result = await download_files(
@@ -261,7 +264,7 @@ class TestReaderDownloadFiles:
                 side_effect=[[]],  # Only for initial local check
             ),
             patch(
-                "application_sdk.io.utils._download_file",
+                "application_sdk.storage.formats.utils._download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
             patch("uuid.uuid4") as mock_uuid4,
@@ -294,7 +297,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.io.utils._download_file",
+                "application_sdk.storage.formats.utils._download_file",
                 new_callable=AsyncMock,
                 side_effect=Exception("Download failed"),
             ),
@@ -315,11 +318,11 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=True),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.io.utils._download_prefix",
+                "application_sdk.storage.formats.utils._download_prefix",
                 new_callable=AsyncMock,
             ),
             patch(
-                "application_sdk.io.utils.find_local_files_by_extension",
+                "application_sdk.storage.formats.utils.find_local_files_by_extension",
                 side_effect=[
                     [],
                     [],
@@ -399,7 +402,7 @@ class TestReaderDownloadFiles:
 
         with (
             patch("os.path.isfile", return_value=True),
-            patch("application_sdk.io.utils.logger") as mock_logger,
+            patch("application_sdk.storage.formats.utils.logger") as mock_logger,
         ):
             await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
@@ -423,11 +426,11 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.io.utils._download_file",
+                "application_sdk.storage.formats.utils._download_file",
                 new_callable=AsyncMock,
                 side_effect=Exception("Download failed"),
             ),
-            patch("application_sdk.io.utils.logger") as mock_logger,
+            patch("application_sdk.storage.formats.utils.logger") as mock_logger,
         ):
             with pytest.raises(SDKIOError):
                 await download_files(
@@ -460,11 +463,11 @@ class TestDownloadFilesIsolation:
             patch("os.path.isfile", return_value=False),
             patch("os.path.isdir", return_value=True),
             patch(
-                "application_sdk.io.utils._download_prefix",
+                "application_sdk.storage.formats.utils._download_prefix",
                 new_callable=AsyncMock,
             ) as mock_download_prefix,
             patch(
-                "application_sdk.io.utils.find_local_files_by_extension",
+                "application_sdk.storage.formats.utils.find_local_files_by_extension",
                 side_effect=[
                     [],
                     ["/fake/result1.parquet"],

@@ -28,7 +28,7 @@ import pandas as pd
 import pytest
 
 from application_sdk.common.types import DataframeType
-from application_sdk.io.json import JsonFileWriter
+from application_sdk.storage.formats.json import JsonFileWriter
 
 
 class TestWriterDataIntegrity:
@@ -65,7 +65,7 @@ class TestWriterDataIntegrity:
                     object_store[key] = f.readlines()
 
         with patch(
-            "application_sdk.io._upload_file",
+            "application_sdk.storage.formats._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):
@@ -109,7 +109,7 @@ class TestWriterDataIntegrity:
         import daft
 
         from application_sdk.common.types import DataframeType
-        from application_sdk.io.json import JsonFileWriter
+        from application_sdk.storage.formats.json import JsonFileWriter
 
         object_store: Dict[str, List[str]] = {}
 
@@ -119,7 +119,7 @@ class TestWriterDataIntegrity:
                     object_store[key] = f.readlines()
 
         with patch(
-            "application_sdk.io._upload_file",
+            "application_sdk.storage.formats._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):
@@ -163,7 +163,7 @@ class TestWriterDataIntegrity:
         import daft
 
         from application_sdk.common.types import DataframeType
-        from application_sdk.io.json import JsonFileWriter
+        from application_sdk.storage.formats.json import JsonFileWriter
 
         async def mock_upload(
             source, destination=None, retain_local_copy=False, **kwargs
@@ -172,7 +172,7 @@ class TestWriterDataIntegrity:
                 os.remove(source)
 
         with patch(
-            "application_sdk.io._upload_file",
+            "application_sdk.storage.formats._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):
@@ -224,7 +224,7 @@ class TestWriterDataIntegrity:
         import daft
 
         from application_sdk.common.types import DataframeType
-        from application_sdk.io.json import JsonFileWriter
+        from application_sdk.storage.formats.json import JsonFileWriter
 
         uploaded_files: List[str] = []
 
@@ -237,7 +237,7 @@ class TestWriterDataIntegrity:
                 os.remove(source)
 
         with patch(
-            "application_sdk.io._upload_file",
+            "application_sdk.storage.formats._upload_file",
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):

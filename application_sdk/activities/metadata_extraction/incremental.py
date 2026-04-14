@@ -92,13 +92,13 @@ from application_sdk.common.incremental.state.state_writer import (
     prepare_previous_state,
 )
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
-from application_sdk.io import DataframeType
-from application_sdk.io.json import JsonFileWriter
-from application_sdk.io.parquet import ParquetFileReader
-from application_sdk.io.utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
 from application_sdk.services.statestore import StateStore, StateType
+from application_sdk.storage.formats import DataframeType
+from application_sdk.storage.formats.json import JsonFileWriter
+from application_sdk.storage.formats.parquet import ParquetFileReader
+from application_sdk.storage.formats.utils import is_empty_dataframe
 
 warnings.warn(
     "application_sdk.activities.metadata_extraction.incremental is deprecated. "

@@ -14,7 +14,7 @@ from application_sdk.activities.metadata_extraction.sql import (
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common import sql_utils
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.io.parquet import ParquetFileWriter
+from application_sdk.storage.formats.parquet import ParquetFileWriter
 from application_sdk.transformers import TransformerInterface
 
 
@@ -140,7 +140,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.close",
+        "application_sdk.storage.formats.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
@@ -183,7 +183,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.close",
+        "application_sdk.storage.formats.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
@@ -315,13 +315,16 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.close",
+        "application_sdk.storage.formats.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.io.json.JsonFileWriter.close", new_callable=AsyncMock)
-    @patch("application_sdk.io.parquet.ParquetFileReader.read")
     @patch(
-        "application_sdk.io.parquet.download_files",
+        "application_sdk.storage.formats.json.JsonFileWriter.close",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.storage.formats.parquet.ParquetFileReader.read")
+    @patch(
+        "application_sdk.storage.formats.parquet.download_files",
         new_callable=AsyncMock,
     )
     @patch("daft.read_parquet")
@@ -331,7 +334,7 @@ class TestBaseSQLMetadataExtractionActivities:
     )
     @patch.object(MockTransformer, "transform_metadata")
     @patch(
-        "application_sdk.io.json.JsonFileWriter.write",
+        "application_sdk.storage.formats.json.JsonFileWriter.write",
         new_callable=AsyncMock,
     )
     async def test_transform_data_success(
@@ -382,14 +385,14 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.close",
+        "application_sdk.storage.formats.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
         "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.io.parquet.ParquetFileWriter.write_batches")
+    @patch("application_sdk.storage.formats.parquet.ParquetFileWriter.write_batches")
     async def test_query_executor_single_db_success(
         self,
         mock_write_batched_dataframe,
@@ -435,7 +438,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.close",
+        "application_sdk.storage.formats.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
@@ -568,14 +571,14 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.close",
+        "application_sdk.storage.formats.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
         "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.io.parquet.ParquetFileWriter.write_batches")
+    @patch("application_sdk.storage.formats.parquet.ParquetFileWriter.write_batches")
     @patch("application_sdk.common.sql_utils.get_database_names")
     @patch("application_sdk.common.sql_utils.prepare_query")
     @patch("application_sdk.common.sql_utils.parse_credentials_extra")
@@ -690,7 +693,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.path.exists", return_value=True)
     @patch("application_sdk.common.sql_utils.get_database_names")
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.close",
+        "application_sdk.storage.formats.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     async def test_query_executor_multidb_no_sql_client(
@@ -767,7 +770,7 @@ class TestBaseSQLMetadataExtractionActivities:
         new_callable=AsyncMock,
     )
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.write_batches",
+        "application_sdk.storage.formats.parquet.ParquetFileWriter.write_batches",
         new_callable=AsyncMock,
     )
     async def test_execute_single_db_success_with_write(
@@ -884,7 +887,7 @@ class TestBaseSQLMetadataExtractionActivities:
         new_callable=AsyncMock,
     )
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.write_batches",
+        "application_sdk.storage.formats.parquet.ParquetFileWriter.write_batches",
         new_callable=AsyncMock,
     )
     async def test_execute_single_db_async_iterator(
@@ -926,16 +929,16 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("os.makedirs")
     @patch("os.path.exists", return_value=True)
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.close",
+        "application_sdk.storage.formats.parquet.ParquetFileWriter.close",
         new_callable=AsyncMock,
     )
     @patch(
         "application_sdk.clients.sql.BaseSQLClient.get_batched_results",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.io.parquet.ParquetFileWriter.write_batches")
+    @patch("application_sdk.storage.formats.parquet.ParquetFileWriter.write_batches")
     @patch(
-        "application_sdk.io.parquet.ParquetFileWriter.write",
+        "application_sdk.storage.formats.parquet.ParquetFileWriter.write",
         new_callable=AsyncMock,
     )
     @patch("application_sdk.common.sql_utils.get_database_names")

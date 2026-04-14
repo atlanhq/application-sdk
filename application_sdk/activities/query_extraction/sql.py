@@ -15,10 +15,10 @@ from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.handlers import HandlerInterface
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.io.parquet import ParquetFileWriter
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
 from application_sdk.services.secretstore import SecretStore
+from application_sdk.storage.formats.parquet import ParquetFileWriter
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 

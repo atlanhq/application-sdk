@@ -31,13 +31,13 @@ from application_sdk.constants import (
     SQL_QUERIES_PATH,
 )
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.io import DataframeType
-from application_sdk.io.json import JsonFileWriter
-from application_sdk.io.parquet import ParquetFileReader, ParquetFileWriter
-from application_sdk.io.utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.services.secretstore import SecretStore
+from application_sdk.storage.formats import DataframeType
+from application_sdk.storage.formats.json import JsonFileWriter
+from application_sdk.storage.formats.parquet import ParquetFileReader, ParquetFileWriter
+from application_sdk.storage.formats.utils import is_empty_dataframe
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.query import QueryBasedTransformer
 
