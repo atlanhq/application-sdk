@@ -567,7 +567,7 @@ async def download_prefix(
     *,
     suffix: str = "",
     normalize: bool = True,
-    max_concurrency: int = 10,
+    max_concurrency: int = 4,
 ) -> list[str]:
     """Download all objects under *prefix* to a local directory.
 

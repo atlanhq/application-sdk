@@ -256,6 +256,60 @@ class TestDownloadPrefix:
         assert len(paths) == 1
         assert paths[0].endswith("file.parquet")
 
+    async def test_download_prefix_concurrent(self, store, tmp_path) -> None:
+        """Verify multiple files are downloaded concurrently."""
+        for i in range(8):
+            await _put(
+                f"batch/file_{i}.txt", f"content_{i}".encode(), store, normalize=False
+            )
+
+        from application_sdk.storage.ops import download_prefix
+
+        paths = await download_prefix("batch", tmp_path, store=store, max_concurrency=3)
+        assert len(paths) == 8
+        for i in range(8):
+            assert (
+                tmp_path / f"batch/file_{i}.txt"
+            ).read_bytes() == f"content_{i}".encode()
+
+    async def test_download_prefix_empty(self, store, tmp_path) -> None:
+        """Empty prefix returns no files."""
+        from application_sdk.storage.ops import download_prefix
+
+        paths = await download_prefix("nonexistent", tmp_path, store=store)
+        assert paths == []
+
+    async def test_download_prefix_respects_max_concurrency(
+        self, store, tmp_path
+    ) -> None:
+        """Verify semaphore limits concurrent downloads."""
+        from unittest.mock import patch
+
+        for i in range(6):
+            await _put(f"sem/f_{i}.txt", b"x", store, normalize=False)
+
+        from application_sdk.storage.ops import download_prefix
+
+        max_active = 0
+        active = 0
+        original_download = download_file
+
+        async def tracking_download(*args, **kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            try:
+                return await original_download(*args, **kwargs)
+            finally:
+                active -= 1
+
+        with patch(
+            "application_sdk.storage.ops.download_file", side_effect=tracking_download
+        ):
+            await download_prefix("sem", tmp_path, store=store, max_concurrency=2)
+
+        assert max_active <= 2, f"Expected max 2 concurrent, got {max_active}"
+
 
 class TestDownloadFile:
     async def test_download_file_missing_key_raises(self, store, tmp_path) -> None:
