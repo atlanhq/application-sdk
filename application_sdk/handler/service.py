@@ -98,7 +98,7 @@ def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def _pairs_to_flat(pairs: list[dict[str, str]]) -> dict[str, Any]:
-    """Convert v3 [{key, value}] pairs back to a flat credential dict.
+    """Convert v3 [{key, value}] pairs to a flat credential dict.
 
     Reverse of ``_flatten_to_pairs``.  Keys prefixed with ``extra.`` are
     collected into a nested ``extra`` dict so that
@@ -117,12 +117,16 @@ def _pairs_to_flat(pairs: list[dict[str, str]]) -> dict[str, Any]:
     return flat
 
 
-def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
-    """Normalize v2 credential formats to v3 list[{key, value}] format.
+def _normalize_credentials(
+    body: dict[str, Any],
+    *,
+    to_flat: bool = False,
+) -> dict[str, Any]:
+    """Normalize credential formats to a consistent shape.
 
-    Handles three formats:
+    Handles three input formats:
 
-    1. v3 array (already correct):
+    1. v3 array:
         {"credentials": [{"key": "host", "value": "..."}]}
 
     2. v2 nested dict (Heracles internal):
@@ -131,29 +135,46 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     3. v2 flat top-level (Heracles credential test):
         {"host": "...", "authType": "basic", "password": "...", "extra": {...}}
 
-    Returns the body with credentials normalized to v3 array format.
+    Args:
+        body: The request body dict.
+        to_flat: When True, returns credentials as a flat dict
+            ``{"host": "...", "extra": {"role": "..."}}`` — the format
+            used by ``BaseSQLClient.load()`` and production secret stores
+            (Dapr/Vault).  When False (default), returns the v3 list
+            ``[{"key": ..., "value": ...}]``.
+
+    Returns:
+        The body with credentials normalized to the requested format.
     """
     creds = body.get("credentials")
 
-    # Already v3 array format — no conversion needed
+    # Already v3 array format
     if isinstance(creds, list):
+        if to_flat:
+            return {**body, "credentials": _pairs_to_flat(creds)}
         return body
 
     # Format 2: nested dict under "credentials" key
     if isinstance(creds, dict):
         logger.info(
-            "Converting v2 nested-dict credentials to v3 list, keys=%s",
+            "Converting v2 nested-dict credentials to %s, keys=%s",
+            "flat dict" if to_flat else "v3 list",
             list(creds.keys()),
         )
+        if to_flat:
+            return body  # already a flat dict
         return {**body, "credentials": _flatten_to_pairs(dict(creds))}
 
     # Format 3: flat top-level keys (detect by presence of known credential keys)
     if creds is None and _CREDENTIAL_KEYS & body.keys():
         flat_creds = {k: body[k] for k in list(body.keys()) if k in _CREDENTIAL_KEYS}
         logger.info(
-            "Converting v2 flat top-level credentials to v3 list, keys=%s",
+            "Converting v2 flat top-level credentials to %s, keys=%s",
+            "flat dict" if to_flat else "v3 list",
             list(flat_creds.keys()),
         )
+        if to_flat:
+            return {**body, "credentials": flat_creds}
         return {**body, "credentials": _flatten_to_pairs(flat_creds)}
 
     return body
@@ -667,16 +688,13 @@ def create_app_handler_service(
             # create_app_handler_service) instead of get_infrastructure()
             # because ContextVar does not propagate to uvicorn ASGI request
             # handlers.
-            body = _normalize_credentials(body)
+            # Normalize to flat dict (to_flat=True) so get_secret() returns
+            # the same format as production (Dapr/Vault).
+            body = _normalize_credentials(body, to_flat=True)
             if "credentials" in body and body["credentials"]:
                 if _secret_store is not None and hasattr(_secret_store, "set"):
                     credential_guid = str(uuid4())
-                    # Convert v3 list [{key, value}] to flat dict {key: value}
-                    # so get_secret() returns the same format as production
-                    # (Dapr/Vault), where credentials are stored as flat dicts.
-                    # extra.* keys are nested under an "extra" dict.
-                    flat_creds = _pairs_to_flat(body["credentials"])
-                    _secret_store.set(credential_guid, json.dumps(flat_creds))
+                    _secret_store.set(credential_guid, json.dumps(body["credentials"]))
                     body["credential_guid"] = credential_guid
                     del body["credentials"]
                     logger.debug(
