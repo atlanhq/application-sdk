@@ -103,7 +103,7 @@ jobs:
         # Pull only ``.github/scripts/`` from the SDK at the same SHA this
         # reusable workflow is running (so the parser stays versioned with the
         # workflow, not the caller's repo). Sparse checkout keeps it cheap.
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           repository: atlanhq/application-sdk
           ref: ${{ github.workflow_sha || 'main' }}

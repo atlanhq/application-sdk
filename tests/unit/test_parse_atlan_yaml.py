@@ -27,6 +27,8 @@ sys.modules["parse_atlan_yaml"] = parse_atlan_yaml
 assert _spec and _spec.loader
 _spec.loader.exec_module(parse_atlan_yaml)  # type: ignore[union-attr]
 
+AtlanYamlError = parse_atlan_yaml.AtlanYamlError
+
 
 def _write(tmp_path: Path, payload: dict, name: str = "atlan.yaml") -> Path:
     p = tmp_path / name
@@ -125,7 +127,7 @@ def test_kebab_case_name_rejected(tmp_path, monkeypatch, bad_name):
             "workflow_packages": [_pkg(name=bad_name)],
         },
     )
-    with pytest.raises(SystemExit):
+    with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
 
@@ -138,7 +140,7 @@ def test_type_must_be_in_closed_set(tmp_path, monkeypatch, bad_type):
     pkg = _pkg()
     pkg["type"] = bad_type
     _write(tmp_path, {"name": "x", "app_id": "1", "workflow_packages": [pkg]})
-    with pytest.raises(SystemExit):
+    with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
 
@@ -152,7 +154,7 @@ def test_duplicate_names_rejected(tmp_path, monkeypatch):
             "workflow_packages": [_pkg(), _pkg()],  # two identical names
         },
     )
-    with pytest.raises(SystemExit):
+    with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
 
@@ -166,14 +168,14 @@ def test_missing_required_keys_rejected(tmp_path, monkeypatch):
             "workflow_packages": [{"name": "x", "type": "connector"}],
         },
     )
-    with pytest.raises(SystemExit):
+    with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
 
 def test_workflow_packages_must_be_list(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write(tmp_path, {"name": "x", "app_id": "1", "workflow_packages": {"name": "x"}})
-    with pytest.raises(SystemExit):
+    with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
 
@@ -181,7 +183,7 @@ def test_empty_display_name_or_generated_dir_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     pkg = _pkg(display="")
     _write(tmp_path, {"name": "x", "app_id": "1", "workflow_packages": [pkg]})
-    with pytest.raises(SystemExit):
+    with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
 
@@ -191,25 +193,25 @@ def test_empty_display_name_or_generated_dir_rejected(tmp_path, monkeypatch):
 def test_missing_atlan_yaml_name_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write(tmp_path, {"app_id": "1"})
-    with pytest.raises(SystemExit):
+    with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
 
 def test_unsupported_build_tag_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write(tmp_path, {"name": "x", "app_id": "1", "build_tag": "v2"})
-    with pytest.raises(SystemExit):
+    with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
 
 def test_missing_atlan_yaml_file_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)  # empty dir, no atlan.yaml
-    with pytest.raises(SystemExit):
+    with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
 
 
 def test_invalid_yaml_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "atlan.yaml").write_text("name: x\n  bad: : indent\n  - unclosed")
-    with pytest.raises(SystemExit):
+    with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()

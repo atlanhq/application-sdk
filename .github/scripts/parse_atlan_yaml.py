@@ -45,10 +45,17 @@ _ALLOWED_TYPES = {"connector", "miner", "orchestrator", "utility", "custom"}
 _REQUIRED_PACKAGE_KEYS = {"name", "display_name", "type", "generated_dir"}
 
 
+class AtlanYamlError(Exception):
+    """Raised when atlan.yaml validation fails."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
 def _err(msg: str) -> None:
-    """Emit a GitHub Actions error annotation and exit non-zero."""
-    print(f"::error::{msg}", file=sys.stderr)
-    sys.exit(1)
+    """Raise :class:`AtlanYamlError` with *msg*."""
+    raise AtlanYamlError(msg)
 
 
 def _validate_workflow_packages(wp_val: Any) -> str:
@@ -136,7 +143,8 @@ def parse(
 ) -> dict[str, str]:
     """Parse atlan.yaml + uv.lock and return the workflow-output dict.
 
-    Pure function — no I/O on stdout / GITHUB_OUTPUT. Test entry point.
+    Raises :class:`AtlanYamlError` on validation failures.  No I/O on
+    stdout / GITHUB_OUTPUT — test entry point.
     """
     if not os.path.isfile(atlan_yaml_path):
         _err("atlan.yaml not found in repo root")
@@ -204,7 +212,11 @@ def _write_outputs(outputs: dict[str, str]) -> None:
 
 
 def main() -> None:
-    outputs = parse()
+    try:
+        outputs = parse()
+    except AtlanYamlError as e:
+        print(f"::error::{e.message}", file=sys.stderr)
+        sys.exit(1)
     _write_outputs(outputs)
     print(f"App: {outputs['app_name']}")
     print(f"App ID: {outputs['app_id']}")
