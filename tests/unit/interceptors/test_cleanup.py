@@ -25,7 +25,7 @@ def _suppress_cleanup_deprecation_warning() -> None:
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
-    from application_sdk.interceptors.cleanup import (
+    from application_sdk.execution._temporal.interceptors.cleanup import (
         CleanupInterceptor,
         CleanupWorkflowInboundInterceptor,
         cleanup,
@@ -176,7 +176,9 @@ class TestCleanupActivity:
             ):
                 result = await cleanup()
 
-        from application_sdk.interceptors.cleanup import CleanupResult
+        from application_sdk.execution._temporal.interceptors.cleanup import (
+            CleanupResult,
+        )
 
         assert isinstance(result, CleanupResult)
         assert isinstance(result.path_results, dict)

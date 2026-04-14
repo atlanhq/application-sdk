@@ -6,16 +6,14 @@ activities marked with @mcp_tool decorators and mounts them on FastAPI
 using streamable HTTP transport.
 """
 
-from typing import Any, Callable, List, Optional, Tuple, Type
+from typing import Optional
 
 from fastmcp import FastMCP
 from fastmcp.server.http import StarletteWithLifespan
 
-from application_sdk.activities import ActivitiesInterface
 from application_sdk.constants import MCP_METADATA_KEY
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.mcp.models import MCPMetadata
-from application_sdk.workflows import WorkflowInterface
 
 
 class MCPServer:
@@ -45,54 +43,6 @@ class MCPServer:
             on_duplicate_tools="error",
         )
 
-    async def register_tools(
-        self,
-        workflow_and_activities_classes: List[
-            Tuple[Type[WorkflowInterface], Type[ActivitiesInterface]]
-        ],
-    ) -> None:
-        """
-        Discover activities marked with @mcp_tool and register them.
-
-        Args:
-            workflow_and_activities_classes: List of (workflow_class, activities_class) tuples
-        """
-        activity_methods: List[Callable[..., Any]] = []
-        for workflow_class, activities_class in workflow_and_activities_classes:
-            activities_instance = activities_class()
-            activity_methods.extend(workflow_class.get_activities(activities_instance))  # type: ignore
-
-        for f in activity_methods:
-            mcp_metadata: Optional[MCPMetadata] = getattr(f, MCP_METADATA_KEY, None)
-            if not mcp_metadata:
-                self.logger.info(
-                    "No MCP metadata found on activity method, skipping tool registration",
-                    method=f.__name__,
-                )
-                continue
-
-            if mcp_metadata.visible:
-                self.logger.info(
-                    "Registering MCP tool",
-                    tool_name=mcp_metadata.name,
-                    description=mcp_metadata.description,
-                )
-                self.server.tool(
-                    f,
-                    name=mcp_metadata.name,
-                    description=mcp_metadata.description,
-                    *mcp_metadata.args,
-                    **mcp_metadata.kwargs,
-                )
-            else:
-                self.logger.info(
-                    "Tool is marked as not visible, skipping registration: %s",
-                    mcp_metadata.name,
-                )
-
-        tools = await self.server.get_tools()
-        self.logger.info("Registered %d tools: %s", len(tools), list(tools.keys()))
-
     async def register_tools_from_registry(self, app_name: str) -> None:
         """Discover @mcp_tool-decorated tasks via the v3 TaskRegistry.
 
@@ -105,7 +55,6 @@ class MCPServer:
             app_name: The app name used to look up tasks in the registry.
         """
         from application_sdk.app.registry import TaskRegistry
-        from application_sdk.constants import MCP_METADATA_KEY
 
         tasks = TaskRegistry.get_instance().get_tasks_for_app(app_name)
         for task_meta in tasks:
