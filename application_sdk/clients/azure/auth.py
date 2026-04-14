@@ -66,7 +66,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.common.error_codes import CommonError
-from application_sdk.common.utils import run_sync
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -222,7 +222,8 @@ class AzureAuthProvider:
         )
 
         try:
-            return await run_sync(ClientSecretCredential)(
+            return await run_in_thread(
+                ClientSecretCredential,
                 validated_credentials.tenant_id,
                 validated_credentials.client_id,
                 validated_credentials.client_secret,
@@ -256,7 +257,9 @@ class AzureAuthProvider:
             logger.debug("Validating Azure credential")
 
             # Try to get a token for Azure Management API
-            token = await run_sync(credential.get_token)(AZURE_MANAGEMENT_API_ENDPOINT)
+            token = await run_in_thread(
+                credential.get_token, AZURE_MANAGEMENT_API_ENDPOINT
+            )
 
             if token and hasattr(token, "token"):
                 logger.debug("Azure credential validation successful")
