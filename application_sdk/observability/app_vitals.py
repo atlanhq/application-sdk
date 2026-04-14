@@ -377,6 +377,9 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             "workflow_type": info.workflow_type or "",
             "task_queue": info.task_queue or "",
             "namespace": info.namespace or "",
+            "parent_workflow_id": info.parent.workflow_id if info.parent else "",
+            "parent_run_id": info.parent.run_id if info.parent else "",
+            "continued_run_id": info.continued_run_id or "",
             "status": wf_status,
             "duration_ms": round(wf_duration_ms, 1),
             "total_activities": len(acts),
@@ -573,12 +576,13 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
         start_ns = time.monotonic_ns()
         start_resource = sample()
 
-        # Measure input payload size — sum of serialized arg bytes.
+        # Measure input payload size. At the inbound interceptor level,
+        # input.args are deserialized Python objects (not raw Payloads).
+        # Use sys.getsizeof as a rough in-memory size estimate.
         input_payload_bytes: int | None = None
         try:
-            input_payload_bytes = sum(
-                len(p.data) for p in (input.args or []) if hasattr(p, "data")
-            )
+            if input.args:
+                input_payload_bytes = sum(sys.getsizeof(a) for a in input.args)
         except Exception:
             pass
 
