@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
+import yaml
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -269,6 +270,45 @@ _storage: ObjectStore | None = None
 
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
+
+# Path to atlan.yaml at the app repo root. Multi-entrypoint native apps
+# declare each entrypoint's ``generated_dir`` here; the SDK uses that
+# mapping to resolve ``?entrypoint={name}`` to the correct subdir of
+# ``CONTRACT_GENERATED_DIR`` at runtime.
+ATLAN_YAML_PATH = Path.cwd() / "atlan.yaml"
+
+
+def _load_entrypoint_registry() -> dict[str, str]:
+    """Return ``{entrypoint_name: generated_dir}`` from atlan.yaml.
+
+    Empty dict when atlan.yaml doesn't exist, has no ``entrypoints`` key,
+    or is malformed. Read on each call — the file is tiny and only hit on
+    manifest requests.
+    """
+    if not ATLAN_YAML_PATH.exists():
+        return {}
+    try:
+        data = yaml.safe_load(ATLAN_YAML_PATH.read_text()) or {}
+    except yaml.YAMLError as exc:
+        logger.warning(
+            "atlan.yaml is not valid YAML (%s); entrypoint registry empty", exc
+        )
+        return {}
+    packages = data.get("entrypoints") or []
+    if not isinstance(packages, list):
+        logger.warning(
+            "atlan.yaml entrypoints must be a list; entrypoint registry empty"
+        )
+        return {}
+    registry: dict[str, str] = {}
+    for i, pkg in enumerate(packages):
+        if not isinstance(pkg, dict):
+            continue
+        name = pkg.get("name")
+        generated_dir = pkg.get("generated_dir")
+        if isinstance(name, str) and isinstance(generated_dir, str):
+            registry[name] = generated_dir
+    return registry
 
 
 async def _get_temporal_client() -> Client:
@@ -1369,11 +1409,15 @@ def create_app_handler_service(
 
     @app.get("/workflows/v1/configmaps")
     async def list_configmaps() -> JSONResponse:
+        seen: set[str] = set()
         configmap_ids: list[str] = []
         if CONTRACT_GENERATED_DIR.exists():
-            for json_file in CONTRACT_GENERATED_DIR.glob("*.json"):
-                if json_file.stem != "manifest":
-                    configmap_ids.append(json_file.stem)
+            for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
+                stem = json_file.stem
+                if stem == "manifest" or stem in seen:
+                    continue
+                seen.add(stem)
+                configmap_ids.append(stem)
         return JSONResponse(
             content=_wrap_response(
                 cast("dict[str, Any]", {"configmaps": configmap_ids}),
@@ -1386,20 +1430,39 @@ def create_app_handler_service(
     # ------------------------------------------------------------------
 
     @app.get("/workflows/v1/manifest")
-    async def get_manifest() -> Response:
+    async def get_manifest(entrypoint: str | None = None) -> Response:
+        deployment = (DEPLOYMENT_NAME or "default").encode()
+
+        if entrypoint:
+            # Multi-entrypoint: look up generated_dir from atlan.yaml registry
+            registry = _load_entrypoint_registry()
+            generated_dir = registry.get(entrypoint)
+            if generated_dir is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No entrypoint {entrypoint!r} in atlan.yaml",
+                )
+            ep_manifest = (
+                CONTRACT_GENERATED_DIR / generated_dir / "manifest.json"
+            ).resolve()
+            if not ep_manifest.is_relative_to(CONTRACT_GENERATED_DIR.resolve()):
+                raise HTTPException(status_code=404, detail="Invalid generated_dir")
+            if not ep_manifest.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Entrypoint {entrypoint!r} has no manifest.json in {generated_dir}/",
+                )
+            raw = ep_manifest.read_bytes().replace(b"{deployment_name}", deployment)
+            return Response(content=raw, media_type="application/json")
+
+        # No entrypoint param: single-entrypoint path
         if manifest is not None:
-            # Programmatic: Pydantic model → JSON bytes, single hop.
             return Response(
                 content=manifest.model_dump_json(), media_type="application/json"
             )
         manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
         if manifest_path.exists():
-            # Disk: contract-generated file — serve raw bytes with deployment
-            # name substitution. No parse/reserialize: the file is already
-            # valid JSON, validated at build time by the contract tooling.
-            raw = manifest_path.read_bytes()
-            deployment = (DEPLOYMENT_NAME or "default").encode()
-            raw = raw.replace(b"{deployment_name}", deployment)
+            raw = manifest_path.read_bytes().replace(b"{deployment_name}", deployment)
             return Response(content=raw, media_type="application/json")
         raise HTTPException(status_code=404, detail="No manifest available")
 
@@ -1413,7 +1476,7 @@ def create_app_handler_service(
     # ------------------------------------------------------------------
 
     @app.get("/manifest", include_in_schema=False)
-    async def get_manifest_legacy() -> Response:
+    async def get_manifest_legacy(entrypoint: str | None = None) -> Response:
         """Unversioned alias for ``GET /workflows/v1/manifest``.
 
         .. deprecated::
@@ -1423,7 +1486,7 @@ def create_app_handler_service(
             orchestrators have been updated to use ``/workflows/v1/manifest``.
             Do **not** add new callers of this endpoint.
         """
-        return await get_manifest()
+        return await get_manifest(entrypoint=entrypoint)
 
     # ------------------------------------------------------------------
     # Health probes
