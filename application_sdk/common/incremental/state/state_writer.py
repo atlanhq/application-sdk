@@ -259,7 +259,7 @@ async def upload_current_state(
 
     await upload_prefix(
         local_dir=str(current_state_dir),
-        destination=current_state_s3_prefix,
+        prefix=current_state_s3_prefix,
     )
     logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)
 
@@ -451,7 +451,7 @@ async def create_current_state_snapshot(
                 # Upload incremental-diff to S3
                 await upload_prefix(
                     local_dir=str(incremental_diff_dir),
-                    destination=incremental_diff_s3_prefix,
+                    prefix=incremental_diff_s3_prefix,
                 )
                 logger.info(
                     "Incremental-diff uploaded to S3",
@@ -471,7 +471,7 @@ async def create_current_state_snapshot(
     # Step 6: Upload current-state to S3
     await upload_prefix(
         local_dir=str(current_state_dir),
-        destination=current_state_s3_prefix,
+        prefix=current_state_s3_prefix,
     )
     logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)
 

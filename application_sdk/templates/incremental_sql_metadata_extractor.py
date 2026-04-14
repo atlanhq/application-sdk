@@ -554,7 +554,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         logger.info("Uploading batch files to S3: %s", batches_s3_prefix)
         await upload_prefix(
             local_dir=str(batches_dir),
-            destination=batches_s3_prefix,
+            prefix=batches_s3_prefix,
             retain_local_copy=True,
         )
 
