@@ -359,33 +359,39 @@ import them directly unless you are building a custom `App` from scratch.
 ### FileReference: passing large data between tasks
 
 Temporal has a payload size limit (~2 MB). Use `FileReference` to store large data in object
-storage and pass only a lightweight reference through the workflow:
+storage and pass only a lightweight reference through the workflow.
+
+The framework handles upload and download **automatically and transparently** around every
+`@task` boundary:
+
+- **After** a task returns, any `FileReference` with `local_path` set (ephemeral) is
+  uploaded to the object store and the reference is made durable before it enters the
+  Temporal payload.
+- **Before** a task runs, any durable `FileReference` (with `storage_path` set) is
+  downloaded to a local temp path so `local_path` is populated when your method is called.
+
+You only need to declare `FileReference` fields in your contracts and use
+`FileReference.from_local()` when writing — no manual upload/download calls required:
 
 ```python
 from application_sdk.contracts import Input, Output
 from application_sdk.contracts.types import FileReference
 
 class FetchOutput(Output):
-    results: FileReference  # stored in object store, safe to pass between tasks
+    results: FileReference  # auto-uploaded by the framework after fetch() returns
 
 class ProcessInput(Input):
-    results: FileReference
+    results: FileReference  # auto-downloaded by the framework before process() runs
 
-# In the fetch task — write to a local file, then upload:
+# In the fetch task — write locally and return; the framework uploads automatically:
 async def fetch(self, input: FetchInput) -> FetchOutput:
-    from application_sdk.storage import upload_file
     local_path = "/tmp/results.parquet"
     write_parquet(data, local_path)
-    await upload_file("output/results.parquet", local_path, self.context.storage)
-    ref = FileReference(local_path=local_path, storage_path="output/results.parquet")
-    return FetchOutput(results=ref)
+    return FetchOutput(results=FileReference.from_local(local_path))
 
-# In the next task — download and read:
+# In the next task — local_path is already populated by the framework:
 async def process(self, input: ProcessInput) -> ProcessOutput:
-    from application_sdk.storage import download_file
-    local_path = "/tmp/results.parquet"
-    await download_file(input.results.storage_path, local_path, self.context.storage)
-    data = read_parquet(local_path)
+    data = read_parquet(input.results.local_path)
     ...
 ```
 
