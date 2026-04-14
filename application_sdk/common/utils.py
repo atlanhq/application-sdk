@@ -1,5 +1,3 @@
-import asyncio
-import functools
 import glob
 import json
 import os
@@ -546,25 +544,6 @@ async def get_file_names(output_path: str, typename: str) -> List[str]:
     ]
 
     return file_name_list
-
-
-def run_sync(func):
-    """Run a function in a thread pool executor.
-
-    Args:
-        func: The function to run in thread pool.
-
-    Returns:
-        An async wrapper function that runs the input function in a thread pool.
-    """
-
-    async def wrapper(*args, **kwargs):
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None, functools.partial(func, *args, **kwargs)
-        )
-
-    return wrapper
 
 
 async def download_file_from_upload_response(
