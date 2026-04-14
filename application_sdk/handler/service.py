@@ -103,6 +103,10 @@ def _pairs_to_flat(pairs: list[dict[str, str]]) -> dict[str, Any]:
 
     Reverse of ``_flatten_to_pairs``.  ``extra.*`` keys are nested under
     an ``extra`` dict so ``parse_credentials_extra()`` works correctly.
+
+    Note: all values remain strings — no type coercion is performed.
+    A round-trip through ``_flatten_to_pairs`` then ``_pairs_to_flat``
+    will stringify non-string values (e.g. ``int 5432`` → ``str "5432"``).
     """
     flat: dict[str, Any] = {}
     extra: dict[str, Any] = {}

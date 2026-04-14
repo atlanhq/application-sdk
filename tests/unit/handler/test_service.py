@@ -947,12 +947,27 @@ class TestFlattenToPairs:
     def test_empty_dict(self) -> None:
         assert _flatten_to_pairs({}) == []
 
+    def test_non_dict_extra_dropped(self) -> None:
+        """Non-dict extra values are silently ignored."""
+        result = _flatten_to_pairs({"host": "db.example.com", "extra": "string"})
+        keys = {p["key"] for p in result}
+        assert keys == {"host"}
+
+    def test_mutates_input_extra_key(self) -> None:
+        """_flatten_to_pairs pops 'extra' from the input dict."""
+        creds = {"host": "db.example.com", "extra": {"role": "ADMIN"}}
+        _flatten_to_pairs(creds)
+        assert "extra" not in creds
+
 
 class TestPairsToFlat:
     """Tests for _pairs_to_flat (v3 list → flat dict)."""
 
     def test_simple_keys(self) -> None:
-        pairs = [{"key": "host", "value": "db.example.com"}, {"key": "username", "value": "admin"}]
+        pairs = [
+            {"key": "host", "value": "db.example.com"},
+            {"key": "username", "value": "admin"},
+        ]
         result = _pairs_to_flat(pairs)
         assert result == {"host": "db.example.com", "username": "admin"}
 
@@ -977,18 +992,50 @@ class TestPairsToFlat:
     def test_empty_list(self) -> None:
         assert _pairs_to_flat([]) == {}
 
+    def test_single_extra_key(self) -> None:
+        """A single extra.* key still produces a nested extra dict."""
+        pairs = [
+            {"key": "host", "value": "db.example.com"},
+            {"key": "extra.role", "value": "ADMIN"},
+        ]
+        result = _pairs_to_flat(pairs)
+        assert result == {"host": "db.example.com", "extra": {"role": "ADMIN"}}
+
+    def test_malformed_pair_raises_key_error(self) -> None:
+        """Pairs missing 'key' or 'value' raise KeyError."""
+        import pytest
+
+        with pytest.raises(KeyError):
+            _pairs_to_flat([{"key": "host"}])  # missing "value"
+        with pytest.raises(KeyError):
+            _pairs_to_flat([{"value": "db.example.com"}])  # missing "key"
+
     def test_round_trip_with_flatten_to_pairs(self) -> None:
-        """_pairs_to_flat should reverse _flatten_to_pairs."""
+        """_pairs_to_flat reverses _flatten_to_pairs for string values."""
         original = {
             "host": "snow.example.com",
             "authType": "basic",
             "username": "admin",
             "password": "secret",
-            "extra": {"role": "ACCOUNTADMIN", "warehouse": "COMPUTE_WH", "database": "PROD"},
+            "extra": {
+                "role": "ACCOUNTADMIN",
+                "warehouse": "COMPUTE_WH",
+                "database": "PROD",
+            },
         }
         pairs = _flatten_to_pairs(dict(original))  # dict() because _flatten_to_pairs pops extra
         restored = _pairs_to_flat(pairs)
         assert restored == original
+
+    def test_round_trip_lossy_for_non_string_values(self) -> None:
+        """Non-string values are stringified by _flatten_to_pairs and stay strings."""
+        original = {"host": "db.example.com", "port": 5432, "ssl": True}
+        pairs = _flatten_to_pairs(dict(original))
+        restored = _pairs_to_flat(pairs)
+        # Values are stringified — not equal to original types
+        assert restored["port"] == "5432"  # int → str
+        assert restored["ssl"] == "true"  # bool → str (json.dumps)
+        assert restored["host"] == "db.example.com"  # str stays str
 
 
 class TestStartCredentialPersistence:
