@@ -137,12 +137,17 @@ class AzureClient(ClientInterface):
 
             # Handle credential resolution
             if "credential_guid" in self.credentials:
-                # If we have a credential_guid, use the async get_credentials function
-                from application_sdk.services.secretstore import SecretStore
+                from dapr.clients import DaprClient
 
-                self.resolved_credentials = await SecretStore.get_credentials(
-                    self.credentials["credential_guid"]
+                from application_sdk.infrastructure._dapr.client import (
+                    DaprCredentialVault,
                 )
+
+                with DaprClient() as dapr_client:
+                    vault = DaprCredentialVault(dapr_client)
+                    self.resolved_credentials = await vault.get_credentials(
+                        self.credentials["credential_guid"]
+                    )
             else:
                 # If credentials are already resolved (direct format), use them as-is
                 # Check if credentials appear to need resolution but no credential_guid provided

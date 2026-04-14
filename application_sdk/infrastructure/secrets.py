@@ -1,11 +1,104 @@
 """Secrets management abstraction."""
 
-from typing import ClassVar, Protocol
+from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+def _process_raw_secret(secret_data: Any) -> dict[str, Any]:
+    """Process raw Dapr secret data into a standardised dictionary.
+
+    Mirrors ``_process_secret_data`` in ``_dapr/client.py`` — kept separate to
+    avoid a circular import (``_dapr/client.py`` imports from this module).
+    """
+    import collections.abc
+    import json
+
+    if isinstance(secret_data, collections.abc.Mapping):
+        secret_data = dict(secret_data)
+    if len(secret_data) == 1:
+        k, v = next(iter(secret_data.items()))
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+        return {k: v}
+    return secret_data
+
+
+def get_deployment_secret(key: str) -> Any:
+    """Get a specific key from deployment configuration in the deployment secret store.
+
+    Checks whether the deployment secret store Dapr component is registered
+    before fetching.  Returns ``None`` when:
+
+    - Running in a local (non-Dapr) environment.
+    - The component is not registered.
+    - The key is not present in the secret.
+    - Any Dapr error occurs.
+
+    Args:
+        key: The key to look up inside the deployment secret.
+
+    Returns:
+        The value for *key*, or ``None`` if unavailable.
+    """
+    from application_sdk.constants import (
+        DEPLOYMENT_NAME,
+        DEPLOYMENT_SECRET_PATH,
+        DEPLOYMENT_SECRET_STORE_NAME,
+        LOCAL_ENVIRONMENT,
+    )
+
+    if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+        return None
+
+    try:
+        from dapr.clients import DaprClient
+
+        with DaprClient() as client:
+            # Verify the component is registered before calling.
+            metadata = client.get_metadata()
+            registered = any(
+                c.name == DEPLOYMENT_SECRET_STORE_NAME
+                for c in getattr(metadata, "registered_components", [])
+            )
+            if not registered:
+                logger.warning(
+                    "Deployment secret store component not registered: %s",
+                    DEPLOYMENT_SECRET_STORE_NAME,
+                )
+                return None
+
+            # Try multi-key bundle first.
+            result = client.get_secret(
+                store_name=DEPLOYMENT_SECRET_STORE_NAME, key=DEPLOYMENT_SECRET_PATH
+            )
+            secret_data = _process_raw_secret(result.secret)
+            if isinstance(secret_data, dict) and key in secret_data:
+                return secret_data[key]
+
+            # Fall back to single-key lookup.
+            logger.debug("Multi-key bundle lookup missed; trying single-key: %s", key)
+            result = client.get_secret(store_name=DEPLOYMENT_SECRET_STORE_NAME, key=key)
+            single_data = _process_raw_secret(result.secret)
+            if isinstance(single_data, dict):
+                if key in single_data:
+                    return single_data[key]
+                if len(single_data) == 1:
+                    return list(single_data.values())[0]
+
+            return None
+
+    except Exception:
+        logger.error("Failed to fetch deployment config key: %s", key, exc_info=True)
+        return None
 
 
 class SecretStoreError(Exception):

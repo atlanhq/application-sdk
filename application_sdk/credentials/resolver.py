@@ -21,10 +21,10 @@ class CredentialResolver:
        ``secret_store.get(ref.name)`` → parses JSON → looks up parser in
        registry → returns typed Credential.
 
-    2. **Legacy path** (``credential_guid`` is non-empty): Lazily imports the
-       deprecated v2 ``SecretStore.get_credentials()`` → if
-       ``credential_type != "unknown"`` parses into typed Credential, otherwise
-       wraps in ``RawCredential``.
+    2. **GUID path** (``credential_guid`` is non-empty): Uses
+       ``DaprCredentialVault.get_credentials(guid)`` to fetch and resolve the
+       credential from the upstream store → if ``credential_type != "unknown"``
+       parses into typed Credential, otherwise wraps in ``RawCredential``.
     """
 
     def __init__(
@@ -70,7 +70,7 @@ class CredentialResolver:
             The raw credential data as a dict.
         """
         if ref.credential_guid:
-            return await self._resolve_legacy_raw(ref)
+            return await self._resolve_by_guid(ref)
         raw_json = await self._fetch_raw_json(ref)
         return raw_json
 
@@ -115,43 +115,28 @@ class CredentialResolver:
         return data
 
     async def _resolve_legacy(self, ref: "CredentialRef") -> "Credential":
-        data = await self._resolve_legacy_raw(ref)
+        data = await self._resolve_by_guid(ref)
         if ref.credential_type == "unknown":
             from application_sdk.credentials.types import RawCredential
 
             return RawCredential(data=data)
         return self._registry.parse(ref.credential_type, data)
 
-    async def _resolve_legacy_raw(self, ref: "CredentialRef") -> dict[str, Any]:
-        """Call the deprecated v2 SecretStore.get_credentials() API."""
+    async def _resolve_by_guid(self, ref: "CredentialRef") -> dict[str, Any]:
+        """Resolve credentials by GUID using DaprCredentialVault."""
+        from dapr.clients import DaprClient
+
         from application_sdk.credentials.errors import CredentialNotFoundError
+        from application_sdk.infrastructure._dapr.client import DaprCredentialVault
 
         try:
-            # Lazy import of the v2 deprecated service
-            from application_sdk.services.secretstore import (
-                SecretStore as V2SecretStore,  # type: ignore[import]
-            )
-
-            result: dict[str, Any] = await V2SecretStore.get_credentials(
-                ref.credential_guid
-            )
-            return result
-        except ImportError:
-            # v2 SecretStore not available (e.g. local dev without Dapr) —
-            # fall through to the v3 secret store fallback below.
-            pass
+            with DaprClient() as dapr_client:
+                vault = DaprCredentialVault(dapr_client)
+                result: dict[str, Any] = await vault.get_credentials(
+                    ref.credential_guid
+                )
+                return result
+        except CredentialNotFoundError:
+            raise
         except Exception as exc:
-            # v2 SecretStore is available but raised (e.g. Dapr/state store
-            # error). This is a real failure, not a missing dependency — do NOT
-            # fall through to the v3 store, raise immediately.
             raise CredentialNotFoundError(ref.credential_guid) from exc
-
-        # Fall back: try the v3 secret store with the GUID as the key
-        data = await self._fetch_raw_json(
-            ref.__class__(
-                name=ref.credential_guid,
-                credential_type=ref.credential_type,
-                store_name=ref.store_name,
-            )
-        )
-        return data
