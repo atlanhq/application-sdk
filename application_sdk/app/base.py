@@ -1476,7 +1476,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     app_name = app_cls._app_name
     app_version = app_cls._app_version
 
-    async def _run(self_wf: Any, input_data: Input) -> Output:
+    async def _run(self, input_data: Input) -> Output:
         from application_sdk.app.client import WorkflowAppClient
         from application_sdk.app.context import AppContext
 
