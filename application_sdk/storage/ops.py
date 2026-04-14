@@ -221,7 +221,9 @@ async def upload_file(
             try:
                 resolved_path.unlink(missing_ok=True)
             except OSError as exc:
-                logging.debug("Failed to delete local file %s: %s", resolved_path, exc)
+                logging.debug(
+                    "Failed to delete local file (cleanup): %s", type(exc).__name__
+                )
 
     return digest
 
