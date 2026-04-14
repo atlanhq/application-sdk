@@ -1,6 +1,8 @@
-"""Unit tests for InMemorySecretStore and EnvironmentSecretStore."""
+"""Unit tests for InMemorySecretStore, EnvironmentSecretStore, and get_deployment_secret."""
 
+import json
 import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -9,6 +11,7 @@ from application_sdk.infrastructure.secrets import (
     InMemorySecretStore,
     SecretNotFoundError,
     SecretStoreError,
+    get_deployment_secret,
 )
 
 
@@ -243,3 +246,127 @@ class TestSecretStoreError:
         """Test that secret_name is included in string representation."""
         err = SecretStoreError("failed", secret_name="MY_VAR")
         assert "MY_VAR" in str(err)
+
+
+class TestGetDeploymentSecret:
+    """Tests for get_deployment_secret()."""
+
+    def test_returns_none_in_local_environment(self) -> None:
+        """Local environment → returns None without touching Dapr."""
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "local"),
+            patch("application_sdk.constants.LOCAL_ENVIRONMENT", "local"),
+        ):
+            result = get_deployment_secret("any_key")
+
+        assert result is None
+
+    def test_returns_none_when_component_not_registered(self) -> None:
+        """Component not in registered_components → returns None."""
+        mock_client = MagicMock()
+        metadata = MagicMock()
+        metadata.registered_components = []
+        mock_client.get_metadata.return_value = metadata
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "prod"),
+            patch("application_sdk.constants.LOCAL_ENVIRONMENT", "local"),
+            patch(
+                "application_sdk.constants.DEPLOYMENT_SECRET_STORE_NAME",
+                "deployment-secret-store",
+            ),
+            patch("dapr.clients.DaprClient", return_value=mock_client),
+        ):
+            result = get_deployment_secret("MY_KEY")
+
+        assert result is None
+
+    def test_returns_value_from_multi_key_bundle(self) -> None:
+        """Multi-key bundle contains the requested key → returns its value."""
+        bundle = {"DB_HOST": "db.example.com", "DB_PORT": "5432"}
+        secret_response = MagicMock()
+        secret_response.secret = {"ATLAN_DEPLOYMENT_SECRETS": json.dumps(bundle)}
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        component = MagicMock()
+        component.name = "deployment-secret-store"
+        metadata = MagicMock()
+        metadata.registered_components = [component]
+        mock_client.get_metadata.return_value = metadata
+        mock_client.get_secret.return_value = secret_response
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "prod"),
+            patch("application_sdk.constants.LOCAL_ENVIRONMENT", "local"),
+            patch(
+                "application_sdk.constants.DEPLOYMENT_SECRET_STORE_NAME",
+                "deployment-secret-store",
+            ),
+            patch(
+                "application_sdk.constants.DEPLOYMENT_SECRET_PATH",
+                "ATLAN_DEPLOYMENT_SECRETS",
+            ),
+            patch("dapr.clients.DaprClient", return_value=mock_client),
+        ):
+            result = get_deployment_secret("DB_HOST")
+
+        assert result == "db.example.com"
+
+    def test_falls_back_to_single_key_when_bundle_misses(self) -> None:
+        """Bundle doesn't contain the key → falls back to single-key lookup."""
+        bundle_response = MagicMock()
+        # Bundle is a single key whose value is a JSON dict NOT containing DB_PORT
+        bundle_response.secret = {
+            "ATLAN_DEPLOYMENT_SECRETS": json.dumps({"OTHER_KEY": "other_value"})
+        }
+        single_response = MagicMock()
+        single_response.secret = {"DB_PORT": "5432"}
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        component = MagicMock()
+        component.name = "deployment-secret-store"
+        metadata = MagicMock()
+        metadata.registered_components = [component]
+        mock_client.get_metadata.return_value = metadata
+        mock_client.get_secret.side_effect = [bundle_response, single_response]
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "prod"),
+            patch("application_sdk.constants.LOCAL_ENVIRONMENT", "local"),
+            patch(
+                "application_sdk.constants.DEPLOYMENT_SECRET_STORE_NAME",
+                "deployment-secret-store",
+            ),
+            patch(
+                "application_sdk.constants.DEPLOYMENT_SECRET_PATH",
+                "ATLAN_DEPLOYMENT_SECRETS",
+            ),
+            patch("dapr.clients.DaprClient", return_value=mock_client),
+        ):
+            result = get_deployment_secret("DB_PORT")
+
+        assert result == "5432"
+
+    def test_returns_none_on_exception(self) -> None:
+        """Any unexpected exception → returns None (never raises)."""
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get_metadata.side_effect = RuntimeError("Dapr unavailable")
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "prod"),
+            patch("application_sdk.constants.LOCAL_ENVIRONMENT", "local"),
+            patch("dapr.clients.DaprClient", return_value=mock_client),
+        ):
+            result = get_deployment_secret("ANY_KEY")
+
+        assert result is None

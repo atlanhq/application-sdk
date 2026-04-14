@@ -5,7 +5,7 @@ the v3 infrastructure event binding. Falls back silently when no event
 binding is configured.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional, Type
 
 from temporalio import activity, workflow
@@ -55,12 +55,10 @@ def _get_event_token_service() -> "OAuthTokenService | None":
         )
         from application_sdk.credentials.oauth import OAuthTokenService
         from application_sdk.credentials.types import OAuthClientCredential
-        from application_sdk.services.secretstore import SecretStore
+        from application_sdk.infrastructure.secrets import get_deployment_secret
 
-        client_id = SecretStore.get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
-        client_secret = SecretStore.get_deployment_secret(
-            WORKFLOW_AUTH_CLIENT_SECRET_KEY
-        )
+        client_id = get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
+        client_secret = get_deployment_secret(WORKFLOW_AUTH_CLIENT_SECRET_KEY)
         token_url = AUTH_URL
 
         if not client_id or not client_secret or not token_url:
@@ -108,7 +106,7 @@ def _enrich_event_metadata(event: Event) -> Event:
         event.metadata = EventMetadata()
 
     event.metadata.application_name = APPLICATION_NAME
-    event.metadata.created_timestamp = int(datetime.now().timestamp())
+    event.metadata.created_timestamp = int(datetime.now(tz=UTC).timestamp())
     event.metadata.topic_name = event.get_topic_name()
 
     try:
