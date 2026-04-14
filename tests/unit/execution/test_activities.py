@@ -192,8 +192,8 @@ class TestGetAllTaskActivities:
                 return _ActOutput()
 
         activities = get_all_task_activities()
-        # 2 user tasks + 4 framework tasks (upload, download, cleanup_files, cleanup_storage) = 6
-        assert len(activities) == 6
+        # 2 user tasks + 5 framework tasks (upload, download, cleanup_files, cleanup_storage, resolve_config) = 7
+        assert len(activities) == 7
 
     def test_filters_by_app_names(self) -> None:
         class _AppA(App):
@@ -240,8 +240,8 @@ class TestGetAllTaskActivities:
                 return _Out2()
 
         activities = get_all_task_activities(app_names=None)
-        # 1 user task per app (2) + 4 framework tasks deduplicated across apps (4) = 6
-        assert len(activities) == 6
+        # 1 user task per app (2) + 5 framework tasks deduplicated across apps (5) = 7
+        assert len(activities) == 7
         activity_names = [
             a._task_metadata.name  # type: ignore[attr-defined]
             for a in activities

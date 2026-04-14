@@ -2,6 +2,7 @@
 
 import importlib.metadata
 import inspect
+import logging
 import os
 import re
 import shutil
@@ -37,6 +38,7 @@ from application_sdk.contracts.cleanup import (
     StorageCleanupInput,
     StorageCleanupOutput,
 )
+from application_sdk.contracts.config import ResolveConfigInput, ResolveConfigOutput
 from application_sdk.contracts.storage import (
     DownloadInput,
     DownloadOutput,
@@ -50,6 +52,8 @@ from application_sdk.errors import (
     APP_NON_RETRYABLE,
     ErrorCode,
 )
+
+_base_logger = logging.getLogger(__name__)
 
 try:
     _FRAMEWORK_VERSION = importlib.metadata.version("application-sdk")
@@ -883,6 +887,132 @@ class App(ABC):
         workflow.continue_as_new(
             args=[input],
             memo={"correlation_id": self.correlation_id},
+        )
+
+    # =========================================================================
+    # Framework-provided config resolution task
+    # =========================================================================
+
+    @task(timeout_seconds=60, retry_max_attempts=2)
+    async def resolve_config(
+        self,
+        input: ResolveConfigInput,
+    ) -> ResolveConfigOutput:
+        """Read workflow config pre-pushed by an external orchestrator.
+
+        In production, Argo marketplace-scripts push workflow configuration
+        (credentials, connection, metadata, filters) via
+        ``POST /workflows/v1/config/{workflow_id}`` **before** starting the
+        Temporal workflow.  The Temporal input payload typically contains
+        only ``workflow_id``; the remaining fields must be resolved from
+        the state store.
+
+        This task calls the co-located HTTP server's config endpoint to
+        retrieve the stored configuration — the same code path used by the
+        handler service for ``GET /workflows/v1/config/{id}``.
+
+        This is the v3 equivalent of v2's ``get_workflow_args`` activity.
+
+        Args:
+            input: ``ResolveConfigInput`` with the ``workflow_id`` to look up.
+
+        Returns:
+            ``ResolveConfigOutput`` with the resolved config fields.
+            Fields not found in the stored config default to empty values.
+        """
+        import httpx
+
+        config: dict[str, Any] = {}
+        workflow_id = input.workflow_id
+
+        if not workflow_id:
+            _base_logger.warning(
+                "resolve_config: no workflow_id provided, returning empty config"
+            )
+            return ResolveConfigOutput()
+
+        # Read from the handler's own /config endpoint (same pod).
+        # The service layer tries state store first, falls back to object store.
+        server_port = os.environ.get("ATLAN_APP_PORT", "8000")
+        url = f"http://localhost:{server_port}/workflows/v1/config/{workflow_id}"
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(url, params={"type": "workflows"}, timeout=10)
+                if resp.status_code == 200:
+                    result = resp.json()
+                    # Service wraps the config in {success, data, message}
+                    config = result.get("data", result)
+                elif resp.status_code == 404:
+                    _base_logger.warning(
+                        "resolve_config: config not found for workflow_id=%s",
+                        workflow_id,
+                    )
+                else:
+                    _base_logger.warning(
+                        "resolve_config: unexpected status %d for workflow_id=%s",
+                        resp.status_code,
+                        workflow_id,
+                    )
+        except Exception as exc:
+            _base_logger.warning("resolve_config: failed to fetch config: %s", exc)
+
+        # Extract connection info if present.
+        # ConnectionRef expects nested AE format:
+        # {"typeName": "Connection", "attributes": {"qualifiedName": ..., "name": ...}}
+        # Config may have it as a nested dict or flat keys.
+        connection_data = config.get("connection", {})
+        connection_ref = None
+        if connection_data:
+            from application_sdk.contracts.types import ConnectionRef
+
+            try:
+                connection_ref = ConnectionRef.model_validate(connection_data)
+            except Exception:
+                # Flat format fallback — construct from known keys
+                from application_sdk.contracts.types import ConnectionAttributes
+
+                qn = connection_data.get(
+                    "connection_qualified_name",
+                    connection_data.get("connectionQualifiedName", ""),
+                )
+                name = connection_data.get(
+                    "connection_name",
+                    connection_data.get("connectionName", ""),
+                )
+                # Also check nested attributes format
+                attrs = connection_data.get("attributes", {})
+                if not qn and attrs:
+                    qn = attrs.get("qualified_name", attrs.get("qualifiedName", ""))
+                if not name and attrs:
+                    name = attrs.get("name", "")
+                connection_ref = ConnectionRef(
+                    attributes=ConnectionAttributes(
+                        qualified_name=qn,
+                        name=name,
+                    )
+                )
+
+        return ResolveConfigOutput(
+            credential_guid=config.get(
+                "credential_guid", config.get("credentialGuid", "")
+            ),
+            connection=connection_ref,
+            metadata=config.get("metadata", {}),
+            output_path=config.get("output_path", config.get("outputPath", "")),
+            output_prefix=config.get("output_prefix", config.get("outputPrefix", "")),
+            exclude_filter=config.get(
+                "exclude_filter", config.get("excludeFilter", "")
+            ),
+            include_filter=config.get(
+                "include_filter", config.get("includeFilter", "")
+            ),
+            temp_table_regex=config.get(
+                "temp_table_regex", config.get("tempTableRegex", "")
+            ),
+            source_tag_prefix=config.get(
+                "source_tag_prefix", config.get("sourceTagPrefix", "")
+            ),
         )
 
     # =========================================================================

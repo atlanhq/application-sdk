@@ -29,6 +29,7 @@ from application_sdk.contracts.base import (
     validate_is_contract,
     validate_payload_safety,
 )
+from application_sdk.contracts.config import ResolveConfigInput, ResolveConfigOutput
 from application_sdk.contracts.storage import (
     DownloadInput,
     DownloadOutput,
@@ -70,6 +71,8 @@ __all__ = [
     "GitReference",
     "MaxItems",
     "StorageTier",
+    "ResolveConfigInput",
+    "ResolveConfigOutput",
     "UploadInput",
     "UploadOutput",
     "DownloadInput",

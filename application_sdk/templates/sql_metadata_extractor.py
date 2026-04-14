@@ -146,9 +146,11 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         """Orchestrate the full metadata extraction pipeline.
 
         Default orchestration:
+        0. Resolve config from state store if credential_guid is empty (Argo path)
         1. Fetch all metadata types in parallel (databases, schemas, tables, columns)
         2. Transform data
-        3. Return aggregated output
+        3. Upload to Atlan
+        4. Return aggregated output
 
         Override to customize the orchestration order or add additional steps.
         """
@@ -156,6 +158,57 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         logger.info("Starting SQL metadata extraction: %s", workflow_id)
 
         try:
+            # Step 0: Resolve config from state store if needed (Argo path).
+            # When Argo triggers the workflow, it only passes workflow_id.
+            # The full config (credentials, connection, metadata) was pre-pushed
+            # via POST /workflows/v1/config/{workflow_id} by marketplace-scripts.
+            # This is the v3 equivalent of v2's get_workflow_args activity.
+            if not input.credential_guid and not input.credential_ref and workflow_id:
+                from application_sdk.contracts.config import ResolveConfigInput
+
+                logger.info(
+                    "credential_guid is empty, resolving config from state store "
+                    "for workflow_id=%s",
+                    workflow_id,
+                )
+                resolved = await self.resolve_config(
+                    ResolveConfigInput(workflow_id=workflow_id)
+                )
+                # Merge resolved config into input, only overwriting empty fields
+                if resolved.credential_guid and not input.credential_guid:
+                    input = input.model_copy(
+                        update={
+                            k: v
+                            for k, v in {
+                                "credential_guid": resolved.credential_guid,
+                                "connection": resolved.connection or input.connection,
+                                "output_path": resolved.output_path
+                                or input.output_path,
+                                "output_prefix": resolved.output_prefix
+                                or input.output_prefix,
+                                "exclude_filter": resolved.exclude_filter
+                                or input.exclude_filter,
+                                "include_filter": resolved.include_filter
+                                or input.include_filter,
+                                "temp_table_regex": resolved.temp_table_regex
+                                or input.temp_table_regex,
+                                "source_tag_prefix": resolved.source_tag_prefix
+                                or input.source_tag_prefix,
+                            }.items()
+                            if v  # only merge non-empty values
+                        }
+                    )
+                    logger.info(
+                        "Config resolved: credential_guid=%s, connection=%s",
+                        resolved.credential_guid,
+                        resolved.connection,
+                    )
+                else:
+                    logger.warning(
+                        "resolve_config returned empty credential_guid for workflow_id=%s",
+                        workflow_id,
+                    )
+
             # Prefer credential_ref; fall back to legacy credential_guid
             cred_ref = input.credential_ref
             if cred_ref is None and input.credential_guid:
