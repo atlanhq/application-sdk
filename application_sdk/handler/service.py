@@ -98,6 +98,29 @@ def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
     return pairs
 
 
+def _pairs_to_flat(pairs: list[dict[str, str]]) -> dict[str, Any]:
+    """Convert v3 [{key, value}] pairs to a flat credential dict.
+
+    Reverse of ``_flatten_to_pairs``.  ``extra.*`` keys are nested under
+    an ``extra`` dict so ``parse_credentials_extra()`` works correctly.
+
+    Note: all values remain strings — no type coercion is performed.
+    A round-trip through ``_flatten_to_pairs`` then ``_pairs_to_flat``
+    will stringify non-string values (e.g. ``int 5432`` → ``str "5432"``).
+    """
+    flat: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
+    for p in pairs:
+        key, value = p["key"], p["value"]
+        if key.startswith("extra."):
+            extra[key[len("extra.") :]] = value
+        else:
+            flat[key] = value
+    if extra:
+        flat["extra"] = extra
+    return flat
+
+
 def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize v2 credential formats to v3 list[{key, value}] format.
 
@@ -652,10 +675,10 @@ def create_app_handler_service(
             if "credentials" in body and body["credentials"]:
                 if _secret_store is not None and hasattr(_secret_store, "set"):
                     credential_guid = str(uuid4())
-                    # Convert v3 list [{key, value}] to flat dict {key: value}
-                    # so get_secret() returns the same format as production
-                    # (Dapr/Vault), where credentials are stored as flat dicts.
-                    flat_creds = {p["key"]: p["value"] for p in body["credentials"]}
+                    # Convert v3 list [{key, value}] to flat dict so
+                    # get_secret() returns the same format as production
+                    # (Dapr/Vault). extra.* keys nested under "extra".
+                    flat_creds = _pairs_to_flat(body["credentials"])
                     _secret_store.set(credential_guid, json.dumps(flat_creds))
                     body["credential_guid"] = credential_guid
                     del body["credentials"]
