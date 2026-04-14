@@ -26,7 +26,8 @@ The pipeline has 10 stages. Execute every one. Do NOT declare "run complete" aft
 - When a finding is canceled → set ticket to "Canceled" (American spelling — check `list_issue_statuses` first!)
 - When work starts → set ticket to "In Progress"
 - When review feedback is addressed → leave a Linear comment summarizing what was fixed
-- When PR is ready → set ticket to "Done", leave comment "All gates passed"
+- When all gates pass → set ticket to "In Review" (NOT "Done") and leave comment "All gates passed — ready for human merge"
+- **"Done" means MERGED** — only set "Done" when the PR is actually merged into the target branch. Until then, the ticket stays "In Review". The 2026-04-14 run incorrectly set 9 tickets to "Done" while PRs were still open.
 - **Always call `list_issue_statuses` before the first state update** to get exact state names for the workspace
 - **Use Linear comments for decisions/reasoning** — keep the description clean and short, put the narrative in comments so people can follow the thread
 
