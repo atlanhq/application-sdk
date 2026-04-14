@@ -10,11 +10,11 @@
 # Build: parallel matrix (amd64 + arm64), merged into a multi-arch manifest.
 # Publish: after build succeeds, registers the version in the Global Marketplace via API.
 #
-# Usage in each app repo (.github/entrypoints/build-and-publish.yaml):
+# Usage in each app repo (.github/workflows/build-and-publish.yaml):
 #
 #   jobs:
 #     build-and-publish:
-#       uses: atlanhq/application-sdk/.github/entrypoints/build-and-publish-app.yaml@main
+#       uses: atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml@main
 #       with:
 #         publish: ${{ github.event.inputs.publish != 'false' }}
 #         channel: ${{ inputs.channel || 'all' }}
@@ -24,7 +24,7 @@
 name: Build & Publish Atlan App
 
 on:
-  entrypoint_call:
+  workflow_call:
     inputs:
       ref:
         description: "Branch or SHA to checkout and build (default: caller's ref)"
@@ -95,7 +95,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -106,7 +106,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           repository: atlanhq/application-sdk
-          ref: ${{ github.entrypoint_sha || 'main' }}
+          ref: ${{ github.workflow_sha || 'main' }}
           path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
@@ -192,7 +192,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -297,7 +297,7 @@ jobs:
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
-    uses: atlanhq/application-sdk/.github/entrypoints/build-and-scan.yaml@main
+    uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main
     with:
       image: ${{ needs.prepare.outputs.ghcr_image }}
       snyk_org: partner-images
@@ -320,7 +320,7 @@ jobs:
         with:
           token: ${{ secrets.ORG_PAT_GITHUB }}
           repository: ${{ matrix.repo }}
-          event-type: dispatch_app_builder_entrypoint
+          event-type: dispatch_app_builder_workflow
           client-payload: |-
             {
                 "app_name": "${{ needs.prepare.outputs.app_name }}",
