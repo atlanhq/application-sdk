@@ -1,13 +1,14 @@
 """Dapr client implementations."""
 
-import collections.abc
 import copy
 import json
+import re
 from enum import Enum
 from typing import Any
 
 from dapr.clients import DaprClient
 
+from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.infrastructure.bindings import BindingError, BindingResponse
 from application_sdk.infrastructure.pubsub import MessageHandler, PubSubError
 from application_sdk.infrastructure.secrets import SecretNotFoundError, SecretStoreError
@@ -15,6 +16,9 @@ from application_sdk.infrastructure.state import StateStoreError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+# Allowlist: UUIDs, hex strings, and similar safe identifiers.
+_SAFE_GUID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 # ---------------------------------------------------------------------------
@@ -44,18 +48,9 @@ def _handle_single_key_secret(key: str, value: Any) -> dict[str, Any]:
     return {key: value}
 
 
-def _process_secret_data(secret_data: Any) -> dict[str, Any]:
-    """Process raw Dapr secret data into a standardised dictionary.
-
-    Converts ``ScalarMapContainer`` to ``dict`` and unwraps single-key secrets
-    that contain a JSON-encoded dict.
-    """
-    if isinstance(secret_data, collections.abc.Mapping):
-        secret_data = dict(secret_data)
-    if len(secret_data) == 1:
-        k, v = next(iter(secret_data.items()))
-        return _handle_single_key_secret(k, v)
-    return secret_data
+# _process_secret_data is now provided by _secret_utils.process_secret_data.
+# Kept as a thin alias so existing internal callers don't require renaming.
+_process_secret_data = process_secret_data
 
 
 def _resolve_credentials(
@@ -482,13 +477,17 @@ class DaprCredentialVault:
                 )
                 try:
                     logger.debug("Fetching multi-key secret: %s", key_to_fetch)
-                    secret_data = self._get_secret(key_to_fetch)
+                    secret_data = await self._get_secret(key_to_fetch)
                 except Exception:
                     logger.warning(
                         "Failed to fetch secret bundle: %s", key_to_fetch, exc_info=True
                     )
             else:
-                secret_data = self._fetch_single_key_secrets(credential_config)
+                import asyncio
+
+                secret_data = await asyncio.to_thread(
+                    self._fetch_single_key_secrets, credential_config
+                )
 
             if credential_source == _CredentialSource.DIRECT:
                 credential_config.update(secret_data)
@@ -506,7 +505,12 @@ class DaprCredentialVault:
             ) from e
 
     async def _fetch_credential_config(self, credential_guid: str) -> dict[str, Any]:
-        """Fetch the credential config JSON from the upstream object store."""
+        """Fetch the credential config JSON from the upstream object store.
+
+        Raises:
+            CredentialVaultError: If the GUID contains unsafe characters or no
+                config is found in the upstream store.
+        """
         import os
 
         from application_sdk.constants import (
@@ -514,7 +518,16 @@ class DaprCredentialVault:
             STATE_STORE_PATH_TEMPLATE,
             TEMPORARY_PATH,
         )
+        from application_sdk.infrastructure.credential_vault import CredentialVaultError
         from application_sdk.storage.ops import normalize_key
+
+        # Validate before interpolation to prevent path traversal.
+        if not _SAFE_GUID_RE.match(credential_guid):
+            raise CredentialVaultError(
+                "Invalid credential GUID — must match [a-zA-Z0-9_-]+: %r"
+                % credential_guid,
+                credential_guid=credential_guid,
+            )
 
         raw_path = os.path.join(
             TEMPORARY_PATH,
@@ -536,34 +549,48 @@ class DaprCredentialVault:
         response = await self._upstream.invoke("get", data=data, metadata=metadata)
 
         if response.data is None:
-            logger.warning(
-                "No credential config found for GUID %s in upstream store",
-                credential_guid,
+            raise CredentialVaultError(
+                "No credential config found for GUID %s in upstream store"
+                % credential_guid,
+                credential_guid=credential_guid,
             )
-            return {}
 
         return json.loads(response.data)
 
-    def _get_secret(
+    def _get_secret_sync(
+        self, secret_key: str, component_name: str | None = None
+    ) -> dict[str, Any]:
+        """Synchronous secret fetch — call via ``_get_secret`` to avoid blocking."""
+        from application_sdk.common.exc_utils import rewrap
+
+        store = component_name or self._secret_store_name
+        try:
+            result = self._client.get_secret(store_name=store, key=secret_key)
+            return process_secret_data(result.secret)
+        except Exception as e:
+            raise rewrap(e, "Failed to fetch secret (component=%s)" % store) from e
+
+    async def _get_secret(
         self, secret_key: str, component_name: str | None = None
     ) -> dict[str, Any]:
         """Fetch and process a secret from the Dapr secret store.
 
+        Runs the synchronous gRPC call in a thread-pool executor so the async
+        event loop is not blocked.
+
         Returns ``{}`` in local-environment deployments to avoid secret store
         dependency during development.
         """
-        from application_sdk.common.exc_utils import rewrap
+        import asyncio
+
         from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 
         if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
             return {}
 
-        store = component_name or self._secret_store_name
-        try:
-            result = self._client.get_secret(store_name=store, key=secret_key)
-            return _process_secret_data(result.secret)
-        except Exception as e:
-            raise rewrap(e, "Failed to fetch secret (component=%s)" % store) from e
+        return await asyncio.to_thread(
+            self._get_secret_sync, secret_key, component_name
+        )
 
     def _fetch_single_key_secrets(
         self, credential_config: dict[str, Any]
@@ -577,7 +604,7 @@ class DaprCredentialVault:
             if not value.strip():
                 return
             try:
-                single_secret = self._get_secret(value)
+                single_secret = self._get_secret_sync(value)
                 if single_secret:
                     for k, v in single_secret.items():
                         if v is None or v == "":

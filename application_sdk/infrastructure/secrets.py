@@ -3,33 +3,10 @@
 from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
+from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-
-
-def _process_raw_secret(secret_data: Any) -> dict[str, Any]:
-    """Process raw Dapr secret data into a standardised dictionary.
-
-    Mirrors ``_process_secret_data`` in ``_dapr/client.py`` — kept separate to
-    avoid a circular import (``_dapr/client.py`` imports from this module).
-    """
-    import collections.abc
-    import json
-
-    if isinstance(secret_data, collections.abc.Mapping):
-        secret_data = dict(secret_data)
-    if len(secret_data) == 1:
-        k, v = next(iter(secret_data.items()))
-        if isinstance(v, str):
-            try:
-                parsed = json.loads(v)
-                if isinstance(parsed, dict):
-                    return parsed
-            except Exception:
-                pass
-        return {k: v}
-    return secret_data
 
 
 def get_deployment_secret(key: str) -> Any:
@@ -80,14 +57,14 @@ def get_deployment_secret(key: str) -> Any:
             result = client.get_secret(
                 store_name=DEPLOYMENT_SECRET_STORE_NAME, key=DEPLOYMENT_SECRET_PATH
             )
-            secret_data = _process_raw_secret(result.secret)
+            secret_data = process_secret_data(result.secret)
             if isinstance(secret_data, dict) and key in secret_data:
                 return secret_data[key]
 
             # Fall back to single-key lookup.
             logger.debug("Multi-key bundle lookup missed; trying single-key: %s", key)
             result = client.get_secret(store_name=DEPLOYMENT_SECRET_STORE_NAME, key=key)
-            single_data = _process_raw_secret(result.secret)
+            single_data = process_secret_data(result.secret)
             if isinstance(single_data, dict):
                 if key in single_data:
                     return single_data[key]

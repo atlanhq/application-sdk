@@ -5,11 +5,15 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from application_sdk.observability.logger_adaptor import get_logger
+
 if TYPE_CHECKING:
     from application_sdk.credentials.ref import CredentialRef
     from application_sdk.credentials.registry import CredentialTypeRegistry
     from application_sdk.credentials.types import Credential
     from application_sdk.infrastructure.secrets import SecretStore
+
+logger = get_logger(__name__)
 
 
 class CredentialResolver:
@@ -135,14 +139,25 @@ class CredentialResolver:
 
         # Local store check — handler/service.py stores inline credentials here
         # under the same UUID that becomes ref.name / ref.credential_guid.
+        from application_sdk.infrastructure.secrets import SecretNotFoundError
+
         try:
             raw = await self._secret_store.get(ref.name)
             data: dict[str, Any] = json.loads(raw)
             return data
-        except Exception:
-            # SecretNotFoundError (key absent), json.JSONDecodeError (bad
-            # format), or store-unavailable — fall through to DaprCredentialVault.
+        except SecretNotFoundError:
             pass
+        except json.JSONDecodeError:
+            logger.debug(
+                "Local store value for GUID %r is not valid JSON; trying Dapr",
+                ref.name,
+            )
+        except Exception:
+            logger.debug(
+                "Local store lookup failed for GUID %r; trying Dapr",
+                ref.name,
+                exc_info=True,
+            )
 
         # Fall back to DaprCredentialVault for platform-issued GUIDs.
         from dapr.clients import DaprClient

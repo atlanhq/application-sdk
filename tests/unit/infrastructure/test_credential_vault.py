@@ -223,17 +223,16 @@ class TestDaprCredentialVaultGetCredentials:
         assert result["password"] == "secret_pass"
 
     @pytest.mark.asyncio
-    async def test_missing_config_returns_empty_dict(self) -> None:
-        """No config bytes → get_credentials returns empty dict (no secrets fetched)."""
+    async def test_missing_config_raises_credential_vault_error(self) -> None:
+        """No config bytes → _fetch_credential_config raises CredentialVaultError."""
         mock_client = _make_mock_dapr_client(
             config_bytes=None,
             secret_data={},
         )
         with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
             vault = self._make_vault(mock_client)
-            result = await vault.get_credentials("ghost-guid")
-
-        assert result == {}
+            with pytest.raises(CredentialVaultError):
+                await vault.get_credentials("ghost-guid")
 
     @pytest.mark.asyncio
     async def test_local_env_skips_secret_fetch(self) -> None:
@@ -286,3 +285,73 @@ class TestDaprCredentialVaultGetCredentials:
         vault = self._make_vault(mock_client)
         with pytest.raises(CredentialVaultError):
             await vault.get_credentials("bad-guid")
+
+    @pytest.mark.asyncio
+    async def test_agent_multi_key_mode_with_secret_path(self) -> None:
+        """AGENT source + secret-path → fetches multi-key bundle via secret-path key."""
+        config = {
+            "credentialSource": "agent",
+            "secret-path": "apps/myapp/creds/my-secret",
+            "host": "host_ref",
+        }
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(),
+            secret_data={"host_ref": "db.example.com"},
+        )
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        # AGENT mode: _resolve_credentials substitutes host_ref → db.example.com
+        assert result["host"] == "db.example.com"
+        # Secret was fetched with the secret-path key, not the GUID
+        mock_client.get_secret.assert_called_once_with(
+            store_name="secretstore",
+            key="apps/myapp/creds/my-secret",
+        )
+
+    @pytest.mark.asyncio
+    async def test_agent_single_key_mode(self) -> None:
+        """AGENT source without secret-path → single-key mode (one lookup per field).
+
+        In single-key mode each config field value is used as a secret key.
+        _fetch_single_key_secrets collects results keyed by the secret's own key
+        names so that _resolve_credentials can substitute config field values that
+        equal a collected key.  The secret store must therefore return the resolved
+        value under the same key that appears as the config field's value.
+        """
+        config = {
+            "credentialSource": "agent",
+            "password": "secret_key_ref",
+        }
+        # Secret is stored as {"secret_key_ref": "actual_password"} so that
+        # _resolve_credentials can match config["password"] == "secret_key_ref".
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(),
+            secret_data={"secret_key_ref": "actual_password"},
+        )
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        assert result.get("password") == "actual_password"
+
+    @pytest.mark.asyncio
+    async def test_guid_validation_rejects_path_traversal(self) -> None:
+        """GUIDs with unsafe characters (e.g. '../') raise CredentialVaultError immediately."""
+        mock_client = _make_mock_dapr_client(config_bytes=b"", secret_data={})
+        vault = self._make_vault(mock_client)
+
+        with pytest.raises(CredentialVaultError, match="Invalid credential GUID"):
+            await vault.get_credentials("../../etc/passwd")
+
+    @pytest.mark.asyncio
+    async def test_guid_validation_rejects_slash(self) -> None:
+        """Slashes in GUIDs are rejected before any network call."""
+        mock_client = _make_mock_dapr_client(config_bytes=b"", secret_data={})
+        vault = self._make_vault(mock_client)
+
+        with pytest.raises(CredentialVaultError, match="Invalid credential GUID"):
+            await vault.get_credentials("valid-prefix/injected")
+
+        mock_client.invoke_binding.assert_not_called()
