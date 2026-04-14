@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Dict, List, Union
 from unittest.mock import mock_open, patch
 
+import pytest
+
 from application_sdk.common.error_codes import CommonError
 from application_sdk.common.utils import (
     extract_database_names_from_regex_common,
@@ -11,6 +13,7 @@ from application_sdk.common.utils import (
     prepare_filters,
     prepare_query,
     read_sql_files,
+    run_sync,
 )
 
 
@@ -934,7 +937,6 @@ class TestParseFilterInput:
 
     def test_invalid_json_strings(self) -> None:
         """Test invalid JSON strings raise CommonError."""
-        import pytest
 
         with pytest.raises(CommonError, match="Invalid filter JSON"):
             parse_filter_input("invalid json")
@@ -944,3 +946,25 @@ class TestParseFilterInput:
 
         with pytest.raises(CommonError, match="Invalid filter JSON"):
             parse_filter_input("not json at all")
+
+
+class TestRunSync:
+    async def test_run_sync_with_kwargs(self) -> None:
+        """run_sync must pass keyword arguments through to the wrapped function."""
+
+        def sync_fn(a: int, b: int, multiplier: int = 1) -> int:
+            return (a + b) * multiplier
+
+        async_fn = run_sync(sync_fn)
+        result = await async_fn(2, 3, multiplier=10)
+        assert result == 50
+
+    async def test_run_sync_with_positional_args(self) -> None:
+        """run_sync must pass positional arguments correctly."""
+
+        def sync_fn(a: int, b: int) -> int:
+            return a + b
+
+        async_fn = run_sync(sync_fn)
+        result = await async_fn(3, 7)
+        assert result == 10
