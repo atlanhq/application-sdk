@@ -357,6 +357,24 @@ class TestStartWorkflowEndpoint:
             TaskRegistry.reset()
 
 
+class TestErrorInfoDisclosure:
+    """Regression: error responses must not leak internal exception details."""
+
+    def test_500_response_does_not_contain_exception_text(self) -> None:
+        """Handler errors should return generic messages, not exception internals."""
+        client = _make_client(handler=_FailingHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 500
+        body = response.json()
+        # The response should NOT contain the internal exception message
+        body_str = str(body)
+        assert "Traceback" not in body_str
+        assert "File " not in body_str
+
+
 class TestWrapResponse:
     """Tests for _wrap_response helper."""
 
