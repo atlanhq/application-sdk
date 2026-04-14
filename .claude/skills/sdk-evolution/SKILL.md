@@ -170,6 +170,17 @@ The 2026-04-09 retrospective found 12 improvements. Zero were committed to rule 
 ### 23. Every stage must log a checkpoint before proceeding
 Print `[Stage N/10 complete] → Proceeding to Stage N+1` after each stage finishes. This makes premature stops visible in the conversation. If a user sees `[Stage 5/10 complete]` as the last checkpoint, they know stages 6-10 didn't run. This was added because the 2026-04-14 run had no visible stage markers — it silently stopped and printed a final banner.
 
+### 24. Check CI status on EVERY PR before approving or labeling ready-to-merge
+After pushing a PR and before any review/approval step, wait for CI and verify it passes:
+```bash
+gh pr checks {pr_number} --repo atlanhq/application-sdk --watch
+```
+If any check fails:
+1. Read the failure logs: `gh run view {run_id} --repo atlanhq/application-sdk --log-failed`
+2. If the failure is in your changed code → fix it, push, wait for CI again
+3. If the failure is a flaky/infra issue (e.g., segfault during teardown with all tests passing, timeout on a specific OS) → re-run the failed job: `gh run rerun {run_id} --repo atlanhq/application-sdk --failed`
+4. **NEVER label a PR `ready-to-merge` while CI is red.** The 2026-04-14 run labeled PR #1309 as ready-to-merge with a failing `Unit Tests (3.14, macOS-latest)` check that was never investigated.
+
 ---
 
 ## Configuration
