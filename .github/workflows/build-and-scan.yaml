@@ -246,6 +246,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: atlanhq/application-sdk
+          ref: ${{ github.workflow_sha || 'main' }}
           sparse-checkout: .security
           path: _sdk
           token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
