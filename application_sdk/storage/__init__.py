@@ -44,20 +44,24 @@ from application_sdk.storage.errors import (
     StoragePermissionError,
 )
 from application_sdk.storage.factory import create_local_store, create_memory_store
-from application_sdk.storage.ops import (
-    delete,
-    delete_file,
+from application_sdk.storage.batch import (
     delete_prefix,
-    download_file,
     download_prefix,
-    exists,
-    list_files,
     list_keys,
-    normalize_key,
-    upload_file,
     upload_file_from_bytes,
     upload_prefix,
 )
+from application_sdk.storage.ops import (
+    delete,
+    delete_file,
+    download_file,
+    exists,
+    normalize_key,
+    upload_file,
+)
+
+#: v2-compatible alias
+list_files = list_keys
 
 __all__ = [
     # Store factories

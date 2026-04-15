@@ -15,7 +15,7 @@ from fastapi import UploadFile, status
 from fastapi.responses import JSONResponse
 
 from application_sdk.server.fastapi.models import FileUploadResponse
-from application_sdk.storage.ops import upload_file_from_bytes
+from application_sdk.storage.batch import upload_file_from_bytes
 
 
 def internal_server_error_handler(_, exc: Exception) -> JSONResponse:

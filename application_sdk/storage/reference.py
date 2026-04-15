@@ -260,7 +260,8 @@ async def materialize_file_reference(
         StorageError: If the downloaded data does not match the stored sidecar.
     """
     from application_sdk.storage.errors import StorageError, StorageNotFoundError
-    from application_sdk.storage.ops import download_file, list_keys
+    from application_sdk.storage.batch import list_keys
+    from application_sdk.storage.ops import download_file
 
     if not ref.is_durable or ref.storage_path is None:
         return ref  # nothing to materialise

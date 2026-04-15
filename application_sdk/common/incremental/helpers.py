@@ -24,7 +24,8 @@ from application_sdk.constants import (
     UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.ops import download_file, list_keys
+from application_sdk.storage.batch import list_keys
+from application_sdk.storage.ops import download_file
 
 logger = get_logger(__name__)
 

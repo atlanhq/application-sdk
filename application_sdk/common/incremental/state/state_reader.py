@@ -20,7 +20,7 @@ from application_sdk.common.incremental.helpers import (
     get_persistent_s3_prefix,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.ops import download_prefix
+from application_sdk.storage.batch import download_prefix
 
 logger = get_logger(__name__)
 

@@ -10,14 +10,13 @@ import pytest
 import application_sdk.constants as constants
 from application_sdk.storage.errors import StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
+from application_sdk.storage.batch import download_prefix, list_keys
 from application_sdk.storage.ops import (
     _get_bytes,
     _get_content,
     _put,
     delete,
     download_file,
-    download_prefix,
-    list_keys,
     normalize_key,
     upload_file,
 )

@@ -23,7 +23,7 @@ from application_sdk.storage.formats.utils import (
     is_empty_dataframe,
     path_gen,
 )
-from application_sdk.storage.ops import delete_prefix as _delete_prefix
+from application_sdk.storage.batch import delete_prefix as _delete_prefix
 from application_sdk.storage.ops import upload_file as _upload_file
 
 logger = get_logger(__name__)
