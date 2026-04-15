@@ -10,6 +10,32 @@ on:
     branches:
       - main
       - refactor-v3
+  # workflow_dispatch is how the auto-complete loop re-fires itself
+  # between iterations. GitHub prevents GITHUB_TOKEN from triggering
+  # issue_comment events (anti-infinite-loop guardrail), so the bot
+  # can't post a '@sdk-review auto-complete --iteration=N' comment
+  # and have it fire. workflow_dispatch IS allowed to be triggered
+  # by GITHUB_TOKEN, so the 'Trigger re-review iteration' step calls
+  # this endpoint instead, passing iteration state as inputs.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number (internal auto-complete retrigger)"
+        required: true
+        type: string
+      iteration:
+        description: "Current iteration number (1-3)"
+        required: true
+        type: string
+      max_iter:
+        description: "Max iterations (1-3)"
+        required: true
+        type: string
+      trigger_reason:
+        description: "Why this was dispatched (audit trail)"
+        required: false
+        type: string
+        default: "auto-complete retrigger"
 
 permissions:
   id-token: write
@@ -49,27 +75,33 @@ jobs:
   # Inline comment replies on previous bot comments → answer agent
   # responds in-thread (no separate trigger needed).
   sdk-review:
-    # Gate: only repo collaborators / members / owners can trigger,
-    # plus the `github-actions[bot]` self-retriggers from the
-    # auto-complete loop (which have `--iteration=` in the body).
-    # This prevents external contributors on forks from burning API
-    # credits, triggering VPN connections, or leveraging the workflow's
-    # write permissions, while still letting the internal fix-loop
-    # continue across iterations.
+    # Two entry paths:
+    #   1. issue_comment from a repo OWNER/MEMBER/COLLABORATOR containing
+    #      '@sdk-review' (but not 'stop' / 'cancel').
+    #   2. workflow_dispatch from the auto-complete loop (bot
+    #      self-retrigger). GITHUB_TOKEN is ALLOWED to fire
+    #      workflow_dispatch, unlike issue_comment where it is
+    #      silently suppressed by GitHub's anti-loop guardrail.
     #
-    # Excludes `stop` / `cancel` so those route to the sdk-review-stop
-    # job instead.
+    # External fork contributors cannot enter either path: (1) is
+    # gated on author_association, (2) cannot be triggered without
+    # repo write access.
     if: |
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request &&
-      contains(github.event.comment.body, '@sdk-review') &&
-      !contains(github.event.comment.body, '@sdk-review stop') &&
-      !contains(github.event.comment.body, '@sdk-review cancel') &&
-      (github.event.comment.author_association == 'OWNER' ||
-       github.event.comment.author_association == 'MEMBER' ||
-       github.event.comment.author_association == 'COLLABORATOR' ||
-       (github.event.comment.user.login == 'github-actions[bot]' &&
-        contains(github.event.comment.body, '--iteration=')))
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '@sdk-review') &&
+        !contains(github.event.comment.body, '@sdk-review stop') &&
+        !contains(github.event.comment.body, '@sdk-review cancel') &&
+        (github.event.comment.author_association == 'OWNER' ||
+         github.event.comment.author_association == 'MEMBER' ||
+         github.event.comment.author_association == 'COLLABORATOR')
+      )
+      ||
+      (
+        github.event_name == 'workflow_dispatch' &&
+        github.event.inputs.pr_number != ''
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -97,58 +129,88 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.issue.number }}
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_COMMENT_PR_NUMBER: ${{ github.event.issue.number }}
+          DISPATCH_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          DISPATCH_ITERATION: ${{ github.event.inputs.iteration }}
+          DISPATCH_MAX_ITER: ${{ github.event.inputs.max_iter }}
         run: |
+          # Two entry paths — resolve PR metadata from the appropriate
+          # event source:
+          #   issue_comment:      PR number in github.event.issue.number
+          #                       Mode + iteration parsed from comment body
+          #   workflow_dispatch:  PR number + iteration + max in inputs
+          #                       Mode is always "auto-fix" (this path only
+          #                       exists for the auto-complete retrigger loop)
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            PR_NUMBER="$DISPATCH_PR_NUMBER"
+            MODE="auto-fix"
+            ITERATION="$DISPATCH_ITERATION"
+            MAX_ITER="$DISPATCH_MAX_ITER"
+            # Commenter for override-check compat: use the retrigger's
+            # original requester if we can find it (from the last
+            # @sdk-review auto-complete comment on the PR); otherwise
+            # fall back to the bot itself.
+            COMMENTER=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --jq '[.[] | select(.body | test("@sdk-review\\s+auto[- ]?complete|@sdk-review\\s+resolve"; "i"))
+                    | select(.user.login != "github-actions[bot]")] | last | .user.login // "github-actions[bot]"')
+            COMMENT_BODY=""  # no comment in dispatch path
+          else
+            PR_NUMBER="$ISSUE_COMMENT_PR_NUMBER"
+            # Pull comment body and commenter from the event JSON safely — NEVER
+            # interpolate user-controlled content via Actions template syntax into shell.
+            COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH")
+            COMMENTER=$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")
+
+            # Determine mode from comment body (grep on the bash variable,
+            # never expanded via Actions template syntax — no shell-injection risk).
+            #   override            → admin force-pass
+            #   challenge           → re-evaluate prior review
+            #   auto-complete       → review + fix loop (preferred name)
+            #   resolve all issues  → alias for auto-complete (backward-compat)
+            #   (none of the above) → review-only
+            if printf '%s' "$COMMENT_BODY" | grep -qi "override"; then
+              MODE=override
+            elif printf '%s' "$COMMENT_BODY" | grep -qi "challenge"; then
+              MODE=challenge
+            elif printf '%s' "$COMMENT_BODY" | grep -qiE "auto[- ]?complete|resolve"; then
+              MODE=auto-fix
+            else
+              MODE=review-only
+            fi
+
+            # For human-initiated auto-complete, this is iteration 1.
+            # For human-initiated everything else, iteration/max irrelevant
+            # but set sensible defaults.
+            ITERATION=1
+            MAX_ITER=3
+          fi
+
           HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
           HEAD_BRANCH=$(gh pr view "$PR_NUMBER" --json headRefName -q .headRefName)
           BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName)
-          # Pull comment body and commenter from the event JSON safely — NEVER
-          # interpolate user-controlled content via Actions template syntax into shell.
-          COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH")
-          COMMENTER=$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")
+
+          # Validate iteration/max are integers in [1,3]
+          if ! [[ "$MAX_ITER" =~ ^[0-9]+$ ]] || [ "$MAX_ITER" -lt 1 ] || [ "$MAX_ITER" -gt 3 ]; then
+            MAX_ITER=3
+          fi
+          if ! [[ "$ITERATION" =~ ^[0-9]+$ ]] || [ "$ITERATION" -lt 1 ] || [ "$ITERATION" -gt "$MAX_ITER" ]; then
+            ITERATION=1
+          fi
 
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "head_branch=$HEAD_BRANCH" >> "$GITHUB_OUTPUT"
           echo "base_branch=$BASE_BRANCH" >> "$GITHUB_OUTPUT"
           echo "commenter=$COMMENTER" >> "$GITHUB_OUTPUT"
-
-          # IMPORTANT: do NOT write COMMENT_BODY into $GITHUB_OUTPUT — a crafted
-          # multiline comment could inject arbitrary outputs. Only the derived
-          # mode flag goes out; raw body stays inside this step and is
-          # propagated to downstream Claude steps via a dedicated env var.
-
-          # Determine mode from comment body (grep on the bash variable, never
-          # expanded via Actions template syntax so no shell-injection risk).
-          #   override            → admin force-pass
-          #   auto-complete       → review + fix loop (preferred name)
-          #   resolve all issues  → alias for auto-complete (backward-compat)
-          #   --iteration=        → internal self-trigger for next fix iteration
-          #   (none of the above) → review-only
-          if printf '%s' "$COMMENT_BODY" | grep -qi "override"; then
-            MODE=override
-          elif printf '%s' "$COMMENT_BODY" | grep -qi "challenge"; then
-            MODE=challenge
-          elif printf '%s' "$COMMENT_BODY" | grep -qiE "auto[- ]?complete|resolve"; then
-            MODE=auto-fix
-          elif printf '%s' "$COMMENT_BODY" | grep -qi "\-\-iteration="; then
-            MODE=auto-fix
-          else
-            MODE=review-only
-          fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
-
-          # Expose parsed iteration/max to subsequent steps safely.
-          # Cap MAX_ITER at 3 server-side regardless of --max=N in the
-          # comment, so nobody can run a 100-iteration loop that burns
-          # Anthropic credits unchecked.
-          ITERATION=$(printf '%s' "$COMMENT_BODY" | grep -oP '\-\-iteration=\K\d+' || echo "1")
-          MAX_ITER=$(printf '%s' "$COMMENT_BODY" | grep -oP '\-\-max=\K\d+' || echo "3")
-          if ! [[ "$MAX_ITER" =~ ^[0-9]+$ ]] || [ "$MAX_ITER" -lt 1 ] || [ "$MAX_ITER" -gt 3 ]; then
-            MAX_ITER=3
-          fi
           echo "iteration=$ITERATION" >> "$GITHUB_OUTPUT"
           echo "max_iter=$MAX_ITER" >> "$GITHUB_OUTPUT"
+          echo "event_name=$EVENT_NAME" >> "$GITHUB_OUTPUT"
+
+          # IMPORTANT: do NOT write COMMENT_BODY into $GITHUB_OUTPUT — a crafted
+          # multiline comment could inject arbitrary outputs.
 
           # Detect whether the PR modifies any file under .github/workflows/.
           # GITHUB_TOKEN from GH Actions can't push changes to workflow files
@@ -177,9 +239,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ github.event.comment.id }}
+          EVENT_NAME: ${{ steps.pr.outputs.event_name }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           MODE: ${{ steps.pr.outputs.mode }}
+          ITERATION: ${{ steps.pr.outputs.iteration }}
+          MAX_ITER: ${{ steps.pr.outputs.max_iter }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # Count prior SDK_REVIEW_V2 comments (none posted yet in this run).
@@ -193,11 +258,14 @@ jobs:
             VERB="Review"
           fi
           echo "verb=$VERB" >> "$GITHUB_OUTPUT"
-          echo "Detected verb: $VERB (prior SDK_REVIEW_V2 comments: $PRIOR_REVIEWS)"
+          echo "Detected verb: $VERB (prior SDK_REVIEW_V2 comments: $PRIOR_REVIEWS, event: $EVENT_NAME)"
 
-          # 👀 reaction on the triggering comment
-          gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
-            -f content=eyes 2>/dev/null || true
+          # 👀 reaction on the triggering comment (skip for workflow_dispatch
+          # — no triggering comment exists; this is an auto-retrigger)
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+              -f content=eyes 2>/dev/null || true
+          fi
 
           # Map internal mode name to user-friendly label
           case "$MODE" in
@@ -1089,17 +1157,25 @@ jobs:
           ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
           GH_TOKEN: ${{ github.token }}
 
-      # Trigger next iteration (fresh session via new Action run).
+      # Trigger next iteration (fresh run via workflow_dispatch).
       # Max 3 iterations. Honors the `sdk-review-stopped` label so the
       # author can break out of the auto-complete loop between
       # iterations without killing the fix session mid-commit.
+      #
+      # IMPORTANT: uses gh api /dispatches instead of posting an
+      # @sdk-review comment. GITHUB_TOKEN cannot trigger issue_comment
+      # workflows (anti-loop guardrail), so a bot-posted comment
+      # silently produces zero runs. workflow_dispatch IS allowed for
+      # GITHUB_TOKEN, so dispatch + inputs gives us the loop.
       - name: Trigger re-review iteration
         if: |
           steps.pr.outputs.mode == 'auto-fix' &&
           steps.verdict.outputs.verdict == 'NEEDS_FIXES'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_BRANCH: ${{ steps.pr.outputs.head_branch }}
           CURRENT: ${{ steps.pr.outputs.iteration }}
           MAX: ${{ steps.pr.outputs.max_iter }}
         run: |
@@ -1125,9 +1201,30 @@ jobs:
             exit 0
           fi
 
-          # Post self-triggering comment for next iteration
-          gh pr comment "$PR_NUMBER" --body \
-            "@sdk-review auto-complete --iteration=$NEXT --max=$MAX"
+          # Fire the next iteration via workflow_dispatch.
+          # The workflow file must exist on the default branch for this
+          # to work (GitHub loads workflow_dispatch workflows from the
+          # default branch only, regardless of the 'ref' used for the run).
+          DEFAULT_BRANCH=$(gh api "repos/${REPO}" --jq '.default_branch')
+          echo "Dispatching iteration ${NEXT}/${MAX} via workflow_dispatch (ref=${DEFAULT_BRANCH})..."
+
+          if gh api "repos/${REPO}/actions/workflows/claude.yml/dispatches" \
+               -X POST \
+               -f ref="${DEFAULT_BRANCH}" \
+               -F "inputs[pr_number]=${PR_NUMBER}" \
+               -F "inputs[iteration]=${NEXT}" \
+               -F "inputs[max_iter]=${MAX}" \
+               -F "inputs[trigger_reason]=auto-complete iteration ${NEXT}/${MAX}"; then
+            # Post a short informational comment on the PR (not a
+            # trigger — just user-facing visibility).
+            gh pr comment "$PR_NUMBER" --body \
+              "🔁 **Auto-complete iteration ${NEXT}/${MAX} dispatched.** [Watch live progress](${{ github.server_url }}/${{ github.repository }}/actions/workflows/claude.yml)"
+          else
+            # Dispatch failed (permission / missing workflow / branch
+            # deleted). Fall back to telling the human.
+            gh pr comment "$PR_NUMBER" --body \
+              "⚠️ Auto-complete iteration ${NEXT}/${MAX} could not be dispatched. Re-run manually by commenting \`@sdk-review auto-complete\`."
+          fi
 
       # Finalize if clean (approve + update branch + status = success)
       - name: Finalize (approve if clean)
