@@ -34,6 +34,13 @@ jobs:
   #   @sdk-review                     → Review only
   #   @sdk-review auto-complete       → Review + fix loop until clean
   #   @sdk-review stop                → Cancel an in-progress auto-complete
+  #   @sdk-review challenge: <reason> → Re-evaluate prior review's findings
+  #                                      against author pushback. Claude
+  #                                      can STAND BY / WITHDRAW / SOFTEN
+  #                                      each finding. Withdrawn findings
+  #                                      are emitted as YAML for the
+  #                                      retrospective learned-not-to-flag
+  #                                      list (manual aggregation for v1).
   #   @sdk-review override: <reason>  → Admin force-pass
   #
   # Aliases (backward-compat): `resolve all issues` == `auto-complete`,
@@ -120,6 +127,8 @@ jobs:
           #   (none of the above) → review-only
           if printf '%s' "$COMMENT_BODY" | grep -qi "override"; then
             MODE=override
+          elif printf '%s' "$COMMENT_BODY" | grep -qi "challenge"; then
+            MODE=challenge
           elif printf '%s' "$COMMENT_BODY" | grep -qiE "auto[- ]?complete|resolve"; then
             MODE=auto-fix
           elif printf '%s' "$COMMENT_BODY" | grep -qi "\-\-iteration="; then
@@ -195,6 +204,7 @@ jobs:
             auto-fix)     LABEL="auto-complete" ;;
             review-only)  LABEL="review" ;;
             override)     LABEL="override (admin)" ;;
+            challenge)    LABEL="challenge re-review" ;;
             *)            LABEL="$MODE" ;;
           esac
 
@@ -480,6 +490,93 @@ jobs:
                "Only repo admins can override the sdk-review check."
                Output VERDICT:NEEDS_FIXES and stop.
 
+            If the mode is "challenge":
+            A challenge is a formal pushback on a prior review — the
+            author believes one or more findings were wrong. You must
+            re-evaluate the PR in light of their pushback, honestly
+            and without sycophancy.
+
+            1. Fetch the most recent prior SDK_REVIEW_V2 comment:
+               gh api repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments \
+                 --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | last | .body'
+
+            2. Fetch the triggering challenge comment body via $GITHUB_EVENT_PATH
+               (same as any @sdk-review comment — mode=challenge was
+               detected because it contains "challenge"). Extract any
+               reason the author gave after "@sdk-review challenge:".
+
+            3. Fetch author's replies on bot-posted inline review comments:
+               gh api repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/comments \
+                 --jq '[.[] | select(.user.login != "github-actions[bot]")] | .[] | {path, line, body, in_reply_to_id}'
+
+            4. Re-read the changed files (not just the diff) so you can
+               evaluate findings in context again with fresh eyes.
+
+            5. For EACH finding in the prior review, decide one of:
+               - **STAND BY**: the finding is still valid. Explain WHY,
+                 addressing the author's specific objection.
+               - **WITHDRAW**: the finding was wrong. Acknowledge
+                 explicitly (e.g. "I initially flagged this as a bare
+                 except; on re-read, the exception is intentional and
+                 narrowly scoped — retracting this finding.").
+               - **SOFTEN**: downgrade severity (e.g. Critical → Minor).
+                 Explain what changed your assessment.
+
+            6. Post a new SDK_REVIEW_V2 comment with this format (use
+               \$SDK_REVIEW_VERB = "Re-review" since challenge implies
+               prior review exists):
+
+               <!-- SDK_REVIEW_V2 -->
+               ## SDK Re-review (challenge response): PR #<num> — <title>
+
+               ### Verdict: <updated verdict>
+
+               > Re-evaluated prior findings against the author's
+               > challenge: "<quote their reason if given>".
+               > <1-line summary of outcome — how many stood, withdrawn, softened>
+
+               ### Changes from prior review
+
+               - **[STAND BY]** `file:line` — <original finding> — <why it still holds>
+               - **[WITHDRAWN]** `file:line` — <original finding> — <why you now agree>
+               - **[SOFTENED]** `file:line` — <original> (was Critical, now Minor) — <why>
+
+               ### Findings by File (current state)
+
+               <same format as review mode, but reflecting post-challenge state>
+
+               ### Retrospective (for learned-not-to-flag list)
+
+               \`\`\`yaml
+               # For each WITHDRAWN finding, emit an entry. This YAML
+               # block is machine-parseable so a future step can append
+               # these to a learned-not-to-flag log.
+               withdrawn_findings:
+                 - file: <path>
+                   line: <N>
+                   original_text: <verbatim prior finding>
+                   author_challenge: <quote author's objection>
+                   why_withdrawn: <your reasoning>
+               \`\`\`
+               (Omit the whole "Retrospective" section if no findings
+               were withdrawn in this pass.)
+
+            7. Verdict logic for challenge mode:
+               - If ALL prior blockers are withdrawn/softened below
+                 Critical → verdict is READY_TO_MERGE.
+               - If some challenges are valid but others stand, and
+                 remaining findings meet the normal bar → NEEDS_FIXES
+                 or READY_TO_MERGE as appropriate.
+               - Output the verdict as the LAST LINE: VERDICT:<verdict>
+
+            8. Do NOT re-post inline comments (the original ones from
+               the prior review still stand on the lines that haven't
+               changed). If you withdraw a finding, you may OPTIONALLY
+               reply to its inline thread acknowledging the retraction.
+
+            Stop here if mode is "challenge". Do not proceed to the
+            regular review flow below.
+
             Otherwise, do the review using the MULTI-AGENT ORCHESTRATOR pattern:
 
             ## Orchestrator setup
@@ -490,6 +587,20 @@ jobs:
             SDK_REVIEW_V2 comment.
 
             ### Step 1 — Prepare shared context (prompt-caching optimization)
+
+            Each subagent narrows to 2-3 relevant rule files (not all 6),
+            but the full rule set is enumerated here for reference:
+              - .claude/skills/sdk-review/references/v3-architecture-rules.md
+              - .claude/skills/sdk-review/references/code-quality-rules.md
+              - .claude/skills/sdk-review/references/security-rules.md
+              - .claude/skills/sdk-review/references/test-quality-rules.md
+              - .claude/skills/sdk-review/references/dx-rules.md
+              - .claude/skills/sdk-review/references/structural-rules.md
+              - .claude/skills/sdk-review/references/retro-log.md
+                (learned-not-to-flag — patterns previously withdrawn
+                after author challenges. DO NOT flag these again without
+                additional evidence beyond what was present in the
+                prior false-positive case.)
 
             Run once so all 3 subagents read from disk instead of
             re-fetching through gh:
@@ -1085,6 +1196,8 @@ jobs:
             fi
 
             APPROVE_BODY="⚠️ **SDK Review — Admin override.** Approving because @${OVERRIDE_ADMIN} explicitly invoked \`@sdk-review override\`. Reason: _${OVERRIDE_REASON}_. This bypasses normal review findings; the reason above is recorded for audit. CI passing. Branch up to date."
+          elif [ "$MODE" = "challenge" ]; then
+            APPROVE_BODY="SDK Re-review (challenge response): blocking findings withdrawn or softened after re-evaluating author pushback. CI passing. Branch up to date. Approved."
           else
             PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR}/comments" \
               --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 1)

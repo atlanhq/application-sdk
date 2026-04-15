@@ -1,0 +1,269 @@
+# Update Security Dashboard — reusable workflow.
+#
+# Triggered after a vulnerability scan completes. Downloads scan results,
+# generates per-repo dashboard data, and deploys to Kryptonite (k.atlan.dev).
+#
+# Usage in each app repo:
+#   on:
+#     workflow_run:
+#       workflows: ["Vulnerability Scan"]
+#       types: [completed]
+#     workflow_dispatch:
+#   permissions:
+#     id-token: write
+#     actions: read
+#     contents: read
+#   jobs:
+#     dashboard:
+#       uses: atlanhq/application-sdk/.github/workflows/update-dashboard.yaml@main
+#       secrets: inherit
+#
+name: Update Security Dashboard
+
+on:
+  workflow_call:
+    inputs:
+      dashboard_path:
+        description: "S3 path for dashboard deployment"
+        required: false
+        type: string
+        default: "security-dashboard"
+      scan_workflow:
+        description: "Name of the scan workflow file to download artifacts from"
+        required: false
+        type: string
+        default: "vulnerability-scan.yml"
+    secrets:
+      ORG_PAT_GITHUB:
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+jobs:
+  update:
+    name: Update Dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Checkout dashboard assets from SDK
+        uses: actions/checkout@v4
+        with:
+          repository: atlanhq/application-sdk
+          path: _sdk
+          sparse-checkout: .security
+          token: ${{ secrets.ORG_PAT_GITHUB || secrets.GITHUB_TOKEN }}
+
+      - name: Download latest scan artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCAN_WORKFLOW: ${{ inputs.scan_workflow }}
+        run: |
+          mkdir -p /tmp/scan-artifacts
+
+          RUN_ID=$(gh run list \
+            --workflow="${SCAN_WORKFLOW}" \
+            --status=completed \
+            --limit=5 \
+            --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
+
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::No completed runs found for workflow ${SCAN_WORKFLOW}"
+            exit 1
+          fi
+
+          echo "Downloading artifacts from run $RUN_ID"
+          gh run download "$RUN_ID" --name trivy-results --dir /tmp/scan-artifacts || echo "No trivy results"
+          gh run download "$RUN_ID" --name snyk-results --dir /tmp/scan-artifacts || echo "No snyk results"
+
+      - name: Generate per-repo dashboard data
+        run: |
+          python3 - <<'PYEOF'
+          import json, os
+          from datetime import datetime
+
+          repo_name = os.environ.get("GITHUB_REPOSITORY", "unknown")
+
+          # Merge base + repo allowlists
+          allowlist = {}
+          try:
+              with open("_sdk/.security/base-allowlist.json") as f:
+                  base = json.load(f)
+              allowlist.update({k: v for k, v in base.items() if not k.startswith("_")})
+          except FileNotFoundError:
+              print("Warning: base allowlist not found")
+          except json.JSONDecodeError as e:
+              print(f"Warning: base allowlist invalid JSON: {e}")
+
+          try:
+              if os.path.exists(".security/allowlist.json"):
+                  with open(".security/allowlist.json") as f:
+                      repo_al = json.load(f)
+                  repo_entries = {k: v for k, v in repo_al.items() if not k.startswith("_")}
+                  # Base wins on conflict
+                  for k in list(repo_entries.keys()):
+                      if k not in allowlist:
+                          allowlist[k] = repo_entries[k]
+          except json.JSONDecodeError as e:
+              print(f"Warning: repo allowlist invalid JSON: {e}")
+
+          today = datetime.now().strftime("%Y-%m-%d")
+          all_vulns = []
+
+          # Parse Trivy
+          try:
+              with open("/tmp/scan-artifacts/trivy_results.json") as f:
+                  trivy = json.load(f)
+              for result in trivy.get("Results", []):
+                  result_type = result.get("Type", "")
+                  is_app = result_type in ("pip", "pipenv", "poetry", "uv", "python-pkg")
+                  for vuln in result.get("Vulnerabilities", []):
+                      vid = vuln.get("VulnerabilityID")
+                      if vid:
+                          entry = allowlist.get(vid)
+                          if entry:
+                              status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
+                          else:
+                              status = "new"
+                          all_vulns.append({
+                              "id": vid,
+                              "severity": vuln.get("Severity", ""),
+                              "package": vuln.get("PkgName", ""),
+                              "installed": vuln.get("InstalledVersion", ""),
+                              "fixed": vuln.get("FixedVersion", ""),
+                              "scanner": "trivy",
+                              "source_type": "app" if is_app else "base_image",
+                              "status": status,
+                          })
+          except FileNotFoundError:
+              print("Warning: no Trivy results")
+          except json.JSONDecodeError as e:
+              print(f"Warning: Trivy results invalid JSON: {e}")
+
+          # Parse Snyk
+          try:
+              with open("/tmp/scan-artifacts/snyk_results.json") as f:
+                  snyk = json.load(f)
+              if not snyk.get("error"):
+                  trivy_ids = {v["id"] for v in all_vulns}
+
+                  # Top-level vulns — infer source_type from package manager
+                  for vuln in snyk.get("vulnerabilities", []):
+                      vid = vuln.get("id")
+                      if vid:
+                          cves = vuln.get("identifiers", {}).get("CVE", [])
+                          if vid in trivy_ids or any(c in trivy_ids for c in cves):
+                              continue
+                          lang = vuln.get("language", "").lower()
+                          pkg_manager = vuln.get("packageManager", "").lower()
+                          is_app = lang in ("python", "js", "ruby") or pkg_manager in ("pip", "npm", "yarn", "poetry", "uv")
+                          entry = allowlist.get(vid)
+                          if entry:
+                              status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
+                          else:
+                              status = "new"
+                          all_vulns.append({
+                              "id": vid,
+                              "severity": vuln.get("severity", "").upper(),
+                              "package": vuln.get("packageName") or vuln.get("name", ""),
+                              "installed": vuln.get("version", ""),
+                              "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
+                              "scanner": "snyk",
+                              "source_type": "app" if is_app else "base_image",
+                              "status": status,
+                          })
+
+                  # Application dependencies
+                  for app in snyk.get("applications", []):
+                      for vuln in app.get("vulnerabilities", []):
+                          vid = vuln.get("id")
+                          if vid and vid not in trivy_ids:
+                              entry = allowlist.get(vid)
+                              if entry:
+                                  status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
+                              else:
+                                  status = "new"
+                              all_vulns.append({
+                                  "id": vid,
+                                  "severity": vuln.get("severity", "").upper(),
+                                  "package": vuln.get("packageName") or vuln.get("name", ""),
+                                  "installed": vuln.get("version", ""),
+                                  "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
+                                  "scanner": "snyk",
+                                  "source_type": "app",
+                                  "status": status,
+                              })
+          except FileNotFoundError:
+              print("Warning: no Snyk results")
+          except json.JSONDecodeError as e:
+              print(f"Warning: Snyk results invalid JSON: {e}")
+
+          # Deduplicate
+          seen = set()
+          unique = []
+          for v in all_vulns:
+              if v["id"] not in seen:
+                  seen.add(v["id"])
+                  unique.append(v)
+
+          # Write per-repo data file (not shared data.json)
+          repo_slug = repo_name.replace("/", "_")
+          repo_data = {
+              "repo": repo_name,
+              "vulnerabilities": unique,
+              "scanned_at": datetime.now().isoformat() + "Z",
+              "total": len(unique),
+              "critical": sum(1 for v in unique if v["severity"] == "CRITICAL"),
+              "high": sum(1 for v in unique if v["severity"] == "HIGH"),
+              "allowlisted": sum(1 for v in unique if v["status"] == "allowlisted"),
+              "new": sum(1 for v in unique if v["status"] == "new"),
+          }
+
+          os.makedirs("/tmp/dashboard-deploy/repos", exist_ok=True)
+
+          # Write this repo's data
+          with open(f"/tmp/dashboard-deploy/repos/{repo_slug}.json", "w") as f:
+              json.dump(repo_data, f, indent=2)
+
+          # Copy dashboard HTML
+          html_src = "_sdk/.security/dashboard/index.html"
+          if os.path.exists(html_src):
+              import shutil
+              shutil.copy(html_src, "/tmp/dashboard-deploy/index.html")
+
+          print(f"Dashboard data generated: {len(unique)} vulnerabilities for {repo_name}")
+          print(f"  CRITICAL: {repo_data['critical']}")
+          print(f"  HIGH: {repo_data['high']}")
+          print(f"  Allowlisted: {repo_data['allowlisted']}")
+          print(f"  New: {repo_data['new']}")
+          PYEOF
+
+      - name: Setup AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+      - name: Deploy to Kryptonite
+        env:
+          REPO_SLUG: ${{ github.repository }}
+        run: |
+          SLUG=$(echo "$REPO_SLUG" | tr '/' '_')
+
+          # Upload per-repo data (no --delete, doesn't clobber other repos)
+          aws s3 cp "/tmp/dashboard-deploy/repos/${SLUG}.json" \
+            "s3://kryptonite-store/${{ inputs.dashboard_path }}/repos/${SLUG}.json"
+
+          # Upload dashboard HTML (shared, idempotent)
+          if [ -f /tmp/dashboard-deploy/index.html ]; then
+            aws s3 cp /tmp/dashboard-deploy/index.html \
+              "s3://kryptonite-store/${{ inputs.dashboard_path }}/index.html"
+          fi
+
+          echo "Dashboard updated at https://k.atlan.dev/${{ inputs.dashboard_path }}/"

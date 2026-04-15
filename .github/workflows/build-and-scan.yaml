@@ -242,6 +242,15 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Checkout base allowlist from SDK
+        uses: actions/checkout@v4
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          sparse-checkout: .security
+          path: _sdk
+          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+
       - name: Download Trivy results
         uses: actions/download-artifact@v4
         continue-on-error: true
@@ -264,14 +273,49 @@ jobs:
           import json, sys, os
           from datetime import datetime
 
-          allowlist_path = ".security/allowlist.json"
-          if os.path.exists(allowlist_path):
-              with open(allowlist_path) as f:
-                  allowlist = json.load(f)
-          else:
-              print("No .security/allowlist.json found — all vulnerabilities will be reported but not blocked.")
-              print("To enable the security gate, add .security/allowlist.json to your repo.")
+          # Load base allowlist (from SDK) — base entries always win on conflict
+          base_allowlist = {}
+          base_path = "_sdk/.security/base-allowlist.json"
+          try:
+              with open(base_path) as f:
+                  base_raw = json.load(f)
+              base_allowlist = {k: v for k, v in base_raw.items() if not k.startswith("_")}
+              print(f"Base allowlist: {len(base_allowlist)} entries")
+          except FileNotFoundError:
+              print(f"Warning: {base_path} not found — no base allowlist")
+          except json.JSONDecodeError as e:
+              print(f"Error: base allowlist has invalid JSON: {e}")
+              sys.exit(1)
+
+          # Load repo allowlist
+          repo_allowlist = {}
+          repo_path = ".security/allowlist.json"
+          try:
+              if os.path.exists(repo_path):
+                  with open(repo_path) as f:
+                      repo_raw = json.load(f)
+                  repo_allowlist = {k: v for k, v in repo_raw.items() if not k.startswith("_")}
+                  print(f"Repo allowlist: {len(repo_allowlist)} entries")
+              else:
+                  print("No .security/allowlist.json in repo")
+          except json.JSONDecodeError as e:
+              print(f"Error: repo allowlist has invalid JSON: {e}")
+              sys.exit(1)
+
+          # Merge: repo first, then base overwrites — base always wins on conflict
+          allowlist = {}
+          allowlist.update(repo_allowlist)
+          conflicts = [k for k in base_allowlist if k in repo_allowlist]
+          if conflicts:
+              for c in conflicts:
+                  print(f"Warning: conflict on {c} — base allowlist wins (repo entry ignored)")
+          allowlist.update(base_allowlist)
+
+          if not allowlist:
+              print("No allowlists found — all vulnerabilities will be reported but not blocked.")
               allowlist = None
+
+          print(f"Total allowlist: {len(allowlist) if allowlist else 0} entries")
 
           today = datetime.now().strftime("%Y-%m-%d")
           all_vulns = {}
