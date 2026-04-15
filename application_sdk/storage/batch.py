@@ -139,7 +139,8 @@ async def download_prefix(
 ) -> list[str]:
     """Download all objects under *prefix* to a local directory.
 
-    Each key's relative path (after the prefix) is preserved under *local_dir*.
+    Each key's full store path is preserved under *local_dir*
+    (e.g. key ``artifacts/run/file.json`` → ``local_dir/artifacts/run/file.json``).
     Downloads run concurrently (up to *max_concurrency* at a time).
 
     Args:

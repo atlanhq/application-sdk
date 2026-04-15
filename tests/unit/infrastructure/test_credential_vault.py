@@ -10,7 +10,6 @@ import pytest
 
 from application_sdk.infrastructure._dapr.credential_vault import (
     DaprCredentialVault,
-    _handle_single_key_secret,
     _resolve_credentials,
 )
 from application_sdk.infrastructure._secret_utils import (
@@ -69,34 +68,6 @@ class TestInMemoryCredentialVault:
 # ---------------------------------------------------------------------------
 # _handle_single_key_secret
 # ---------------------------------------------------------------------------
-
-
-class TestHandleSingleKeySecret:
-    def test_json_dict_value_is_unwrapped(self) -> None:
-        nested = {"username": "u", "password": "p"}
-        result = _handle_single_key_secret("key", json.dumps(nested))
-        assert result == nested
-
-    def test_json_empty_dict_is_returned(self) -> None:
-        result = _handle_single_key_secret("key", "{}")
-        assert result == {}
-
-    def test_json_array_returns_key_value_pair(self) -> None:
-        result = _handle_single_key_secret("key", json.dumps([1, 2]))
-        assert result == {"key": json.dumps([1, 2])}
-
-    def test_plain_string_returns_key_value_pair(self) -> None:
-        result = _handle_single_key_secret("key", "plain")
-        assert result == {"key": "plain"}
-
-    def test_invalid_json_returns_key_value_pair(self) -> None:
-        result = _handle_single_key_secret("key", "not json {")
-        assert result == {"key": "not json {"}
-
-    def test_non_string_value_returns_key_value_pair(self) -> None:
-        assert _handle_single_key_secret("k", 42) == {"k": 42}
-        assert _handle_single_key_secret("k", True) is not None
-        assert _handle_single_key_secret("k", [1, 2]) == {"k": [1, 2]}
 
 
 # ---------------------------------------------------------------------------

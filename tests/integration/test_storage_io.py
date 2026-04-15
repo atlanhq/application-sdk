@@ -16,6 +16,7 @@ from application_sdk.infrastructure.context import (
     set_infrastructure,
 )
 from application_sdk.storage.batch import (
+    delete_prefix,
     download_prefix,
     list_keys,
     upload_file_from_bytes,
@@ -253,3 +254,33 @@ async def test_upload_file_from_bytes_empty(store, tmp_path):
     dest = tmp_path / "empty.bin"
     await download_file("bytes/empty.bin", dest, store)
     assert dest.read_bytes() == b""
+
+
+# ------------------------------------------------------------------
+# delete_prefix
+# ------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_delete_prefix_removes_all(store, tmp_path):
+    """Upload files, delete by prefix, verify all gone."""
+    for i in range(3):
+        src = tmp_path / f"file_{i}.txt"
+        src.write_text(f"data-{i}")
+        await upload_file(f"to-delete/file_{i}.txt", src, store)
+
+    keys_before = await list_keys("to-delete", store)
+    assert len(keys_before) == 3
+
+    deleted = await delete_prefix("to-delete", store)
+    assert deleted == 3
+
+    keys_after = await list_keys("to-delete", store)
+    assert keys_after == []
+
+
+@pytest.mark.integration
+async def test_delete_prefix_empty(store):
+    """delete_prefix on nonexistent prefix returns 0."""
+    deleted = await delete_prefix("nonexistent-prefix", store)
+    assert deleted == 0

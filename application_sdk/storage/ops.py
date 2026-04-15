@@ -54,6 +54,8 @@ import obstore
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
+logger = logging.getLogger(__name__)
+
 
 def normalize_key(key: str) -> str:
     """Normalise a local or object-store path into a clean object-store key.
@@ -221,7 +223,7 @@ async def upload_file(
             try:
                 resolved_path.unlink(missing_ok=True)
             except OSError as exc:
-                logging.debug(
+                logger.debug(
                     "Failed to delete local file (cleanup): %s", type(exc).__name__
                 )
 
