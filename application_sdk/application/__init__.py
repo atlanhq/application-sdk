@@ -101,6 +101,30 @@ class BaseApplication:
             return json.loads(raw)
         return None
 
+    def get_manifest_version(self) -> Optional[Dict[str, Any]]:
+        """Return a stable hash of the DAG portion of the raw manifest.
+
+        Uses the raw manifest (no placeholder substitution) so the hash
+        is deterministic across deployments.
+        """
+        import hashlib
+        import json
+        from pathlib import Path
+
+        manifest_path = Path.cwd() / "contract" / "generated" / "manifest.json"
+        if not manifest_path.exists():
+            return None
+
+        with open(manifest_path) as f:
+            raw = json.load(f)
+
+        dag = raw.get("dag")
+        if dag is None:
+            return None
+
+        version = hashlib.sha256(json.dumps(dag, sort_keys=True).encode()).hexdigest()
+        return {"manifest_version": version}
+
     def bootstrap_event_registration(self):
         self.event_subscriptions: Dict[str, EventWorkflowTrigger] = {}
         if self.application_manifest is None:
@@ -303,6 +327,7 @@ class BaseApplication:
             handler=self.handler_class(client=self.client_class()),
             has_configmap=has_configmap,
             manifest=self.get_manifest(),
+            manifest_version=self.get_manifest_version(),
         )
 
         # Mount MCP at root
