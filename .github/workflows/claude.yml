@@ -3,11 +3,39 @@ name: Claude Code
 on:
   issue_comment:
     types: [created]
+  pull_request_review_comment:
+    types: [created]
   pull_request:
     types: [synchronize]
     branches:
       - main
       - refactor-v3
+  # workflow_dispatch is how the auto-complete loop re-fires itself
+  # between iterations. GitHub prevents GITHUB_TOKEN from triggering
+  # issue_comment events (anti-infinite-loop guardrail), so the bot
+  # can't post a '@sdk-review auto-complete --iteration=N' comment
+  # and have it fire. workflow_dispatch IS allowed to be triggered
+  # by GITHUB_TOKEN, so the 'Trigger re-review iteration' step calls
+  # this endpoint instead, passing iteration state as inputs.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number (internal auto-complete retrigger)"
+        required: true
+        type: string
+      iteration:
+        description: "Current iteration number (1-3)"
+        required: true
+        type: string
+      max_iter:
+        description: "Max iterations (1-3)"
+        required: true
+        type: string
+      trigger_reason:
+        description: "Why this was dispatched (audit trail)"
+        required: false
+        type: string
+        default: "auto-complete retrigger"
 
 permissions:
   id-token: write
@@ -32,6 +60,13 @@ jobs:
   #   @sdk-review                     → Review only
   #   @sdk-review auto-complete       → Review + fix loop until clean
   #   @sdk-review stop                → Cancel an in-progress auto-complete
+  #   @sdk-review challenge: <reason> → Re-evaluate prior review's findings
+  #                                      against author pushback. Claude
+  #                                      can STAND BY / WITHDRAW / SOFTEN
+  #                                      each finding. Withdrawn findings
+  #                                      are emitted as YAML for the
+  #                                      retrospective learned-not-to-flag
+  #                                      list (manual aggregation for v1).
   #   @sdk-review override: <reason>  → Admin force-pass
   #
   # Aliases (backward-compat): `resolve all issues` == `auto-complete`,
@@ -40,27 +75,33 @@ jobs:
   # Inline comment replies on previous bot comments → answer agent
   # responds in-thread (no separate trigger needed).
   sdk-review:
-    # Gate: only repo collaborators / members / owners can trigger,
-    # plus the `github-actions[bot]` self-retriggers from the
-    # auto-complete loop (which have `--iteration=` in the body).
-    # This prevents external contributors on forks from burning API
-    # credits, triggering VPN connections, or leveraging the workflow's
-    # write permissions, while still letting the internal fix-loop
-    # continue across iterations.
+    # Two entry paths:
+    #   1. issue_comment from a repo OWNER/MEMBER/COLLABORATOR containing
+    #      '@sdk-review' (but not 'stop' / 'cancel').
+    #   2. workflow_dispatch from the auto-complete loop (bot
+    #      self-retrigger). GITHUB_TOKEN is ALLOWED to fire
+    #      workflow_dispatch, unlike issue_comment where it is
+    #      silently suppressed by GitHub's anti-loop guardrail.
     #
-    # Excludes `stop` / `cancel` so those route to the sdk-review-stop
-    # job instead.
+    # External fork contributors cannot enter either path: (1) is
+    # gated on author_association, (2) cannot be triggered without
+    # repo write access.
     if: |
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request &&
-      contains(github.event.comment.body, '@sdk-review') &&
-      !contains(github.event.comment.body, '@sdk-review stop') &&
-      !contains(github.event.comment.body, '@sdk-review cancel') &&
-      (github.event.comment.author_association == 'OWNER' ||
-       github.event.comment.author_association == 'MEMBER' ||
-       github.event.comment.author_association == 'COLLABORATOR' ||
-       (github.event.comment.user.login == 'github-actions[bot]' &&
-        contains(github.event.comment.body, '--iteration=')))
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '@sdk-review') &&
+        !contains(github.event.comment.body, '@sdk-review stop') &&
+        !contains(github.event.comment.body, '@sdk-review cancel') &&
+        (github.event.comment.author_association == 'OWNER' ||
+         github.event.comment.author_association == 'MEMBER' ||
+         github.event.comment.author_association == 'COLLABORATOR')
+      )
+      ||
+      (
+        github.event_name == 'workflow_dispatch' &&
+        github.event.inputs.pr_number != ''
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -78,67 +119,111 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Connect to VPN
-        uses: ./.github/actions/globalprotect-connect
-        with:
-          portal-url: vpn2.atlan.app
-          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
-          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+      # NOTE: VPN connect is intentionally AFTER Resolve PR metadata and
+      # Acknowledge trigger. Those first two steps only talk to GitHub
+      # (api.github.com, not behind VPN), and we want the 👀 reaction,
+      # pending status check, and ack comment to appear within ~3 seconds
+      # of the @sdk-review comment — not after the 30-60s VPN negotiation.
 
       - name: Resolve PR metadata
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.issue.number }}
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_COMMENT_PR_NUMBER: ${{ github.event.issue.number }}
+          DISPATCH_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          DISPATCH_ITERATION: ${{ github.event.inputs.iteration }}
+          DISPATCH_MAX_ITER: ${{ github.event.inputs.max_iter }}
         run: |
+          # Two entry paths — resolve PR metadata from the appropriate
+          # event source:
+          #   issue_comment:      PR number in github.event.issue.number
+          #                       Mode + iteration parsed from comment body
+          #   workflow_dispatch:  PR number + iteration + max in inputs
+          #                       Mode is always "auto-fix" (this path only
+          #                       exists for the auto-complete retrigger loop)
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            PR_NUMBER="$DISPATCH_PR_NUMBER"
+            MODE="auto-fix"
+            ITERATION="$DISPATCH_ITERATION"
+            MAX_ITER="$DISPATCH_MAX_ITER"
+            # Commenter for override-check compat: use the retrigger's
+            # original requester if we can find it (from the last
+            # @sdk-review auto-complete comment on the PR); otherwise
+            # fall back to the bot itself.
+            COMMENTER=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --jq '[.[] | select(.body | test("@sdk-review\\s+auto[- ]?complete|@sdk-review\\s+resolve"; "i"))
+                    | select(.user.login != "github-actions[bot]")] | last | .user.login // "github-actions[bot]"')
+            COMMENT_BODY=""  # no comment in dispatch path
+          else
+            PR_NUMBER="$ISSUE_COMMENT_PR_NUMBER"
+            # Pull comment body and commenter from the event JSON safely — NEVER
+            # interpolate user-controlled content via Actions template syntax into shell.
+            COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH")
+            COMMENTER=$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")
+
+            # Determine mode from comment body (grep on the bash variable,
+            # never expanded via Actions template syntax — no shell-injection risk).
+            #   override            → admin force-pass
+            #   challenge           → re-evaluate prior review
+            #   auto-complete       → review + fix loop (preferred name)
+            #   resolve all issues  → alias for auto-complete (backward-compat)
+            #   (none of the above) → review-only
+            if printf '%s' "$COMMENT_BODY" | grep -qi "override"; then
+              MODE=override
+            elif printf '%s' "$COMMENT_BODY" | grep -qi "challenge"; then
+              MODE=challenge
+            elif printf '%s' "$COMMENT_BODY" | grep -qiE "auto[- ]?complete|resolve"; then
+              MODE=auto-fix
+            else
+              MODE=review-only
+            fi
+
+            # For human-initiated auto-complete, this is iteration 1.
+            # For human-initiated everything else, iteration/max irrelevant
+            # but set sensible defaults.
+            ITERATION=1
+            MAX_ITER=3
+          fi
+
           HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
           HEAD_BRANCH=$(gh pr view "$PR_NUMBER" --json headRefName -q .headRefName)
           BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName)
-          # Pull comment body and commenter from the event JSON safely — NEVER
-          # interpolate user-controlled content via Actions template syntax into shell.
-          COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH")
-          COMMENTER=$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")
+
+          # Validate iteration/max are integers in [1,3]
+          if ! [[ "$MAX_ITER" =~ ^[0-9]+$ ]] || [ "$MAX_ITER" -lt 1 ] || [ "$MAX_ITER" -gt 3 ]; then
+            MAX_ITER=3
+          fi
+          if ! [[ "$ITERATION" =~ ^[0-9]+$ ]] || [ "$ITERATION" -lt 1 ] || [ "$ITERATION" -gt "$MAX_ITER" ]; then
+            ITERATION=1
+          fi
 
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "head_branch=$HEAD_BRANCH" >> "$GITHUB_OUTPUT"
           echo "base_branch=$BASE_BRANCH" >> "$GITHUB_OUTPUT"
           echo "commenter=$COMMENTER" >> "$GITHUB_OUTPUT"
-
-          # IMPORTANT: do NOT write COMMENT_BODY into $GITHUB_OUTPUT — a crafted
-          # multiline comment could inject arbitrary outputs. Only the derived
-          # mode flag goes out; raw body stays inside this step and is
-          # propagated to downstream Claude steps via a dedicated env var.
-
-          # Determine mode from comment body (grep on the bash variable, never
-          # expanded via Actions template syntax so no shell-injection risk).
-          #   override            → admin force-pass
-          #   auto-complete       → review + fix loop (preferred name)
-          #   resolve all issues  → alias for auto-complete (backward-compat)
-          #   --iteration=        → internal self-trigger for next fix iteration
-          #   (none of the above) → review-only
-          if printf '%s' "$COMMENT_BODY" | grep -qi "override"; then
-            MODE=override
-          elif printf '%s' "$COMMENT_BODY" | grep -qiE "auto[- ]?complete|resolve"; then
-            MODE=auto-fix
-          elif printf '%s' "$COMMENT_BODY" | grep -qi "\-\-iteration="; then
-            MODE=auto-fix
-          else
-            MODE=review-only
-          fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
-
-          # Expose parsed iteration/max to subsequent steps safely.
-          # Cap MAX_ITER at 3 server-side regardless of --max=N in the
-          # comment, so nobody can run a 100-iteration loop that burns
-          # Anthropic credits unchecked.
-          ITERATION=$(printf '%s' "$COMMENT_BODY" | grep -oP '\-\-iteration=\K\d+' || echo "1")
-          MAX_ITER=$(printf '%s' "$COMMENT_BODY" | grep -oP '\-\-max=\K\d+' || echo "3")
-          if ! [[ "$MAX_ITER" =~ ^[0-9]+$ ]] || [ "$MAX_ITER" -lt 1 ] || [ "$MAX_ITER" -gt 3 ]; then
-            MAX_ITER=3
-          fi
           echo "iteration=$ITERATION" >> "$GITHUB_OUTPUT"
           echo "max_iter=$MAX_ITER" >> "$GITHUB_OUTPUT"
+          echo "event_name=$EVENT_NAME" >> "$GITHUB_OUTPUT"
+
+          # IMPORTANT: do NOT write COMMENT_BODY into $GITHUB_OUTPUT — a crafted
+          # multiline comment could inject arbitrary outputs.
+
+          # Detect whether the PR modifies any file under .github/workflows/.
+          # GITHUB_TOKEN from GH Actions can't push changes to workflow files
+          # (403 "without `workflows` permission"). If this PR touches one,
+          # skip branch-update attempts and tell the author — otherwise the
+          # whole pipeline fails with a cascading cryptic error.
+          TOUCHES_WORKFLOWS=$(gh pr view "$PR_NUMBER" --json files \
+            --jq '[.files[].path | select(startswith(".github/workflows/"))] | length')
+          if [ "${TOUCHES_WORKFLOWS:-0}" -gt 0 ]; then
+            echo "touches_workflows=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "touches_workflows=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # Instant UX feedback: 👀 reaction + pending status check + ack comment.
       # All three happen in the first ~5 s so the user sees @sdk-review
@@ -154,9 +239,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ github.event.comment.id }}
+          EVENT_NAME: ${{ steps.pr.outputs.event_name }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           MODE: ${{ steps.pr.outputs.mode }}
+          ITERATION: ${{ steps.pr.outputs.iteration }}
+          MAX_ITER: ${{ steps.pr.outputs.max_iter }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # Count prior SDK_REVIEW_V2 comments (none posted yet in this run).
@@ -170,25 +258,49 @@ jobs:
             VERB="Review"
           fi
           echo "verb=$VERB" >> "$GITHUB_OUTPUT"
-          echo "Detected verb: $VERB (prior SDK_REVIEW_V2 comments: $PRIOR_REVIEWS)"
+          echo "Detected verb: $VERB (prior SDK_REVIEW_V2 comments: $PRIOR_REVIEWS, event: $EVENT_NAME)"
 
-          # 👀 reaction on the triggering comment
-          gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
-            -f content=eyes 2>/dev/null || true
+          # 👀 reaction on the triggering comment (skip for workflow_dispatch
+          # — no triggering comment exists; this is an auto-retrigger)
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+              -f content=eyes 2>/dev/null || true
+          fi
 
           # Map internal mode name to user-friendly label
           case "$MODE" in
             auto-fix)     LABEL="auto-complete" ;;
             review-only)  LABEL="review" ;;
             override)     LABEL="override (admin)" ;;
+            challenge)    LABEL="challenge re-review" ;;
             *)            LABEL="$MODE" ;;
           esac
+
+          # Size-aware time estimate based on total lines changed.
+          # Bucketed so users aren't misled by a fixed "~5-8 min" when
+          # they've pushed a 3,000-line PR that will realistically take
+          # 15-25 min (big diff → bigger subagent context → slower).
+          TOTAL_LINES=$(gh pr view "$PR_NUMBER" --json files \
+            --jq '[.files[] | (.additions // 0) + (.deletions // 0)] | add // 0' 2>/dev/null || echo 0)
+          if [ "$TOTAL_LINES" -lt 50 ]; then
+            EST="~3-5 min"
+          elif [ "$TOTAL_LINES" -lt 500 ]; then
+            EST="~5-10 min"
+          elif [ "$TOTAL_LINES" -lt 2000 ]; then
+            EST="~10-15 min"
+          else
+            EST="~15-25 min (large PR)"
+          fi
+          # Auto-complete mode can take longer (fix loop adds iterations)
+          if [ "$MODE" = "auto-fix" ]; then
+            EST="${EST}, possibly longer with fix iterations"
+          fi
 
           # Set sdk-review status check to pending
           gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
             -f state=pending \
             -f context=sdk-review \
-            -f description="SDK ${VERB} starting (${LABEL})... (takes ~5-8 min)" \
+            -f description="SDK ${VERB} starting (${LABEL})... ${EST}" \
             -f target_url="${RUN_URL}" 2>/dev/null || true
 
           # Add a "stop" hint when auto-complete is running
@@ -197,8 +309,20 @@ jobs:
             STOP_HINT=$'\n\n> 💡 Comment `@sdk-review stop` to cancel.'
           fi
 
-          BODY="🔄 **SDK ${VERB} starting** (${LABEL}) — takes ~5-8 min. [Watch live progress](${RUN_URL})${STOP_HINT}"
+          BODY="🔄 **SDK ${VERB} starting** (${LABEL}) — ${EST}. [Watch live progress](${RUN_URL})${STOP_HINT}"
           gh pr comment "$PR_NUMBER" --body "$BODY"
+
+      # Connect to VPN AFTER the ack (Resolve + Acknowledge only need
+      # api.github.com, not the internal VPN'd services). This means
+      # the 👀 reaction, pending status, and ack comment appear in ~3s
+      # instead of ~30-60s. VPN is required for the Claude session
+      # below to reach llmproxy.atlan.dev.
+      - name: Connect to VPN
+        uses: ./.github/actions/globalprotect-connect
+        with:
+          portal-url: vpn2.atlan.app
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
       # Pre-flight: Try to resolve conflicts BEFORE running the review
       # Tier 1: GitHub API update-branch
@@ -216,13 +340,33 @@ jobs:
           PR: ${{ steps.pr.outputs.number }}
           BASE: ${{ steps.pr.outputs.base_branch }}
           HEAD: ${{ steps.pr.outputs.head_branch }}
+          TOUCHES_WORKFLOWS: ${{ steps.pr.outputs.touches_workflows }}
         run: |
+          # Set git identity BEFORE any merge/commit so we don't cascade
+          # into 'empty ident name' errors if a tier step runs.
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
           MERGE_STATE=$(gh pr view "$PR" --json mergeStateStatus -q .mergeStateStatus)
           MERGEABLE=$(gh pr view "$PR" --json mergeable -q .mergeable)
 
           if [ "$MERGEABLE" = "MERGEABLE" ] && [ "$MERGE_STATE" = "CLEAN" ]; then
             echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
             echo "No conflicts."
+            exit 0
+          fi
+
+          # If the PR touches .github/workflows/*, GITHUB_TOKEN cannot
+          # push a branch update without the `workflows` scope (which
+          # GITHUB_TOKEN does NOT carry). Attempting Tier 1/2 would fail
+          # with a cryptic 403 → cascade into 'empty ident name' →
+          # 'there is no merge to abort'. Skip tier attempts cleanly,
+          # tell the author, and proceed with the review anyway.
+          if [ "$TOUCHES_WORKFLOWS" = "true" ]; then
+            echo "PR modifies .github/workflows/* — skipping branch update (GITHUB_TOKEN lacks workflow scope)."
+            gh pr comment "$PR" --body \
+              "⚠️ This PR modifies \`.github/workflows/*\` files. GitHub's \`GITHUB_TOKEN\` cannot update the branch (lacks \`workflows\` scope). **Review will proceed**, but you will need to **update the branch manually** (or a maintainer with a PAT that has the \`workflow\` scope must do it) before the PR can be merged."
+            echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -238,14 +382,22 @@ jobs:
           git fetch origin "$BASE" "$HEAD"
           git checkout "$HEAD"
           if git merge "origin/$BASE" --no-edit; then
-            git push origin "$HEAD"
-            echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
-            echo "Resolved via Tier 2 (git merge)."
-            exit 0
+            if git push origin "$HEAD"; then
+              echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
+              echo "Resolved via Tier 2 (git merge)."
+              exit 0
+            else
+              echo "::warning::Tier 2 merge succeeded locally but push failed — likely workflow-file or branch-protection issue. Aborting merge."
+              # Undo the merge commit we just made locally
+              git reset --hard "origin/$HEAD" 2>/dev/null || true
+              echo "needs_resolution=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
 
-          # Tier 2 failed — abort and signal Tier 3 needed
-          git merge --abort
+          # Tier 2 failed — abort (if there's anything to abort) and
+          # signal Tier 3 needed.
+          git merge --abort 2>/dev/null || true
           echo "needs_resolution=true" >> "$GITHUB_OUTPUT"
           echo "Tiers 1+2 failed. Will spawn Tier 3 (Claude semantic resolver)."
 
@@ -406,27 +558,175 @@ jobs:
                "Only repo admins can override the sdk-review check."
                Output VERDICT:NEEDS_FIXES and stop.
 
-            Otherwise, do the review:
+            If the mode is "challenge":
+            A challenge is a formal pushback on a prior review — the
+            author believes one or more findings were wrong. You must
+            re-evaluate the PR in light of their pushback, honestly
+            and without sycophancy.
 
-            1. Get the diff:
-               gh pr diff ${{ steps.pr.outputs.number }}
+            1. Fetch the most recent prior SDK_REVIEW_V2 comment:
+               gh api repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments \
+                 --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | last | .body'
 
-            2. Read the changed files in full using Read tool for context.
+            2. Fetch the triggering challenge comment body via $GITHUB_EVENT_PATH
+               (same as any @sdk-review comment — mode=challenge was
+               detected because it contains "challenge"). Extract any
+               reason the author gave after "@sdk-review challenge:".
 
-            3. Read these SDK review rules (ALL of them):
-               - .claude/skills/sdk-review/references/v3-architecture-rules.md
-               - .claude/skills/sdk-review/references/code-quality-rules.md
-               - .claude/skills/sdk-review/references/security-rules.md
-               - .claude/skills/sdk-review/references/test-quality-rules.md
-               - .claude/skills/sdk-review/references/dx-rules.md
-               - .claude/skills/sdk-review/references/structural-rules.md
+            3. Fetch author's replies on bot-posted inline review comments:
+               gh api repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/comments \
+                 --jq '[.[] | select(.user.login != "github-actions[bot]")] | .[] | {path, line, body, in_reply_to_id}'
 
-            4. Analyze the PR across these 3 dimensions:
-               - CORRECTNESS: architecture (ADR compliance, contract safety, determinism), security (secrets, injection, isolation), logical bugs
-               - QUALITY: code quality (imports, logging, naming, size), test coverage, developer experience
-               - STRUCTURE: holistic — symptoms vs causes, file health, dependency direction, v3 replacements
+            4. Re-read the changed files (not just the diff) so you can
+               evaluate findings in context again with fresh eyes.
 
-            5. Check guardrails G1-G8 (defined in the reference rules). Any violation is a blocker.
+            5. For EACH finding in the prior review, decide one of:
+               - **STAND BY**: the finding is still valid. Explain WHY,
+                 addressing the author's specific objection.
+               - **WITHDRAW**: the finding was wrong. Acknowledge
+                 explicitly (e.g. "I initially flagged this as a bare
+                 except; on re-read, the exception is intentional and
+                 narrowly scoped — retracting this finding.").
+               - **SOFTEN**: downgrade severity (e.g. Critical → Minor).
+                 Explain what changed your assessment.
+
+            6. Post a new SDK_REVIEW_V2 comment with this format (use
+               \$SDK_REVIEW_VERB = "Re-review" since challenge implies
+               prior review exists):
+
+               <!-- SDK_REVIEW_V2 -->
+               ## SDK Re-review (challenge response): PR #<num> — <title>
+
+               ### Verdict: <updated verdict>
+
+               > Re-evaluated prior findings against the author's
+               > challenge: "<quote their reason if given>".
+               > <1-line summary of outcome — how many stood, withdrawn, softened>
+
+               ### Changes from prior review
+
+               - **[STAND BY]** `file:line` — <original finding> — <why it still holds>
+               - **[WITHDRAWN]** `file:line` — <original finding> — <why you now agree>
+               - **[SOFTENED]** `file:line` — <original> (was Critical, now Minor) — <why>
+
+               ### Findings by File (current state)
+
+               <same format as review mode, but reflecting post-challenge state>
+
+               ### Retrospective (for learned-not-to-flag list)
+
+               \`\`\`yaml
+               # For each WITHDRAWN finding, emit an entry. This YAML
+               # block is machine-parseable so a future step can append
+               # these to a learned-not-to-flag log.
+               withdrawn_findings:
+                 - file: <path>
+                   line: <N>
+                   original_text: <verbatim prior finding>
+                   author_challenge: <quote author's objection>
+                   why_withdrawn: <your reasoning>
+               \`\`\`
+               (Omit the whole "Retrospective" section if no findings
+               were withdrawn in this pass.)
+
+            7. Verdict logic for challenge mode:
+               - If ALL prior blockers are withdrawn/softened below
+                 Critical → verdict is READY_TO_MERGE.
+               - If some challenges are valid but others stand, and
+                 remaining findings meet the normal bar → NEEDS_FIXES
+                 or READY_TO_MERGE as appropriate.
+               - Output the verdict as the LAST LINE: VERDICT:<verdict>
+
+            8. Do NOT re-post inline comments (the original ones from
+               the prior review still stand on the lines that haven't
+               changed). If you withdraw a finding, you may OPTIONALLY
+               reply to its inline thread acknowledging the retraction.
+
+            Stop here if mode is "challenge". Do not proceed to the
+            regular review flow below.
+
+            Otherwise, do the review using the MULTI-AGENT ORCHESTRATOR pattern:
+
+            ## Orchestrator setup
+
+            You are the ORCHESTRATOR. Do NOT review the PR yourself.
+            Dispatch 3 Task subagents IN PARALLEL (single message, 3
+            Task tool uses). Consolidate their findings into ONE
+            SDK_REVIEW_V2 comment.
+
+            ### Step 1 — Prepare shared context (prompt-caching optimization)
+
+            Each subagent narrows to 2-3 relevant rule files (not all 6),
+            but the full rule set is enumerated here for reference:
+              - .claude/skills/sdk-review/references/v3-architecture-rules.md
+              - .claude/skills/sdk-review/references/code-quality-rules.md
+              - .claude/skills/sdk-review/references/security-rules.md
+              - .claude/skills/sdk-review/references/test-quality-rules.md
+              - .claude/skills/sdk-review/references/dx-rules.md
+              - .claude/skills/sdk-review/references/structural-rules.md
+              - .claude/skills/sdk-review/references/retro-log.md
+                (learned-not-to-flag — patterns previously withdrawn
+                after author challenges. DO NOT flag these again without
+                additional evidence beyond what was present in the
+                prior false-positive case.)
+
+            Run once so all 3 subagents read from disk instead of
+            re-fetching through gh:
+
+                mkdir -p /tmp/sdkreview
+                gh pr diff ${{ steps.pr.outputs.number }} > /tmp/sdkreview/diff.patch
+                gh pr view ${{ steps.pr.outputs.number }} --json files --jq '.files[].path' > /tmp/sdkreview/files.txt
+
+            ### Step 2 — Dispatch 3 subagents in PARALLEL
+
+            Issue a SINGLE assistant message containing 3 Task tool
+            uses. Use subagent_type: "general-purpose" for all three.
+
+            AGENT A — CORRECTNESS (arch + security + bugs). Prompt:
+              "You are a CORRECTNESS reviewer. Read diff at
+              /tmp/sdkreview/diff.patch and files at
+              /tmp/sdkreview/files.txt. Apply rules from
+              .claude/skills/sdk-review/references/v3-architecture-rules.md,
+              security-rules.md, retro-log.md (avoid re-flagging
+              withdrawn patterns). Output JSON array of findings with
+              fields {severity: Critical|Important|Minor, tag:
+              ARCH|SEC|BUG, file, line, description, fix}. If none: []"
+
+            AGENT B — QUALITY (code quality + tests + DX). Prompt:
+              "You are a QUALITY reviewer. Read /tmp/sdkreview/diff.patch.
+              Apply rules from code-quality-rules.md, test-quality-rules.md,
+              dx-rules.md, retro-log.md. Severity: lint-rejectable
+              (bare except, f-string in logger, print, unused imports,
+              mutable defaults) is at LEAST Important. Missing types /
+              docstrings / formatting → Minor. Output JSON findings
+              with tag: QUAL|TEST|DX."
+
+            AGENT C — STRUCTURE (holistic, design). Prompt:
+              "You are a STRUCTURE reviewer. Read full files (not
+              just diff) from /tmp/sdkreview/files.txt. Apply
+              structural-rules.md, v3-architecture-rules.md,
+              retro-log.md. Find: dumping grounds, dep direction
+              violations, god functions, v3-replacement opportunities.
+              Output JSON findings with tag: STRUCT|ARCH and extra
+              field design_change: true|false when the fix requires
+              architectural rework (not a simple patch)."
+
+            ### Step 3 — Consolidate
+
+            Merge all 3 JSON arrays. De-duplicate by (file, line, ~description):
+            keep the HIGHEST severity and merge descriptions. If a SEC
+            tag conflicts with QUAL on same line, SEC wins.
+
+            Check guardrails G1-G8. Any Critical [SEC] → BLOCKED.
+
+            ### Step 4 — Fallback (if any subagent fails)
+
+            If any Task call errors (auth / timeout / parse failure),
+            log it to stderr and proceed with whichever subagents
+            succeeded. If ALL fail, fall back to direct review:
+            read the diff + the 6 rule files and review yourself.
+            This fallback keeps the pipeline healthy if the LiteLLM
+            subagent auth issue ever resurfaces.
 
             6. Post a summary comment to the PR using `gh pr comment`.
                Use $SDK_REVIEW_VERB (Review / Re-review) in the heading.
@@ -446,6 +746,17 @@ jobs:
                > <1-2 sentence summary of current status — for Re-review,
                > mention whether prior findings were resolved and whether
                > new issues were introduced by the latest changes>
+
+               ### Delta from prior review
+               (INCLUDE THIS SECTION ONLY IF $SDK_REVIEW_VERB == "Re-review".
+                For each finding in the prior SDK_REVIEW_V2 comment, emit
+                one bullet with one of the four markers. If no changes
+                for a category, write "- None".)
+
+               - **[RESOLVED]** `file:line` — prior finding "..." — fixed in this iteration
+               - **[STILL]** `file:line` — prior finding "..." — still present
+               - **[NEW]** `file:line` — introduced by this iteration
+               - **[REGRESSION]** `file:line` — was flagged, fixed, now re-introduced
 
                ### Findings by File
 
@@ -470,19 +781,83 @@ jobs:
                  -f side="RIGHT"
                Max 15 inline comments, prioritize Critical > Important > Minor.
 
-            8. If there are no Critical findings and fewer than 3 Important → verdict is READY_TO_MERGE.
-               If any Critical security finding → verdict is BLOCKED.
-               Otherwise → verdict is NEEDS_FIXES.
+            7b. AUTO-RESOLVE previously-flagged findings that are now fixed.
 
-            9. Output the verdict as the LAST LINE of your response:
-               VERDICT:<verdict>
+                On a re-review (SDK_REVIEW_VERB=Re-review), fetch prior
+                inline review threads authored by github-actions[bot]:
 
-            Do NOT use the Task/Agent tool — do everything directly in this session.
-            Do NOT set a commit status check (sdk-review status is disabled for v1).
+                  gh api graphql -f query='
+                    query($owner:String!,$name:String!,$num:Int!) {
+                      repository(owner:$owner, name:$name) {
+                        pullRequest(number:$num) {
+                          reviewThreads(first:100) {
+                            nodes { id isResolved
+                              comments(first:1) {
+                                nodes { author{login} path line body }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }' -F owner=atlanhq -F name=application-sdk -F num=${{ steps.pr.outputs.number }}
+
+                For each un-resolved thread whose comment author is
+                github-actions[bot], check whether the finding STILL
+                applies to the current code (read the file at that path
+                and line). If the finding has been addressed (code no
+                longer has the issue, or the line/file is gone), resolve
+                the thread:
+
+                  gh api graphql -f query='
+                    mutation($id:ID!) {
+                      resolveReviewThread(input:{threadId:$id}) {
+                        thread { id isResolved }
+                      }
+                    }' -F id=<thread id>
+
+                Do NOT resolve threads the author has explicitly
+                responded to arguing the finding is wrong — those go
+                through the `@sdk-review challenge:` flow.
+
+            8. Severity rules (IMPORTANT — read carefully):
+
+               Any finding that would FAIL a standard linter or pre-commit
+               check on this repo (bare `except:` / E722, f-string passed
+               to `logger.*`, `print()` in production code, unused imports,
+               mutable default args, etc.) is at least **Important** —
+               never Minor. If CI would reject the code, the review must
+               not call it Minor.
+
+               Any hardcoded secret, SQL injection, auth bypass, tenant
+               isolation break, missing input validation on public endpoint,
+               logging of credentials/tokens → always **Critical**.
+
+               Missing type hints, missing docstrings, formatting nits,
+               naming preferences → Minor.
+
+            9. Verdict rules:
+
+               - Any Critical security finding [SEC] → BLOCKED.
+               - Any Critical non-security finding OR 3+ Important findings
+                 OR 5+ Minor findings → NEEDS_FIXES.
+               - No Critical, fewer than 3 Important, fewer than 5 Minor →
+                 READY_TO_MERGE.
+               - Major design smells (god function, dependency direction
+                 violation, dumping ground, contract break) that aren't
+                 a simple patch → NEEDS_HUMAN_REVIEW.
+
+            10. Output the verdict as the LAST LINE of your response:
+                VERDICT:<verdict>
+
+            Use the Task tool (Wave 1 — 3 parallel subagents) as
+            instructed above. Each subagent is a "general-purpose"
+            agent with a narrow, focused prompt. This is the
+            orchestrator pattern; do NOT review the PR directly.
+            Do NOT set a commit status check (Finalize handles that).
             Do NOT proceed to auto-fix — that is a separate workflow step.
           claude_args: |
             --model claude-opus-4-6
-            --allowedTools "Read,Glob,Grep,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh label:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(cat:*),Bash(jq:*)"
+            --allowedTools "Task,Read,Glob,Grep,Write,Bash(mkdir:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh label:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(cat:*),Bash(jq:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
@@ -497,12 +872,191 @@ jobs:
           # heading and summary for consistent messaging across UI.
           SDK_REVIEW_VERB: ${{ steps.ack.outputs.verb }}
 
+      # Adversarial review (Wave 2 — GPT-5.3-codex via LiteLLM).
+      # Second cross-model opinion. Posts a separate comment with
+      # SDK_REVIEW_V2_ADVERSARIAL marker. Runs BEFORE verdict parsing
+      # so Reconcile (next step) can fold Codex's disagreements back
+      # into the Opus SDK_REVIEW_V2 comment, and Parse verdict reads
+      # the reconciled version.
+      - name: Adversarial review (GPT-5.3-codex)
+        id: adversarial
+        if: |
+          steps.pr.outputs.mode != 'override' &&
+          steps.pr.outputs.mode != 'challenge'
+        continue-on-error: true
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --jq '[.[] | select(.body | contains("SDK_REVIEW_V2")
+              and (.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
+              and (.body | contains("SDK_REVIEW_V2_RECONCILED") | not))] | last | .body // ""')
+
+          if [ -z "$CLAUDE_REVIEW" ]; then
+            echo "No SDK_REVIEW_V2 comment found — skipping adversarial pass."
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          DIFF=$(gh pr diff "$PR_NUMBER" 2>/dev/null | head -c 40000)
+
+          if [ -z "$DIFF" ]; then
+            echo "Empty diff — skipping adversarial pass."
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          REQUEST_BODY=$(jq -n \
+            --arg diff "$DIFF" \
+            --arg claude "$CLAUDE_REVIEW" \
+            '{
+              model: "gpt-5.3-codex",
+              messages: [
+                {
+                  role: "system",
+                  content: "You are a senior Python engineer doing adversarial re-review. Another reviewer (Claude Opus) reviewed this PR. Output JSON ONLY — no prose. Fields: missed (array of findings the other review missed), false_positives (array of findings you think are wrong), severity_changes (array of {file,line,from,to,reason}). Each finding: {severity, tag, file, line, description}. If no disagreements, all arrays empty."
+                },
+                {
+                  role: "user",
+                  content: ("## PR diff\n```\n" + $diff + "\n```\n\n## Opus review\n" + $claude + "\n\nReturn STRICT JSON matching the schema described in the system prompt. No markdown, no prose outside the JSON.")
+                }
+              ],
+              temperature: 0.2,
+              max_tokens: 4000,
+              response_format: {type: "json_object"}
+            }')
+
+          echo "Calling GPT-5.3-codex..."
+          RESPONSE=$(curl -sS -X POST "https://llmproxy.atlan.dev/v1/chat/completions" \
+            -H "Authorization: Bearer $LITELLM_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$REQUEST_BODY" 2>&1)
+
+          CODEX_JSON=$(printf '%s' "$RESPONSE" | jq -r '.choices[0].message.content // ""')
+
+          if [ -z "$CODEX_JSON" ]; then
+            ERR=$(printf '%s' "$RESPONSE" | jq -r '.error.message // "unknown"')
+            echo "::warning::Codex returned no content: $ERR"
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Save JSON to disk for the Reconcile step
+          printf '%s' "$CODEX_JSON" > /tmp/codex_disagreements.json
+
+          # Post an informational comment so humans see the raw Codex output
+          HUMAN_SUMMARY=$(printf '%s' "$CODEX_JSON" | jq -r '
+            def list(name; arr): if (arr|length) > 0 then
+              "### " + name + "\n" + (arr | map("- [\(.tag // "?")] `\(.file // "?"):\(.line // "?")` — \(.description // "")") | join("\n")) + "\n"
+            else "### " + name + "\nNone\n" end;
+            list("What was missed"; .missed // []) +
+            list("False positives"; .false_positives // []) +
+            (if (.severity_changes // [] | length) > 0 then
+               "### Severity disagreements\n" +
+               ((.severity_changes // []) | map("- `\(.file):\(.line)` — was \(.from), should be \(.to) — \(.reason)") | join("\n"))
+             else "### Severity disagreements\nNone" end)' 2>/dev/null || echo "Codex output malformed.")
+
+          BODY=$(printf '%s\n' \
+            "<!-- SDK_REVIEW_V2_ADVERSARIAL -->" \
+            "## 🤖 Adversarial review (GPT-5.3-codex)" \
+            "" \
+            "> Cross-model second opinion. These disagreements feed into the reconciled Opus review above." \
+            "" \
+            "${HUMAN_SUMMARY}" \
+            "" \
+            "---" \
+            "<sub>Reconciled with Opus's findings automatically — see the updated SDK Review comment.</sub>")
+
+          gh pr comment "$PR_NUMBER" --body "$BODY"
+          echo "ran=true" >> "$GITHUB_OUTPUT"
+
+      # Reconcile — fold Codex disagreements into the Opus SDK_REVIEW_V2
+      # comment. If Codex caught something Opus missed, add it. If
+      # Codex flagged a false positive, remove it. If severity differs,
+      # pick the median (more conservative).
+      #
+      # Runs a short Claude session that reads both the Opus review
+      # and the Codex JSON disagreements, edits the Opus comment in
+      # place (PATCH), re-evaluates the verdict on the reconciled set.
+      - name: Reconcile Opus + Codex findings
+        if: steps.adversarial.outputs.ran == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          show_full_output: true
+          prompt: |
+            You are reconciling two reviews on PR #${{ steps.pr.outputs.number }}
+            in repo ${{ github.repository }}.
+
+            1. Fetch the most recent SDK_REVIEW_V2 comment (NOT
+               _ADVERSARIAL, NOT _RECONCILED):
+               gh api "repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments" \
+                 --jq '[.[] | select(.body | contains("SDK_REVIEW_V2")
+                   and (.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
+                   and (.body | contains("SDK_REVIEW_V2_RECONCILED") | not))] | last'
+               Remember its `id` (comment id) and `body`.
+
+            2. Read /tmp/codex_disagreements.json (GPT-5.3-codex's
+               disagreements, JSON schema: missed, false_positives,
+               severity_changes).
+
+            3. Produce a reconciled SDK_REVIEW_V2 comment body:
+               - ADD each finding from Codex's `missed` array
+                 (if not already in the Opus review).
+               - REMOVE each finding from Codex's `false_positives`
+                 array (match by file+line+description similarity).
+                 Only remove if Codex's reasoning is strong.
+               - ADJUST severity per `severity_changes` — but apply a
+                 CONSERVATIVE rule: use the HIGHER of {Opus, Codex}
+                 severity when they disagree (never silently downgrade
+                 a Critical).
+               - Re-evaluate verdict with the reconciled findings
+                 using the standard rules (Critical [SEC] → BLOCKED,
+                 3+ Important or 5+ Minor → NEEDS_FIXES, etc.).
+               - Add a new section "### Cross-model reconciliation"
+                 BEFORE the Findings list that summarizes what was
+                 added/removed/adjusted. Example:
+                   - Added 1 missed finding (SEC at api/foo.py:42)
+                   - Removed 0 false positives
+                   - Adjusted 1 severity (bar.py:10: Minor → Important)
+               - Keep the SDK_REVIEW_V2 marker. Replace it with both
+                 markers stacked:
+                   <!-- SDK_REVIEW_V2 -->
+                   <!-- SDK_REVIEW_V2_RECONCILED -->
+
+            4. Edit the Opus comment in place:
+               gh api -X PATCH \
+                 "repos/${{ github.repository }}/issues/comments/<comment_id>" \
+                 -f body="<reconciled body>"
+
+            5. Output VERDICT:<new verdict> as the LAST LINE.
+
+            If /tmp/codex_disagreements.json is missing or Codex had
+            no disagreements (all arrays empty), skip everything and
+            output VERDICT:UNCHANGED.
+          claude_args: |
+            --model claude-opus-4-6
+            --allowedTools "Read,Bash(gh api:*),Bash(cat:*),Bash(jq:*)"
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+          GH_TOKEN: ${{ github.token }}
+
       # Parse verdict by reading the SDK_REVIEW_V2 comment Claude posted.
       # The action output 'result' isn't reliably exposed by
       # anthropics/claude-code-action@v1 — it resolved to empty string
       # in testing, causing the pipeline to always fall through to
       # NEEDS_FIXES and skip Finalize. Fetching the comment we just
       # posted gives a stable, authoritative source for the verdict.
+      #
+      # Note: this runs AFTER Adversarial + Reconcile, so the comment
+      # we read is the RECONCILED version (if Reconcile ran).
       - name: Parse verdict
         id: verdict
         env:
@@ -603,17 +1157,25 @@ jobs:
           ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
           GH_TOKEN: ${{ github.token }}
 
-      # Trigger next iteration (fresh session via new Action run).
+      # Trigger next iteration (fresh run via workflow_dispatch).
       # Max 3 iterations. Honors the `sdk-review-stopped` label so the
       # author can break out of the auto-complete loop between
       # iterations without killing the fix session mid-commit.
+      #
+      # IMPORTANT: uses gh api /dispatches instead of posting an
+      # @sdk-review comment. GITHUB_TOKEN cannot trigger issue_comment
+      # workflows (anti-loop guardrail), so a bot-posted comment
+      # silently produces zero runs. workflow_dispatch IS allowed for
+      # GITHUB_TOKEN, so dispatch + inputs gives us the loop.
       - name: Trigger re-review iteration
         if: |
           steps.pr.outputs.mode == 'auto-fix' &&
           steps.verdict.outputs.verdict == 'NEEDS_FIXES'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_BRANCH: ${{ steps.pr.outputs.head_branch }}
           CURRENT: ${{ steps.pr.outputs.iteration }}
           MAX: ${{ steps.pr.outputs.max_iter }}
         run: |
@@ -639,9 +1201,30 @@ jobs:
             exit 0
           fi
 
-          # Post self-triggering comment for next iteration
-          gh pr comment "$PR_NUMBER" --body \
-            "@sdk-review auto-complete --iteration=$NEXT --max=$MAX"
+          # Fire the next iteration via workflow_dispatch.
+          # The workflow file must exist on the default branch for this
+          # to work (GitHub loads workflow_dispatch workflows from the
+          # default branch only, regardless of the 'ref' used for the run).
+          DEFAULT_BRANCH=$(gh api "repos/${REPO}" --jq '.default_branch')
+          echo "Dispatching iteration ${NEXT}/${MAX} via workflow_dispatch (ref=${DEFAULT_BRANCH})..."
+
+          if gh api "repos/${REPO}/actions/workflows/claude.yml/dispatches" \
+               -X POST \
+               -f ref="${DEFAULT_BRANCH}" \
+               -F "inputs[pr_number]=${PR_NUMBER}" \
+               -F "inputs[iteration]=${NEXT}" \
+               -F "inputs[max_iter]=${MAX}" \
+               -F "inputs[trigger_reason]=auto-complete iteration ${NEXT}/${MAX}"; then
+            # Post a short informational comment on the PR (not a
+            # trigger — just user-facing visibility).
+            gh pr comment "$PR_NUMBER" --body \
+              "🔁 **Auto-complete iteration ${NEXT}/${MAX} dispatched.** [Watch live progress](${{ github.server_url }}/${{ github.repository }}/actions/workflows/claude.yml)"
+          else
+            # Dispatch failed (permission / missing workflow / branch
+            # deleted). Fall back to telling the human.
+            gh pr comment "$PR_NUMBER" --body \
+              "⚠️ Auto-complete iteration ${NEXT}/${MAX} could not be dispatched. Re-run manually by commenting \`@sdk-review auto-complete\`."
+          fi
 
       # Finalize if clean (approve + update branch + status = success)
       - name: Finalize (approve if clean)
@@ -652,10 +1235,18 @@ jobs:
           MODE: ${{ steps.pr.outputs.mode }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          TOUCHES_WORKFLOWS: ${{ steps.pr.outputs.touches_workflows }}
         run: |
-          # Update branch
-          gh api "repos/${REPO}/pulls/$PR/update-branch" \
-            -X PUT -f update_method=merge 2>/dev/null || echo "Branch already up to date"
+          # Update branch. Skip if the PR touches workflow files —
+          # GITHUB_TOKEN lacks 'workflows' scope so update-branch would
+          # 403. The author needs to update the branch manually (or a
+          # maintainer with a PAT that has workflow scope).
+          if [ "$TOUCHES_WORKFLOWS" = "true" ]; then
+            echo "PR touches .github/workflows/* — skipping branch update (GITHUB_TOKEN lacks workflow scope)."
+          else
+            gh api "repos/${REPO}/pulls/$PR/update-branch" \
+              -X PUT -f update_method=merge 2>/dev/null || echo "Branch already up to date"
+          fi
 
           # Wait for CI after branch update
           sleep 15
@@ -664,7 +1255,9 @@ jobs:
             echo "CI checks failing after branch update. Not approving."
             gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
               -f state=failure -f context=sdk-review \
-              -f description="SDK Review: Clean but CI failing after branch update" 2>/dev/null || true
+              -f description="Review verdict READY TO MERGE, but required CI checks are failing. Fix CI, then re-run @sdk-review." 2>/dev/null || true
+            gh pr comment "$PR" --body \
+              "ℹ️ **SDK Review verdict: READY TO MERGE** — but required CI checks on this branch are failing. The \`sdk-review\` status is set to \`failure\` to prevent merge. Fix CI (e.g. pre-commit, tests), push, and re-run \`@sdk-review\`."
             exit 0
           fi
 
@@ -700,6 +1293,8 @@ jobs:
             fi
 
             APPROVE_BODY="⚠️ **SDK Review — Admin override.** Approving because @${OVERRIDE_ADMIN} explicitly invoked \`@sdk-review override\`. Reason: _${OVERRIDE_REASON}_. This bypasses normal review findings; the reason above is recorded for audit. CI passing. Branch up to date."
+          elif [ "$MODE" = "challenge" ]; then
+            APPROVE_BODY="SDK Re-review (challenge response): blocking findings withdrawn or softened after re-evaluating author pushback. CI passing. Branch up to date. Approved."
           else
             PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR}/comments" \
               --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 1)
@@ -980,3 +1575,134 @@ jobs:
             gh pr comment "$PR_NUMBER" --body \
               "🛑 **Stop acknowledged.** No running SDK Review runs were found, but the \`sdk-review-stopped\` label has been set so any queued iteration will skip. Comment \`@sdk-review\` to start a fresh review."
           fi
+
+  # ── @sdk-review inline Q&A handler ──────────────────────────
+  # Lightweight responder: when a collaborator replies to a
+  # bot-posted inline review comment with a question, this job
+  # spawns a small Claude session that reads the original finding
+  # + the author's question + the file around that line, and
+  # posts a reply in the same thread.
+  #
+  # Not full re-review. Just Q&A on a single finding. If the
+  # author wants the bot to formally re-evaluate the finding
+  # (withdraw / stand by / soften), they should use
+  # `@sdk-review challenge: <reason>` on the PR instead.
+  #
+  # Gate: only fires when the PARENT comment is from
+  # github-actions[bot] and the replier is OWNER/MEMBER/COLLABORATOR.
+  sdk-review-inline-qa:
+    if: |
+      github.event_name == 'pull_request_review_comment' &&
+      github.event.action == 'created' &&
+      github.event.comment.in_reply_to_id != null &&
+      github.event.comment.user.login != 'github-actions[bot]' &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    timeout-minutes: 5
+    concurrency:
+      group: sdk-review-qa-${{ github.event.comment.id }}
+      cancel-in-progress: false
+    steps:
+      - name: Check if parent comment is from the bot
+        id: parent_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PARENT_ID: ${{ github.event.comment.in_reply_to_id }}
+        run: |
+          PARENT_AUTHOR=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/comments/${PARENT_ID}" \
+            --jq '.user.login' 2>/dev/null || echo "unknown")
+          echo "parent_author=$PARENT_AUTHOR" >> "$GITHUB_OUTPUT"
+          if [ "$PARENT_AUTHOR" = "github-actions[bot]" ]; then
+            echo "is_bot_parent=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_bot_parent=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.parent_check.outputs.is_bot_parent == 'true'
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Connect to VPN
+        if: steps.parent_check.outputs.is_bot_parent == 'true'
+        uses: ./.github/actions/globalprotect-connect
+        with:
+          portal-url: vpn2.atlan.app
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: React with 👀 (ack that Q is being answered)
+        if: steps.parent_check.outputs.is_bot_parent == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          gh api "repos/${REPO}/pulls/comments/${COMMENT_ID}/reactions" \
+            -f content=eyes 2>/dev/null || true
+
+      - name: Answer the question (lightweight Claude session)
+        if: steps.parent_check.outputs.is_bot_parent == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          show_full_output: true
+          prompt: |
+            An author replied to one of your prior SDK review inline
+            comments with a question. Answer it briefly.
+
+            ## Context
+
+            Repository: ${{ github.repository }}
+            PR number: ${{ github.event.pull_request.number }}
+            Parent (bot) review comment id: ${{ github.event.comment.in_reply_to_id }}
+            Reply comment id: ${{ github.event.comment.id }}
+
+            ## Your task
+
+            1. Fetch the parent (bot's original finding):
+               gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/${{ github.event.comment.in_reply_to_id }}
+               Extract its body, path, line.
+
+            2. Fetch the author's reply body:
+               gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/${{ github.event.comment.id }}
+
+            3. Read the file at the reported path around the reported
+               line (use Read tool with offset/limit).
+
+            4. Compose a short, direct answer to the author's question:
+               - If they're asking "what is this?" or "please explain" →
+                 give a one-paragraph explanation of WHY it's a problem
+                 with a concrete example (e.g. for f-string in logger:
+                 "If DEBUG level is off, the f-string still formats
+                 every call → wasted CPU. %-style defers formatting.")
+               - If they're arguing the finding is wrong → DO NOT
+                 withdraw here. Instead say: "If you believe this is
+                 wrong, comment `@sdk-review challenge: <your reason>`
+                 on the PR and I'll formally re-evaluate."
+               - If they're asking "how to fix" → give the exact
+                 replacement code.
+
+            5. Post the answer as a reply in the SAME thread:
+               gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments \
+                 -f body="<your answer>" \
+                 -f in_reply_to="${{ github.event.comment.in_reply_to_id }}"
+
+            Keep the answer ≤ 150 words. Plain text, no headers.
+            Start with the direct answer, not a preamble.
+          claude_args: |
+            --model claude-opus-4-6
+            --allowedTools "Read,Glob,Grep,Bash(gh api:*),Bash(cat:*),Bash(jq:*)"
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+          GH_TOKEN: ${{ github.token }}
