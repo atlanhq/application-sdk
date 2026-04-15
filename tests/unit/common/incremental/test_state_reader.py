@@ -8,15 +8,12 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from application_sdk.common.incremental.state.state_reader import download_current_state
 
 
 class TestDownloadCurrentState:
     """Tests for download_current_state (S3 download with first-run handling)."""
 
-    @pytest.mark.asyncio
     async def test_first_run_returns_not_exists(self):
         """First run (S3 raises exception) returns exists=False."""
         with (
@@ -42,7 +39,6 @@ class TestDownloadCurrentState:
         assert exists is False
         assert json_count == 0
 
-    @pytest.mark.asyncio
     async def test_existing_state_returns_exists(self):
         """Existing state with JSON files returns exists=True and file count."""
         with (
@@ -76,7 +72,6 @@ class TestDownloadCurrentState:
         assert exists is True
         assert json_count == 2
 
-    @pytest.mark.asyncio
     async def test_empty_download_returns_not_exists(self):
         """Download that results in zero JSON files returns exists=False."""
         with (
@@ -101,7 +96,6 @@ class TestDownloadCurrentState:
         assert exists is False
         assert json_count == 0
 
-    @pytest.mark.asyncio
     async def test_clears_stale_directory(self):
         """Clears existing stale directory before downloading."""
         with (

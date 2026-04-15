@@ -36,7 +36,6 @@ def mock_client():
 
 
 class TestAsyncDaprClientState:
-    @pytest.mark.asyncio
     async def test_save_state(self, mock_client):
         client, mock_http = mock_client
         mock_http.post.return_value = MagicMock(
@@ -50,7 +49,6 @@ class TestAsyncDaprClientState:
         assert "/v1.0/state/mystore" in args[0][0]
         assert args[1]["json"] == [{"key": "key1", "value": '{"value": 1}'}]
 
-    @pytest.mark.asyncio
     async def test_get_state_returns_data(self, mock_client):
         client, mock_http = mock_client
         mock_http.get.return_value = MagicMock(
@@ -63,7 +61,6 @@ class TestAsyncDaprClientState:
 
         assert result == b'{"value": 1}'
 
-    @pytest.mark.asyncio
     async def test_get_state_returns_none_for_missing(self, mock_client):
         client, mock_http = mock_client
         mock_http.get.return_value = MagicMock(
@@ -76,7 +73,6 @@ class TestAsyncDaprClientState:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_delete_state(self, mock_client):
         client, mock_http = mock_client
         mock_http.delete.return_value = MagicMock(
@@ -89,7 +85,6 @@ class TestAsyncDaprClientState:
 
 
 class TestAsyncDaprClientSecrets:
-    @pytest.mark.asyncio
     async def test_get_secret(self, mock_client):
         client, mock_http = mock_client
         mock_http.get.return_value = MagicMock(
@@ -102,7 +97,6 @@ class TestAsyncDaprClientSecrets:
 
         assert result == {"api_key": "secret123"}
 
-    @pytest.mark.asyncio
     async def test_get_bulk_secret(self, mock_client):
         client, mock_http = mock_client
         mock_http.get.return_value = MagicMock(
@@ -120,7 +114,6 @@ class TestAsyncDaprClientSecrets:
 
 
 class TestAsyncDaprClientPubSub:
-    @pytest.mark.asyncio
     async def test_publish_event(self, mock_client):
         client, mock_http = mock_client
         mock_http.post.return_value = MagicMock(
@@ -133,7 +126,6 @@ class TestAsyncDaprClientPubSub:
         args = mock_http.post.call_args
         assert "/v1.0/publish/pubsub/my-topic" in args[0][0]
 
-    @pytest.mark.asyncio
     async def test_publish_event_with_metadata(self, mock_client):
         client, mock_http = mock_client
         mock_http.post.return_value = MagicMock(
@@ -149,7 +141,6 @@ class TestAsyncDaprClientPubSub:
 
 
 class TestAsyncDaprClientBinding:
-    @pytest.mark.asyncio
     async def test_invoke_binding(self, mock_client):
         client, mock_http = mock_client
         mock_http.post.return_value = MagicMock(
@@ -167,7 +158,6 @@ class TestAsyncDaprClientBinding:
         assert result.data == b"result data"
         mock_http.post.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_invoke_binding_no_data(self, mock_client):
         client, mock_http = mock_client
         mock_http.post.return_value = MagicMock(
@@ -183,7 +173,6 @@ class TestAsyncDaprClientBinding:
 
 
 class TestAsyncDaprClientMetadata:
-    @pytest.mark.asyncio
     async def test_get_metadata(self, mock_client):
         client, mock_http = mock_client
         mock_http.get.return_value = MagicMock(

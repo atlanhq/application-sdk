@@ -161,7 +161,6 @@ class TestPrepareCurrentStateDirectory:
 class TestPreparePreviousState:
     """Tests for prepare_previous_state (conditional download)."""
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_not_available(self):
         """Returns None when current_state_available is False."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -174,7 +173,6 @@ class TestPreparePreviousState:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_downloads_previous_state(self):
         """Downloads previous state when available."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -197,7 +195,6 @@ class TestPreparePreviousState:
             assert result.exists()
             assert "previous" in result.name
 
-    @pytest.mark.asyncio
     async def test_cleans_up_on_download_failure(self):
         """Cleans up temp directory if S3 download fails."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -234,19 +231,16 @@ class TestPreparePreviousState:
 class TestDownloadTransformedData:
     """Tests for download_transformed_data (path validation)."""
 
-    @pytest.mark.asyncio
     async def test_empty_output_path_raises(self):
         """Empty output_path raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError, match="No output_path"):
             await download_transformed_data("")
 
-    @pytest.mark.asyncio
     async def test_whitespace_output_path_raises(self):
         """Whitespace-only output_path raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError, match="No output_path"):
             await download_transformed_data("   ")
 
-    @pytest.mark.asyncio
     async def test_downloads_from_s3(self):
         """Downloads transformed data from S3 to local path."""
         with tempfile.TemporaryDirectory() as temp_dir:

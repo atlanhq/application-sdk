@@ -251,7 +251,6 @@ class TestSecretStoreError:
 class TestGetDeploymentSecret:
     """Tests for get_deployment_secret()."""
 
-    @pytest.mark.asyncio
     async def test_returns_none_in_local_environment(self) -> None:
         """Local environment → returns None without touching Dapr."""
         with (
@@ -262,7 +261,6 @@ class TestGetDeploymentSecret:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_client_fails(self) -> None:
         """AsyncDaprClient construction fails → returns None."""
         with (
@@ -281,7 +279,6 @@ class TestGetDeploymentSecret:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_value_from_multi_key_bundle(self) -> None:
         """Multi-key bundle contains the requested key → returns its value."""
         bundle = {"DB_HOST": "db.example.com", "DB_PORT": "5432"}
@@ -312,7 +309,6 @@ class TestGetDeploymentSecret:
 
         assert result == "db.example.com"
 
-    @pytest.mark.asyncio
     async def test_falls_back_to_single_key_when_bundle_misses(self) -> None:
         """Bundle doesn't contain the key → falls back to single-key lookup."""
         mock_client = MagicMock(
@@ -349,7 +345,6 @@ class TestGetDeploymentSecret:
 
         assert result == "5432"
 
-    @pytest.mark.asyncio
     async def test_returns_none_on_exception(self) -> None:
         """Any unexpected exception → returns None (never raises)."""
         with (

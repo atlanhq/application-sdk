@@ -36,7 +36,6 @@ def resolver(store):
 class TestNewPath:
     """Tests for the new (non-legacy) resolution path."""
 
-    @pytest.mark.asyncio
     async def test_resolve_api_key(self, store, resolver):
         store.set("prod-key", json.dumps({"type": "api_key", "api_key": "secret123"}))
         ref = api_key_ref("prod-key")
@@ -44,7 +43,6 @@ class TestNewPath:
         assert isinstance(cred, ApiKeyCredential)
         assert cred.api_key == "secret123"
 
-    @pytest.mark.asyncio
     async def test_resolve_basic(self, store, resolver):
         store.set(
             "db-creds", json.dumps({"type": "basic", "username": "u", "password": "p"})
@@ -54,7 +52,6 @@ class TestNewPath:
         assert isinstance(cred, BasicCredential)
         assert cred.username == "u"
 
-    @pytest.mark.asyncio
     async def test_type_from_data_overrides_ref_type(self, store, resolver):
         """'type' field in JSON takes precedence over ref.credential_type."""
         store.set("cred", json.dumps({"type": "api_key", "api_key": "k"}))
@@ -63,27 +60,23 @@ class TestNewPath:
         cred = await resolver.resolve(ref)
         assert isinstance(cred, ApiKeyCredential)
 
-    @pytest.mark.asyncio
     async def test_not_found_raises(self, resolver):
         ref = api_key_ref("nonexistent")
         with pytest.raises(CredentialNotFoundError):
             await resolver.resolve(ref)
 
-    @pytest.mark.asyncio
     async def test_invalid_json_raises(self, store, resolver):
         store.set("bad", "not-json")
         ref = api_key_ref("bad")
         with pytest.raises(CredentialParseError):
             await resolver.resolve(ref)
 
-    @pytest.mark.asyncio
     async def test_unknown_type_raises(self, store, resolver):
         store.set("cred", json.dumps({"type": "unknown_type_xyz"}))
         ref = CredentialRef(name="cred", credential_type="unknown_type_xyz")
         with pytest.raises(CredentialParseError, match="No parser registered"):
             await resolver.resolve(ref)
 
-    @pytest.mark.asyncio
     async def test_resolve_raw_returns_dict(self, store, resolver):
         data = {"type": "api_key", "api_key": "secret"}
         store.set("my-key", json.dumps(data))
@@ -108,13 +101,13 @@ def _make_vault_patches(vault_return=None, vault_side_effect=None):
         mock_vault.get_credentials = AsyncMock(return_value=vault_return or {})
 
     p_vault = patch(
-        "application_sdk.infrastructure._dapr.client.DaprCredentialVault",
+        "application_sdk.infrastructure.DaprCredentialVault",
         MagicMock(return_value=mock_vault),
     )
     mock_dapr_instance = MagicMock()
     mock_dapr_instance.close = AsyncMock()
     p_dapr = patch(
-        "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+        "application_sdk.infrastructure.AsyncDaprClient",
         MagicMock(return_value=mock_dapr_instance),
     )
     return p_vault, p_dapr, mock_vault
@@ -127,7 +120,6 @@ class TestGuidResolutionPath:
     credentials), then falls back to DaprCredentialVault for platform GUIDs.
     """
 
-    @pytest.mark.asyncio
     async def test_local_store_takes_precedence_over_vault(self, store, resolver):
         """Inline credentials stored in the local secret store are resolved
         directly — DaprCredentialVault is never called."""
@@ -141,7 +133,6 @@ class TestGuidResolutionPath:
         assert raw["host"] == "local.example.com"
         assert raw["port"] == 5432
 
-    @pytest.mark.asyncio
     async def test_get_credentials_receives_string_not_dict(self, store, resolver):
         """Regression: resolver must pass the GUID as a plain string, not a dict."""
         from unittest.mock import AsyncMock, MagicMock, patch
@@ -160,11 +151,11 @@ class TestGuidResolutionPath:
 
         with (
             patch(
-                "application_sdk.infrastructure._dapr.client.DaprCredentialVault",
+                "application_sdk.infrastructure.DaprCredentialVault",
                 MagicMock(return_value=mock_vault),
             ),
             patch(
-                "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+                "application_sdk.infrastructure.AsyncDaprClient",
                 MagicMock(return_value=mock_dapr),
             ),
         ):
@@ -174,7 +165,6 @@ class TestGuidResolutionPath:
         assert captured == ["abc-123"], f"Expected string guid, got: {captured}"
         assert raw["host"] == "db.example.com"
 
-    @pytest.mark.asyncio
     async def test_resolve_returns_typed_credential_for_known_type(
         self, store, resolver
     ):
@@ -189,7 +179,6 @@ class TestGuidResolutionPath:
         assert isinstance(cred, ApiKeyCredential)
         assert cred.api_key == "secret-from-vault"
 
-    @pytest.mark.asyncio
     async def test_resolve_unknown_type_returns_raw_credential(self, store, resolver):
         """Vault returns dict, unknown type → resolver wraps in RawCredential."""
         p_vault, p_dapr, _ = _make_vault_patches(
@@ -202,7 +191,6 @@ class TestGuidResolutionPath:
         assert isinstance(cred, RawCredential)
         assert cred.get("host") == "db.example.com"
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("method", ["resolve_raw", "resolve"])
     async def test_vault_error_raises_credential_not_found(
         self, store, resolver, method

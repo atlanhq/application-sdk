@@ -65,7 +65,6 @@ class TestBuildObjectStoreKey:
         )
 
 
-@pytest.mark.asyncio
 class TestUploadFileToObjectStore:
     """Test cases for upload_file_to_object_store utility function."""
 
@@ -500,7 +499,6 @@ class TestUploadFileToObjectStore:
         assert result4.contentType == "text/csv"
 
 
-@pytest.mark.asyncio
 class TestDownloadFileFromUploadResponse:
     """Test cases for download_file_from_upload_response utility function."""
 

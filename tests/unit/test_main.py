@@ -391,7 +391,6 @@ class TestParseArgs:
 class TestLogDaprComponents:
     """Tests for _log_dapr_components()."""
 
-    @pytest.mark.asyncio
     async def test_returns_registered_component_names(self, tmp_path: Path) -> None:
         """Returns the set of registered component names on success."""
         dapr_client = AsyncMock()
@@ -410,7 +409,6 @@ class TestLogDaprComponents:
 
         assert result == {"atlan-statestore", "atlan-secretstore"}
 
-    @pytest.mark.asyncio
     async def test_returns_empty_set_on_metadata_failure(self, tmp_path: Path) -> None:
         """Returns empty set when Dapr metadata query fails."""
         dapr_client = AsyncMock()
@@ -420,7 +418,6 @@ class TestLogDaprComponents:
 
         assert result == set()
 
-    @pytest.mark.asyncio
     async def test_return_type_is_set_of_str(self, tmp_path: Path) -> None:
         """Return type is set[str] — every element is a string."""
         dapr_client = AsyncMock()
@@ -445,7 +442,6 @@ class TestCreateInfrastructureEventBinding:
     def _make_dapr_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
 
-    @pytest.mark.asyncio
     async def test_event_binding_created_when_component_registered(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -472,7 +468,6 @@ class TestCreateInfrastructureEventBinding:
         mock_binding.assert_called_once()
         assert infra.event_binding is not None
 
-    @pytest.mark.asyncio
     async def test_event_binding_is_none_when_component_absent(
         self,
         monkeypatch: pytest.MonkeyPatch,

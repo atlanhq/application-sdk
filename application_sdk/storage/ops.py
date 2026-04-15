@@ -540,13 +540,16 @@ async def list_keys(
         StorageError: If the listing fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
+    import asyncio
+
     resolved = _resolve_store(store)
     if normalize and prefix:
         prefix = normalize_key(prefix)
         # Ensure trailing slash so the prefix matches only its own subtree.
         if prefix and not prefix.endswith("/"):
             prefix = prefix + "/"
-    try:
+
+    def _collect() -> list[str]:
         keys: list[str] = []
         for batch in obstore.list(resolved, prefix=prefix or None):
             for item in batch:
@@ -554,6 +557,9 @@ async def list_keys(
                 if not suffix or key.endswith(suffix):
                     keys.append(key)
         return sorted(keys)
+
+    try:
+        return await asyncio.to_thread(_collect)
     except Exception as exc:
         from application_sdk.storage.errors import StorageError
 
@@ -619,6 +625,12 @@ async def upload_prefix(
     """Upload all files under *local_dir* to the store under *prefix*.
 
     Each file's relative path is preserved under *prefix*.
+    Symlinks are skipped to prevent path-traversal.
+
+    Note:
+        Param order is ``(local_dir, prefix)`` — source first, destination second.
+        This is the inverse of :func:`download_prefix` ``(prefix, local_dir)`` which
+        also follows source-first convention.
 
     Args:
         local_dir: Local directory to upload from.
@@ -638,9 +650,11 @@ async def upload_prefix(
         prefix = normalize_key(prefix)
 
     files: list[tuple[str, Path]] = []
-    for root, _dirs, filenames in os.walk(local):
+    for root, _dirs, filenames in os.walk(local, followlinks=False):
         for fname in filenames:
             file_path = Path(root) / fname
+            if file_path.is_symlink():
+                continue
             rel = file_path.relative_to(local)
             key = f"{prefix}/{rel}" if prefix else str(rel)
             files.append((key, file_path))

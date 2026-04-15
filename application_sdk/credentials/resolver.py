@@ -161,8 +161,7 @@ class CredentialResolver:
 
         # Fall back to DaprCredentialVault for platform-issued GUIDs.
         from application_sdk.credentials.errors import CredentialNotFoundError
-        from application_sdk.infrastructure._dapr.client import DaprCredentialVault
-        from application_sdk.infrastructure._dapr.http import AsyncDaprClient
+        from application_sdk.infrastructure import AsyncDaprClient, DaprCredentialVault
 
         dapr_client = AsyncDaprClient()
         try:

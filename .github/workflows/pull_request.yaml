@@ -142,7 +142,7 @@ jobs:
 
       - name: Install and start Dapr runtime (daprd)
         run: |
-          wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.16.2
+          wget -q https://raw.githubusercontent.com/dapr/cli/refs/tags/v1.16.2/install/install.sh -O - | /bin/bash -s 1.16.2
           dapr init --runtime-version 1.16.0 --slim
           mkdir -p tests/integration/dapr-data/objectstore
           # Run daprd directly (no sidecar pattern) for deterministic behavior
