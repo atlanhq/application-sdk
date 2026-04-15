@@ -143,7 +143,13 @@ jobs:
       # Instant UX feedback: 👀 reaction + pending status check + ack comment.
       # All three happen in the first ~5 s so the user sees @sdk-review
       # was picked up.
+      #
+      # Also computes the Review/Re-review verb by counting prior
+      # SDK_REVIEW_V2 comments BEFORE Claude posts a new one. Exposes
+      # as an output so the Claude session + Finalize can use it for
+      # consistent wording across ack / review comment / approval body.
       - name: Acknowledge trigger
+        id: ack
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -153,6 +159,19 @@ jobs:
           MODE: ${{ steps.pr.outputs.mode }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # Count prior SDK_REVIEW_V2 comments (none posted yet in this run).
+          #   0  → first Review on this PR
+          #   >0 → Re-review (there's a prior review in the history)
+          PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 0)
+          if [ "${PRIOR_REVIEWS:-0}" -gt 0 ]; then
+            VERB="Re-review"
+          else
+            VERB="Review"
+          fi
+          echo "verb=$VERB" >> "$GITHUB_OUTPUT"
+          echo "Detected verb: $VERB (prior SDK_REVIEW_V2 comments: $PRIOR_REVIEWS)"
+
           # 👀 reaction on the triggering comment
           gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=eyes 2>/dev/null || true
@@ -169,7 +188,7 @@ jobs:
           gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
             -f state=pending \
             -f context=sdk-review \
-            -f description="SDK Review starting (${LABEL})... (takes ~5-8 min)" \
+            -f description="SDK ${VERB} starting (${LABEL})... (takes ~5-8 min)" \
             -f target_url="${RUN_URL}" 2>/dev/null || true
 
           # Add a "stop" hint when auto-complete is running
@@ -178,7 +197,7 @@ jobs:
             STOP_HINT=$'\n\n> 💡 Comment `@sdk-review stop` to cancel.'
           fi
 
-          BODY="🔄 **SDK Review starting** (${LABEL}) — takes ~5-8 min. [Watch live progress](${RUN_URL})${STOP_HINT}"
+          BODY="🔄 **SDK ${VERB} starting** (${LABEL}) — takes ~5-8 min. [Watch live progress](${RUN_URL})${STOP_HINT}"
           gh pr comment "$PR_NUMBER" --body "$BODY"
 
       # Pre-flight: Try to resolve conflicts BEFORE running the review
@@ -349,6 +368,12 @@ jobs:
             event payload — NOT the last comment on the PR, which is
             the bot's acknowledgment).
 
+            The environment variable SDK_REVIEW_VERB is either
+            "Review" (first time this PR is being reviewed) or
+            "Re-review" (there's a prior SDK_REVIEW_V2 comment on this
+            PR from an earlier run). Use this verb in every heading /
+            summary you post — NEVER hard-code "SDK Review:".
+
             ## Review Process
 
             If the mode is "override":
@@ -359,10 +384,12 @@ jobs:
                "no reason provided" if empty.
             3. If "admin" → post a PR comment with the EXACT format below
                (keep the SDK_REVIEW_V2 marker + the `### Verdict:` line —
-               downstream steps parse both):
+               downstream steps parse both). Substitute $SDK_REVIEW_VERB
+               into the heading (usually "Review", or "Re-review" if
+               a prior SDK_REVIEW_V2 comment exists):
 
                <!-- SDK_REVIEW_V2 -->
-               ## SDK Review: PR #<num> — <title>
+               ## SDK $SDK_REVIEW_VERB: PR #<num> — <title>
 
                ### Verdict: READY TO MERGE
 
@@ -401,14 +428,24 @@ jobs:
 
             5. Check guardrails G1-G8 (defined in the reference rules). Any violation is a blocker.
 
-            6. Post a summary comment to the PR using `gh pr comment`. Format:
+            6. Post a summary comment to the PR using `gh pr comment`.
+               Use $SDK_REVIEW_VERB (Review / Re-review) in the heading.
+               When $SDK_REVIEW_VERB is "Re-review", include a short
+               delta note in the summary line — did the latest changes
+               resolve prior findings, introduce new ones, or neither?
+               Look at the most recent prior SDK_REVIEW_V2 comment on
+               the PR for context (fetch via `gh api`).
+
+               Format:
 
                <!-- SDK_REVIEW_V2 -->
-               ## SDK Review: PR #<num> — <title>
+               ## SDK $SDK_REVIEW_VERB: PR #<num> — <title>
 
                ### Verdict: READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW
 
-               > <1-2 sentence summary of current status>
+               > <1-2 sentence summary of current status — for Re-review,
+               > mention whether prior findings were resolved and whether
+               > new issues were introduced by the latest changes>
 
                ### Findings by File
 
@@ -455,6 +492,10 @@ jobs:
           # so override checks authenticate the real human, not comments[-1]
           # (which is now the bot's acknowledgment).
           SDK_REVIEW_COMMENTER: ${{ steps.pr.outputs.commenter }}
+          # "Review" or "Re-review" — computed in Acknowledge trigger.
+          # Claude must use this exact verb in the SDK_REVIEW_V2 comment
+          # heading and summary for consistent messaging across UI.
+          SDK_REVIEW_VERB: ${{ steps.ack.outputs.verb }}
 
       # Parse verdict by reading the SDK_REVIEW_V2 comment Claude posted.
       # The action output 'result' isn't reliably exposed by
