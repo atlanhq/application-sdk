@@ -71,8 +71,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         # ── App Vitals ───────────────────────────────────────────────────
         # Deterministic filter flag — marks every App Vitals log event
         "app_vitals",
-        # Per-workflow identity (deployment-level fields are on OTel Resource)
-        "tenant_id",
+        # Per-workflow identity (deployment-level fields are on OTel Resource;
+        # tenant_id is redundant with ResourceAttributes['k8s.cluster.name'])
         # Outcome
         "status",
         "error_type",
@@ -99,6 +99,9 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "retry_max_attempts",
         # Payload size
         "input_payload_bytes",
+        # Activity wall-clock timestamps (ISO 8601)
+        "activity_start_time",
+        "activity_end_time",
         # Workflow hierarchy
         "parent_workflow_id",
         "parent_run_id",

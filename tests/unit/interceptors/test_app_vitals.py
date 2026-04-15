@@ -1068,7 +1068,7 @@ class TestWorkflowSummary:
             },
         ]
 
-        common = {"app_name": "snowflake", "tenant_id": "t1"}
+        common = {"app_name": "snowflake"}
         info = MockWorkflowInfo()
         summary = interceptor._build_summary_attrs(common, info, "succeeded", 500.0)
 
@@ -1094,10 +1094,10 @@ class TestLoggerAdaptorExtraKeysAllowlist:
 
     APP_VITALS_LOG_FIELDS = [
         # Identity — only per-workflow/per-app fields. Deployment attrs (version,
-        # release_id, pod_name, k8s.domain.name) are on OTel Resource.
+        # release_id, pod_name, k8s.domain.name, k8s.cluster.name) are on OTel
+        # Resource. tenant_id is redundant with k8s.cluster.name.
         "app_vitals",
         "app_name",
-        "tenant_id",
         # Execution context
         "workflow_id",
         "run_id",
@@ -1164,7 +1164,6 @@ class TestLoggerAdaptorExtraKeysAllowlist:
         sample_extra = {
             "app_vitals": "true",
             "app_name": "snowflake",
-            "tenant_id": "tenant_123",
             "workflow_id": "wf-abc",
             "run_id": "run-def",
             "activity_type": "fetch_tables",

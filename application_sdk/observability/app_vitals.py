@@ -19,6 +19,7 @@ import os
 import sys
 import time
 import traceback
+from datetime import datetime, timezone
 from typing import Any
 
 from temporalio import activity, workflow
@@ -34,7 +35,7 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
-from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
+from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME  # noqa: F401 — APP_TENANT_ID kept for test patch compat
 from application_sdk.observability.error_classifier import (
     classify_error,
     extract_cause_chain,
@@ -42,31 +43,6 @@ from application_sdk.observability.error_classifier import (
 )
 from application_sdk.observability.resource_sampler import compute_deltas, sample
 from application_sdk.observability.trace_context import get_trace_context
-
-
-def _get_tenant_id() -> str:
-    """Get tenant_id from correlation context (preferred) or env var fallback."""
-    try:
-        from application_sdk.observability.context import correlation_context
-
-        corr_ctx = correlation_context.get()
-        if corr_ctx:
-            tenant_id = corr_ctx.get("atlan-tenant-id", "")
-            if tenant_id:
-                return str(tenant_id)
-    except Exception:
-        pass
-
-    try:
-        from application_sdk.observability.correlation import get_correlation_context
-
-        corr = get_correlation_context()
-        if corr and hasattr(corr, "correlation_id"):
-            pass
-    except Exception:
-        pass
-
-    return APP_TENANT_ID
 
 
 def _get_correlation_id() -> str:
@@ -152,8 +128,10 @@ def _build_common_attrs() -> dict[str, str]:
     """Build the per-event identity attributes.
 
     Deployment-level attributes (app.version, release_id, sdk_version, pod_name,
-    k8s.domain.name, etc.) are set on the OTel Resource by build_otel_resource()
-    and appear as ResourceAttributes.* in ClickHouse — not duplicated here.
+    k8s.domain.name, k8s.cluster.name, etc.) are set on the OTel Resource or
+    injected by the collector and appear as ResourceAttributes.* in ClickHouse
+    — not duplicated here. tenant_id is intentionally omitted because
+    k8s.cluster.name identifies the tenant at the deployment level.
 
     ``app_name`` stays in log attrs (not resource) because a single deployment
     can host multiple apps; app_name is conceptually per-event, not per-pod.
@@ -165,7 +143,6 @@ def _build_common_attrs() -> dict[str, str]:
     return {
         "app_vitals": "true",
         "app_name": APPLICATION_NAME,
-        "tenant_id": _get_tenant_id(),
         "correlation_id": _get_correlation_id(),
         "trace_id": trace_id,
         "span_id": span_id,
@@ -186,7 +163,6 @@ def _emit_log_event(
     # Console visibility — key fields only, one line, greppable prefix.
     _CONSOLE_KEYS = (
         "app_name",
-        "tenant_id",
         "workflow_type",
         "activity_type",
         "status",
@@ -532,7 +508,6 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             # attributes (app_name, app_version, release_id, etc.) are on the
             # OTel Resource and exported with every metric point automatically.
             metric_labels = {
-                "tenant_id": common["tenant_id"],
                 "workflow_type": info.workflow_type or "",
                 "task_queue": info.task_queue or "",
                 "status": status,
@@ -596,6 +571,9 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
         try:
             started_common = _build_common_attrs()
             retry_policy = getattr(info, "retry_policy", None)
+            activity_start_time_iso = (
+                info.started_time.isoformat() if info.started_time else ""
+            )
             started_attrs: dict[str, Any] = {
                 **started_common,
                 "workflow_id": info.workflow_id or "",
@@ -607,6 +585,7 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
                 "retry_max_attempts": (
                     retry_policy.maximum_attempts if retry_policy else 0
                 ),
+                "activity_start_time": activity_start_time_iso,
                 "dimension": "reliability",
                 "source": "temporal",
                 "metric_name": "app_vitals.reliability.activity_started",
@@ -665,6 +644,10 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
             common = _build_common_attrs()
 
             retry_policy = getattr(info, "retry_policy", None)
+            activity_start_time_iso = (
+                info.started_time.isoformat() if info.started_time else ""
+            )
+            activity_end_time_iso = datetime.now(timezone.utc).isoformat()
             event_attrs: dict[str, Any] = {
                 **common,
                 "workflow_id": info.workflow_id or "",
@@ -676,6 +659,8 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
                 "retry_max_attempts": (
                     retry_policy.maximum_attempts if retry_policy else 0
                 ),
+                "activity_start_time": activity_start_time_iso,
+                "activity_end_time": activity_end_time_iso,
                 "namespace": getattr(info, "namespace", ""),
                 "status": status,
                 "error_type": error_type,
@@ -716,7 +701,6 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
             # Metric labels: only activity/workflow-scoped fields. Deployment
             # attributes live on the OTel Resource.
             metric_labels = {
-                "tenant_id": common["tenant_id"],
                 "workflow_id": info.workflow_id or "",
                 "workflow_run_id": info.workflow_run_id or "",
                 "workflow_type": getattr(info, "workflow_type", ""),

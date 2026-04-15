@@ -5,7 +5,6 @@ from opentelemetry.sdk.resources import Resource
 
 from application_sdk.constants import (
     APP_SDK_VERSION,
-    APP_TENANT_ID,
     APP_TYPE,
     APPLICATION_NAME,
     APPLICATION_VERSION,
@@ -101,10 +100,10 @@ def build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource:
         resource_attributes["service.version"] = SERVICE_VERSION
     if OTEL_WF_NODE_NAME:
         resource_attributes["k8s.workflow.node.name"] = OTEL_WF_NODE_NAME
-    # tenant.id — deployment-scoped tenant identifier
-    if "tenant.id" not in resource_attributes:
-        resource_attributes["tenant.id"] = APP_TENANT_ID
     # Deployment-level attributes — constant per pod, don't duplicate in log attrs.
+    # tenant.id is intentionally omitted: k8s.cluster.name (injected by the
+    # central OTel collector's resource processor) identifies the tenant at
+    # the deployment level.
     # NOTE: app.name is intentionally NOT a resource attribute — a deployment
     # can host multiple apps; app_name stays in log attrs per-event.
     # app.build_id is also omitted — app.version carries the same signal.
