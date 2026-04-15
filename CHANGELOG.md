@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.8.6 (April 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.5...v2.8.6
+
+### Features
+
+- post scan results as PR comment (#1263) (by @mananjain99 in [f28c6ee](https://github.com/atlanhq/application-sdk/commit/f28c6ee))
+- read app vitals release metadata from env vars (#1320) (by @anuj-atlan in [1c51805](https://github.com/atlanhq/application-sdk/commit/1c51805))
+
+### Bug Fixes
+
+- add missing pull-requests permission to build-and-publish-app (#1266) (by @stevemann-atlan in [5c027cb](https://github.com/atlanhq/application-sdk/commit/5c027cb))
+- lowercase app_name in build-and-publish dispatch payload (#1278) (by @adityachoudhury-cloud in [22c51d8](https://github.com/atlanhq/application-sdk/commit/22c51d8))
+- add missing await on execution_options() in AsyncBaseSQLClient.run_query() (#1207) (by @tanishkhot in [8e7236d](https://github.com/atlanhq/application-sdk/commit/8e7236d))
+- resilient thread-based heartbeater for all activities (#1215) (by @anuj-atlan in [64780fc](https://github.com/atlanhq/application-sdk/commit/64780fc))
+
+
 ## v2.8.5 (April 09, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.4...v2.8.5
