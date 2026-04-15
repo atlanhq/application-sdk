@@ -2,7 +2,7 @@
 # Copy this to .github/workflows/branch-keeper.yml when ready to deploy.
 #
 # Keeps auto-maintained PRs up-to-date when the base branch changes.
-# ONLY runs for PRs that went through "@sdk-review resolve all" AND got approved.
+# ONLY runs for PRs that went through "@sdk-review auto-complete" AND got approved.
 # Regular "@sdk-review" (review-only) PRs are NOT auto-maintained.
 #
 # Trigger: push to base branch (another PR merged).

@@ -1,28 +1,33 @@
 # SDK Review v2 — Complete Flow
 
-> Multi-model PR review with auto-fix loop, conflict resolution, and human escalation.
+> Multi-model PR review with auto-complete (fix) loop, conflict resolution, and human escalation.
 > Triggered by `@sdk-review` comments on PRs.
 
 ---
 
-## High-Level: Two Routes
+## High-Level: Four Routes
 
 ```mermaid
 flowchart LR
     A([Developer comments<br/>on PR]) --> B{Which command?}
 
     B -->|@sdk-review| C[Route 1<br/>REVIEW ONLY]
-    B -->|@sdk-review<br/>resolve all issues| D[Route 2<br/>AUTO-RESOLVE LOOP]
-    B -->|@sdk-review<br/>override: reason| E[Route 3<br/>ADMIN OVERRIDE]
+    B -->|@sdk-review<br/>auto-complete| D[Route 2<br/>AUTO-COMPLETE LOOP]
+    B -->|@sdk-review<br/>stop| S[Route 3<br/>CANCEL]
+    B -->|@sdk-review<br/>override: reason| E[Route 4<br/>ADMIN OVERRIDE]
 
     C --> F([Findings posted<br/>Author fixes manually])
     D --> G([Bot fixes + re-reviews<br/>until clean, then approves])
+    S --> T([In-progress runs cancelled<br/>sdk-review-stopped label set])
     E --> H([Status forced to pass<br/>audit logged])
 
     style C fill:#e1f5ff,stroke:#0366d6
     style D fill:#fff4e1,stroke:#d68d36
+    style S fill:#f0e1ff,stroke:#6f42c1
     style E fill:#ffe1e1,stroke:#cb2431
 ```
+
+Aliases: `resolve all issues` == `auto-complete`, `cancel` == `stop`.
 
 ---
 
@@ -86,7 +91,7 @@ flowchart TD
     VERDICT -->|BLOCKED| END_BLOCKED([STOP<br/>Critical security issue])
     VERDICT -->|NEEDS HUMAN REVIEW| END_HUMAN([STOP<br/>label: needs-human-review<br/>Design decision needed])
 
-    subgraph FIX["STAGE 4: AUTO-FIX (new Claude session)"]
+    subgraph FIX["STAGE 4: AUTO-COMPLETE (new Claude session)"]
         F1[Read SDK_REVIEW comment]
         F1 --> F2[For each PATCH/MIGRATE finding<br/>any severity, all fixed]
         F2 --> F3[Brainstorm → Plan → Apply]
@@ -96,8 +101,10 @@ flowchart TD
         F6 --> F7
         F5 -->|pass| F7[Commit fix]
         F7 --> F8[Push to PR branch]
-        F8 --> F9{Iteration < 3?}
-        F9 -->|yes| F10[Self-trigger:<br/>@sdk-review --iteration=N+1]
+        F8 --> FSTOP{sdk-review-stopped<br/>label set?}
+        FSTOP -->|yes| END_STOP([STOP<br/>Auto-complete cancelled<br/>by author])
+        FSTOP -->|no| F9{Iteration < 3?}
+        F9 -->|yes| F10[Self-trigger:<br/>@sdk-review auto-complete --iteration=N+1]
         F9 -->|no| END_MAX([STOP<br/>Max 3 iterations<br/>label: needs-human-review])
         F10 --> START
     end
@@ -129,6 +136,7 @@ flowchart TD
     style END_HUMAN fill:#d68d36,color:#fff
     style END_MAX fill:#d68d36,color:#fff
     style END_REVIEW fill:#586069,color:#fff
+    style END_STOP fill:#586069,color:#fff
     style HUMAN_REBASE fill:#d68d36,color:#fff
     style FN_FAIL fill:#cb2431,color:#fff
 ```
@@ -161,7 +169,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A([PR approved via<br/>resolve all flow]) --> B[Labels added:<br/>sdk-review-approved<br/>sdk-review-auto-maintained]
+    A([PR approved via<br/>auto-complete flow]) --> B[Labels added:<br/>sdk-review-approved<br/>sdk-review-auto-maintained]
 
     B --> C{Event}
 
@@ -227,7 +235,7 @@ flowchart LR
     L1[sdk-review-approved] -.->|set when| S1([PR passes review])
     L1 -.->|removed when| R1([Author pushes code])
 
-    L2[sdk-review-auto-maintained] -.->|set when| S2([resolve-all flow approves])
+    L2[sdk-review-auto-maintained] -.->|set when| S2([auto-complete flow approves])
     L2 -.->|removed when| R2([Author pushes code])
 
     L3[needs-human-review] -.->|set when| S3([DESIGN_CHANGE finding<br/>OR max iterations hit])
@@ -236,10 +244,14 @@ flowchart LR
     L4[needs-rebase] -.->|set when| S4([All 3 conflict tiers fail])
     L4 -.->|removed when| R4([Author rebases manually])
 
+    L5[sdk-review-stopped] -.->|set when| S5([@sdk-review stop<br/>command received])
+    L5 -.->|removed when| R5([Next @sdk-review<br/>picks it up])
+
     style L1 fill:#0e8a16,color:#fff
     style L2 fill:#1d76db,color:#fff
     style L3 fill:#d93f0b,color:#fff
     style L4 fill:#e4e669,color:#000
+    style L5 fill:#586069,color:#fff
 ```
 
 ---
@@ -250,7 +262,7 @@ flowchart LR
 flowchart LR
     S1[Stage 1<br/>Orient<br/>~$0-1.50] --> S2[Stage 2<br/>Review<br/>~$2-5]
     S2 --> S3[Stage 3<br/>Post<br/>~$0]
-    S3 --> S4[Stage 4<br/>Auto-Fix<br/>~$1-3 per iteration]
+    S3 --> S4[Stage 4<br/>Auto-Complete<br/>~$1-3 per iteration]
     S4 --> S5[Stage 5<br/>Finalize<br/>~$0]
 
     style S1 fill:#e1f5ff
