@@ -3,6 +3,8 @@ name: Claude Code
 on:
   issue_comment:
     types: [created]
+  pull_request_review_comment:
+    types: [created]
   pull_request:
     types: [synchronize]
     branches:
@@ -470,12 +472,73 @@ jobs:
                  -f side="RIGHT"
                Max 15 inline comments, prioritize Critical > Important > Minor.
 
-            8. If there are no Critical findings and fewer than 3 Important → verdict is READY_TO_MERGE.
-               If any Critical security finding → verdict is BLOCKED.
-               Otherwise → verdict is NEEDS_FIXES.
+            7b. AUTO-RESOLVE previously-flagged findings that are now fixed.
 
-            9. Output the verdict as the LAST LINE of your response:
-               VERDICT:<verdict>
+                On a re-review (SDK_REVIEW_VERB=Re-review), fetch prior
+                inline review threads authored by github-actions[bot]:
+
+                  gh api graphql -f query='
+                    query($owner:String!,$name:String!,$num:Int!) {
+                      repository(owner:$owner, name:$name) {
+                        pullRequest(number:$num) {
+                          reviewThreads(first:100) {
+                            nodes { id isResolved
+                              comments(first:1) {
+                                nodes { author{login} path line body }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }' -F owner=atlanhq -F name=application-sdk -F num=${{ steps.pr.outputs.number }}
+
+                For each un-resolved thread whose comment author is
+                github-actions[bot], check whether the finding STILL
+                applies to the current code (read the file at that path
+                and line). If the finding has been addressed (code no
+                longer has the issue, or the line/file is gone), resolve
+                the thread:
+
+                  gh api graphql -f query='
+                    mutation($id:ID!) {
+                      resolveReviewThread(input:{threadId:$id}) {
+                        thread { id isResolved }
+                      }
+                    }' -F id=<thread id>
+
+                Do NOT resolve threads the author has explicitly
+                responded to arguing the finding is wrong — those go
+                through the `@sdk-review challenge:` flow.
+
+            8. Severity rules (IMPORTANT — read carefully):
+
+               Any finding that would FAIL a standard linter or pre-commit
+               check on this repo (bare `except:` / E722, f-string passed
+               to `logger.*`, `print()` in production code, unused imports,
+               mutable default args, etc.) is at least **Important** —
+               never Minor. If CI would reject the code, the review must
+               not call it Minor.
+
+               Any hardcoded secret, SQL injection, auth bypass, tenant
+               isolation break, missing input validation on public endpoint,
+               logging of credentials/tokens → always **Critical**.
+
+               Missing type hints, missing docstrings, formatting nits,
+               naming preferences → Minor.
+
+            9. Verdict rules:
+
+               - Any Critical security finding [SEC] → BLOCKED.
+               - Any Critical non-security finding OR 3+ Important findings
+                 OR 5+ Minor findings → NEEDS_FIXES.
+               - No Critical, fewer than 3 Important, fewer than 5 Minor →
+                 READY_TO_MERGE.
+               - Major design smells (god function, dependency direction
+                 violation, dumping ground, contract break) that aren't
+                 a simple patch → NEEDS_HUMAN_REVIEW.
+
+            10. Output the verdict as the LAST LINE of your response:
+                VERDICT:<verdict>
 
             Do NOT use the Task/Agent tool — do everything directly in this session.
             Do NOT set a commit status check (sdk-review status is disabled for v1).
@@ -664,7 +727,9 @@ jobs:
             echo "CI checks failing after branch update. Not approving."
             gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
               -f state=failure -f context=sdk-review \
-              -f description="SDK Review: Clean but CI failing after branch update" 2>/dev/null || true
+              -f description="Review verdict READY TO MERGE, but required CI checks are failing. Fix CI, then re-run @sdk-review." 2>/dev/null || true
+            gh pr comment "$PR" --body \
+              "ℹ️ **SDK Review verdict: READY TO MERGE** — but required CI checks on this branch are failing. The \`sdk-review\` status is set to \`failure\` to prevent merge. Fix CI (e.g. pre-commit, tests), push, and re-run \`@sdk-review\`."
             exit 0
           fi
 
@@ -980,3 +1045,134 @@ jobs:
             gh pr comment "$PR_NUMBER" --body \
               "🛑 **Stop acknowledged.** No running SDK Review runs were found, but the \`sdk-review-stopped\` label has been set so any queued iteration will skip. Comment \`@sdk-review\` to start a fresh review."
           fi
+
+  # ── @sdk-review inline Q&A handler ──────────────────────────
+  # Lightweight responder: when a collaborator replies to a
+  # bot-posted inline review comment with a question, this job
+  # spawns a small Claude session that reads the original finding
+  # + the author's question + the file around that line, and
+  # posts a reply in the same thread.
+  #
+  # Not full re-review. Just Q&A on a single finding. If the
+  # author wants the bot to formally re-evaluate the finding
+  # (withdraw / stand by / soften), they should use
+  # `@sdk-review challenge: <reason>` on the PR instead.
+  #
+  # Gate: only fires when the PARENT comment is from
+  # github-actions[bot] and the replier is OWNER/MEMBER/COLLABORATOR.
+  sdk-review-inline-qa:
+    if: |
+      github.event_name == 'pull_request_review_comment' &&
+      github.event.action == 'created' &&
+      github.event.comment.in_reply_to_id != null &&
+      github.event.comment.user.login != 'github-actions[bot]' &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    timeout-minutes: 5
+    concurrency:
+      group: sdk-review-qa-${{ github.event.comment.id }}
+      cancel-in-progress: false
+    steps:
+      - name: Check if parent comment is from the bot
+        id: parent_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PARENT_ID: ${{ github.event.comment.in_reply_to_id }}
+        run: |
+          PARENT_AUTHOR=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/comments/${PARENT_ID}" \
+            --jq '.user.login' 2>/dev/null || echo "unknown")
+          echo "parent_author=$PARENT_AUTHOR" >> "$GITHUB_OUTPUT"
+          if [ "$PARENT_AUTHOR" = "github-actions[bot]" ]; then
+            echo "is_bot_parent=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_bot_parent=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.parent_check.outputs.is_bot_parent == 'true'
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Connect to VPN
+        if: steps.parent_check.outputs.is_bot_parent == 'true'
+        uses: ./.github/actions/globalprotect-connect
+        with:
+          portal-url: vpn2.atlan.app
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: React with 👀 (ack that Q is being answered)
+        if: steps.parent_check.outputs.is_bot_parent == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          gh api "repos/${REPO}/pulls/comments/${COMMENT_ID}/reactions" \
+            -f content=eyes 2>/dev/null || true
+
+      - name: Answer the question (lightweight Claude session)
+        if: steps.parent_check.outputs.is_bot_parent == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          show_full_output: true
+          prompt: |
+            An author replied to one of your prior SDK review inline
+            comments with a question. Answer it briefly.
+
+            ## Context
+
+            Repository: ${{ github.repository }}
+            PR number: ${{ github.event.pull_request.number }}
+            Parent (bot) review comment id: ${{ github.event.comment.in_reply_to_id }}
+            Reply comment id: ${{ github.event.comment.id }}
+
+            ## Your task
+
+            1. Fetch the parent (bot's original finding):
+               gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/${{ github.event.comment.in_reply_to_id }}
+               Extract its body, path, line.
+
+            2. Fetch the author's reply body:
+               gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/${{ github.event.comment.id }}
+
+            3. Read the file at the reported path around the reported
+               line (use Read tool with offset/limit).
+
+            4. Compose a short, direct answer to the author's question:
+               - If they're asking "what is this?" or "please explain" →
+                 give a one-paragraph explanation of WHY it's a problem
+                 with a concrete example (e.g. for f-string in logger:
+                 "If DEBUG level is off, the f-string still formats
+                 every call → wasted CPU. %-style defers formatting.")
+               - If they're arguing the finding is wrong → DO NOT
+                 withdraw here. Instead say: "If you believe this is
+                 wrong, comment `@sdk-review challenge: <your reason>`
+                 on the PR and I'll formally re-evaluate."
+               - If they're asking "how to fix" → give the exact
+                 replacement code.
+
+            5. Post the answer as a reply in the SAME thread:
+               gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments \
+                 -f body="<your answer>" \
+                 -f in_reply_to="${{ github.event.comment.in_reply_to_id }}"
+
+            Keep the answer ≤ 150 words. Plain text, no headers.
+            Start with the direct answer, not a preamble.
+          claude_args: |
+            --model claude-opus-4-6
+            --allowedTools "Read,Glob,Grep,Bash(gh api:*),Bash(cat:*),Bash(jq:*)"
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+          GH_TOKEN: ${{ github.token }}
