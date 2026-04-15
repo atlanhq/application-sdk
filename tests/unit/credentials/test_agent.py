@@ -380,178 +380,223 @@ class TestExpandDotted:
 # ---------------------------------------------------------------------------
 
 
-class TestResolveWorkflowCredentialsRouting:
-    """Exercises the routing helper on AppContext. Uses the real
-    AppContext wiring (no Temporal dependency needed for these tests).
+class TestCredentialRefFromWorkflowArgs:
+    """Unit tests for the ``CredentialRef.from_workflow_args`` factory.
+
+    This is the single construction site where ``extraction_method`` is
+    interpreted. Once the factory returns, the ref carries the routing
+    decision as typed fields (``agent_json`` or ``credential_guid``),
+    and the resolver never touches ``workflow_args`` directly.
     """
 
-    def _make_context(self, store: InMemorySecretStore):
-        from application_sdk.app.context import AppContext
+    def test_agent_method_and_populated_agent_json_makes_agent_ref(self) -> None:
+        from application_sdk.credentials.ref import CredentialRef
 
-        ctx = AppContext(
-            app_name="test-app",
-            app_version="0.0.0",
-            run_id="run-1",
-            correlation_id="",
+        agent_json = json.dumps(
+            {"secret-path": "atlan/dev/cloudsql", "basic.username": "u"}
         )
-        ctx._secret_store = store
-        return ctx
+        ref = CredentialRef.from_workflow_args(
+            {
+                "extraction_method": "agent",
+                "agent_json": agent_json,
+                "credential_guid": "",
+            }
+        )
+        assert ref.agent_json == agent_json
+        assert ref.credential_guid == ""
 
-    @pytest.mark.asyncio
-    async def test_agent_path_fires_when_method_and_json_both_present(
-        self,
-    ) -> None:
-        """Happy path: ``extraction_method == 'agent'`` AND a non-empty
-        ``agent_json`` both present → agent resolution fires.
+    def test_agent_method_accepts_dict_agent_json(self) -> None:
+        """The generated Pydantic ``Input`` contracts declare
+        ``agent_json: dict[str, Any]`` even though the wire format is a
+        JSON string. The factory handles both shapes.
         """
-        store = _store_with(**{"atlan/dev/cloudsql": _bundle(username="real_user")})
-        ctx = self._make_context(store)
+        from application_sdk.credentials.ref import CredentialRef
 
-        workflow_args = {
-            "extraction_method": "agent",
-            "agent_json": json.dumps(
-                {
-                    "secret-path": "atlan/dev/cloudsql",
-                    "host": "h",
-                    "basic.username": "username",
-                }
-            ),
-            "credential_guid": "",
-        }
-        resolved = await ctx.resolve_workflow_credentials(workflow_args)
-        assert resolved["basic"]["username"] == "real_user"
+        spec_dict = {"secret-path": "p", "basic.username": "u"}
+        ref = CredentialRef.from_workflow_args(
+            {"extraction_method": "agent", "agent_json": spec_dict}
+        )
+        # Always normalised to a JSON string on the ref.
+        assert isinstance(ref.agent_json, str)
+        assert json.loads(ref.agent_json) == spec_dict
 
-    @pytest.mark.asyncio
-    async def test_agent_method_mixed_case_is_normalised(self) -> None:
-        """``extraction_method`` is case-insensitive — ``"AGENT"``,
-        ``"Agent"``, ``" agent "`` all count.
+    def test_agent_method_case_insensitive_and_trimmed(self) -> None:
+        from application_sdk.credentials.ref import CredentialRef
+
+        agent_json = json.dumps({"secret-path": "p"})
+        for method in ("AGENT", "Agent", " agent ", "agent"):
+            ref = CredentialRef.from_workflow_args(
+                {"extraction_method": method, "agent_json": agent_json}
+            )
+            assert ref.agent_json == agent_json, f"failed for method={method!r}"
+
+    def test_populated_agent_json_without_method_falls_through_to_guid(self) -> None:
+        """Strict gate: an upstream bug that populates ``agent_json``
+        under a non-agent method doesn't silently take the agent path.
         """
-        store = _store_with(**{"p": _bundle(username="real_user")})
-        ctx = self._make_context(store)
+        from application_sdk.credentials.ref import CredentialRef
 
-        for method in ("AGENT", "Agent", " agent "):
-            resolved = await ctx.resolve_workflow_credentials(
+        ref = CredentialRef.from_workflow_args(
+            {
+                # No extraction_method.
+                "agent_json": json.dumps({"secret-path": "p"}),
+                "credential_guid": "my-guid-123",
+            }
+        )
+        assert ref.agent_json == ""
+        assert ref.credential_guid == "my-guid-123"
+
+    def test_agent_method_with_empty_agent_json_falls_through_to_guid(self) -> None:
+        from application_sdk.credentials.ref import CredentialRef
+
+        for placeholder in ("", "{}", "   "):
+            ref = CredentialRef.from_workflow_args(
                 {
-                    "extraction_method": method,
-                    "agent_json": json.dumps(
-                        {"secret-path": "p", "basic.username": "username"}
-                    ),
+                    "extraction_method": "agent",
+                    "agent_json": placeholder,
+                    "credential_guid": "my-guid-123",
                 }
             )
-            assert resolved["basic"]["username"] == "real_user"
+            assert ref.agent_json == "", f"failed for placeholder={placeholder!r}"
+            assert ref.credential_guid == "my-guid-123"
 
-    @pytest.mark.asyncio
-    async def test_agent_json_without_method_falls_through_to_guid(self) -> None:
-        """Strict gate: a populated ``agent_json`` WITHOUT
-        ``extraction_method == "agent"`` is NOT treated as an agent
-        run. Falls through to the legacy GUID path instead.
-        """
-        store = _store_with(**{"my-guid-123": _bundle(username="real_user", host="h")})
-        ctx = self._make_context(store)
+    def test_agent_method_with_empty_dict_falls_through_to_guid(self) -> None:
+        """Empty dict ``{}`` counts as no agent_json even when typed."""
+        from application_sdk.credentials.ref import CredentialRef
 
-        workflow_args = {
-            # No extraction_method set.
-            "agent_json": json.dumps(
-                {"secret-path": "whatever", "basic.username": "u"}
-            ),
-            "credential_guid": "my-guid-123",
-        }
-        resolved = await ctx.resolve_workflow_credentials(workflow_args)
-        # Legacy GUID path returns bundle verbatim — proves agent path
-        # was skipped despite populated agent_json.
-        assert resolved == {"username": "real_user", "host": "h"}
+        ref = CredentialRef.from_workflow_args(
+            {
+                "extraction_method": "agent",
+                "agent_json": {},
+                "credential_guid": "my-guid-123",
+            }
+        )
+        assert ref.agent_json == ""
+        assert ref.credential_guid == "my-guid-123"
 
-    @pytest.mark.asyncio
-    async def test_agent_method_with_empty_json_falls_through_to_guid(
-        self,
-    ) -> None:
-        """Strict gate: ``extraction_method == "agent"`` WITHOUT a
-        non-empty ``agent_json`` is NOT the agent path. Falls through.
-        """
-        store = _store_with(**{"my-guid-123": _bundle(username="real_user", host="h")})
-        ctx = self._make_context(store)
+    def test_direct_method_with_guid_uses_guid_path(self) -> None:
+        from application_sdk.credentials.ref import CredentialRef
 
-        workflow_args = {
-            "extraction_method": "agent",
-            "agent_json": "{}",  # Placeholder — doesn't qualify.
-            "credential_guid": "my-guid-123",
-        }
-        resolved = await ctx.resolve_workflow_credentials(workflow_args)
-        assert resolved == {"username": "real_user", "host": "h"}
-
-    @pytest.mark.asyncio
-    async def test_direct_method_with_guid(self) -> None:
-        """``extraction_method == "direct"`` with a credential_guid uses
-        the legacy GUID path.
-        """
-        store = _store_with(**{"my-guid-123": _bundle(username="real_user", host="h")})
-        ctx = self._make_context(store)
-
-        resolved = await ctx.resolve_workflow_credentials(
+        ref = CredentialRef.from_workflow_args(
             {
                 "extraction_method": "direct",
                 "agent_json": "{}",
                 "credential_guid": "my-guid-123",
             }
         )
+        assert ref.credential_guid == "my-guid-123"
+        assert ref.agent_json == ""
+        assert ref.name == "my-guid-123"  # legacy ref sets name = guid
+
+    def test_guid_only_no_method(self) -> None:
+        from application_sdk.credentials.ref import CredentialRef
+
+        ref = CredentialRef.from_workflow_args({"credential_guid": "g"})
+        assert ref.credential_guid == "g"
+
+    def test_no_routable_source_raises(self) -> None:
+        from application_sdk.credentials.ref import CredentialRef
+
+        with pytest.raises(ValueError, match="no routable credential source"):
+            CredentialRef.from_workflow_args({})
+
+        with pytest.raises(ValueError, match="no routable credential source"):
+            CredentialRef.from_workflow_args(
+                {"extraction_method": "direct", "agent_json": "", "credential_guid": ""}
+            )
+
+    def test_agent_method_but_no_json_and_no_guid_raises(self) -> None:
+        from application_sdk.credentials.ref import CredentialRef
+
+        with pytest.raises(ValueError, match="no routable credential source"):
+            CredentialRef.from_workflow_args(
+                {"extraction_method": "agent", "agent_json": "{}"}
+            )
+
+
+class TestCredentialResolverAgentBranch:
+    """Exercises the agent branch of CredentialResolver. Uses a real
+    resolver + InMemorySecretStore end-to-end; proves the single typed
+    ``resolve_raw(ref)`` API handles agent refs identically to legacy
+    refs from the caller's perspective.
+    """
+
+    @pytest.mark.asyncio
+    async def test_resolve_raw_agent_ref_returns_flat_dict_with_nested_extra(
+        self,
+    ) -> None:
+        from application_sdk.credentials.ref import CredentialRef
+        from application_sdk.credentials.resolver import CredentialResolver
+
+        store = _store_with(
+            **{
+                "atlan/dev/cloudsql": _bundle(
+                    username="real_pg_user",
+                    password="real_pg_password",
+                    database="real_pg_db",
+                )
+            }
+        )
+        ref = CredentialRef.from_workflow_args(
+            {
+                "extraction_method": "agent",
+                "agent_json": CLOUDSQL_POSTGRES_AGENT_JSON,
+            }
+        )
+        resolver = CredentialResolver(store)
+
+        resolved = await resolver.resolve_raw(ref)
+
+        assert resolved["host"] == "34.122.182.89"
+        assert resolved["port"] == 5432
+        assert resolved["basic"] == {
+            "username": "real_pg_user",
+            "password": "real_pg_password",
+        }
+        assert resolved["extra"]["database"] == "real_pg_db"
+
+    @pytest.mark.asyncio
+    async def test_resolve_raw_legacy_guid_ref_still_works(self) -> None:
+        """Legacy GUID refs continue to resolve via the local secret
+        store path — agent branch is additive, not a replacement.
+        """
+        from application_sdk.credentials.ref import CredentialRef
+        from application_sdk.credentials.resolver import CredentialResolver
+
+        store = _store_with(**{"my-guid-123": _bundle(username="real_user", host="h")})
+        ref = CredentialRef.from_workflow_args(
+            {"extraction_method": "direct", "credential_guid": "my-guid-123"}
+        )
+        resolver = CredentialResolver(store)
+
+        resolved = await resolver.resolve_raw(ref)
         assert resolved == {"username": "real_user", "host": "h"}
 
     @pytest.mark.asyncio
-    async def test_neither_source_raises_value_error(self) -> None:
-        store = _store_with()
-        ctx = self._make_context(store)
-
-        with pytest.raises(ValueError, match="no credential source"):
-            await ctx.resolve_workflow_credentials(
-                {
-                    "extraction_method": "direct",
-                    "agent_json": "",
-                    "credential_guid": "",
-                }
-            )
-
-    @pytest.mark.asyncio
-    async def test_missing_keys_entirely_raises_value_error(self) -> None:
-        store = _store_with()
-        ctx = self._make_context(store)
-
-        with pytest.raises(ValueError, match="no credential source"):
-            await ctx.resolve_workflow_credentials({})
-
-    @pytest.mark.asyncio
-    async def test_no_secret_store_raises_runtime_error(self) -> None:
-        from application_sdk.app.context import AppContext
-
-        ctx = AppContext(
-            app_name="test-app",
-            app_version="0.0.0",
-            run_id="run-1",
-            correlation_id="",
-        )
-        # _secret_store stays None
-        with pytest.raises(RuntimeError, match="No secret store"):
-            await ctx.resolve_workflow_credentials(
-                {
-                    "extraction_method": "agent",
-                    "agent_json": json.dumps({"secret-path": "p"}),
-                }
-            )
-
-    @pytest.mark.asyncio
-    async def test_whitespace_only_agent_json_with_method_falls_through(
-        self,
-    ) -> None:
-        """Whitespace-only ``agent_json`` is treated as absent even
-        under ``extraction_method == "agent"``.
+    async def test_resolve_typed_agent_ref_uses_auth_type_for_parser(self) -> None:
+        """When ``credential_type`` is empty on an agent ref (which is
+        what ``from_workflow_args`` produces), the resolver reads
+        ``auth-type`` from the agent JSON to pick the registry parser.
         """
-        store = _store_with(**{"my-guid-123": _bundle(username="real_user")})
-        ctx = self._make_context(store)
+        from application_sdk.credentials.ref import CredentialRef
+        from application_sdk.credentials.resolver import CredentialResolver
+        from application_sdk.credentials.types import BasicCredential
 
-        resolved = await ctx.resolve_workflow_credentials(
+        store = _store_with(**{"p": _bundle(username="real_user", password="real_pw")})
+        agent_json = json.dumps(
             {
-                "extraction_method": "agent",
-                "agent_json": "   ",
-                "credential_guid": "my-guid-123",
+                "secret-path": "p",
+                "auth-type": "basic",
+                "basic.username": "username",
+                "basic.password": "password",
             }
         )
-        assert resolved["username"] == "real_user"
+        ref = CredentialRef.from_workflow_args(
+            {"extraction_method": "agent", "agent_json": agent_json}
+        )
+        resolver = CredentialResolver(store)
+
+        cred = await resolver.resolve(ref)
+        assert isinstance(cred, BasicCredential)
+        assert cred.username == "real_user"
+        assert cred.password == "real_pw"

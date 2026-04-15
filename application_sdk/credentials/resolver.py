@@ -19,11 +19,16 @@ logger = get_logger(__name__)
 class CredentialResolver:
     """Resolves a CredentialRef to a typed Credential.
 
-    Supports two resolution paths:
+    Supports three resolution paths, selected by which field on the
+    :class:`~application_sdk.credentials.ref.CredentialRef` is populated:
 
-    1. **Named path** (``credential_guid`` is empty): Calls
-       ``secret_store.get(ref.name)`` → parses JSON → looks up parser in
-       registry → returns typed Credential.
+    1. **Agent path** (``agent_json`` is non-empty): Parses the inline
+       JSON, fetches the bundle at ``secret-path`` via the injected
+       :class:`SecretStore`, substitutes ref-keys for real values, and
+       collapses dotted root keys into nested dicts.  See
+       :mod:`application_sdk.credentials.agent` for the substitution
+       contract.  Typed resolution uses the ``auth-type`` field in the
+       agent JSON when ``credential_type`` is empty.
 
     2. **GUID path** (``credential_guid`` is non-empty): First checks
        ``secret_store.get(ref.name)`` to cover in-process inline credentials
@@ -32,6 +37,10 @@ class CredentialResolver:
        platform-issued GUIDs from the upstream store. → if
        ``credential_type != "unknown"`` parses into typed Credential, otherwise
        wraps in ``RawCredential``.
+
+    3. **Named path** (both routing fields empty): Calls
+       ``secret_store.get(ref.name)`` → parses JSON → looks up parser in
+       registry → returns typed Credential.
     """
 
     def __init__(
@@ -60,6 +69,8 @@ class CredentialResolver:
             CredentialNotFoundError: If the credential cannot be found.
             CredentialParseError: If the JSON cannot be parsed.
         """
+        if ref.agent_json:
+            return await self._resolve_agent(ref)
         if ref.credential_guid:
             return await self._resolve_legacy(ref)
         return await self._resolve_new(ref)
@@ -76,6 +87,8 @@ class CredentialResolver:
         Returns:
             The raw credential data as a dict.
         """
+        if ref.agent_json:
+            return await self._resolve_agent_raw(ref)
         if ref.credential_guid:
             return await self._resolve_by_guid(ref)
         raw_json = await self._fetch_raw_json(ref)
@@ -89,6 +102,42 @@ class CredentialResolver:
         data = await self._fetch_raw_json(ref)
         type_name = data.get("type", ref.credential_type)
         return self._registry.parse(type_name, data)
+
+    async def _resolve_agent(self, ref: "CredentialRef") -> "Credential":
+        """Resolve an agent-shape ref to a typed Credential.
+
+        Falls back to the ``auth-type`` field inside the agent JSON
+        when ``ref.credential_type`` is empty (the common case —
+        ``CredentialRef.from_workflow_args`` does not populate
+        ``credential_type`` for agent refs).
+        """
+        import json as _json
+
+        data = await self._resolve_agent_raw(ref)
+        type_name = ref.credential_type
+        if not type_name:
+            # Peek at auth-type on the (string) agent_json so we don't
+            # silently drop to 'unknown' when the payload knows better.
+            try:
+                spec = _json.loads(ref.agent_json)
+                type_name = spec.get("auth-type") or "unknown"
+            except Exception:
+                type_name = "unknown"
+        if type_name == "unknown":
+            from application_sdk.credentials.types import RawCredential
+
+            return RawCredential(data=data)
+        # For typed parsing, pull the section matching the auth type if
+        # present (e.g. data["basic"] for ``auth-type: "basic"``);
+        # otherwise hand the whole flat dict to the registry parser.
+        parser_input = data.get(type_name, data)
+        return self._registry.parse(type_name, parser_input)
+
+    async def _resolve_agent_raw(self, ref: "CredentialRef") -> dict[str, Any]:
+        """Resolve an agent-shape ref to a flat dict with ``extra`` nested."""
+        from application_sdk.credentials.agent import resolve_agent_json
+
+        return await resolve_agent_json(ref.agent_json, self._secret_store)
 
     async def _fetch_raw_json(self, ref: "CredentialRef") -> dict[str, Any]:
         from application_sdk.credentials.errors import (
