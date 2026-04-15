@@ -2,7 +2,7 @@
 # Copy this to .github/workflows/branch-keeper.yml when ready to deploy.
 #
 # Keeps auto-maintained PRs up-to-date when the base branch changes.
-# ONLY runs for PRs that went through "@sdk-review resolve all" AND got approved.
+# ONLY runs for PRs that went through "@sdk-review auto-complete" AND got approved.
 # Regular "@sdk-review" (review-only) PRs are NOT auto-maintained.
 #
 # Trigger: push to base branch (another PR merged).
@@ -20,7 +20,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      statuses: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,14 +53,6 @@ jobs:
             if gh api "repos/${{ github.repository }}/pulls/$pr/update-branch" \
               -X PUT -f update_method=merge 2>/dev/null; then
               echo "PR #$pr branch updated via API."
-              # Re-set the sdk-review status on the new HEAD so the
-              # required check stays green after the branch update
-              sleep 5  # wait for GitHub to process the merge commit
-              NEW_SHA=$(gh pr view "$pr" --json headRefOid -q .headRefOid)
-              gh api "repos/${{ github.repository }}/statuses/$NEW_SHA" \
-                -f state=success \
-                -f context=sdk-review \
-                -f description="SDK Review: Approved. Branch updated automatically."
               echo "::endgroup::"
               continue
             fi
