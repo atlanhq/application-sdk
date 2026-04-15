@@ -40,10 +40,13 @@ jobs:
   # Inline comment replies on previous bot comments → answer agent
   # responds in-thread (no separate trigger needed).
   sdk-review:
-    # Gate: only repo collaborators / members / owners can trigger.
+    # Gate: only repo collaborators / members / owners can trigger,
+    # plus the `github-actions[bot]` self-retriggers from the
+    # auto-complete loop (which have `--iteration=` in the body).
     # This prevents external contributors on forks from burning API
     # credits, triggering VPN connections, or leveraging the workflow's
-    # write permissions.
+    # write permissions, while still letting the internal fix-loop
+    # continue across iterations.
     #
     # Excludes `stop` / `cancel` so those route to the sdk-review-stop
     # job instead.
@@ -55,7 +58,9 @@ jobs:
       !contains(github.event.comment.body, '@sdk-review cancel') &&
       (github.event.comment.author_association == 'OWNER' ||
        github.event.comment.author_association == 'MEMBER' ||
-       github.event.comment.author_association == 'COLLABORATOR')
+       github.event.comment.author_association == 'COLLABORATOR' ||
+       (github.event.comment.user.login == 'github-actions[bot]' &&
+        contains(github.event.comment.body, '--iteration=')))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -90,7 +95,7 @@ jobs:
           HEAD_BRANCH=$(gh pr view "$PR_NUMBER" --json headRefName -q .headRefName)
           BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName)
           # Pull comment body and commenter from the event JSON safely — NEVER
-          # interpolate user-controlled content via ${{ }} into shell.
+          # interpolate user-controlled content via Actions template syntax into shell.
           COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH")
           COMMENTER=$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")
 
@@ -106,7 +111,7 @@ jobs:
           # propagated to downstream Claude steps via a dedicated env var.
 
           # Determine mode from comment body (grep on the bash variable, never
-          # expanded via ${{ }} so no shell-injection risk).
+          # expanded via Actions template syntax so no shell-injection risk).
           #   override            → admin force-pass
           #   auto-complete       → review + fix loop (preferred name)
           #   resolve all issues  → alias for auto-complete (backward-compat)
@@ -124,15 +129,27 @@ jobs:
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
           # Expose parsed iteration/max to subsequent steps safely.
+          # Cap MAX_ITER at 3 server-side regardless of --max=N in the
+          # comment, so nobody can run a 100-iteration loop that burns
+          # Anthropic credits unchecked.
           ITERATION=$(printf '%s' "$COMMENT_BODY" | grep -oP '\-\-iteration=\K\d+' || echo "1")
           MAX_ITER=$(printf '%s' "$COMMENT_BODY" | grep -oP '\-\-max=\K\d+' || echo "3")
+          if ! [[ "$MAX_ITER" =~ ^[0-9]+$ ]] || [ "$MAX_ITER" -lt 1 ] || [ "$MAX_ITER" -gt 3 ]; then
+            MAX_ITER=3
+          fi
           echo "iteration=$ITERATION" >> "$GITHUB_OUTPUT"
           echo "max_iter=$MAX_ITER" >> "$GITHUB_OUTPUT"
 
-      # Instant UX feedback: 👀 reaction + pending status + ack comment.
-      # All happen in the first ~5s so the user immediately sees that
-      # @sdk-review was picked up.
+      # Instant UX feedback: 👀 reaction + pending status check + ack comment.
+      # All three happen in the first ~5 s so the user sees @sdk-review
+      # was picked up.
+      #
+      # Also computes the Review/Re-review verb by counting prior
+      # SDK_REVIEW_V2 comments BEFORE Claude posts a new one. Exposes
+      # as an output so the Claude session + Finalize can use it for
+      # consistent wording across ack / review comment / approval body.
       - name: Acknowledge trigger
+        id: ack
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -142,6 +159,19 @@ jobs:
           MODE: ${{ steps.pr.outputs.mode }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # Count prior SDK_REVIEW_V2 comments (none posted yet in this run).
+          #   0  → first Review on this PR
+          #   >0 → Re-review (there's a prior review in the history)
+          PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 0)
+          if [ "${PRIOR_REVIEWS:-0}" -gt 0 ]; then
+            VERB="Re-review"
+          else
+            VERB="Review"
+          fi
+          echo "verb=$VERB" >> "$GITHUB_OUTPUT"
+          echo "Detected verb: $VERB (prior SDK_REVIEW_V2 comments: $PRIOR_REVIEWS)"
+
           # 👀 reaction on the triggering comment
           gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=eyes 2>/dev/null || true
@@ -158,7 +188,7 @@ jobs:
           gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
             -f state=pending \
             -f context=sdk-review \
-            -f description="SDK Review starting (${LABEL})... (takes ~5-8 min)" \
+            -f description="SDK ${VERB} starting (${LABEL})... (takes ~5-8 min)" \
             -f target_url="${RUN_URL}" 2>/dev/null || true
 
           # Add a "stop" hint when auto-complete is running
@@ -167,7 +197,7 @@ jobs:
             STOP_HINT=$'\n\n> 💡 Comment `@sdk-review stop` to cancel.'
           fi
 
-          BODY="🔄 **SDK Review starting** (${LABEL}) — takes ~5-8 min. [Watch live progress](${RUN_URL})${STOP_HINT}"
+          BODY="🔄 **SDK ${VERB} starting** (${LABEL}) — takes ~5-8 min. [Watch live progress](${RUN_URL})${STOP_HINT}"
           gh pr comment "$PR_NUMBER" --body "$BODY"
 
       # Pre-flight: Try to resolve conflicts BEFORE running the review
@@ -177,7 +207,7 @@ jobs:
       #
       # SECURITY: Branch names are attacker-controlled (PR author creates
       # the branch). All branch/PR values are passed via env: not
-      # interpolated into shell via ${{ }}.
+      # interpolated into shell via Actions template syntax.
       - name: Conflict pre-flight (Tier 1 + 2)
         id: conflicts
         env:
@@ -314,7 +344,7 @@ jobs:
       # add subagents back once we verify subagent auth works with the proxy.
       #
       # SECURITY: No user-controlled content is interpolated into this prompt
-      # via ${{ }}. The comment body / commenter / mode / etc. are not embedded
+      # via Actions template syntax. The comment body / commenter / mode / etc. are not embedded
       # here — the Claude session fetches everything it needs via gh CLI
       # using trusted identifiers (PR number, repo, head SHA) only.
       - name: SDK Review (Session A — Review)
@@ -338,13 +368,43 @@ jobs:
             event payload — NOT the last comment on the PR, which is
             the bot's acknowledgment).
 
+            The environment variable SDK_REVIEW_VERB is either
+            "Review" (first time this PR is being reviewed) or
+            "Re-review" (there's a prior SDK_REVIEW_V2 comment on this
+            PR from an earlier run). Use this verb in every heading /
+            summary you post — NEVER hard-code "SDK Review:".
+
             ## Review Process
 
             If the mode is "override":
             1. Check if the commenter is a repo admin:
                gh api repos/${{ github.repository }}/collaborators/"$SDK_REVIEW_COMMENTER"/permission --jq .permission
-            2. If "admin" → post a PR comment confirming the override. Output VERDICT:READY_TO_MERGE and stop.
-            3. If not admin → post a PR comment: "Only repo admins can override the sdk-review check." Output VERDICT:NEEDS_FIXES and stop.
+            2. Extract the override reason from the triggering comment body
+               (everything after "@sdk-review override:"). Fall back to
+               "no reason provided" if empty.
+            3. If "admin" → post a PR comment with the EXACT format below
+               (keep the SDK_REVIEW_V2 marker + the `### Verdict:` line —
+               downstream steps parse both). Substitute $SDK_REVIEW_VERB
+               into the heading (usually "Review", or "Re-review" if
+               a prior SDK_REVIEW_V2 comment exists):
+
+               <!-- SDK_REVIEW_V2 -->
+               ## SDK $SDK_REVIEW_VERB: PR #<num> — <title>
+
+               ### Verdict: READY TO MERGE
+
+               > ⚠️ **Admin override** by @<SDK_REVIEW_COMMENTER>.
+               > **Reason:** <reason>
+               >
+               > This PR is being approved via admin override,
+               > bypassing normal SDK review findings. The reason
+               > above is recorded for audit.
+
+               Then output VERDICT:READY_TO_MERGE and stop.
+
+            4. If not admin → post a PR comment:
+               "Only repo admins can override the sdk-review check."
+               Output VERDICT:NEEDS_FIXES and stop.
 
             Otherwise, do the review:
 
@@ -368,14 +428,24 @@ jobs:
 
             5. Check guardrails G1-G8 (defined in the reference rules). Any violation is a blocker.
 
-            6. Post a summary comment to the PR using `gh pr comment`. Format:
+            6. Post a summary comment to the PR using `gh pr comment`.
+               Use $SDK_REVIEW_VERB (Review / Re-review) in the heading.
+               When $SDK_REVIEW_VERB is "Re-review", include a short
+               delta note in the summary line — did the latest changes
+               resolve prior findings, introduce new ones, or neither?
+               Look at the most recent prior SDK_REVIEW_V2 comment on
+               the PR for context (fetch via `gh api`).
+
+               Format:
 
                <!-- SDK_REVIEW_V2 -->
-               ## SDK Review: PR #<num> — <title>
+               ## SDK $SDK_REVIEW_VERB: PR #<num> — <title>
 
                ### Verdict: READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW
 
-               > <1-2 sentence summary of current status>
+               > <1-2 sentence summary of current status — for Re-review,
+               > mention whether prior findings were resolved and whether
+               > new issues were introduced by the latest changes>
 
                ### Findings by File
 
@@ -422,18 +492,47 @@ jobs:
           # so override checks authenticate the real human, not comments[-1]
           # (which is now the bot's acknowledgment).
           SDK_REVIEW_COMMENTER: ${{ steps.pr.outputs.commenter }}
+          # "Review" or "Re-review" — computed in Acknowledge trigger.
+          # Claude must use this exact verb in the SDK_REVIEW_V2 comment
+          # heading and summary for consistent messaging across UI.
+          SDK_REVIEW_VERB: ${{ steps.ack.outputs.verb }}
 
-      # Parse verdict from review output.
-      # SECURITY: steps.review.outputs.result is the full Claude session
-      # output — which can contain shell metacharacters from PR content
-      # the model echoes back. Never interpolate it into shell via ${{ }};
-      # always pass it through env: so it's just a string to the shell.
+      # Parse verdict by reading the SDK_REVIEW_V2 comment Claude posted.
+      # The action output 'result' isn't reliably exposed by
+      # anthropics/claude-code-action@v1 — it resolved to empty string
+      # in testing, causing the pipeline to always fall through to
+      # NEEDS_FIXES and skip Finalize. Fetching the comment we just
+      # posted gives a stable, authoritative source for the verdict.
       - name: Parse verdict
         id: verdict
         env:
-          REVIEW_RESULT: ${{ steps.review.outputs.result }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          VERDICT=$(printf '%s' "$REVIEW_RESULT" | grep -oP 'VERDICT:\K.*' | tail -1 || echo "NEEDS_FIXES")
+          # Find the most recent SDK_REVIEW_V2 comment on this PR
+          REVIEW_COMMENT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | last | .body // ""')
+
+          if [ -z "$REVIEW_COMMENT" ]; then
+            echo "::warning::No SDK_REVIEW_V2 comment found — defaulting to NEEDS_FIXES."
+            VERDICT="NEEDS_FIXES"
+          else
+            # Extract the verdict line. Claude posts e.g.:
+            #   ### Verdict: READY TO MERGE
+            # Normalize to READY_TO_MERGE / NEEDS_FIXES / BLOCKED / NEEDS_HUMAN_REVIEW.
+            RAW=$(printf '%s' "$REVIEW_COMMENT" | grep -oiP '###\s*Verdict:\s*\K[A-Z][A-Z _]+' | head -1 | tr '[:lower:]' '[:upper:]')
+            # Collapse whitespace to underscores
+            VERDICT=$(printf '%s' "$RAW" | tr -s ' ' '_' | sed 's/_*$//')
+
+            case "$VERDICT" in
+              READY_TO_MERGE|NEEDS_FIXES|BLOCKED|NEEDS_HUMAN_REVIEW) ;;
+              *)
+                echo "::warning::Could not parse verdict from comment — got '$VERDICT'. Defaulting to NEEDS_FIXES."
+                VERDICT="NEEDS_FIXES" ;;
+            esac
+          fi
+
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
           echo "Review verdict: $VERDICT"
 
@@ -544,7 +643,7 @@ jobs:
           gh pr comment "$PR_NUMBER" --body \
             "@sdk-review auto-complete --iteration=$NEXT --max=$MAX"
 
-      # Finalize if clean (approve + update branch)
+      # Finalize if clean (approve + update branch + status = success)
       - name: Finalize (approve if clean)
         if: steps.verdict.outputs.verdict == 'READY_TO_MERGE'
         env:
@@ -569,15 +668,69 @@ jobs:
             exit 0
           fi
 
+          # Compose context-aware approve message.
+          #
+          # Special case — admin override:
+          #   Body is distinct and audit-friendly, names the admin and
+          #   the reason they gave. Both are extracted from the most
+          #   recent "@sdk-review override: ..." comment on the PR.
+          #
+          # Otherwise:
+          #   Axis 1 — "Review" vs "Re-review":
+          #     Counts existing SDK_REVIEW_V2 comments on the PR.
+          #     More than one means this run is a re-review (the count
+          #     includes the one we just posted in this run).
+          #   Axis 2 — outcome phrase:
+          #     First review, review-only:   "no blocking issues found"
+          #     First review, auto-complete: "findings resolved"
+          #     Re-review, review-only:      "no new issues introduced by the latest changes"
+          #     Re-review, auto-complete:    "previous findings resolved; no new issues introduced"
+          if [ "$MODE" = "override" ]; then
+            # Find the most recent @sdk-review override:… comment by a
+            # human collaborator and extract admin + reason.
+            OVERRIDE_INFO=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+              --jq '[.[] | select(.body | test("@sdk-review\\s+override:"; "i"))] | last // {}')
+            OVERRIDE_ADMIN=$(printf '%s' "$OVERRIDE_INFO" | jq -r '.user.login // "unknown"')
+            OVERRIDE_REASON=$(printf '%s' "$OVERRIDE_INFO" | jq -r '.body // ""' \
+              | grep -oiP '@sdk-review\s+override:\s*\K.*' \
+              | head -1 \
+              | sed 's/[[:space:]]*$//')
+            if [ -z "$OVERRIDE_REASON" ]; then
+              OVERRIDE_REASON="no reason provided"
+            fi
+
+            APPROVE_BODY="⚠️ **SDK Review — Admin override.** Approving because @${OVERRIDE_ADMIN} explicitly invoked \`@sdk-review override\`. Reason: _${OVERRIDE_REASON}_. This bypasses normal review findings; the reason above is recorded for audit. CI passing. Branch up to date."
+          else
+            PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+              --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 1)
+
+            if [ "${PRIOR_REVIEWS:-1}" -gt 1 ]; then
+              VERB="Re-review"
+              if [ "$MODE" = "auto-fix" ]; then
+                OUTCOME="previous findings resolved; no new issues introduced by the latest changes"
+              else
+                OUTCOME="no new issues introduced by the latest changes"
+              fi
+            else
+              VERB="Review"
+              if [ "$MODE" = "auto-fix" ]; then
+                OUTCOME="findings resolved"
+              else
+                OUTCOME="no blocking issues found"
+              fi
+            fi
+
+            APPROVE_BODY="SDK ${VERB}: ${OUTCOME}. CI passing. Branch up to date. Approved."
+          fi
+
           # Approve
-          gh pr review "$PR" --approve \
-            --body "SDK Review v2: All findings resolved. CI passing. Branch up to date. Approved."
+          gh pr review "$PR" --approve --body "$APPROVE_BODY"
 
           # Labels
           gh label create "sdk-review-approved" --color "0e8a16" --force 2>/dev/null
           gh pr edit "$PR" --add-label "sdk-review-approved"
 
-          # Auto-maintained label only for resolve-all flow
+          # Auto-maintained label only for auto-complete flow
           if [ "$MODE" = "auto-fix" ]; then
             gh label create "sdk-review-auto-maintained" --color "1d76db" --force 2>/dev/null
             gh pr edit "$PR" --add-label "sdk-review-auto-maintained"
@@ -592,6 +745,34 @@ jobs:
           gh api "repos/${REPO}/statuses/${NEW_SHA}" \
             -f state=success -f context=sdk-review \
             -f description="SDK Review: Approved. Ready to merge." 2>/dev/null || true
+
+      # Mark status = failure for BLOCKED verdict
+      - name: Set status (BLOCKED)
+        if: steps.verdict.outputs.verdict == 'BLOCKED'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f state=failure -f context=sdk-review \
+            -f description="SDK Review: BLOCKED — critical security finding." 2>/dev/null || true
+
+      # Mark status = failure and add label for NEEDS_FIXES in review-only mode
+      # (so the PR visibly blocks on merge until author fixes & re-runs)
+      - name: Set status (NEEDS_FIXES, review-only)
+        if: |
+          steps.verdict.outputs.verdict == 'NEEDS_FIXES' &&
+          steps.pr.outputs.mode == 'review-only'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f state=failure -f context=sdk-review \
+            -f description="SDK Review: NEEDS_FIXES — see review comment." 2>/dev/null || true
 
   # ── Reset review status on new commits ──────────────────────
   # When the author pushes new code, reset the sdk-review check
@@ -647,7 +828,7 @@ jobs:
             echo "is_bot=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Reset sdk-review status (author commits only)
+      - name: Reset sdk-review status + labels + dismiss bot approval (author commits only)
         if: steps.check.outputs.is_bot == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -669,9 +850,20 @@ jobs:
           gh pr edit "$PR_NUMBER" --remove-label "sdk-review-approved" 2>/dev/null || true
           gh pr edit "$PR_NUMBER" --remove-label "sdk-review-auto-maintained" 2>/dev/null || true
 
+          # Dismiss the bot's prior APPROVED review. Removing the label
+          # isn't enough — the formal PR review stays green unless
+          # explicitly dismissed via the Reviews API. We only dismiss
+          # reviews authored by github-actions[bot] — never a human's.
+          BOT_REVIEW_IDS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]" and .state == "APPROVED")] | .[].id' 2>/dev/null || echo "")
+          for review_id in $BOT_REVIEW_IDS; do
+            gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
+              -X PUT \
+              -f message="New commits detected — SDK Review approval dismissed. Comment @sdk-review to re-approve." 2>/dev/null || true
+          done
+
           # Only post a comment if the PR was previously approved.
-          # This avoids noise on every push to non-approved PRs (the
-          # status check description is enough for those).
+          # This avoids noise on every push to non-approved PRs.
           if [ "$WAS_APPROVED" -gt 0 ]; then
             gh pr comment "$PR_NUMBER" --body \
               "New commits detected. The previous SDK Review approval has been reset because the code changed. Comment \`@sdk-review\` (or \`@sdk-review auto-complete\`) to re-review."
@@ -685,9 +877,9 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          # Re-set the status to success on the NEW commit SHA so
-          # the required check passes on the updated branch
-          # (only if the PR was previously approved).
+          # Re-set the status to success on the NEW commit SHA so the
+          # required check stays green on the updated branch (only if
+          # the PR was previously approved).
           HAS_LABEL=$(gh pr view "$PR_NUMBER" --json labels \
             --jq '.labels[].name' | grep -c "sdk-review-approved" || true)
 
