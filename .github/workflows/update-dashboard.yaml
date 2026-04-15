@@ -1,0 +1,210 @@
+# Update Security Dashboard — reusable workflow.
+#
+# Triggered after a vulnerability scan completes. Downloads scan results,
+# generates dashboard data, and deploys to Kryptonite (k.atlan.dev).
+#
+# Usage in each app repo:
+#   on:
+#     workflow_run:
+#       workflows: ["Vulnerability Scan"]
+#       types: [completed]
+#     workflow_dispatch:
+#   jobs:
+#     dashboard:
+#       uses: atlanhq/application-sdk/.github/workflows/update-dashboard.yaml@main
+#       secrets: inherit
+#
+name: Update Security Dashboard
+
+on:
+  workflow_call:
+    inputs:
+      dashboard_path:
+        description: "S3 path for dashboard deployment"
+        required: false
+        type: string
+        default: "security-dashboard"
+    secrets:
+      ORG_PAT_GITHUB:
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+jobs:
+  update:
+    name: Update Dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout dashboard assets from SDK
+        uses: actions/checkout@v4
+        with:
+          repository: atlanhq/application-sdk
+          path: _sdk
+          sparse-checkout: .security/dashboard
+          token: ${{ secrets.ORG_PAT_GITHUB || secrets.GITHUB_TOKEN }}
+
+      - name: Download latest scan artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/scan-artifacts
+
+          RUN_ID=$(gh run list \
+            --workflow="vulnerability-scan.yml" \
+            --status=completed \
+            --limit=5 \
+            --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
+
+          if [ -z "$RUN_ID" ]; then
+            echo "No scan runs found"
+            exit 0
+          fi
+
+          echo "Downloading artifacts from run $RUN_ID"
+          gh run download "$RUN_ID" --name trivy-results --dir /tmp/scan-artifacts || echo "No trivy results"
+          gh run download "$RUN_ID" --name snyk-results --dir /tmp/scan-artifacts || echo "No snyk results"
+
+      - name: Fetch base allowlist from SDK
+        run: |
+          if [ -f _sdk/.security/base-allowlist.json ]; then
+            cp _sdk/.security/base-allowlist.json /tmp/base-allowlist.json
+            echo "Base allowlist loaded"
+          else
+            echo "{}" > /tmp/base-allowlist.json
+            echo "No base allowlist found"
+          fi
+
+      - name: Generate dashboard data
+        run: |
+          python3 - <<'PYEOF'
+          import json, os
+          from datetime import datetime
+
+          repo_name = os.environ.get("GITHUB_REPOSITORY", "unknown")
+
+          # Merge base + repo allowlists
+          allowlist = {}
+          try:
+              with open("/tmp/base-allowlist.json") as f:
+                  base = json.load(f)
+              allowlist.update({k: v for k, v in base.items() if not k.startswith("_")})
+          except: pass
+
+          if os.path.exists(".security/allowlist.json"):
+              with open(".security/allowlist.json") as f:
+                  repo_al = json.load(f)
+              allowlist.update({k: v for k, v in repo_al.items() if not k.startswith("_")})
+
+          today = datetime.now().strftime("%Y-%m-%d")
+          all_vulns = []
+
+          # Parse Trivy
+          try:
+              with open("/tmp/scan-artifacts/trivy_results.json") as f:
+                  trivy = json.load(f)
+              for result in trivy.get("Results", []):
+                  result_type = result.get("Type", "")
+                  is_app = result_type in ("pip", "pipenv", "poetry", "uv", "python-pkg")
+                  for vuln in result.get("Vulnerabilities", []):
+                      vid = vuln.get("VulnerabilityID")
+                      if vid:
+                          entry = allowlist.get(vid)
+                          if entry:
+                              status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
+                          else:
+                              status = "new"
+                          all_vulns.append({
+                              "id": vid,
+                              "severity": vuln.get("Severity", ""),
+                              "package": vuln.get("PkgName", ""),
+                              "installed": vuln.get("InstalledVersion", ""),
+                              "fixed": vuln.get("FixedVersion", ""),
+                              "scanner": "trivy",
+                              "source_type": "app" if is_app else "base_image",
+                              "status": status,
+                          })
+          except Exception as e:
+              print(f"Trivy: {e}")
+
+          # Parse Snyk
+          try:
+              with open("/tmp/scan-artifacts/snyk_results.json") as f:
+                  snyk = json.load(f)
+              if not snyk.get("error"):
+                  for vuln in snyk.get("vulnerabilities", []):
+                      vid = vuln.get("id")
+                      if vid:
+                          trivy_ids = {v["id"] for v in all_vulns}
+                          cves = vuln.get("identifiers", {}).get("CVE", [])
+                          if vid in trivy_ids or any(c in trivy_ids for c in cves):
+                              continue
+                          entry = allowlist.get(vid)
+                          if entry:
+                              status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
+                          else:
+                              status = "new"
+                          all_vulns.append({
+                              "id": vid,
+                              "severity": vuln.get("severity", "").upper(),
+                              "package": vuln.get("packageName") or vuln.get("name", ""),
+                              "installed": vuln.get("version", ""),
+                              "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
+                              "scanner": "snyk",
+                              "source_type": "base_image",
+                              "status": status,
+                          })
+          except Exception as e:
+              print(f"Snyk: {e}")
+
+          # Deduplicate
+          seen = set()
+          unique = []
+          for v in all_vulns:
+              if v["id"] not in seen:
+                  seen.add(v["id"])
+                  unique.append(v)
+
+          # Build data
+          data_path = "_sdk/.security/dashboard/data.json"
+          if os.path.exists(data_path):
+              with open(data_path) as f:
+                  data = json.load(f)
+          else:
+              data = {"repos": {}, "generated_at": ""}
+
+          data["repos"][repo_name] = {
+              "vulnerabilities": unique,
+              "scanned_at": datetime.now().isoformat() + "Z",
+              "total": len(unique),
+              "critical": sum(1 for v in unique if v["severity"] == "CRITICAL"),
+              "high": sum(1 for v in unique if v["severity"] == "HIGH"),
+              "allowlisted": sum(1 for v in unique if v["status"] == "allowlisted"),
+              "new": sum(1 for v in unique if v["status"] == "new"),
+          }
+          data["generated_at"] = datetime.now().isoformat() + "Z"
+
+          os.makedirs("_sdk/.security/dashboard", exist_ok=True)
+          with open(data_path, "w") as f:
+              json.dump(data, f, indent=2)
+
+          print(f"Dashboard updated: {len(unique)} vulnerabilities for {repo_name}")
+          PYEOF
+
+      - name: Setup AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+      - name: Deploy to Kryptonite
+        run: |
+          aws s3 sync _sdk/.security/dashboard/ s3://kryptonite-store/${{ inputs.dashboard_path }}/ --delete
+          echo "Dashboard deployed to https://k.atlan.dev/${{ inputs.dashboard_path }}/"

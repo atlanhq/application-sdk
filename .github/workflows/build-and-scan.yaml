@@ -242,6 +242,12 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Fetch base allowlist from SDK
+        run: |
+          curl -sH "Authorization: token ${{ secrets.ORG_PAT_GITHUB || github.token }}" \
+            "https://raw.githubusercontent.com/atlanhq/application-sdk/main/.security/base-allowlist.json" \
+            -o /tmp/base-allowlist.json 2>/dev/null || echo "{}" > /tmp/base-allowlist.json
+
       - name: Download Trivy results
         uses: actions/download-artifact@v4
         continue-on-error: true
@@ -264,14 +270,31 @@ jobs:
           import json, sys, os
           from datetime import datetime
 
-          allowlist_path = ".security/allowlist.json"
-          if os.path.exists(allowlist_path):
-              with open(allowlist_path) as f:
-                  allowlist = json.load(f)
+          # Merge base allowlist (from SDK) + repo allowlist
+          allowlist = {}
+          try:
+              with open("/tmp/base-allowlist.json") as f:
+                  base = json.load(f)
+              allowlist.update({k: v for k, v in base.items() if not k.startswith("_")})
+              print(f"Base allowlist: {len(allowlist)} entries")
+          except:
+              pass
+
+          repo_allowlist_path = ".security/allowlist.json"
+          if os.path.exists(repo_allowlist_path):
+              with open(repo_allowlist_path) as f:
+                  repo_al = json.load(f)
+              repo_entries = {k: v for k, v in repo_al.items() if not k.startswith("_")}
+              allowlist.update(repo_entries)
+              print(f"Repo allowlist: {len(repo_entries)} entries")
           else:
-              print("No .security/allowlist.json found — all vulnerabilities will be reported but not blocked.")
-              print("To enable the security gate, add .security/allowlist.json to your repo.")
+              print("No .security/allowlist.json in repo")
+
+          if not allowlist:
+              print("No allowlists found — all vulnerabilities will be reported but not blocked.")
               allowlist = None
+
+          print(f"Total allowlist: {len(allowlist) if allowlist else 0} entries")
 
           today = datetime.now().strftime("%Y-%m-%d")
           all_vulns = {}
