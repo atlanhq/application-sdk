@@ -40,10 +40,13 @@ jobs:
   # Inline comment replies on previous bot comments → answer agent
   # responds in-thread (no separate trigger needed).
   sdk-review:
-    # Gate: only repo collaborators / members / owners can trigger.
+    # Gate: only repo collaborators / members / owners can trigger,
+    # plus the `github-actions[bot]` self-retriggers from the
+    # auto-complete loop (which have `--iteration=` in the body).
     # This prevents external contributors on forks from burning API
     # credits, triggering VPN connections, or leveraging the workflow's
-    # write permissions.
+    # write permissions, while still letting the internal fix-loop
+    # continue across iterations.
     #
     # Excludes `stop` / `cancel` so those route to the sdk-review-stop
     # job instead.
@@ -55,7 +58,9 @@ jobs:
       !contains(github.event.comment.body, '@sdk-review cancel') &&
       (github.event.comment.author_association == 'OWNER' ||
        github.event.comment.author_association == 'MEMBER' ||
-       github.event.comment.author_association == 'COLLABORATOR')
+       github.event.comment.author_association == 'COLLABORATOR' ||
+       (github.event.comment.user.login == 'github-actions[bot]' &&
+        contains(github.event.comment.body, '--iteration=')))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -124,8 +129,14 @@ jobs:
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
           # Expose parsed iteration/max to subsequent steps safely.
+          # Cap MAX_ITER at 3 server-side regardless of --max=N in the
+          # comment, so nobody can run a 100-iteration loop that burns
+          # Anthropic credits unchecked.
           ITERATION=$(printf '%s' "$COMMENT_BODY" | grep -oP '\-\-iteration=\K\d+' || echo "1")
           MAX_ITER=$(printf '%s' "$COMMENT_BODY" | grep -oP '\-\-max=\K\d+' || echo "3")
+          if ! [[ "$MAX_ITER" =~ ^[0-9]+$ ]] || [ "$MAX_ITER" -lt 1 ] || [ "$MAX_ITER" -gt 3 ]; then
+            MAX_ITER=3
+          fi
           echo "iteration=$ITERATION" >> "$GITHUB_OUTPUT"
           echo "max_iter=$MAX_ITER" >> "$GITHUB_OUTPUT"
 
@@ -343,8 +354,30 @@ jobs:
             If the mode is "override":
             1. Check if the commenter is a repo admin:
                gh api repos/${{ github.repository }}/collaborators/"$SDK_REVIEW_COMMENTER"/permission --jq .permission
-            2. If "admin" → post a PR comment confirming the override. Output VERDICT:READY_TO_MERGE and stop.
-            3. If not admin → post a PR comment: "Only repo admins can override the sdk-review check." Output VERDICT:NEEDS_FIXES and stop.
+            2. Extract the override reason from the triggering comment body
+               (everything after "@sdk-review override:"). Fall back to
+               "no reason provided" if empty.
+            3. If "admin" → post a PR comment with the EXACT format below
+               (keep the SDK_REVIEW_V2 marker + the `### Verdict:` line —
+               downstream steps parse both):
+
+               <!-- SDK_REVIEW_V2 -->
+               ## SDK Review: PR #<num> — <title>
+
+               ### Verdict: READY TO MERGE
+
+               > ⚠️ **Admin override** by @<SDK_REVIEW_COMMENTER>.
+               > **Reason:** <reason>
+               >
+               > This PR is being approved via admin override,
+               > bypassing normal SDK review findings. The reason
+               > above is recorded for audit.
+
+               Then output VERDICT:READY_TO_MERGE and stop.
+
+            4. If not admin → post a PR comment:
+               "Only repo admins can override the sdk-review check."
+               Output VERDICT:NEEDS_FIXES and stop.
 
             Otherwise, do the review:
 
@@ -596,38 +629,61 @@ jobs:
 
           # Compose context-aware approve message.
           #
-          # Axis 1 — "Review" vs "Re-review":
-          #   Counts existing SDK_REVIEW_V2 comments on the PR.
-          #   More than one means this run is a re-review (the count
-          #   includes the one we just posted in this run).
+          # Special case — admin override:
+          #   Body is distinct and audit-friendly, names the admin and
+          #   the reason they gave. Both are extracted from the most
+          #   recent "@sdk-review override: ..." comment on the PR.
           #
-          # Axis 2 — outcome phrase:
-          #   First review, review-only:  "no blocking issues found"
-          #   First review, auto-complete: "findings resolved"
-          #   Re-review, review-only:     "no new issues introduced by the latest changes"
-          #   Re-review, auto-complete:   "previous findings resolved; no new issues introduced"
-          PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR}/comments" \
-            --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 1)
+          # Otherwise:
+          #   Axis 1 — "Review" vs "Re-review":
+          #     Counts existing SDK_REVIEW_V2 comments on the PR.
+          #     More than one means this run is a re-review (the count
+          #     includes the one we just posted in this run).
+          #   Axis 2 — outcome phrase:
+          #     First review, review-only:   "no blocking issues found"
+          #     First review, auto-complete: "findings resolved"
+          #     Re-review, review-only:      "no new issues introduced by the latest changes"
+          #     Re-review, auto-complete:    "previous findings resolved; no new issues introduced"
+          if [ "$MODE" = "override" ]; then
+            # Find the most recent @sdk-review override:… comment by a
+            # human collaborator and extract admin + reason.
+            OVERRIDE_INFO=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+              --jq '[.[] | select(.body | test("@sdk-review\\s+override:"; "i"))] | last // {}')
+            OVERRIDE_ADMIN=$(printf '%s' "$OVERRIDE_INFO" | jq -r '.user.login // "unknown"')
+            OVERRIDE_REASON=$(printf '%s' "$OVERRIDE_INFO" | jq -r '.body // ""' \
+              | grep -oiP '@sdk-review\s+override:\s*\K.*' \
+              | head -1 \
+              | sed 's/[[:space:]]*$//')
+            if [ -z "$OVERRIDE_REASON" ]; then
+              OVERRIDE_REASON="no reason provided"
+            fi
 
-          if [ "${PRIOR_REVIEWS:-1}" -gt 1 ]; then
-            VERB="Re-review"
-            if [ "$MODE" = "auto-fix" ]; then
-              OUTCOME="previous findings resolved; no new issues introduced by the latest changes"
-            else
-              OUTCOME="no new issues introduced by the latest changes"
-            fi
+            APPROVE_BODY="⚠️ **SDK Review — Admin override.** Approving because @${OVERRIDE_ADMIN} explicitly invoked \`@sdk-review override\`. Reason: _${OVERRIDE_REASON}_. This bypasses normal review findings; the reason above is recorded for audit. CI passing. Branch up to date."
           else
-            VERB="Review"
-            if [ "$MODE" = "auto-fix" ]; then
-              OUTCOME="findings resolved"
+            PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+              --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 1)
+
+            if [ "${PRIOR_REVIEWS:-1}" -gt 1 ]; then
+              VERB="Re-review"
+              if [ "$MODE" = "auto-fix" ]; then
+                OUTCOME="previous findings resolved; no new issues introduced by the latest changes"
+              else
+                OUTCOME="no new issues introduced by the latest changes"
+              fi
             else
-              OUTCOME="no blocking issues found"
+              VERB="Review"
+              if [ "$MODE" = "auto-fix" ]; then
+                OUTCOME="findings resolved"
+              else
+                OUTCOME="no blocking issues found"
+              fi
             fi
+
+            APPROVE_BODY="SDK ${VERB}: ${OUTCOME}. CI passing. Branch up to date. Approved."
           fi
 
           # Approve
-          gh pr review "$PR" --approve \
-            --body "SDK ${VERB}: ${OUTCOME}. CI passing. Branch up to date. Approved."
+          gh pr review "$PR" --approve --body "$APPROVE_BODY"
 
           # Labels
           gh label create "sdk-review-approved" --color "0e8a16" --force 2>/dev/null
