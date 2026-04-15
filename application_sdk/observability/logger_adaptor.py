@@ -15,7 +15,10 @@ from opentelemetry.trace.span import TraceFlags
 from pydantic import BaseModel, Field
 
 from application_sdk.constants import (
+    APP_SDK_VERSION,
+    APP_TYPE,
     APPLICATION_NAME,
+    APPLICATION_VERSION,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,
     ENABLE_OTLP_WORKFLOW_LOGS,
@@ -33,6 +36,9 @@ from application_sdk.constants import (
     OTEL_RESOURCE_ATTRIBUTES,
     OTEL_WF_NODE_NAME,
     OTEL_WORKFLOW_LOGS_ENDPOINT,
+    PUBLISHED_AT,
+    RELEASE_CHANNEL,
+    RELEASE_ID,
     SERVICE_NAME,
     SERVICE_VERSION,
 )
@@ -438,6 +444,19 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 if "service.version" not in resource_attributes:
                     resource_attributes["service.version"] = SERVICE_VERSION
                 resource_attributes["sdk.version"] = _SDK_VERSION
+                # App vitals metadata from Local Marketplace
+                if APPLICATION_VERSION:
+                    resource_attributes["app.version"] = APPLICATION_VERSION
+                if RELEASE_ID:
+                    resource_attributes["app.release_id"] = RELEASE_ID
+                if RELEASE_CHANNEL:
+                    resource_attributes["app.release_channel"] = RELEASE_CHANNEL
+                if APP_SDK_VERSION:
+                    resource_attributes["app.sdk_version"] = APP_SDK_VERSION
+                if APP_TYPE:
+                    resource_attributes["app.type"] = APP_TYPE
+                if PUBLISHED_AT:
+                    resource_attributes["app.published_at"] = PUBLISHED_AT
                 workflow_node_name = OTEL_WF_NODE_NAME
                 if workflow_node_name:
                     resource_attributes["k8s.workflow.node.name"] = workflow_node_name

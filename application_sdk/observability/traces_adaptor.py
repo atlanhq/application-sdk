@@ -13,12 +13,18 @@ from opentelemetry.trace import SpanKind
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    APP_SDK_VERSION,
+    APP_TYPE,
+    APPLICATION_VERSION,
     ENABLE_OTLP_TRACES,
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
     OTEL_RESOURCE_ATTRIBUTES,
     OTEL_WF_NODE_NAME,
+    PUBLISHED_AT,
+    RELEASE_CHANNEL,
+    RELEASE_ID,
     SERVICE_NAME,
     SERVICE_VERSION,
     TRACES_BATCH_SIZE,
@@ -142,6 +148,20 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 resource_attributes["service.name"] = SERVICE_NAME
             if "service.version" not in resource_attributes:
                 resource_attributes["service.version"] = SERVICE_VERSION
+
+            # App vitals metadata from Local Marketplace
+            if APPLICATION_VERSION:
+                resource_attributes["app.version"] = APPLICATION_VERSION
+            if RELEASE_ID:
+                resource_attributes["app.release_id"] = RELEASE_ID
+            if RELEASE_CHANNEL:
+                resource_attributes["app.release_channel"] = RELEASE_CHANNEL
+            if APP_SDK_VERSION:
+                resource_attributes["app.sdk_version"] = APP_SDK_VERSION
+            if APP_TYPE:
+                resource_attributes["app.type"] = APP_TYPE
+            if PUBLISHED_AT:
+                resource_attributes["app.published_at"] = PUBLISHED_AT
 
             # Add workflow node name if running in Argo
             if workflow_node_name:
