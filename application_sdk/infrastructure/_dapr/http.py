@@ -9,7 +9,6 @@ Endpoint reference: https://docs.dapr.io/reference/api/
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any
 
@@ -17,7 +16,9 @@ import httpx
 from httpx_retries import Retry, RetryTransport
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -32,8 +33,8 @@ _API_PREFIX = "/v1.0"
 
 STATE_PATH = f"{_API_PREFIX}/state/{{store_name}}"
 STATE_KEY_PATH = f"{_API_PREFIX}/state/{{store_name}}/{{key}}"
-SECRET_STORE_PATH = f"{_API_PREFIX}/{'secrets'}/{{store_name}}/{{key}}"  # noqa: ISC003
-SECRET_STORE_BULK_PATH = f"{_API_PREFIX}/{'secrets'}/{{store_name}}/bulk"  # noqa: ISC003
+SECRET_STORE_PATH = _API_PREFIX + "/secrets/{store_name}/{key}"
+SECRET_STORE_BULK_PATH = _API_PREFIX + "/secrets/{store_name}/bulk"
 PUBLISH_PATH = f"{_API_PREFIX}/publish/{{pubsub_name}}/{{topic}}"
 BINDING_PATH = f"{_API_PREFIX}/bindings/{{binding_name}}"
 METADATA_PATH = f"{_API_PREFIX}/metadata"
@@ -92,6 +93,12 @@ class AsyncDaprClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    async def __aenter__(self) -> "AsyncDaprClient":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.close()
+
     # ------------------------------------------------------------------
     # State Store
     # ------------------------------------------------------------------
@@ -107,9 +114,10 @@ class AsyncDaprClient:
         resp = await self._client.get(
             STATE_KEY_PATH.format(store_name=store_name, key=key)
         )
+        if resp.is_error:
+            resp.raise_for_status()
         if resp.status_code == 204 or not resp.content:
             return None
-        resp.raise_for_status()
         return resp.content
 
     async def delete_state(self, store_name: str, key: str) -> None:
@@ -183,7 +191,11 @@ class AsyncDaprClient:
         resp.raise_for_status()
         return BindingResult(
             data=resp.content if resp.content else None,
-            metadata=dict(resp.headers),
+            metadata={
+                k: v
+                for k, v in resp.headers.items()
+                if k.lower().startswith("metadata.")
+            },
         )
 
     # ------------------------------------------------------------------

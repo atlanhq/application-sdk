@@ -111,9 +111,11 @@ def _make_vault_patches(vault_return=None, vault_side_effect=None):
         "application_sdk.infrastructure._dapr.client.DaprCredentialVault",
         MagicMock(return_value=mock_vault),
     )
+    mock_dapr_instance = MagicMock()
+    mock_dapr_instance.close = AsyncMock()
     p_dapr = patch(
         "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
-        MagicMock(return_value=MagicMock()),
+        MagicMock(return_value=mock_dapr_instance),
     )
     return p_vault, p_dapr, mock_vault
 
@@ -142,7 +144,7 @@ class TestGuidResolutionPath:
     @pytest.mark.asyncio
     async def test_get_credentials_receives_string_not_dict(self, store, resolver):
         """Regression: resolver must pass the GUID as a plain string, not a dict."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import AsyncMock, MagicMock, patch
 
         captured: list = []
         expected_creds = {"host": "db.example.com", "port": 1025}
@@ -154,8 +156,7 @@ class TestGuidResolutionPath:
         mock_vault = MagicMock()
         mock_vault.get_credentials = _capture
         mock_dapr = MagicMock()
-        mock_dapr.__enter__ = MagicMock(return_value=mock_dapr)
-        mock_dapr.__exit__ = MagicMock(return_value=False)
+        mock_dapr.close = AsyncMock()
 
         with (
             patch(

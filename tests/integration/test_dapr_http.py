@@ -14,6 +14,7 @@ import json
 import os
 import uuid
 
+import httpx
 import pytest
 
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient, BindingResult
@@ -135,7 +136,7 @@ class TestBindingIntegration:
             )
             assert isinstance(result, BindingResult)
             assert isinstance(result.metadata, dict)
-        except Exception:
+        except httpx.ConnectError:
             pytest.skip("No objectstore binding available")
 
 
@@ -185,7 +186,7 @@ class TestPubSubIntegration:
                 "integ-test-topic",
                 json.dumps({"test": True, "id": uuid.uuid4().hex}),
             )
-        except Exception:
+        except httpx.ConnectError:
             pytest.skip("No pubsub component available")
 
     async def test_publish_event_with_metadata(self, client):
@@ -197,7 +198,7 @@ class TestPubSubIntegration:
                 json.dumps({"test": True}),
                 metadata={"rawPayload": "true"},
             )
-        except Exception:
+        except httpx.ConnectError:
             pytest.skip("No pubsub component available")
 
 

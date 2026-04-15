@@ -47,11 +47,6 @@ def _handle_single_key_secret(key: str, value: Any) -> dict[str, Any]:
     return {key: value}
 
 
-# _process_secret_data is now provided by _secret_utils.process_secret_data.
-# Kept as a thin alias so existing internal callers don't require renaming.
-_process_secret_data = process_secret_data
-
-
 def _resolve_credentials(
     credential_config: dict[str, Any], secret_data: dict[str, Any]
 ) -> dict[str, Any]:
@@ -187,7 +182,7 @@ class DaprSecretStore:
                 store_name=self._store_name,
                 key=name,
             )
-            if name in result.secret:
+            if name in result:
                 return result[name]
             raise SecretNotFoundError(name)
         except SecretNotFoundError:
@@ -211,9 +206,9 @@ class DaprSecretStore:
         try:
             result = await self._client.get_bulk_secret(store_name=self._store_name)
             return {
-                name: result.get(name, {}).get(name, "")
+                name: next(iter(result[name].values()), "")
                 for name in names
-                if name in result.secrets
+                if name in result
             }
         except Exception as e:
             raise SecretStoreError(
@@ -369,34 +364,26 @@ class DaprBinding:
 # ---------------------------------------------------------------------------
 
 
-def is_dapr_component_registered(component_name: str) -> bool:
+async def is_dapr_component_registered(component_name: str) -> bool:
     """Return ``True`` if a Dapr component with *component_name* is registered.
 
     Uses the Dapr metadata API.  Returns ``False`` (conservatively) when the
     metadata call fails.
     """
-    import asyncio
-
-    async def _check() -> bool:
-        client = AsyncDaprClient()
+    async with AsyncDaprClient() as client:
         try:
             metadata = await client.get_metadata()
             components = metadata.get(
                 "components", metadata.get("registeredComponents", [])
             )
             return any(c.get("name") == component_name for c in components)
-        finally:
-            await client.close()
-
-    try:
-        return asyncio.run(_check())
-    except Exception:
-        logger.warning(
-            "Failed to read Dapr metadata for component %s; treating as unavailable",
-            component_name,
-            exc_info=True,
-        )
-        return False
+        except Exception:
+            logger.warning(
+                "Failed to read Dapr metadata for component %s; treating as unavailable",
+                component_name,
+                exc_info=True,
+            )
+            return False
 
 
 # ---------------------------------------------------------------------------

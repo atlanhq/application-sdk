@@ -143,10 +143,13 @@ class AzureClient(ClientInterface):
                 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 
                 dapr_client = AsyncDaprClient()
-                vault = DaprCredentialVault(dapr_client)
-                self.resolved_credentials = await vault.get_credentials(
-                    self.credentials["credential_guid"]
-                )
+                try:
+                    vault = DaprCredentialVault(dapr_client)
+                    self.resolved_credentials = await vault.get_credentials(
+                        self.credentials["credential_guid"]
+                    )
+                finally:
+                    await dapr_client.close()
             else:
                 # If credentials are already resolved (direct format), use them as-is
                 # Check if credentials appear to need resolution but no credential_guid provided

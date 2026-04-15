@@ -11,8 +11,10 @@ import pytest
 from application_sdk.infrastructure._dapr.client import (
     DaprCredentialVault,
     _handle_single_key_secret,
-    _process_secret_data,
     _resolve_credentials,
+)
+from application_sdk.infrastructure._secret_utils import (
+    process_secret_data as _process_secret_data,
 )
 from application_sdk.infrastructure.credential_vault import (
     CredentialVault,
