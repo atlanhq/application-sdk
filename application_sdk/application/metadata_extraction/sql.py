@@ -310,6 +310,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             ui_enabled=ui_enabled,
             has_configmap=has_configmap,
             manifest=self.get_manifest(),
+            manifest_version=self.get_manifest_version(),
         )
 
         # register the workflow on the application server
