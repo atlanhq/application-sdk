@@ -17,7 +17,6 @@ from application_sdk.infrastructure.pubsub import PubSubError
 from application_sdk.infrastructure.secrets import SecretNotFoundError, SecretStoreError
 from application_sdk.infrastructure.state import StateStoreError
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
