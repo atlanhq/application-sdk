@@ -23,15 +23,6 @@ class EntityType(str, Enum):
     DATABASE = "database"
 
 
-class ColumnField(str, Enum):
-    """Standard column fields used in ancestral merge operations."""
-
-    TYPE_NAME = "typeName"
-    STATUS = "status"
-    ATTRIBUTES = "attributes"
-    CUSTOM_ATTRIBUTES = "customAttributes"
-
-
 class ConnectionInfo(BaseModel):
     """Connection information for the database."""
 
@@ -149,53 +140,50 @@ class TableScope(BaseModel):
     }
 
 
-class MergeResult(BaseModel):
-    """Result of ancestral column merge operation.
-
-    Tracks counts of columns merged from current extraction and ancestral state,
-    as well as columns excluded.
-
-    Attributes:
-        columns_from_current: Count of columns from current extraction
-        columns_from_ancestral: Count of columns carried from ancestral state
-        columns_total: Total columns in merged output
-        excluded_already_extracted: Ancestral columns skipped because parent table
-            was CREATED/UPDATED in current run (fresh columns were extracted)
-        excluded_table_removed: Ancestral columns excluded because parent table
-            no longer exists in extraction scope
-    """
-
-    columns_from_current: int = 0
-    columns_from_ancestral: int = 0
-    columns_total: int = 0
-    excluded_already_extracted: int = 0
-    excluded_table_removed: int = 0
-
-
 class IncrementalDiffResult(BaseModel):
     """Result of incremental diff creation.
 
-    Tracks counts of changed assets written to incremental-diff folder.
-    This folder contains only assets that changed in this specific run
-    (CREATED, UPDATED, or BACKFILL).
+    Tracks counts of changed and deleted assets written to incremental-diff folder.
+    The diff contains assets that changed (CREATED, UPDATED, BACKFILL) and
+    assets that were deleted (present in previous state but absent in current scope).
 
     Attributes:
         tables_created: Count of CREATED tables
         tables_updated: Count of UPDATED tables
         tables_backfill: Count of BACKFILL tables
+        tables_deleted: Count of deleted tables (previous - current)
         columns_total: Total columns for changed tables
+        columns_deleted: Count of deleted columns (cascade + updated table diffs)
         schemas_total: Total schemas in diff
         databases_total: Total databases in diff
         total_files: Total JSON files written
+        is_incremental: Whether this was an incremental run (vs first run)
     """
 
     tables_created: int = 0
     tables_updated: int = 0
     tables_backfill: int = 0
+    tables_deleted: int = 0
     columns_total: int = 0
+    columns_deleted: int = 0
     schemas_total: int = 0
     databases_total: int = 0
     total_files: int = 0
+    is_incremental: bool = True
+
+    @property
+    def total_changed_entities(self) -> int:
+        """Total count of all changed and deleted entities."""
+        return (
+            self.tables_created
+            + self.tables_updated
+            + self.tables_backfill
+            + self.tables_deleted
+            + self.columns_total
+            + self.columns_deleted
+            + self.schemas_total
+            + self.databases_total
+        )
 
 
 class IncrementalWorkflowArgs(BaseModel):
