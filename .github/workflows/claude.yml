@@ -94,13 +94,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      # Set status to pending immediately
-      - name: Set review status to pending
+      # Instant UX feedback: acknowledge the comment + post starting comment +
+      # set status to pending. All three happen in the first ~5 seconds so
+      # the user immediately sees that @sdk-review was picked up.
+      - name: Acknowledge trigger
         run: |
+          # 👀 reaction on the triggering comment
+          gh api "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -f content=eyes 2>/dev/null || true
+
+          # Set status check to pending immediately (appears on PR within seconds)
           gh api "repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.head_sha }}" \
             -f state=pending \
             -f context=sdk-review \
-            -f description="SDK Review in progress..."
+            -f description="SDK Review starting... (takes ~5-8 min)"
+
+          # Post a visible acknowledgment comment with a link to the Actions run
+          gh pr comment "${{ steps.pr.outputs.number }}" --body \
+            "🔄 **SDK Review starting** (mode: \`${{ steps.pr.outputs.mode }}\`) — takes ~5-8 min. [Watch live progress](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -207,10 +218,10 @@ jobs:
             Be conservative. When in doubt, ABORT and let a human handle it.
           claude_args: |
             --model claude-opus-4-6
-            --timeout 600
             --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git fetch:*),Bash(git checkout:*),Bash(git merge:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(uv run:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
           GH_TOKEN: ${{ github.token }}
 
@@ -237,6 +248,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       # Main review session (Opus)
+      # v1 implementation: single-session review (no Agent subagents).
+      # The Agent tool (for subagents) caused auth failures because subagents
+      # don't inherit the LiteLLM-specific auth. Keep the review simple for v1;
+      # add subagents back once we verify subagent auth works with the proxy.
       - name: SDK Review (Session A — Review)
         id: review
         uses: anthropics/claude-code-action@v1
@@ -244,7 +259,7 @@ jobs:
           anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           show_full_output: true
           prompt: |
-            You are running the SDK Review pipeline on PR #${{ steps.pr.outputs.number }}.
+            You are reviewing PR #${{ steps.pr.outputs.number }} for the Atlan application-sdk.
 
             Command from user: "${{ steps.pr.outputs.comment }}"
             Mode: ${{ steps.pr.outputs.mode }}
@@ -253,33 +268,89 @@ jobs:
 
             IMPORTANT: Full git history is already checked out locally. Do NOT run git fetch.
 
-            Execute the /sdk-review skill. Follow the SKILL.md stages exactly:
-            - Stage 1: Orient (CI, branch, conflicts, previous review)
-            - Stage 2: Review (holistic assessment, 3 Opus agents, 1 GPT-5.3-codex adversarial via curl)
-            - Stage 3: Post review (summary comment, inline comments, status check, labels)
-              Includes Stage 3b-bis: handle inline comment replies (Q&A from author)
+            ## Review Process
 
-            For the adversarial review (Wave 2), call GPT-5.3-codex via:
-            curl -s "https://llmproxy.atlan.dev/v1/chat/completions" \
-              -H "Authorization: Bearer $LITELLM_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d '{"model": "gpt-5.3-codex", "temperature": 0.2, "max_tokens": 12000, "messages": [...]}'
+            If the mode is "override", handle that first:
+            1. Check if the commenter is a repo admin:
+               gh api repos/${{ github.repository }}/collaborators/${{ steps.pr.outputs.commenter }}/permission --jq .permission
+            2. If "admin" → set status check to success with description "Overridden by @${{ steps.pr.outputs.commenter }}". Post a PR comment confirming the override. Output VERDICT:READY_TO_MERGE and stop.
+            3. If not admin → post a PR comment: "Only repo admins can override the sdk-review check." Output VERDICT:NEEDS_FIXES and stop.
 
-            If mode is "override", check if the commenter is a repo admin:
-            gh api repos/atlanhq/application-sdk/collaborators/${{ steps.pr.outputs.commenter }}/permission --jq .permission
-            Only admins can override.
+            Otherwise, do the review:
 
-            After completing the review, output the verdict as the LAST LINE of your response:
-            VERDICT:<verdict>
-            Where verdict is: READY_TO_MERGE, NEEDS_FIXES, BLOCKED, or NEEDS_HUMAN
+            1. Get the diff:
+               gh pr diff ${{ steps.pr.outputs.number }}
 
-            Do NOT proceed to auto-fix — that is a separate step.
+            2. Read the changed files in full using Read tool for context.
+
+            3. Read these SDK review rules (ALL of them):
+               - .claude/skills/sdk-review/references/v3-architecture-rules.md
+               - .claude/skills/sdk-review/references/code-quality-rules.md
+               - .claude/skills/sdk-review/references/security-rules.md
+               - .claude/skills/sdk-review/references/test-quality-rules.md
+               - .claude/skills/sdk-review/references/dx-rules.md
+               - .claude/skills/sdk-review/references/structural-rules.md
+
+            4. Analyze the PR across these 3 dimensions:
+               - CORRECTNESS: architecture (ADR compliance, contract safety, determinism), security (secrets, injection, isolation), logical bugs
+               - QUALITY: code quality (imports, logging, naming, size), test coverage, developer experience
+               - STRUCTURE: holistic — symptoms vs causes, file health, dependency direction, v3 replacements
+
+            5. Check guardrails G1-G8 (defined in the reference rules). Any violation is a blocker.
+
+            6. Post a summary comment to the PR using `gh pr comment`. Format:
+
+               <!-- SDK_REVIEW_V2 -->
+               ## SDK Review: PR #<num> — <title>
+
+               ### Verdict: READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW
+
+               > <1-2 sentence summary of current status>
+
+               ### Findings by File
+
+               **`<path>`**
+               - **Critical** [TAG] L42 — description. Fix: <what to do>
+               - **Important** [TAG] L56 — description. Fix: <what to do>
+
+               **`<another file>`**
+               - ...
+
+               (tags: [ARCH], [SEC], [BUG], [QUAL], [TEST], [DX], [STRUCT])
+
+               ### Strengths (if any)
+               - ...
+
+            7. For each finding post an inline comment on the exact line using:
+               gh api repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/comments \
+                 -f body="<severity tag, description, fix>" \
+                 -f commit_id="${{ steps.pr.outputs.head_sha }}" \
+                 -f path="<file>" \
+                 -F line=<N> \
+                 -f side="RIGHT"
+               Max 15 inline comments, prioritize Critical > Important > Minor.
+
+            8. Set the commit status based on verdict:
+               gh api repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.head_sha }} \
+                 -f state=<success|failure> \
+                 -f context=sdk-review \
+                 -f description="SDK Review: <verdict> (X critical, Y important)"
+
+            9. If there are no Critical findings and fewer than 3 Important → verdict is READY_TO_MERGE.
+               If any Critical security finding → verdict is BLOCKED.
+               Otherwise → verdict is NEEDS_FIXES.
+
+            10. Output the verdict as the LAST LINE of your response:
+                VERDICT:<verdict>
+
+            Do NOT proceed to auto-fix — that is a separate step handled by the next workflow job.
+            Do NOT use the Task/Agent tool — do everything directly in this session.
           claude_args: |
             --model claude-opus-4-6
-            --timeout 900
-            --allowedTools "Read,Write,Edit,Glob,Grep,Agent,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh label:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(git fetch:*),Bash(git checkout:*),Bash(git merge:*),Bash(git push:*),Bash(curl:*),Bash(cat:*),Bash(jq:*)"
+            --allowedTools "Read,Glob,Grep,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh label:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(cat:*),Bash(jq:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
           GH_TOKEN: ${{ github.token }}
 
@@ -351,10 +422,10 @@ jobs:
             Output: FIXES_APPLIED:<count> or FIXES_APPLIED:0
           claude_args: |
             --model claude-opus-4-6
-            --timeout 600
             --allowedTools "Read,Write,Edit,Glob,Grep,Bash(uv run:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git diff:*),Bash(git checkout:*),Bash(git status:*),Bash(gh api:*),Bash(gh pr view:*),Bash(cat:*),Bash(jq:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
           GH_TOKEN: ${{ github.token }}
 
