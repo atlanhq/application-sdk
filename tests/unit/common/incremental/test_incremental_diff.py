@@ -106,9 +106,7 @@ class TestDetectDeletions:
             delete_dir = Path(tmp) / "delete"
             current_col_dir = Path(tmp) / "current" / "column"
 
-            _write_entities(
-                prev, "table", [_make_table_entity("db/schema/t1")]
-            )
+            _write_entities(prev, "table", [_make_table_entity("db/schema/t1")])
 
             counts = _detect_deletions(
                 previous_state_dir=prev,
@@ -147,9 +145,7 @@ class TestDetectDeletions:
             delete_dir = Path(tmp) / "delete"
             current_col_dir = Path(tmp) / "current" / "column"
 
-            _write_entities(
-                prev, "table", [_make_table_entity("db/schema/t1")]
-            )
+            _write_entities(prev, "table", [_make_table_entity("db/schema/t1")])
             _write_entities(
                 prev,
                 "column",
@@ -408,9 +404,7 @@ class TestCreateIncrementalDiffWithDeletions:
                 ],
             )
 
-            scope = _make_scope(
-                {"db/s/t1": "CREATED", "db/s/t2": "UPDATED"}
-            )
+            scope = _make_scope({"db/s/t1": "CREATED", "db/s/t2": "UPDATED"})
 
             result = create_incremental_diff(
                 transformed_dir=transformed,

@@ -432,9 +432,12 @@ async def create_current_state_snapshot(
                 get_table_qns_from_columns,
             )
 
-            tables_with_columns = get_table_qns_from_columns(
-                current_state_dir.joinpath(EntityType.COLUMN.value), conn=conn
-            ) or set()
+            tables_with_columns = (
+                get_table_qns_from_columns(
+                    current_state_dir.joinpath(EntityType.COLUMN.value), conn=conn
+                )
+                or set()
+            )
             table_scope.tables_with_extracted_columns = tables_with_columns
 
             total_files = count_json_files_recursive(current_state_dir)
