@@ -397,8 +397,7 @@ jobs:
   # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
   # Waits for security-scan. While fail_on_findings stays false, this is an
   # ordering constraint only; once enforcement flips, a failing scan blocks
-  # publish outright. The publish payload carries ci_scan_status / ci_scan_run_url
-  # so downstream (GM) can record which CI scan covered this release.
+  # publish outright.
   publish:
     name: Publish to Marketplace
     needs: [prepare, merge, security-scan]
@@ -421,8 +420,6 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-          CI_SCAN_STATUS: ${{ needs.security-scan.result }}
-          CI_SCAN_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
@@ -452,14 +449,6 @@ jobs:
               body["allowed_tenants"] = [t.strip() for t in tenants.split(",") if t.strip()]
           else:
               body["target_channel"] = os.environ.get("CHANNEL", "all") or "all"
-
-          # CI scan attestation — GM persists these for audit (Phase 3)
-          scan_status = os.environ.get("CI_SCAN_STATUS", "").strip()
-          if scan_status:
-              body["ci_scan_status"] = scan_status
-          scan_run_url = os.environ.get("CI_SCAN_RUN_URL", "").strip()
-          if scan_run_url:
-              body["ci_scan_run_url"] = scan_run_url
 
           print(json.dumps(body))
           PYEOF
