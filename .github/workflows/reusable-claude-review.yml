@@ -14,10 +14,6 @@ on:
     secrets:
       AI_GATEWAY_KEY:
         required: true
-      GLOBALPROTECT_USERNAME:
-        required: true
-      GLOBALPROTECT_PASSWORD:
-        required: true
 
 jobs:
   review:
@@ -45,29 +41,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Connect to VPN
-        uses: atlanhq/github-actions/globalprotect-connect-action@main
-        with:
-          portal-url: vpn2.atlan.app
-          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
-          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
-
-      - name: Health check AI Gateway
-        env:
-          AI_GATEWAY_KEY: ${{ secrets.AI_GATEWAY_KEY }}
-        run: |
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-            https://llmproxy.atlan.dev/v1/messages \
-            -H "x-api-key: $AI_GATEWAY_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -H "content-type: application/json" \
-            -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"ping"}]}')
-          echo "AI Gateway health check status: $HTTP_STATUS"
-          if [ "$HTTP_STATUS" = "000" ]; then
-            echo "::error::AI Gateway unreachable (timeout). Check VPN connection."
-            exit 1
-          fi
 
       - name: Run Claude Code Review
         uses: anthropics/claude-code-action@v1
