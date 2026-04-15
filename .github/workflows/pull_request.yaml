@@ -3,7 +3,7 @@ name: PR Checks
 on:
   pull_request:
     types: [opened, synchronize, labeled, reopened]
-    branches: [main, refactor-v3]
+    branches: [main, refactor-v3, BLDX-755]
 
 permissions:
   id-token: write
