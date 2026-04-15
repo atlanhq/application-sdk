@@ -142,6 +142,19 @@ jobs:
           echo "iteration=$ITERATION" >> "$GITHUB_OUTPUT"
           echo "max_iter=$MAX_ITER" >> "$GITHUB_OUTPUT"
 
+          # Detect whether the PR modifies any file under .github/workflows/.
+          # GITHUB_TOKEN from GH Actions can't push changes to workflow files
+          # (403 "without `workflows` permission"). If this PR touches one,
+          # skip branch-update attempts and tell the author — otherwise the
+          # whole pipeline fails with a cascading cryptic error.
+          TOUCHES_WORKFLOWS=$(gh pr view "$PR_NUMBER" --json files \
+            --jq '[.files[].path | select(startswith(".github/workflows/"))] | length')
+          if [ "${TOUCHES_WORKFLOWS:-0}" -gt 0 ]; then
+            echo "touches_workflows=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "touches_workflows=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # Instant UX feedback: 👀 reaction + pending status check + ack comment.
       # All three happen in the first ~5 s so the user sees @sdk-review
       # was picked up.
@@ -218,13 +231,33 @@ jobs:
           PR: ${{ steps.pr.outputs.number }}
           BASE: ${{ steps.pr.outputs.base_branch }}
           HEAD: ${{ steps.pr.outputs.head_branch }}
+          TOUCHES_WORKFLOWS: ${{ steps.pr.outputs.touches_workflows }}
         run: |
+          # Set git identity BEFORE any merge/commit so we don't cascade
+          # into 'empty ident name' errors if a tier step runs.
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
           MERGE_STATE=$(gh pr view "$PR" --json mergeStateStatus -q .mergeStateStatus)
           MERGEABLE=$(gh pr view "$PR" --json mergeable -q .mergeable)
 
           if [ "$MERGEABLE" = "MERGEABLE" ] && [ "$MERGE_STATE" = "CLEAN" ]; then
             echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
             echo "No conflicts."
+            exit 0
+          fi
+
+          # If the PR touches .github/workflows/*, GITHUB_TOKEN cannot
+          # push a branch update without the `workflows` scope (which
+          # GITHUB_TOKEN does NOT carry). Attempting Tier 1/2 would fail
+          # with a cryptic 403 → cascade into 'empty ident name' →
+          # 'there is no merge to abort'. Skip tier attempts cleanly,
+          # tell the author, and proceed with the review anyway.
+          if [ "$TOUCHES_WORKFLOWS" = "true" ]; then
+            echo "PR modifies .github/workflows/* — skipping branch update (GITHUB_TOKEN lacks workflow scope)."
+            gh pr comment "$PR" --body \
+              "⚠️ This PR modifies \`.github/workflows/*\` files. GitHub's \`GITHUB_TOKEN\` cannot update the branch (lacks \`workflows\` scope). **Review will proceed**, but you will need to **update the branch manually** (or a maintainer with a PAT that has the \`workflow\` scope must do it) before the PR can be merged."
+            echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -240,14 +273,22 @@ jobs:
           git fetch origin "$BASE" "$HEAD"
           git checkout "$HEAD"
           if git merge "origin/$BASE" --no-edit; then
-            git push origin "$HEAD"
-            echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
-            echo "Resolved via Tier 2 (git merge)."
-            exit 0
+            if git push origin "$HEAD"; then
+              echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
+              echo "Resolved via Tier 2 (git merge)."
+              exit 0
+            else
+              echo "::warning::Tier 2 merge succeeded locally but push failed — likely workflow-file or branch-protection issue. Aborting merge."
+              # Undo the merge commit we just made locally
+              git reset --hard "origin/$HEAD" 2>/dev/null || true
+              echo "needs_resolution=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
 
-          # Tier 2 failed — abort and signal Tier 3 needed
-          git merge --abort
+          # Tier 2 failed — abort (if there's anything to abort) and
+          # signal Tier 3 needed.
+          git merge --abort 2>/dev/null || true
           echo "needs_resolution=true" >> "$GITHUB_OUTPUT"
           echo "Tiers 1+2 failed. Will spawn Tier 3 (Claude semantic resolver)."
 
@@ -448,6 +489,17 @@ jobs:
                > <1-2 sentence summary of current status — for Re-review,
                > mention whether prior findings were resolved and whether
                > new issues were introduced by the latest changes>
+
+               ### Delta from prior review
+               (INCLUDE THIS SECTION ONLY IF $SDK_REVIEW_VERB == "Re-review".
+                For each finding in the prior SDK_REVIEW_V2 comment, emit
+                one bullet with one of the four markers. If no changes
+                for a category, write "- None".)
+
+               - **[RESOLVED]** `file:line` — prior finding "..." — fixed in this iteration
+               - **[STILL]** `file:line` — prior finding "..." — still present
+               - **[NEW]** `file:line` — introduced by this iteration
+               - **[REGRESSION]** `file:line` — was flagged, fixed, now re-introduced
 
                ### Findings by File
 
@@ -813,10 +865,18 @@ jobs:
           MODE: ${{ steps.pr.outputs.mode }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          TOUCHES_WORKFLOWS: ${{ steps.pr.outputs.touches_workflows }}
         run: |
-          # Update branch
-          gh api "repos/${REPO}/pulls/$PR/update-branch" \
-            -X PUT -f update_method=merge 2>/dev/null || echo "Branch already up to date"
+          # Update branch. Skip if the PR touches workflow files —
+          # GITHUB_TOKEN lacks 'workflows' scope so update-branch would
+          # 403. The author needs to update the branch manually (or a
+          # maintainer with a PAT that has workflow scope).
+          if [ "$TOUCHES_WORKFLOWS" = "true" ]; then
+            echo "PR touches .github/workflows/* — skipping branch update (GITHUB_TOKEN lacks workflow scope)."
+          else
+            gh api "repos/${REPO}/pulls/$PR/update-branch" \
+              -X PUT -f update_method=merge 2>/dev/null || echo "Branch already up to date"
+          fi
 
           # Wait for CI after branch update
           sleep 15
