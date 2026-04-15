@@ -594,9 +594,28 @@ jobs:
             exit 0
           fi
 
+          # Compose context-aware approve message:
+          # - "Re-review" if a prior SDK_REVIEW_V2 comment existed before
+          #   the one we just posted (i.e., this PR has been reviewed
+          #   before); otherwise "Review".
+          # - "findings resolved" when auto-complete ran fixes;
+          #   "no blocking issues" for a clean review-only pass.
+          PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+            --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 1)
+          if [ "${PRIOR_REVIEWS:-1}" -gt 1 ]; then
+            VERB="Re-review"
+          else
+            VERB="Review"
+          fi
+          if [ "$MODE" = "auto-fix" ]; then
+            OUTCOME="findings resolved"
+          else
+            OUTCOME="no blocking issues"
+          fi
+
           # Approve
           gh pr review "$PR" --approve \
-            --body "SDK Review v2: All findings resolved. CI passing. Branch up to date. Approved."
+            --body "SDK ${VERB}: ${OUTCOME}. CI passing. Branch up to date. Approved."
 
           # Labels
           gh label create "sdk-review-approved" --color "0e8a16" --force 2>/dev/null
