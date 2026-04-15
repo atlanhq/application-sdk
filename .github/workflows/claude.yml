@@ -198,11 +198,31 @@ jobs:
             *)            LABEL="$MODE" ;;
           esac
 
+          # Size-aware time estimate based on total lines changed.
+          # Bucketed so users aren't misled by a fixed "~5-8 min" when
+          # they've pushed a 3,000-line PR that will realistically take
+          # 15-25 min (big diff → bigger subagent context → slower).
+          TOTAL_LINES=$(gh pr view "$PR_NUMBER" --json files \
+            --jq '[.files[] | (.additions // 0) + (.deletions // 0)] | add // 0' 2>/dev/null || echo 0)
+          if [ "$TOTAL_LINES" -lt 50 ]; then
+            EST="~3-5 min"
+          elif [ "$TOTAL_LINES" -lt 500 ]; then
+            EST="~5-10 min"
+          elif [ "$TOTAL_LINES" -lt 2000 ]; then
+            EST="~10-15 min"
+          else
+            EST="~15-25 min (large PR)"
+          fi
+          # Auto-complete mode can take longer (fix loop adds iterations)
+          if [ "$MODE" = "auto-fix" ]; then
+            EST="${EST}, possibly longer with fix iterations"
+          fi
+
           # Set sdk-review status check to pending
           gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
             -f state=pending \
             -f context=sdk-review \
-            -f description="SDK ${VERB} starting (${LABEL})... (takes ~5-8 min)" \
+            -f description="SDK ${VERB} starting (${LABEL})... ${EST}" \
             -f target_url="${RUN_URL}" 2>/dev/null || true
 
           # Add a "stop" hint when auto-complete is running
@@ -211,7 +231,7 @@ jobs:
             STOP_HINT=$'\n\n> 💡 Comment `@sdk-review stop` to cancel.'
           fi
 
-          BODY="🔄 **SDK ${VERB} starting** (${LABEL}) — takes ~5-8 min. [Watch live progress](${RUN_URL})${STOP_HINT}"
+          BODY="🔄 **SDK ${VERB} starting** (${LABEL}) — ${EST}. [Watch live progress](${RUN_URL})${STOP_HINT}"
           gh pr comment "$PR_NUMBER" --body "$BODY"
 
       # Connect to VPN AFTER the ack (Resolve + Acknowledge only need
