@@ -1,0 +1,84 @@
+name: 'Reusable: Claude Code PR Review'
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        type: string
+        default: 'claude-sonnet-4'
+        description: 'Model to use for review'
+      timeout_minutes:
+        type: number
+        default: 25
+        description: 'Timeout for the review job in minutes'
+    secrets:
+      AI_GATEWAY_KEY:
+        required: true
+      GLOBALPROTECT_USERNAME:
+        required: true
+      GLOBALPROTECT_PASSWORD:
+        required: true
+
+jobs:
+  review:
+    name: Claude Code Review
+    runs-on: ubuntu-latest
+    if: >
+      (github.event_name == 'pull_request' && !github.event.pull_request.draft) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '@claude'))
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    env:
+      ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+      CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1'
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Connect to VPN
+        uses: atlanhq/github-actions/globalprotect-connect-action@main
+        with:
+          portal-url: vpn2.atlan.app
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Health check AI Gateway
+        env:
+          AI_GATEWAY_KEY: ${{ secrets.AI_GATEWAY_KEY }}
+        run: |
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            https://llmproxy.atlan.dev/v1/messages \
+            -H "x-api-key: $AI_GATEWAY_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"ping"}]}')
+          echo "AI Gateway health check status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" = "000" ]; then
+            echo "::error::AI Gateway unreachable (timeout). Check VPN connection."
+            exit 1
+          fi
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.AI_GATEWAY_KEY }}
+          model: ${{ inputs.model }}
+          timeout_minutes: ${{ inputs.timeout_minutes }}
+          prompt: |
+            Run /review on PR #${{ github.event.pull_request.number || github.event.issue.number }}.
+
+            The /review skill will use this repo's CLAUDE.md and .claude/skills/review/
+            configuration to perform a full code review. Follow its instructions completely.
+          claude_args: |
+            --allowedTools "Skill,Read,Write,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr review:*),Bash(gh api:*),Bash(python3:*)"
