@@ -22,9 +22,8 @@ from application_sdk.infrastructure.context import (
     InfrastructureContext,
     set_infrastructure,
 )
+from application_sdk.storage.batch import download_prefix, upload_prefix
 from application_sdk.storage.factory import create_local_store
-from application_sdk.storage.ops import download_prefix, list_keys, upload_prefix
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -127,11 +126,11 @@ async def test_incremental_two_run_simulation(tmp_path, infra):
     Run 1 (first run): Extract tables t1, t2, t3 with columns
     Run 2 (incremental): t1=NO CHANGE, t2=UPDATED (col dropped), t3=deleted, t4=CREATED
     """
+    from application_sdk.common.incremental.models import TableScope
     from application_sdk.common.incremental.state.incremental_diff import (
         create_incremental_diff,
     )
     from application_sdk.common.incremental.state.table_scope import add_table_to_scope
-    from application_sdk.common.incremental.models import TableScope
 
     # ---- RUN 1: First extraction (simulated "previous state") ----
     previous_state = tmp_path / "run1" / "current-state"
@@ -322,11 +321,11 @@ async def test_lightweight_current_state_snapshot(tmp_path, infra):
 @pytest.mark.integration
 async def test_first_run_no_previous_state(tmp_path, infra):
     """First run with no previous state — no deletions, no diff errors."""
+    from application_sdk.common.incremental.models import TableScope
     from application_sdk.common.incremental.state.incremental_diff import (
         create_incremental_diff,
     )
     from application_sdk.common.incremental.state.table_scope import add_table_to_scope
-    from application_sdk.common.incremental.models import TableScope
 
     transformed = tmp_path / "transformed"
 
@@ -366,11 +365,11 @@ async def test_first_run_no_previous_state(tmp_path, infra):
 @pytest.mark.integration
 async def test_incremental_diff_with_s3_roundtrip(tmp_path, store, infra):
     """Upload incremental-diff to S3, download it, verify contents intact."""
+    from application_sdk.common.incremental.models import TableScope
     from application_sdk.common.incremental.state.incremental_diff import (
         create_incremental_diff,
     )
     from application_sdk.common.incremental.state.table_scope import add_table_to_scope
-    from application_sdk.common.incremental.models import TableScope
 
     # Previous state had t1 and t2
     previous = tmp_path / "previous"
