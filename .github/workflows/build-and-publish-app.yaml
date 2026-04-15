@@ -355,7 +355,12 @@ jobs:
           echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Job 4: Security scan — Trivy + Snyk + allowlist gate (non-blocking on merge path) ──
+  # ── Job 4: Security scan — Trivy + Snyk + allowlist gate ─────────────────────
+  # Runs after merge; publish and SDR dispatch both wait for it.
+  # fail_on_findings is kept false during the Phase 2 structural rollout so the
+  # scan is informational but publish/dispatch still block on job completion.
+  # Enforcement (fail_on_findings: true) flips after Phase 1 allowlist rollout
+  # reaches adequate adoption — tracked separately.
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
@@ -370,7 +375,7 @@ jobs:
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
   app-deployment-dispatcher:
     name: Dispatch App Deployment
-    needs: [prepare, merge]
+    needs: [prepare, merge, security-scan]
     if: github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -390,9 +395,13 @@ jobs:
             }
 
   # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
+  # Waits for security-scan. While fail_on_findings stays false, this is an
+  # ordering constraint only; once enforcement flips, a failing scan blocks
+  # publish outright. The publish payload carries ci_scan_status / ci_scan_run_url
+  # so downstream (GM) can record which CI scan covered this release.
   publish:
     name: Publish to Marketplace
-    needs: [prepare, merge]
+    needs: [prepare, merge, security-scan]
     if: inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -412,6 +421,8 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          CI_SCAN_STATUS: ${{ needs.security-scan.result }}
+          CI_SCAN_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
@@ -441,6 +452,14 @@ jobs:
               body["allowed_tenants"] = [t.strip() for t in tenants.split(",") if t.strip()]
           else:
               body["target_channel"] = os.environ.get("CHANNEL", "all") or "all"
+
+          # CI scan attestation — GM persists these for audit (Phase 3)
+          scan_status = os.environ.get("CI_SCAN_STATUS", "").strip()
+          if scan_status:
+              body["ci_scan_status"] = scan_status
+          scan_run_url = os.environ.get("CI_SCAN_RUN_URL", "").strip()
+          if scan_run_url:
+              body["ci_scan_run_url"] = scan_run_url
 
           print(json.dumps(body))
           PYEOF
