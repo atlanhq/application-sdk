@@ -79,8 +79,8 @@ from application_sdk.observability.logger_adaptor import get_logger  # noqa: E40
 
 logger = get_logger(__name__)
 
-from application_sdk.discovery import (
-    DiscoveryError,  # noqa: E402
+from application_sdk.discovery import DiscoveryError  # noqa: E402
+from application_sdk.discovery import (  # noqa: E402
     load_app_class,
     load_handler_class,
     validate_app_class,
