@@ -381,6 +381,73 @@ class AppContext:
         resolver = CredentialResolver(self._secret_store)
         return await resolver.resolve_raw(ref)
 
+    async def resolve_workflow_credentials(
+        self, workflow_args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Resolve credentials from a workflow payload to a flat ``dict``.
+
+        Routes on the shape of ``workflow_args`` emitted by the Atlan
+        Argo marketplace template:
+
+        * ``agent_json`` non-empty → inline agent-shape resolution via
+          :func:`application_sdk.credentials.agent.resolve_agent_json`.
+          The returned dict has any ``extra`` field nested and is ready
+          to hand to a SQL client's ``load()`` entry point.
+        * ``credential_guid`` non-empty → legacy v2 resolution path via
+          :class:`~application_sdk.credentials.resolver.CredentialResolver`.
+          Preserves backward compatibility for direct-extraction runs
+          and in-process inline credentials stored by the handler layer.
+        * Neither present → :class:`ValueError`.
+
+        This is the one call every v3 connector activity needs; the
+        routing is centralised here so individual apps don't
+        re-implement the agent/direct discriminator.
+
+        Args:
+            workflow_args: The Temporal workflow input dict. Expected
+                to contain ``agent_json`` (JSON string) or
+                ``credential_guid`` (string) — empty strings are
+                treated as absent.
+
+        Returns:
+            A flat ``dict[str, Any]`` with ref-keys substituted and
+            dotted keys expanded into nested dicts.
+
+        Raises:
+            RuntimeError: If no secret store is configured.
+            ValueError: If neither ``agent_json`` nor
+                ``credential_guid`` is present.
+            CredentialParseError: If ``agent_json`` is malformed.
+            CredentialNotFoundError: If the secret bundle or
+                credential GUID cannot be located.
+        """
+        if self._secret_store is None:
+            raise RuntimeError("No secret store configured")
+
+        agent_json = workflow_args.get("agent_json") or ""
+        if agent_json and agent_json.strip() not in ("", "{}"):
+            from application_sdk.credentials.agent import resolve_agent_json
+
+            return await resolve_agent_json(agent_json, self._secret_store)
+
+        credential_guid = workflow_args.get("credential_guid") or ""
+        if credential_guid:
+            from application_sdk.credentials.ref import CredentialRef
+            from application_sdk.credentials.resolver import CredentialResolver
+
+            ref = CredentialRef(
+                name=credential_guid,
+                credential_type="unknown",
+                credential_guid=credential_guid,
+            )
+            resolver = CredentialResolver(self._secret_store)
+            return await resolver.resolve_raw(ref)
+
+        raise ValueError(
+            "workflow_args has no credential source: need 'agent_json' "
+            "(non-empty JSON) or 'credential_guid' (non-empty string)"
+        )
+
     def log_error(self, message: str, **kwargs: Any) -> None:
         """Log an error message."""
         self.logger.error(message, **kwargs)
