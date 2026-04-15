@@ -242,11 +242,13 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Fetch base allowlist from SDK
-        run: |
-          curl -sH "Authorization: token ${{ secrets.ORG_PAT_GITHUB || github.token }}" \
-            "https://raw.githubusercontent.com/atlanhq/application-sdk/main/.security/base-allowlist.json" \
-            -o /tmp/base-allowlist.json 2>/dev/null || echo "{}" > /tmp/base-allowlist.json
+      - name: Checkout base allowlist from SDK
+        uses: actions/checkout@v4
+        with:
+          repository: atlanhq/application-sdk
+          sparse-checkout: .security/base-allowlist.json
+          path: _sdk
+          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
 
       - name: Download Trivy results
         uses: actions/download-artifact@v4
@@ -270,25 +272,43 @@ jobs:
           import json, sys, os
           from datetime import datetime
 
-          # Merge base allowlist (from SDK) + repo allowlist
-          allowlist = {}
+          # Load base allowlist (from SDK) — base entries always win on conflict
+          base_allowlist = {}
+          base_path = "_sdk/.security/base-allowlist.json"
           try:
-              with open("/tmp/base-allowlist.json") as f:
-                  base = json.load(f)
-              allowlist.update({k: v for k, v in base.items() if not k.startswith("_")})
-              print(f"Base allowlist: {len(allowlist)} entries")
-          except:
-              pass
+              with open(base_path) as f:
+                  base_raw = json.load(f)
+              base_allowlist = {k: v for k, v in base_raw.items() if not k.startswith("_")}
+              print(f"Base allowlist: {len(base_allowlist)} entries")
+          except FileNotFoundError:
+              print(f"Warning: {base_path} not found — no base allowlist")
+          except json.JSONDecodeError as e:
+              print(f"Error: base allowlist has invalid JSON: {e}")
+              sys.exit(1)
 
-          repo_allowlist_path = ".security/allowlist.json"
-          if os.path.exists(repo_allowlist_path):
-              with open(repo_allowlist_path) as f:
-                  repo_al = json.load(f)
-              repo_entries = {k: v for k, v in repo_al.items() if not k.startswith("_")}
-              allowlist.update(repo_entries)
-              print(f"Repo allowlist: {len(repo_entries)} entries")
-          else:
-              print("No .security/allowlist.json in repo")
+          # Load repo allowlist
+          repo_allowlist = {}
+          repo_path = ".security/allowlist.json"
+          try:
+              if os.path.exists(repo_path):
+                  with open(repo_path) as f:
+                      repo_raw = json.load(f)
+                  repo_allowlist = {k: v for k, v in repo_raw.items() if not k.startswith("_")}
+                  print(f"Repo allowlist: {len(repo_allowlist)} entries")
+              else:
+                  print("No .security/allowlist.json in repo")
+          except json.JSONDecodeError as e:
+              print(f"Error: repo allowlist has invalid JSON: {e}")
+              sys.exit(1)
+
+          # Merge: repo first, then base overwrites — base always wins on conflict
+          allowlist = {}
+          allowlist.update(repo_allowlist)
+          conflicts = [k for k in base_allowlist if k in repo_allowlist]
+          if conflicts:
+              for c in conflicts:
+                  print(f"Warning: conflict on {c} — base allowlist wins (repo entry ignored)")
+          allowlist.update(base_allowlist)
 
           if not allowlist:
               print("No allowlists found — all vulnerabilities will be reported but not blocked.")
