@@ -54,6 +54,8 @@ import obstore
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
+# stdlib logger: cannot use get_logger here due to circular import
+# (observability -> storage -> batch -> ops -> observability)
 logger = logging.getLogger(__name__)
 
 
