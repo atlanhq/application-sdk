@@ -35,10 +35,17 @@ jobs:
   # Inline comment replies on previous bot comments → answer agent
   # responds in-thread (no separate trigger needed).
   sdk-review:
+    # Gate: only repo collaborators / members / owners can trigger.
+    # This prevents external contributors on forks from burning API
+    # credits, triggering VPN connections, or leveraging the workflow's
+    # write permissions.
     if: |
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '@sdk-review')
+      contains(github.event.comment.body, '@sdk-review') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -130,13 +137,19 @@ jobs:
       # Tier 1: GitHub API update-branch
       # Tier 2: git merge
       # Tier 3: Claude Code semantic resolver (next step, only if needed)
+      #
+      # SECURITY: Branch names are attacker-controlled (PR author creates
+      # the branch). All branch/PR values are passed via env: not
+      # interpolated into shell via ${{ }}.
       - name: Conflict pre-flight (Tier 1 + 2)
         id: conflicts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+          BASE: ${{ steps.pr.outputs.base_branch }}
+          HEAD: ${{ steps.pr.outputs.head_branch }}
         run: |
-          PR="${{ steps.pr.outputs.number }}"
-          BASE="${{ steps.pr.outputs.base_branch }}"
-          HEAD="${{ steps.pr.outputs.head_branch }}"
-
           MERGE_STATE=$(gh pr view "$PR" --json mergeStateStatus -q .mergeStateStatus)
           MERGEABLE=$(gh pr view "$PR" --json mergeable -q .mergeable)
 
@@ -147,7 +160,7 @@ jobs:
           fi
 
           # Tier 1: API update-branch
-          if gh api "repos/${{ github.repository }}/pulls/$PR/update-branch" \
+          if gh api "repos/${REPO}/pulls/$PR/update-branch" \
              -X PUT -f update_method=merge 2>/dev/null; then
             echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
             echo "Resolved via Tier 1 (API update-branch)."
@@ -168,8 +181,6 @@ jobs:
           git merge --abort
           echo "needs_resolution=true" >> "$GITHUB_OUTPUT"
           echo "Tiers 1+2 failed. Will spawn Tier 3 (Claude semantic resolver)."
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       # Tier 3: Claude Code semantic conflict resolver
       # Only runs if Tiers 1+2 failed.
@@ -277,17 +288,17 @@ jobs:
 
             ## Setup
 
-            First, fetch the commenter and comment body safely via the GitHub API
-            (do NOT read from workflow env vars — they aren't passed):
-
-            COMMENTER=$(gh pr view ${{ steps.pr.outputs.number }} --json comments --jq '.comments[-1].author.login')
-            # (or use .latestReviews if needed)
+            The triggering commenter's GitHub login is in the environment
+            variable SDK_REVIEW_COMMENTER. This is the actual human who
+            posted "@sdk-review ..." (extracted from the issue_comment
+            event payload — NOT the last comment on the PR, which is
+            the bot's acknowledgment).
 
             ## Review Process
 
             If the mode is "override":
             1. Check if the commenter is a repo admin:
-               gh api repos/${{ github.repository }}/collaborators/$COMMENTER/permission --jq .permission
+               gh api repos/${{ github.repository }}/collaborators/"$SDK_REVIEW_COMMENTER"/permission --jq .permission
             2. If "admin" → post a PR comment confirming the override. Output VERDICT:READY_TO_MERGE and stop.
             3. If not admin → post a PR comment: "Only repo admins can override the sdk-review check." Output VERDICT:NEEDS_FIXES and stop.
 
@@ -363,12 +374,22 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
           GH_TOKEN: ${{ github.token }}
+          # Pass triggering commenter to Claude via env (not prompt interpolation)
+          # so override checks authenticate the real human, not comments[-1]
+          # (which is now the bot's acknowledgment).
+          SDK_REVIEW_COMMENTER: ${{ steps.pr.outputs.commenter }}
 
-      # Parse verdict from review output
+      # Parse verdict from review output.
+      # SECURITY: steps.review.outputs.result is the full Claude session
+      # output — which can contain shell metacharacters from PR content
+      # the model echoes back. Never interpolate it into shell via ${{ }};
+      # always pass it through env: so it's just a string to the shell.
       - name: Parse verdict
         id: verdict
+        env:
+          REVIEW_RESULT: ${{ steps.review.outputs.result }}
         run: |
-          VERDICT=$(echo "${{ steps.review.outputs.result }}" | grep -oP 'VERDICT:\K.*' | tail -1 || echo "NEEDS_FIXES")
+          VERDICT=$(printf '%s' "$REVIEW_RESULT" | grep -oP 'VERDICT:\K.*' | tail -1 || echo "NEEDS_FIXES")
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
           echo "Review verdict: $VERDICT"
 
@@ -530,16 +551,22 @@ jobs:
 
       - name: Check if this is a bot/auto commit or author commit
         id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          COMMIT_AUTHOR=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" \
+          COMMIT_AUTHOR=$(gh api "repos/${REPO}/commits/${HEAD_SHA}" \
             --jq '.author.login // .commit.author.name')
-          COMMIT_MSG=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" \
+          COMMIT_MSG=$(gh api "repos/${REPO}/commits/${HEAD_SHA}" \
             --jq '.commit.message' | head -1)
 
-          echo "author=$COMMIT_AUTHOR" >> "$GITHUB_OUTPUT"
-          echo "message=$COMMIT_MSG" >> "$GITHUB_OUTPUT"
-
+          # SECURITY: Do NOT write COMMIT_AUTHOR or COMMIT_MSG to
+          # $GITHUB_OUTPUT — the commit author name and subject line
+          # can contain multi-line content or `key=value` text that
+          # would inject step outputs. Only write the derived is_bot
+          # flag, which is a pure bool.
+          #
           # Skip reset if:
           # - Commit is from github-actions bot (branch-keeper or auto-fix)
           # - Commit message is a merge from base branch (branch-keeper)
@@ -551,8 +578,6 @@ jobs:
           else
             echo "is_bot=false" >> "$GITHUB_OUTPUT"
           fi
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - name: Reset sdk-review labels (author commits only)
         if: steps.check.outputs.is_bot == 'false'
