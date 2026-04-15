@@ -65,16 +65,24 @@ gh label create "needs-rebase" --color "e4e669" --description "PR has conflicts 
    - Status check set to pass/fail based on verdict
    - Merge button is blocked if review has Critical findings
 
-4. Test auto-fix: Comment `@sdk-review please resolve all issues`
-5. Test override: Comment `@sdk-review override: testing the override mechanism`
+4. Test auto-complete: Comment `@sdk-review auto-complete`
+5. Test stop (while auto-complete is running): Comment `@sdk-review stop`
+6. Test override: Comment `@sdk-review override: testing the override mechanism`
    (must be repo admin)
-6. Test Q&A: Reply to an inline comment with a question; the bot should respond.
+7. Test Q&A: Reply to an inline comment with a question; the bot should respond.
 
 ## Usage Summary
 
 | Action | Command |
 |--------|---------|
 | Review a PR | Comment `@sdk-review` on the PR |
-| Review + auto-fix | Comment `@sdk-review please resolve all issues` |
+| Review + auto-complete (fix loop) | Comment `@sdk-review auto-complete` |
+| Cancel in-progress auto-complete | Comment `@sdk-review stop` |
 | Override a blocked review | Comment `@sdk-review override: <reason>` (admin only) |
 | Dispute a finding | Comment `@sdk-review` with explanation of why a finding is wrong |
+
+**Aliases:** `resolve all issues` == `auto-complete`, `cancel` == `stop`.
+
+**Permission:** Only repo OWNER/MEMBER/COLLABORATOR can trigger (external fork
+contributors cannot). This is enforced at the workflow level via
+`author_association`.
