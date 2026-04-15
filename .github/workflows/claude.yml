@@ -449,27 +449,74 @@ jobs:
                "Only repo admins can override the sdk-review check."
                Output VERDICT:NEEDS_FIXES and stop.
 
-            Otherwise, do the review:
+            Otherwise, do the review using the MULTI-AGENT ORCHESTRATOR pattern:
 
-            1. Get the diff:
-               gh pr diff ${{ steps.pr.outputs.number }}
+            ## Orchestrator setup
 
-            2. Read the changed files in full using Read tool for context.
+            You are the ORCHESTRATOR. Do NOT review the PR yourself.
+            Dispatch 3 Task subagents IN PARALLEL (single message, 3
+            Task tool uses). Consolidate their findings into ONE
+            SDK_REVIEW_V2 comment.
 
-            3. Read these SDK review rules (ALL of them):
-               - .claude/skills/sdk-review/references/v3-architecture-rules.md
-               - .claude/skills/sdk-review/references/code-quality-rules.md
-               - .claude/skills/sdk-review/references/security-rules.md
-               - .claude/skills/sdk-review/references/test-quality-rules.md
-               - .claude/skills/sdk-review/references/dx-rules.md
-               - .claude/skills/sdk-review/references/structural-rules.md
+            ### Step 1 — Prepare shared context (prompt-caching optimization)
 
-            4. Analyze the PR across these 3 dimensions:
-               - CORRECTNESS: architecture (ADR compliance, contract safety, determinism), security (secrets, injection, isolation), logical bugs
-               - QUALITY: code quality (imports, logging, naming, size), test coverage, developer experience
-               - STRUCTURE: holistic — symptoms vs causes, file health, dependency direction, v3 replacements
+            Run once so all 3 subagents read from disk instead of
+            re-fetching through gh:
 
-            5. Check guardrails G1-G8 (defined in the reference rules). Any violation is a blocker.
+                mkdir -p /tmp/sdkreview
+                gh pr diff ${{ steps.pr.outputs.number }} > /tmp/sdkreview/diff.patch
+                gh pr view ${{ steps.pr.outputs.number }} --json files --jq '.files[].path' > /tmp/sdkreview/files.txt
+
+            ### Step 2 — Dispatch 3 subagents in PARALLEL
+
+            Issue a SINGLE assistant message containing 3 Task tool
+            uses. Use subagent_type: "general-purpose" for all three.
+
+            AGENT A — CORRECTNESS (arch + security + bugs). Prompt:
+              "You are a CORRECTNESS reviewer. Read diff at
+              /tmp/sdkreview/diff.patch and files at
+              /tmp/sdkreview/files.txt. Apply rules from
+              .claude/skills/sdk-review/references/v3-architecture-rules.md,
+              security-rules.md, retro-log.md (avoid re-flagging
+              withdrawn patterns). Output JSON array of findings with
+              fields {severity: Critical|Important|Minor, tag:
+              ARCH|SEC|BUG, file, line, description, fix}. If none: []"
+
+            AGENT B — QUALITY (code quality + tests + DX). Prompt:
+              "You are a QUALITY reviewer. Read /tmp/sdkreview/diff.patch.
+              Apply rules from code-quality-rules.md, test-quality-rules.md,
+              dx-rules.md, retro-log.md. Severity: lint-rejectable
+              (bare except, f-string in logger, print, unused imports,
+              mutable defaults) is at LEAST Important. Missing types /
+              docstrings / formatting → Minor. Output JSON findings
+              with tag: QUAL|TEST|DX."
+
+            AGENT C — STRUCTURE (holistic, design). Prompt:
+              "You are a STRUCTURE reviewer. Read full files (not
+              just diff) from /tmp/sdkreview/files.txt. Apply
+              structural-rules.md, v3-architecture-rules.md,
+              retro-log.md. Find: dumping grounds, dep direction
+              violations, god functions, v3-replacement opportunities.
+              Output JSON findings with tag: STRUCT|ARCH and extra
+              field design_change: true|false when the fix requires
+              architectural rework (not a simple patch)."
+
+            ### Step 3 — Consolidate
+
+            Merge all 3 JSON arrays. De-duplicate by (file, line, ~description):
+            keep the HIGHEST severity and merge descriptions. If a SEC
+            tag conflicts with QUAL on same line, SEC wins.
+
+            Check guardrails G1-G8. Any Critical [SEC] → BLOCKED.
+
+            ### Step 4 — Fallback (if any subagent fails)
+
+            If any Task call errors (auth / timeout / parse failure),
+            log it to stderr and proceed with whichever subagents
+            succeeded. If ALL fail, fall back to direct review:
+            read the diff + the 6 rule files and review yourself.
+            This fallback keeps the pipeline healthy if the LiteLLM
+            subagent auth issue ever resurfaces.
 
             6. Post a summary comment to the PR using `gh pr comment`.
                Use $SDK_REVIEW_VERB (Review / Re-review) in the heading.
@@ -592,12 +639,15 @@ jobs:
             10. Output the verdict as the LAST LINE of your response:
                 VERDICT:<verdict>
 
-            Do NOT use the Task/Agent tool — do everything directly in this session.
-            Do NOT set a commit status check (sdk-review status is disabled for v1).
+            Use the Task tool (Wave 1 — 3 parallel subagents) as
+            instructed above. Each subagent is a "general-purpose"
+            agent with a narrow, focused prompt. This is the
+            orchestrator pattern; do NOT review the PR directly.
+            Do NOT set a commit status check (Finalize handles that).
             Do NOT proceed to auto-fix — that is a separate workflow step.
           claude_args: |
             --model claude-opus-4-6
-            --allowedTools "Read,Glob,Grep,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh label:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(cat:*),Bash(jq:*)"
+            --allowedTools "Task,Read,Glob,Grep,Write,Bash(mkdir:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh label:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(cat:*),Bash(jq:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
@@ -612,12 +662,191 @@ jobs:
           # heading and summary for consistent messaging across UI.
           SDK_REVIEW_VERB: ${{ steps.ack.outputs.verb }}
 
+      # Adversarial review (Wave 2 — GPT-5.3-codex via LiteLLM).
+      # Second cross-model opinion. Posts a separate comment with
+      # SDK_REVIEW_V2_ADVERSARIAL marker. Runs BEFORE verdict parsing
+      # so Reconcile (next step) can fold Codex's disagreements back
+      # into the Opus SDK_REVIEW_V2 comment, and Parse verdict reads
+      # the reconciled version.
+      - name: Adversarial review (GPT-5.3-codex)
+        id: adversarial
+        if: |
+          steps.pr.outputs.mode != 'override' &&
+          steps.pr.outputs.mode != 'challenge'
+        continue-on-error: true
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --jq '[.[] | select(.body | contains("SDK_REVIEW_V2")
+              and (.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
+              and (.body | contains("SDK_REVIEW_V2_RECONCILED") | not))] | last | .body // ""')
+
+          if [ -z "$CLAUDE_REVIEW" ]; then
+            echo "No SDK_REVIEW_V2 comment found — skipping adversarial pass."
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          DIFF=$(gh pr diff "$PR_NUMBER" 2>/dev/null | head -c 40000)
+
+          if [ -z "$DIFF" ]; then
+            echo "Empty diff — skipping adversarial pass."
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          REQUEST_BODY=$(jq -n \
+            --arg diff "$DIFF" \
+            --arg claude "$CLAUDE_REVIEW" \
+            '{
+              model: "gpt-5.3-codex",
+              messages: [
+                {
+                  role: "system",
+                  content: "You are a senior Python engineer doing adversarial re-review. Another reviewer (Claude Opus) reviewed this PR. Output JSON ONLY — no prose. Fields: missed (array of findings the other review missed), false_positives (array of findings you think are wrong), severity_changes (array of {file,line,from,to,reason}). Each finding: {severity, tag, file, line, description}. If no disagreements, all arrays empty."
+                },
+                {
+                  role: "user",
+                  content: ("## PR diff\n```\n" + $diff + "\n```\n\n## Opus review\n" + $claude + "\n\nReturn STRICT JSON matching the schema described in the system prompt. No markdown, no prose outside the JSON.")
+                }
+              ],
+              temperature: 0.2,
+              max_tokens: 4000,
+              response_format: {type: "json_object"}
+            }')
+
+          echo "Calling GPT-5.3-codex..."
+          RESPONSE=$(curl -sS -X POST "https://llmproxy.atlan.dev/v1/chat/completions" \
+            -H "Authorization: Bearer $LITELLM_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$REQUEST_BODY" 2>&1)
+
+          CODEX_JSON=$(printf '%s' "$RESPONSE" | jq -r '.choices[0].message.content // ""')
+
+          if [ -z "$CODEX_JSON" ]; then
+            ERR=$(printf '%s' "$RESPONSE" | jq -r '.error.message // "unknown"')
+            echo "::warning::Codex returned no content: $ERR"
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Save JSON to disk for the Reconcile step
+          printf '%s' "$CODEX_JSON" > /tmp/codex_disagreements.json
+
+          # Post an informational comment so humans see the raw Codex output
+          HUMAN_SUMMARY=$(printf '%s' "$CODEX_JSON" | jq -r '
+            def list(name; arr): if (arr|length) > 0 then
+              "### " + name + "\n" + (arr | map("- [\(.tag // "?")] `\(.file // "?"):\(.line // "?")` — \(.description // "")") | join("\n")) + "\n"
+            else "### " + name + "\nNone\n" end;
+            list("What was missed"; .missed // []) +
+            list("False positives"; .false_positives // []) +
+            (if (.severity_changes // [] | length) > 0 then
+               "### Severity disagreements\n" +
+               ((.severity_changes // []) | map("- `\(.file):\(.line)` — was \(.from), should be \(.to) — \(.reason)") | join("\n"))
+             else "### Severity disagreements\nNone" end)' 2>/dev/null || echo "Codex output malformed.")
+
+          BODY=$(printf '%s\n' \
+            "<!-- SDK_REVIEW_V2_ADVERSARIAL -->" \
+            "## 🤖 Adversarial review (GPT-5.3-codex)" \
+            "" \
+            "> Cross-model second opinion. These disagreements feed into the reconciled Opus review above." \
+            "" \
+            "${HUMAN_SUMMARY}" \
+            "" \
+            "---" \
+            "<sub>Reconciled with Opus's findings automatically — see the updated SDK Review comment.</sub>")
+
+          gh pr comment "$PR_NUMBER" --body "$BODY"
+          echo "ran=true" >> "$GITHUB_OUTPUT"
+
+      # Reconcile — fold Codex disagreements into the Opus SDK_REVIEW_V2
+      # comment. If Codex caught something Opus missed, add it. If
+      # Codex flagged a false positive, remove it. If severity differs,
+      # pick the median (more conservative).
+      #
+      # Runs a short Claude session that reads both the Opus review
+      # and the Codex JSON disagreements, edits the Opus comment in
+      # place (PATCH), re-evaluates the verdict on the reconciled set.
+      - name: Reconcile Opus + Codex findings
+        if: steps.adversarial.outputs.ran == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          show_full_output: true
+          prompt: |
+            You are reconciling two reviews on PR #${{ steps.pr.outputs.number }}
+            in repo ${{ github.repository }}.
+
+            1. Fetch the most recent SDK_REVIEW_V2 comment (NOT
+               _ADVERSARIAL, NOT _RECONCILED):
+               gh api "repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments" \
+                 --jq '[.[] | select(.body | contains("SDK_REVIEW_V2")
+                   and (.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
+                   and (.body | contains("SDK_REVIEW_V2_RECONCILED") | not))] | last'
+               Remember its `id` (comment id) and `body`.
+
+            2. Read /tmp/codex_disagreements.json (GPT-5.3-codex's
+               disagreements, JSON schema: missed, false_positives,
+               severity_changes).
+
+            3. Produce a reconciled SDK_REVIEW_V2 comment body:
+               - ADD each finding from Codex's `missed` array
+                 (if not already in the Opus review).
+               - REMOVE each finding from Codex's `false_positives`
+                 array (match by file+line+description similarity).
+                 Only remove if Codex's reasoning is strong.
+               - ADJUST severity per `severity_changes` — but apply a
+                 CONSERVATIVE rule: use the HIGHER of {Opus, Codex}
+                 severity when they disagree (never silently downgrade
+                 a Critical).
+               - Re-evaluate verdict with the reconciled findings
+                 using the standard rules (Critical [SEC] → BLOCKED,
+                 3+ Important or 5+ Minor → NEEDS_FIXES, etc.).
+               - Add a new section "### Cross-model reconciliation"
+                 BEFORE the Findings list that summarizes what was
+                 added/removed/adjusted. Example:
+                   - Added 1 missed finding (SEC at api/foo.py:42)
+                   - Removed 0 false positives
+                   - Adjusted 1 severity (bar.py:10: Minor → Important)
+               - Keep the SDK_REVIEW_V2 marker. Replace it with both
+                 markers stacked:
+                   <!-- SDK_REVIEW_V2 -->
+                   <!-- SDK_REVIEW_V2_RECONCILED -->
+
+            4. Edit the Opus comment in place:
+               gh api -X PATCH \
+                 "repos/${{ github.repository }}/issues/comments/<comment_id>" \
+                 -f body="<reconciled body>"
+
+            5. Output VERDICT:<new verdict> as the LAST LINE.
+
+            If /tmp/codex_disagreements.json is missing or Codex had
+            no disagreements (all arrays empty), skip everything and
+            output VERDICT:UNCHANGED.
+          claude_args: |
+            --model claude-opus-4-6
+            --allowedTools "Read,Bash(gh api:*),Bash(cat:*),Bash(jq:*)"
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+          GH_TOKEN: ${{ github.token }}
+
       # Parse verdict by reading the SDK_REVIEW_V2 comment Claude posted.
       # The action output 'result' isn't reliably exposed by
       # anthropics/claude-code-action@v1 — it resolved to empty string
       # in testing, causing the pipeline to always fall through to
       # NEEDS_FIXES and skip Finalize. Fetching the comment we just
       # posted gives a stable, authoritative source for the verdict.
+      #
+      # Note: this runs AFTER Adversarial + Reconcile, so the comment
+      # we read is the RECONCILED version (if Reconcile ran).
       - name: Parse verdict
         id: verdict
         env:
@@ -650,104 +879,6 @@ jobs:
 
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
           echo "Review verdict: $VERDICT"
-
-      # Adversarial review (Wave 2 — GPT-5.3-codex via LiteLLM).
-      # Second-opinion cross-model check on Claude Opus's review.
-      # Asks Codex: "what did Claude miss, what are false positives,
-      # what severities are wrong?" — posts a separate comment with a
-      # distinct SDK_REVIEW_V2_ADVERSARIAL marker.
-      #
-      # Informational only — does NOT change the verdict, doesn't
-      # re-post inline comments. The Opus review remains authoritative
-      # for the sdk-review status check.
-      #
-      # Skipped for override/challenge modes (they have their own
-      # flows) and when there's no review comment to adversarially
-      # re-examine.
-      - name: Adversarial review (GPT-5.3-codex)
-        if: |
-          steps.pr.outputs.mode != 'override' &&
-          steps.pr.outputs.mode != 'challenge' &&
-          steps.verdict.outputs.verdict != ''
-        continue-on-error: true
-        env:
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
-          VERDICT: ${{ steps.verdict.outputs.verdict }}
-        run: |
-          # Fetch the most recent SDK_REVIEW_V2 comment (what Claude just posted)
-          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --jq '[.[] | select(.body | contains("SDK_REVIEW_V2")
-              and (.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not))] | last | .body // ""')
-
-          if [ -z "$CLAUDE_REVIEW" ]; then
-            echo "No SDK_REVIEW_V2 comment found — skipping adversarial pass."
-            exit 0
-          fi
-
-          # Fetch diff — truncate to 40KB to stay well under context limits
-          DIFF=$(gh pr diff "$PR_NUMBER" 2>/dev/null | head -c 40000)
-
-          if [ -z "$DIFF" ]; then
-            echo "PR diff is empty — skipping adversarial pass."
-            exit 0
-          fi
-
-          # Build JSON request safely (jq handles all escaping)
-          REQUEST_BODY=$(jq -n \
-            --arg diff "$DIFF" \
-            --arg claude "$CLAUDE_REVIEW" \
-            --arg verdict "$VERDICT" \
-            '{
-              model: "gpt-5.3-codex",
-              messages: [
-                {
-                  role: "system",
-                  content: "You are a senior Python engineer doing an adversarial re-review. Another reviewer (Claude Opus) just reviewed this PR on atlanhq/application-sdk. Your job: find what they missed, call out false positives in their findings, flag severity mismatches. Be terse. No preamble. No flattery."
-                },
-                {
-                  role: "user",
-                  content: ("## Verdict the other reviewer arrived at: " + $verdict + "\n\n## PR diff (may be truncated)\n\n```\n" + $diff + "\n```\n\n## The other reviewer\u0027s full comment\n\n" + $claude + "\n\n## Output format (use exactly these sections)\n\n### What was missed\n- [TAG] file:line — description — why it matters\n(write \"None\" if nothing was missed)\n\n### False positives in the other review\n- [TAG] file:line — their claim: \"<quote>\" — why it is wrong\n(write \"None\" if no false positives)\n\n### Severity disagreements\n- file:line — they said <level>, should be <level> because <reason>\n(write \"None\" if severities are correct)\n\n### Summary (1 line)\n- Whether the review is sufficient, or needs more work.\n\nIf you fully agree with the review, write exactly: \"Agreed with the Opus review. No disagreements.\" and nothing else.")
-                }
-              ],
-              temperature: 0.3,
-              max_tokens: 2000
-            }')
-
-          echo "Calling GPT-5.3-codex via LiteLLM..."
-          RESPONSE=$(curl -sS -X POST "https://llmproxy.atlan.dev/v1/chat/completions" \
-            -H "Authorization: Bearer $LITELLM_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "$REQUEST_BODY" 2>&1)
-
-          # Extract message content; if request failed, show err info
-          CODEX_ANSWER=$(printf '%s' "$RESPONSE" | jq -r '.choices[0].message.content // ""' 2>/dev/null)
-
-          if [ -z "$CODEX_ANSWER" ]; then
-            ERR=$(printf '%s' "$RESPONSE" | jq -r '.error.message // ""' 2>/dev/null || echo "")
-            echo "::warning::GPT-5.3-codex returned no content. Error: ${ERR:-unknown} (raw response truncated)"
-            exit 0
-          fi
-
-          # Post as a distinct comment with its own marker
-          BODY=$(printf '%s\n' \
-            "<!-- SDK_REVIEW_V2_ADVERSARIAL -->" \
-            "## 🤖 Adversarial review (GPT-5.3-codex)" \
-            "" \
-            "> Cross-model second opinion on the Opus review above. Flags" \
-            "> what the primary reviewer may have missed, false positives," \
-            "> and severity disagreements." \
-            "" \
-            "${CODEX_ANSWER}" \
-            "" \
-            "---" \
-            "<sub>Adversarial review is informational. It does NOT change the verdict or approve/block the PR. The Opus review above is authoritative for the \`sdk-review\` status check.</sub>")
-
-          gh pr comment "$PR_NUMBER" --body "$BODY"
-          echo "Posted adversarial review comment."
 
       # Fix session (Session B — only if auto-fix mode and not clean)
       - name: SDK Fix (Session B — Auto-Fix)
