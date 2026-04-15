@@ -787,7 +787,7 @@ jobs:
             echo "is_bot=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Reset sdk-review status + labels (author commits only)
+      - name: Reset sdk-review status + labels + dismiss bot approval (author commits only)
         if: steps.check.outputs.is_bot == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -808,6 +808,18 @@ jobs:
           # Remove approved and auto-maintained labels
           gh pr edit "$PR_NUMBER" --remove-label "sdk-review-approved" 2>/dev/null || true
           gh pr edit "$PR_NUMBER" --remove-label "sdk-review-auto-maintained" 2>/dev/null || true
+
+          # Dismiss the bot's prior APPROVED review. Removing the label
+          # isn't enough — the formal PR review stays green unless
+          # explicitly dismissed via the Reviews API. We only dismiss
+          # reviews authored by github-actions[bot] — never a human's.
+          BOT_REVIEW_IDS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]" and .state == "APPROVED")] | .[].id' 2>/dev/null || echo "")
+          for review_id in $BOT_REVIEW_IDS; do
+            gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
+              -X PUT \
+              -f message="New commits detected — SDK Review approval dismissed. Comment @sdk-review to re-approve." 2>/dev/null || true
+          done
 
           # Only post a comment if the PR was previously approved.
           # This avoids noise on every push to non-approved PRs.
