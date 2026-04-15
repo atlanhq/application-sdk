@@ -35,14 +35,17 @@ Resolution is a three-step process:
    ``extra`` when ``extra`` is a nested dict.  Literal keys
    (``host``, ``port``, ``aws-region`` and friends) are never treated
    as ref-keys.
-3. **Expand dotted keys** into nested dicts so the returned shape drops
-   straight into
-   :func:`~application_sdk.common.utils.parse_credentials_extra` and
-   the SQL client's ``load(credentials)`` entry point — e.g.
+3. **Expand dotted keys** into nested dicts — e.g.
    ``{"extra.database": "db"}`` becomes ``{"extra": {"database": "db"}}``.
+   This undoes the flattening the Argo template does when serialising
+   YAML ``--parameter`` values. The output is a flat ``dict[str, Any]``
+   with any dotted roots (``extra``, ``basic``, …) nested into
+   sub-dicts.
 
-The output is a flat ``dict[str, Any]`` with any ``extra`` field nested
-exactly as v2's resolved credentials looked at the client boundary.
+The returned shape is **client-agnostic**: it is the same flat-dict
+convention v2's resolved credentials produced at the client boundary,
+consumable by any SQL, REST, NoSQL, or cloud-storage client whose
+``load()`` entry point takes ``dict[str, Any]``.
 """
 
 from __future__ import annotations
@@ -100,11 +103,9 @@ async def resolve_agent_json(
     Returns:
         A flat ``dict[str, Any]`` with all ref-keys substituted for
         their real values and dotted root keys (``extra.database``,
-        ``basic.username``) collapsed into nested dicts.  The shape
-        matches what the v3 SQL client's ``load(credentials)`` entry
-        point and
-        :func:`~application_sdk.common.utils.parse_credentials_extra`
-        expect.
+        ``basic.username``) collapsed into nested dicts. The shape is
+        client-agnostic — any connector that consumes a credentials
+        dict (SQL, REST, NoSQL, cloud storage) reads from it directly.
 
     Raises:
         CredentialParseError: If ``agent_json`` isn't valid JSON, is

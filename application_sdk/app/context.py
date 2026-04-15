@@ -389,15 +389,20 @@ class AppContext:
         Routes on the shape of ``workflow_args`` emitted by the Atlan
         Argo marketplace template:
 
-        * ``agent_json`` non-empty → inline agent-shape resolution via
+        * ``extraction_method == "agent"`` **and** ``agent_json`` is a
+          non-empty JSON object → inline agent-shape resolution via
           :func:`application_sdk.credentials.agent.resolve_agent_json`.
-          The returned dict has any ``extra`` field nested and is ready
-          to hand to a SQL client's ``load()`` entry point.
+          Both conditions must hold — an upstream bug that populates
+          ``agent_json`` under a non-agent extraction_method is not
+          silently accepted. The returned dict is client-agnostic: flat
+          top-level keys plus nested dicts for any dotted roots (e.g.
+          ``extra``, ``basic``). Works for SQL, REST, NoSQL, cloud
+          storage, or any other client whose ``load()`` takes a dict.
         * ``credential_guid`` non-empty → legacy v2 resolution path via
           :class:`~application_sdk.credentials.resolver.CredentialResolver`.
-          Preserves backward compatibility for direct-extraction runs
-          and in-process inline credentials stored by the handler layer.
-        * Neither present → :class:`ValueError`.
+          Covers direct-extraction runs and in-process inline
+          credentials stored by the handler layer.
+        * Neither route applies → :class:`ValueError`.
 
         This is the one call every v3 connector activity needs; the
         routing is centralised here so individual apps don't
@@ -405,18 +410,18 @@ class AppContext:
 
         Args:
             workflow_args: The Temporal workflow input dict. Expected
-                to contain ``agent_json`` (JSON string) or
-                ``credential_guid`` (string) — empty strings are
-                treated as absent.
+                to contain ``extraction_method``, ``agent_json`` (JSON
+                string), and/or ``credential_guid`` (string). Missing or
+                empty strings are treated as absent.
 
         Returns:
             A flat ``dict[str, Any]`` with ref-keys substituted and
-            dotted keys expanded into nested dicts.
+            dotted keys expanded into nested dicts — consumable by any
+            client that takes a credentials dict.
 
         Raises:
             RuntimeError: If no secret store is configured.
-            ValueError: If neither ``agent_json`` nor
-                ``credential_guid`` is present.
+            ValueError: If no routable credential source is available.
             CredentialParseError: If ``agent_json`` is malformed.
             CredentialNotFoundError: If the secret bundle or
                 credential GUID cannot be located.
@@ -424,8 +429,16 @@ class AppContext:
         if self._secret_store is None:
             raise RuntimeError("No secret store configured")
 
+        extraction_method = (
+            (workflow_args.get("extraction_method") or "").strip().lower()
+        )
         agent_json = workflow_args.get("agent_json") or ""
-        if agent_json and agent_json.strip() not in ("", "{}"):
+        agent_json_present = bool(agent_json) and agent_json.strip() not in ("", "{}")
+
+        # Strict gate: agent path only fires when BOTH signals agree.
+        # An upstream bug that populates agent_json under a non-agent
+        # extraction_method falls through instead of being silently honoured.
+        if extraction_method == "agent" and agent_json_present:
             from application_sdk.credentials.agent import resolve_agent_json
 
             return await resolve_agent_json(agent_json, self._secret_store)
@@ -444,8 +457,9 @@ class AppContext:
             return await resolver.resolve_raw(ref)
 
         raise ValueError(
-            "workflow_args has no credential source: need 'agent_json' "
-            "(non-empty JSON) or 'credential_guid' (non-empty string)"
+            "workflow_args has no credential source: need either "
+            "extraction_method='agent' with a non-empty agent_json, "
+            "or a non-empty credential_guid"
         )
 
     def log_error(self, message: str, **kwargs: Any) -> None:

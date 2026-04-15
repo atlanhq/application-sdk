@@ -398,11 +398,17 @@ class TestResolveWorkflowCredentialsRouting:
         return ctx
 
     @pytest.mark.asyncio
-    async def test_agent_json_takes_precedence(self) -> None:
+    async def test_agent_path_fires_when_method_and_json_both_present(
+        self,
+    ) -> None:
+        """Happy path: ``extraction_method == 'agent'`` AND a non-empty
+        ``agent_json`` both present → agent resolution fires.
+        """
         store = _store_with(**{"atlan/dev/cloudsql": _bundle(username="real_user")})
         ctx = self._make_context(store)
 
         workflow_args = {
+            "extraction_method": "agent",
             "agent_json": json.dumps(
                 {
                     "secret-path": "atlan/dev/cloudsql",
@@ -416,19 +422,78 @@ class TestResolveWorkflowCredentialsRouting:
         assert resolved["basic"]["username"] == "real_user"
 
     @pytest.mark.asyncio
-    async def test_empty_agent_json_falls_through_to_guid(self) -> None:
-        """When ``agent_json`` is empty or ``"{}"``, fall through to the
-        legacy GUID path.
+    async def test_agent_method_mixed_case_is_normalised(self) -> None:
+        """``extraction_method`` is case-insensitive — ``"AGENT"``,
+        ``"Agent"``, ``" agent "`` all count.
+        """
+        store = _store_with(**{"p": _bundle(username="real_user")})
+        ctx = self._make_context(store)
+
+        for method in ("AGENT", "Agent", " agent "):
+            resolved = await ctx.resolve_workflow_credentials(
+                {
+                    "extraction_method": method,
+                    "agent_json": json.dumps(
+                        {"secret-path": "p", "basic.username": "username"}
+                    ),
+                }
+            )
+            assert resolved["basic"]["username"] == "real_user"
+
+    @pytest.mark.asyncio
+    async def test_agent_json_without_method_falls_through_to_guid(self) -> None:
+        """Strict gate: a populated ``agent_json`` WITHOUT
+        ``extraction_method == "agent"`` is NOT treated as an agent
+        run. Falls through to the legacy GUID path instead.
         """
         store = _store_with(**{"my-guid-123": _bundle(username="real_user", host="h")})
         ctx = self._make_context(store)
 
         workflow_args = {
-            "agent_json": "{}",
+            # No extraction_method set.
+            "agent_json": json.dumps(
+                {"secret-path": "whatever", "basic.username": "u"}
+            ),
             "credential_guid": "my-guid-123",
         }
         resolved = await ctx.resolve_workflow_credentials(workflow_args)
-        # Legacy path returns the bundle contents verbatim.
+        # Legacy GUID path returns bundle verbatim — proves agent path
+        # was skipped despite populated agent_json.
+        assert resolved == {"username": "real_user", "host": "h"}
+
+    @pytest.mark.asyncio
+    async def test_agent_method_with_empty_json_falls_through_to_guid(
+        self,
+    ) -> None:
+        """Strict gate: ``extraction_method == "agent"`` WITHOUT a
+        non-empty ``agent_json`` is NOT the agent path. Falls through.
+        """
+        store = _store_with(**{"my-guid-123": _bundle(username="real_user", host="h")})
+        ctx = self._make_context(store)
+
+        workflow_args = {
+            "extraction_method": "agent",
+            "agent_json": "{}",  # Placeholder — doesn't qualify.
+            "credential_guid": "my-guid-123",
+        }
+        resolved = await ctx.resolve_workflow_credentials(workflow_args)
+        assert resolved == {"username": "real_user", "host": "h"}
+
+    @pytest.mark.asyncio
+    async def test_direct_method_with_guid(self) -> None:
+        """``extraction_method == "direct"`` with a credential_guid uses
+        the legacy GUID path.
+        """
+        store = _store_with(**{"my-guid-123": _bundle(username="real_user", host="h")})
+        ctx = self._make_context(store)
+
+        resolved = await ctx.resolve_workflow_credentials(
+            {
+                "extraction_method": "direct",
+                "agent_json": "{}",
+                "credential_guid": "my-guid-123",
+            }
+        )
         assert resolved == {"username": "real_user", "host": "h"}
 
     @pytest.mark.asyncio
@@ -438,7 +503,11 @@ class TestResolveWorkflowCredentialsRouting:
 
         with pytest.raises(ValueError, match="no credential source"):
             await ctx.resolve_workflow_credentials(
-                {"agent_json": "", "credential_guid": ""}
+                {
+                    "extraction_method": "direct",
+                    "agent_json": "",
+                    "credential_guid": "",
+                }
             )
 
     @pytest.mark.asyncio
@@ -462,17 +531,27 @@ class TestResolveWorkflowCredentialsRouting:
         # _secret_store stays None
         with pytest.raises(RuntimeError, match="No secret store"):
             await ctx.resolve_workflow_credentials(
-                {"agent_json": json.dumps({"secret-path": "p"})}
+                {
+                    "extraction_method": "agent",
+                    "agent_json": json.dumps({"secret-path": "p"}),
+                }
             )
 
     @pytest.mark.asyncio
-    async def test_whitespace_only_agent_json_is_treated_as_absent(self) -> None:
+    async def test_whitespace_only_agent_json_with_method_falls_through(
+        self,
+    ) -> None:
+        """Whitespace-only ``agent_json`` is treated as absent even
+        under ``extraction_method == "agent"``.
+        """
         store = _store_with(**{"my-guid-123": _bundle(username="real_user")})
         ctx = self._make_context(store)
 
-        workflow_args = {
-            "agent_json": "   ",
-            "credential_guid": "my-guid-123",
-        }
-        resolved = await ctx.resolve_workflow_credentials(workflow_args)
+        resolved = await ctx.resolve_workflow_credentials(
+            {
+                "extraction_method": "agent",
+                "agent_json": "   ",
+                "credential_guid": "my-guid-123",
+            }
+        )
         assert resolved["username"] == "real_user"
