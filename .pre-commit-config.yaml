@@ -31,7 +31,7 @@ repos:
         name: Sync requirements.txt with uv.lock
         entry: bash -c 'uv export --no-hashes --frozen > requirements.txt && git add requirements.txt'
         language: system
-        files: ^uv\.lock$
+        files: ^(uv\.lock|requirements\.txt)$
         pass_filenames: false
   - repo: https://github.com/RobertCraigie/pyright-python
     rev: v1.1.393

@@ -9,6 +9,7 @@ from pathlib import Path
 import yaml
 from fastapi.testclient import TestClient
 
+from application_sdk.contracts.base import Input, Output
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -83,6 +84,23 @@ class _FailingHandler(Handler):
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         raise HandlerError("metadata failed")
+
+
+# ---------------------------------------------------------------------------
+# Module-level contract types for routing tests
+# (locally-defined dataclasses fail get_type_hints() when
+#  'from __future__ import annotations' is active)
+# ---------------------------------------------------------------------------
+
+
+# Plain Pydantic subclasses — @dataclass would generate a conflicting __init__
+# that breaks Pydantic's __pydantic_fields_set__ initialisation.
+class _RoutingInput(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    name: str = ""
+
+
+class _RoutingOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    result: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +377,173 @@ class TestStartWorkflowEndpoint:
         finally:
             AppRegistry.reset()
             TaskRegistry.reset()
+
+
+class TestErrorInfoDisclosure:
+    """Regression: error responses must not leak internal exception details.
+
+    The security fix removed exception interpolation from 4 HTTP error
+    handlers. These tests verify the generic messages are returned.
+    """
+
+    def test_start_workflow_type_error_returns_generic_message(self) -> None:
+        """TypeError handler on /start must not leak internal type info."""
+        # Send invalid JSON that triggers a TypeError in workflow start
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/start",
+            json={"deliberately": "wrong_shape"},
+        )
+        # May return 400 (TypeError) or 503 (not configured) depending on setup
+        # Either way, response body must not contain Python exception details
+        body_str = str(response.json())
+        assert "Traceback" not in body_str
+        assert "TypeError" not in body_str
+
+    def test_handler_error_500_does_not_leak_exception(self) -> None:
+        """Handler endpoint errors should return generic messages."""
+        client = _make_client(handler=_FailingHandler())
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 500
+        body_str = str(response.json())
+        assert "Traceback" not in body_str
+        assert "File " not in body_str
+
+
+class TestStartWorkflowRouting:
+    """Tests for /workflows/v1/start entry-point routing logic."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _make_routed_client(self, app_cls: type, *, patch_temporal: bool = True):  # type: ignore[return]
+        """Create a TestClient wired to app_cls with Temporal mocked out."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        handler = _TestHandler()
+        svc = create_app_handler_service(
+            handler,
+            app_name="routing-test",
+            app_class=app_cls,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-123"
+        mock_handle.result_run_id = "run-abc"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        client = TestClient(svc, raise_server_exceptions=False)
+        return client, patcher
+
+    def test_single_ep_no_workflow_type_auto_selects(self) -> None:
+        """Single-entry-point app accepts request with no workflow_type."""
+        # Use module-level types — locally-defined dataclasses can't be resolved
+        # by get_type_hints() because 'from __future__ import annotations' is active.
+        from application_sdk.app.base import App
+
+        class _SingleEpApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher = self._make_routed_client(_SingleEpApp)
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "hello"})
+            assert response.status_code == 200
+        finally:
+            patcher.stop()
+
+    def test_multi_ep_valid_workflow_type_routes_correctly(self) -> None:
+        """Multi-entry-point app with a valid workflow_type returns 200."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher = self._make_routed_client(_MultiEpApp)
+        try:
+            response = client.post(
+                "/workflows/v1/start",
+                json={"workflow_type": "extract", "name": "x"},
+            )
+            assert response.status_code == 200
+        finally:
+            patcher.stop()
+
+    def test_unknown_workflow_type_returns_400(self) -> None:
+        """Providing an unrecognised workflow_type returns 400 without leaking entry point names."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _TwoEpApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher = self._make_routed_client(_TwoEpApp)
+        try:
+            response = client.post(
+                "/workflows/v1/start",
+                json={"workflow_type": "does-not-exist", "name": "x"},
+            )
+            assert response.status_code == 400
+            detail = response.json().get("detail", "")
+            # Entry point names must NOT be exposed to clients
+            assert "extract" not in detail
+            assert "load" not in detail
+        finally:
+            patcher.stop()
+
+    def test_multi_ep_missing_workflow_type_returns_400(self) -> None:
+        """Multi-entry-point app without workflow_type returns 400."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _AnotherMultiEpApp(App):
+            @entrypoint
+            async def step_a(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def step_b(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher = self._make_routed_client(_AnotherMultiEpApp)
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            assert response.status_code == 400
+            detail = response.json().get("detail", "")
+            assert "step-a" not in detail
+            assert "step-b" not in detail
+        finally:
+            patcher.stop()
 
 
 class TestWrapResponse:

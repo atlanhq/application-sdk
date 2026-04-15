@@ -700,16 +700,61 @@ def create_app_handler_service(
 
         body: dict[str, Any] = await request.json()
         explicit_workflow_id: str | None = body.pop("workflow_id", None)
+        workflow_type: str | None = body.pop("workflow_type", None)
         workflow_id = explicit_workflow_id or "(unknown)"
 
         try:
             client = await _get_temporal_client()
 
-            input_type = getattr(app_cls, "_input_type", None)
+            # Resolve entry point and workflow name from workflow_type.
+            # Deferred to avoid a circular import at module load time.
+            from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
+
+            app_meta = AppRegistry.get_instance().get(app_cls._app_name)  # type: ignore[attr-defined]
+            entry_points = app_meta.entry_points
+
+            if workflow_type:
+                if workflow_type not in entry_points:
+                    logger.warning(
+                        "Unknown workflow_type '%s' for app %s; available: %s",
+                        workflow_type,
+                        app_name,
+                        sorted(entry_points.keys()),
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid workflow_type.",
+                    )
+                ep = entry_points[workflow_type]
+            elif len(entry_points) == 1:
+                ep = next(iter(entry_points.values()))
+            elif len(entry_points) > 1:
+                logger.warning(
+                    "workflow_type required but not provided for multi-entry-point app %s; available: %s",
+                    app_name,
+                    sorted(entry_points.keys()),
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="workflow_type is required for this app.",
+                )
+            else:
+                # Fallback: no entry_points (shouldn't happen for a registered app)
+                raise HTTPException(
+                    status_code=500, detail="App has no registered entry points."
+                )
+
+            input_type = ep.input_type
+            workflow_name = (
+                app_cls._app_name  # type: ignore[attr-defined]
+                if ep.implicit
+                else f"{app_cls._app_name}:{ep.name}"  # type: ignore[attr-defined]
+            )
+
             if input_type is None:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"App class {app_cls.__name__} does not define _input_type.",
+                    detail=f"App class {app_cls.__name__} entry point has no input type.",
                 )
 
             # Save inline credentials to the secret store and replace with a
@@ -779,7 +824,7 @@ def create_app_handler_service(
             )
 
             handle = await client.start_workflow(
-                app_cls._app_name,  # type: ignore[attr-defined]
+                workflow_name,
                 args=[input_data],
                 id=workflow_id,
                 task_queue=_workflow_config.task_queue,
@@ -817,11 +862,13 @@ def create_app_handler_service(
                 }
             )
 
+        except HTTPException:
+            raise
         except TypeError as e:
             logger.error(
                 "Invalid workflow input for app %s: %s", app_name, e, exc_info=True
             )
-            raise HTTPException(status_code=400, detail=f"Invalid input: {e}") from None
+            raise HTTPException(status_code=400, detail="Invalid input") from None
         except Exception as e:
             logger.error(
                 "Failed to start workflow %s for app %s: %s",
@@ -831,7 +878,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Failed to start workflow: {e}"
+                status_code=500, detail="Failed to start workflow"
             ) from None
 
     @app.post("/workflows/v1/stop/{workflow_id}/{run_id:path}")

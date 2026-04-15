@@ -135,14 +135,14 @@ Runs a 4-phase incremental extraction:
 ```python
 from application_sdk.templates import IncrementalSqlMetadataExtractor
 from application_sdk.templates.contracts.incremental_sql import (
-    FetchColumnsInput, FetchColumnsOutput,
+    FetchColumnsIncrementalInput, FetchColumnsOutput,
 )
 from application_sdk.app import task
 
 class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
     @task(timeout_seconds=1800)
     async def fetch_columns(
-        self, input: FetchColumnsInput
+        self, input: FetchColumnsIncrementalInput
     ) -> FetchColumnsOutput: ...
 ```
 
@@ -163,8 +163,8 @@ class MyConnector(App):
     async def on_complete(self, success: bool) -> None:
         if success:
             await self.notify_downstream()
-        await self.cleanup_files()     # remove local temp files tracked via FileReference
-        await self.cleanup_storage()   # remove transient object store artifacts
+        await self.cleanup_files(CleanupInput())     # remove local temp files tracked via FileReference
+        await self.cleanup_storage(StorageCleanupInput())   # remove transient object store artifacts
 ```
 
 ### Built-in Cleanup Tasks

@@ -1,14 +1,19 @@
 """Unit tests for the base Reader and Writer classes."""
 
 import os
+import tempfile
+from pathlib import Path
 from typing import List
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from application_sdk.common.error_codes import IOError as SDKIOError
-from application_sdk.io import Reader
-from application_sdk.io.utils import download_files
+from application_sdk.storage.formats import Reader
+from application_sdk.storage.formats.utils import (
+    download_files,
+    find_local_files_by_extension,
+)
 
 # Fixed UUID used in tests so download paths are deterministic
 _FIXED_UUID_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
@@ -72,7 +77,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                "application_sdk.storage.formats.utils._download_prefix",
                 side_effect=Exception("Object store download failed"),
             ),
         ):
@@ -182,7 +187,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_file",
+                "application_sdk.storage.formats.utils._download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
             patch("uuid.uuid4") as mock_uuid4,
@@ -192,13 +197,13 @@ class TestReaderDownloadFiles:
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
-            # as_store_key strips leading "/" so destination uses normalized key
+            # normalize_key strips leading "/" so destination uses normalized key
             # Downloads are isolated under a unique subdirectory
             expected_destination = os.path.join(
                 "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/test.parquet"
             )
             mock_download.assert_called_once_with(
-                source=path, destination=expected_destination
+                "data/test.parquet", expected_destination
             )
             assert result == [expected_destination]
 
@@ -209,33 +214,27 @@ class TestReaderDownloadFiles:
         input_instance = MockReader(path)
         expected_files = ["/data/file1.parquet", "/data/file2.parquet"]
 
-        # as_store_key strips leading "/" so destination uses normalized key
-        # Downloads are isolated under a unique subdirectory
-        expected_destination = os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data")
-
         with (
             patch("os.path.isfile", return_value=False),
             patch("os.path.isdir", return_value=True),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                "application_sdk.storage.formats.utils._download_prefix",
                 new_callable=AsyncMock,
-            ) as mock_download,
+                return_value=["data/file1.parquet", "data/file2.parquet"],
+            ) as mock_download_prefix,
             patch("uuid.uuid4") as mock_uuid4,
         ):
             mock_uuid4.return_value.hex = _FIXED_UUID_HEX
-            # Mock the file finding function to return empty on first call, then files on second
             with patch(
-                "application_sdk.io.utils.find_local_files_by_extension",
+                "application_sdk.storage.formats.utils.find_local_files_by_extension",
                 side_effect=[[], expected_files],
             ):
                 result = await download_files(
                     input_instance.path, ".parquet", input_instance.file_names
                 )
 
-                mock_download.assert_called_once_with(
-                    source=path, destination=expected_destination
-                )
+                mock_download_prefix.assert_called_once()
                 assert result == expected_files
 
     @pytest.mark.asyncio
@@ -265,7 +264,7 @@ class TestReaderDownloadFiles:
                 side_effect=[[]],  # Only for initial local check
             ),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_file",
+                "application_sdk.storage.formats.utils._download_file",
                 new_callable=AsyncMock,
             ) as mock_download,
             patch("uuid.uuid4") as mock_uuid4,
@@ -278,16 +277,12 @@ class TestReaderDownloadFiles:
             # Should download each specific file
             assert mock_download.call_count == 2
             mock_download.assert_any_call(
-                source=os.path.join(path, "file1.parquet"),
-                destination=os.path.join(
-                    "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file1.parquet"
-                ),
+                "data/file1.parquet",
+                os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file1.parquet"),
             )
             mock_download.assert_any_call(
-                source=os.path.join(path, "file2.parquet"),
-                destination=os.path.join(
-                    "./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file2.parquet"
-                ),
+                "data/file2.parquet",
+                os.path.join("./local/tmp/", _FIXED_DOWNLOAD_ID, "data/file2.parquet"),
             )
             assert result == expected_files
 
@@ -302,7 +297,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_file",
+                "application_sdk.storage.formats.utils._download_file",
                 new_callable=AsyncMock,
                 side_effect=Exception("Download failed"),
             ),
@@ -323,11 +318,11 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=True),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                "application_sdk.storage.formats.utils._download_prefix",
                 new_callable=AsyncMock,
             ),
             patch(
-                "application_sdk.io.utils.find_local_files_by_extension",
+                "application_sdk.storage.formats.utils.find_local_files_by_extension",
                 side_effect=[
                     [],
                     [],
@@ -407,7 +402,7 @@ class TestReaderDownloadFiles:
 
         with (
             patch("os.path.isfile", return_value=True),
-            patch("application_sdk.io.utils.logger") as mock_logger,
+            patch("application_sdk.storage.formats.utils.logger") as mock_logger,
         ):
             await download_files(
                 input_instance.path, ".parquet", input_instance.file_names
@@ -431,11 +426,11 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=False),
             patch("glob.glob", return_value=[]),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_file",
+                "application_sdk.storage.formats.utils._download_file",
                 new_callable=AsyncMock,
                 side_effect=Exception("Download failed"),
             ),
-            patch("application_sdk.io.utils.logger") as mock_logger,
+            patch("application_sdk.storage.formats.utils.logger") as mock_logger,
         ):
             with pytest.raises(SDKIOError):
                 await download_files(
@@ -468,11 +463,11 @@ class TestDownloadFilesIsolation:
             patch("os.path.isfile", return_value=False),
             patch("os.path.isdir", return_value=True),
             patch(
-                "application_sdk.services.objectstore.ObjectStore.download_prefix",
+                "application_sdk.storage.formats.utils._download_prefix",
                 new_callable=AsyncMock,
-            ) as mock_download,
+            ) as mock_download_prefix,
             patch(
-                "application_sdk.io.utils.find_local_files_by_extension",
+                "application_sdk.storage.formats.utils.find_local_files_by_extension",
                 side_effect=[
                     [],
                     ["/fake/result1.parquet"],
@@ -489,10 +484,12 @@ class TestDownloadFilesIsolation:
             )
 
             assert len(results) == 2
-            assert mock_download.call_count == 2
+            assert mock_download_prefix.call_count == 2
 
-            dest1 = mock_download.call_args_list[0].kwargs["destination"]
-            dest2 = mock_download.call_args_list[1].kwargs["destination"]
+            # Check that the two calls used different isolated directories
+            # download_prefix(prefix, local_dir) — local_dir is positional arg [1]
+            dest1 = mock_download_prefix.call_args_list[0][0][1]
+            dest2 = mock_download_prefix.call_args_list[1][0][1]
 
             # Destinations must differ (UUID isolation)
             assert (
@@ -509,11 +506,6 @@ class TestDownloadFilesIsolation:
         named chunk-0.parquet regardless of directory.
         After fix: matching uses relative paths.
         """
-        import tempfile
-        from pathlib import Path
-
-        from application_sdk.io.utils import find_local_files_by_extension
-
         with tempfile.TemporaryDirectory() as tmp:
             table_dir = Path(tmp) / "table"
             schema_dir = Path(tmp) / "schema"

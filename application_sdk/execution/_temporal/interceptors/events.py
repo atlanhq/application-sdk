@@ -5,8 +5,7 @@ the v3 infrastructure event binding. Falls back silently when no event
 binding is configured.
 """
 
-import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional, Type
 
 from temporalio import activity, workflow
@@ -107,7 +106,7 @@ def _enrich_event_metadata(event: Event) -> Event:
         event.metadata = EventMetadata()
 
     event.metadata.application_name = APPLICATION_NAME
-    event.metadata.created_timestamp = int(datetime.now().timestamp())
+    event.metadata.created_timestamp = int(datetime.now(tz=UTC).timestamp())
     event.metadata.topic_name = event.get_topic_name()
 
     try:
@@ -235,7 +234,9 @@ async def _publish_event_via_binding(event: Event) -> None:
     event = _enrich_event_metadata(event)
     _send_lifecycle_event_to_segment(event)
 
-    payload = json.dumps(event.model_dump(mode="json")).encode()
+    import orjson  # lazy import: avoid top-level for interceptor module load time
+
+    payload = orjson.dumps(event.model_dump(mode="json"))
     binding_metadata: dict[str, str] = {"content-type": "application/json"}
 
     try:

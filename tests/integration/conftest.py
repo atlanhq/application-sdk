@@ -86,6 +86,7 @@ def reregister_app():
             app_cls=app_cls,
             input_type=app_cls._input_type,
             output_type=app_cls._output_type,
+            entry_points=app_cls._app_metadata.entry_points,
             allow_override=True,
         )
         _register_tasks(app_cls, app_cls._app_name)
