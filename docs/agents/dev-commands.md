@@ -4,6 +4,8 @@
 - Task runner and common scripts live in `pyproject.toml` under `[tool.poe.tasks]`.
 - Docs build configuration is in `mkdocs.yml` (install with `uv sync --group docs`, then `uv run poe generate-apidocs`).
 - PR review automation: comment `@sdk-review` on any PR to trigger the review pipeline.
+  - `@sdk-review auto-complete` — review + fix loop until clean (max 3 iterations).
+  - `@sdk-review stop` — cancel an in-progress auto-complete run.
 
 ## Pre-commit Checks
 
