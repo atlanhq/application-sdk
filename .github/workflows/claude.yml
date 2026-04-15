@@ -594,23 +594,35 @@ jobs:
             exit 0
           fi
 
-          # Compose context-aware approve message:
-          # - "Re-review" if a prior SDK_REVIEW_V2 comment existed before
-          #   the one we just posted (i.e., this PR has been reviewed
-          #   before); otherwise "Review".
-          # - "findings resolved" when auto-complete ran fixes;
-          #   "no blocking issues" for a clean review-only pass.
+          # Compose context-aware approve message.
+          #
+          # Axis 1 — "Review" vs "Re-review":
+          #   Counts existing SDK_REVIEW_V2 comments on the PR.
+          #   More than one means this run is a re-review (the count
+          #   includes the one we just posted in this run).
+          #
+          # Axis 2 — outcome phrase:
+          #   First review, review-only:  "no blocking issues found"
+          #   First review, auto-complete: "findings resolved"
+          #   Re-review, review-only:     "no new issues introduced by the latest changes"
+          #   Re-review, auto-complete:   "previous findings resolved; no new issues introduced"
           PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR}/comments" \
             --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 1)
+
           if [ "${PRIOR_REVIEWS:-1}" -gt 1 ]; then
             VERB="Re-review"
+            if [ "$MODE" = "auto-fix" ]; then
+              OUTCOME="previous findings resolved; no new issues introduced by the latest changes"
+            else
+              OUTCOME="no new issues introduced by the latest changes"
+            fi
           else
             VERB="Review"
-          fi
-          if [ "$MODE" = "auto-fix" ]; then
-            OUTCOME="findings resolved"
-          else
-            OUTCOME="no blocking issues"
+            if [ "$MODE" = "auto-fix" ]; then
+              OUTCOME="findings resolved"
+            else
+              OUTCOME="no blocking issues found"
+            fi
           fi
 
           # Approve
