@@ -28,9 +28,13 @@ jobs:
   # resolution, and inline comment Q&A.
   #
   # Commands:
-  #   @sdk-review                          → Review only
-  #   @sdk-review please resolve all issues → Review + auto-fix loop
-  #   @sdk-review override: <reason>        → Admin force-pass
+  #   @sdk-review                     → Review only
+  #   @sdk-review auto-complete       → Review + fix loop until clean
+  #   @sdk-review stop                → Cancel an in-progress auto-complete
+  #   @sdk-review override: <reason>  → Admin force-pass
+  #
+  # Aliases (backward-compat): `resolve all issues` == `auto-complete`,
+  # `cancel` == `stop`.
   #
   # Inline comment replies on previous bot comments → answer agent
   # responds in-thread (no separate trigger needed).
@@ -39,10 +43,15 @@ jobs:
     # This prevents external contributors on forks from burning API
     # credits, triggering VPN connections, or leveraging the workflow's
     # write permissions.
+    #
+    # Excludes `stop` / `cancel` so those route to the sdk-review-stop
+    # job instead.
     if: |
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
       contains(github.event.comment.body, '@sdk-review') &&
+      !contains(github.event.comment.body, '@sdk-review stop') &&
+      !contains(github.event.comment.body, '@sdk-review cancel') &&
       (github.event.comment.author_association == 'OWNER' ||
        github.event.comment.author_association == 'MEMBER' ||
        github.event.comment.author_association == 'COLLABORATOR')
@@ -96,9 +105,14 @@ jobs:
 
           # Determine mode from comment body (grep on the bash variable, never
           # expanded via ${{ }} so no shell-injection risk).
+          #   override            → admin force-pass
+          #   auto-complete       → review + fix loop (preferred name)
+          #   resolve all issues  → alias for auto-complete (backward-compat)
+          #   --iteration=        → internal self-trigger for next fix iteration
+          #   (none of the above) → review-only
           if printf '%s' "$COMMENT_BODY" | grep -qi "override"; then
             MODE=override
-          elif printf '%s' "$COMMENT_BODY" | grep -qi "resolve"; then
+          elif printf '%s' "$COMMENT_BODY" | grep -qiE "auto[- ]?complete|resolve"; then
             MODE=auto-fix
           elif printf '%s' "$COMMENT_BODY" | grep -qi "\-\-iteration="; then
             MODE=auto-fix
@@ -129,8 +143,21 @@ jobs:
           gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=eyes 2>/dev/null || true
 
-          # Post an acknowledgment comment with a link to the Actions run
-          BODY="🔄 **SDK Review starting** (mode: \`${MODE}\`) — takes ~5-8 min. [Watch live progress](${RUN_URL})"
+          # Map internal mode name to user-friendly label
+          case "$MODE" in
+            auto-fix)     LABEL="auto-complete" ;;
+            review-only)  LABEL="review" ;;
+            override)     LABEL="override (admin)" ;;
+            *)            LABEL="$MODE" ;;
+          esac
+
+          # Add a "stop" hint when auto-complete is running
+          STOP_HINT=""
+          if [ "$MODE" = "auto-fix" ]; then
+            STOP_HINT=$'\n\n> 💡 Comment `@sdk-review stop` to cancel.'
+          fi
+
+          BODY="🔄 **SDK Review starting** (${LABEL}) — takes ~5-8 min. [Watch live progress](${RUN_URL})${STOP_HINT}"
           gh pr comment "$PR_NUMBER" --body "$BODY"
 
       # Pre-flight: Try to resolve conflicts BEFORE running the review
@@ -460,8 +487,10 @@ jobs:
           ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
           GH_TOKEN: ${{ github.token }}
 
-      # Trigger next iteration (fresh session via new Action run)
-      # Max 3 iterations.
+      # Trigger next iteration (fresh session via new Action run).
+      # Max 3 iterations. Honors the `sdk-review-stopped` label so the
+      # author can break out of the auto-complete loop between
+      # iterations without killing the fix session mid-commit.
       - name: Trigger re-review iteration
         if: |
           steps.pr.outputs.mode == 'auto-fix' &&
@@ -472,6 +501,17 @@ jobs:
           CURRENT: ${{ steps.pr.outputs.iteration }}
           MAX: ${{ steps.pr.outputs.max_iter }}
         run: |
+          # Honor stop-request: if the author commented @sdk-review stop
+          # during this iteration, don't kick off another one.
+          if gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' \
+               | grep -qx "sdk-review-stopped"; then
+            echo "Stop requested — skipping next iteration."
+            gh pr edit "$PR_NUMBER" --remove-label "sdk-review-stopped" 2>/dev/null || true
+            gh pr comment "$PR_NUMBER" --body \
+              "🛑 **Auto-complete stopped** by request. Fixes from this iteration remain pushed. Comment \`@sdk-review\` to run a fresh review, or \`@sdk-review auto-complete\` to resume."
+            exit 0
+          fi
+
           NEXT=$((CURRENT + 1))
 
           if [ "$NEXT" -gt "$MAX" ]; then
@@ -485,7 +525,7 @@ jobs:
 
           # Post self-triggering comment for next iteration
           gh pr comment "$PR_NUMBER" --body \
-            "@sdk-review --iteration=$NEXT --max=$MAX"
+            "@sdk-review auto-complete --iteration=$NEXT --max=$MAX"
 
       # Finalize if clean (approve + update branch)
       - name: Finalize (approve if clean)
@@ -596,7 +636,98 @@ jobs:
           # This avoids noise on every push to non-approved PRs.
           if [ "$WAS_APPROVED" -gt 0 ]; then
             gh pr comment "$PR_NUMBER" --body \
-              "New commits detected. The previous SDK Review approval has been reset because the code changed. Comment \`@sdk-review\` (or \`@sdk-review resolve all issues\`) to re-review."
+              "New commits detected. The previous SDK Review approval has been reset because the code changed. Comment \`@sdk-review\` (or \`@sdk-review auto-complete\`) to re-review."
           fi
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # ── @sdk-review stop handler ────────────────────────────────
+  # Cancels an in-progress sdk-review / auto-complete run for this PR.
+  #
+  # The main sdk-review job uses `concurrency.cancel-in-progress: true`,
+  # but that only triggers when a NEW sdk-review is queued. `stop` needs
+  # to explicitly cancel runs via the Actions API and also set a label
+  # so the in-flight auto-complete loop (if any) won't self-retrigger
+  # after its current iteration finishes.
+  #
+  # Uses a separate concurrency group so it doesn't cancel itself.
+  sdk-review-stop:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      (contains(github.event.comment.body, '@sdk-review stop') ||
+       contains(github.event.comment.body, '@sdk-review cancel')) &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write       # required to cancel other workflow runs
+      pull-requests: write
+      issues: write
+    timeout-minutes: 5
+    concurrency:
+      group: sdk-review-stop-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Cancel in-progress sdk-review runs for this PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          THIS_RUN: ${{ github.run_id }}
+        run: |
+          # Acknowledge the stop request immediately
+          gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=eyes 2>/dev/null || true
+
+          # Always set the stop label so any in-flight loop skips its
+          # next re-trigger (iteration already running will finish
+          # gracefully and honor the label).
+          gh label create "sdk-review-stopped" --color "586069" --force 2>/dev/null || true
+          gh pr edit "$PR_NUMBER" --add-label "sdk-review-stopped" 2>/dev/null || true
+
+          # Find and cancel any in-progress runs of the Claude Code
+          # workflow on this PR's head branch.
+          HEAD_BRANCH=$(gh pr view "$PR_NUMBER" --json headRefName -q .headRefName)
+          RUNS=$(gh run list \
+            --workflow="Claude Code" \
+            --branch="$HEAD_BRANCH" \
+            --status=in_progress \
+            --json databaseId \
+            --jq '.[].databaseId' 2>/dev/null || echo "")
+
+          CANCELLED=0
+          for run_id in $RUNS; do
+            if [ "$run_id" != "$THIS_RUN" ]; then
+              if gh run cancel "$run_id" 2>/dev/null; then
+                CANCELLED=$((CANCELLED + 1))
+              fi
+            fi
+          done
+
+          # Also cancel queued runs so a pending next-iteration
+          # trigger doesn't start the loop back up.
+          QUEUED=$(gh run list \
+            --workflow="Claude Code" \
+            --branch="$HEAD_BRANCH" \
+            --status=queued \
+            --json databaseId \
+            --jq '.[].databaseId' 2>/dev/null || echo "")
+
+          for run_id in $QUEUED; do
+            if [ "$run_id" != "$THIS_RUN" ]; then
+              if gh run cancel "$run_id" 2>/dev/null; then
+                CANCELLED=$((CANCELLED + 1))
+              fi
+            fi
+          done
+
+          if [ "$CANCELLED" -gt 0 ]; then
+            gh pr comment "$PR_NUMBER" --body \
+              "🛑 **Stop acknowledged.** Cancelled ${CANCELLED} in-progress SDK Review run(s). Any fixes already pushed remain in the branch. Comment \`@sdk-review\` to start a fresh review, or \`@sdk-review auto-complete\` to resume the fix loop."
+          else
+            gh pr comment "$PR_NUMBER" --body \
+              "🛑 **Stop acknowledged.** No running SDK Review runs were found, but the \`sdk-review-stopped\` label has been set so any queued iteration will skip. Comment \`@sdk-review\` to start a fresh review."
+          fi
