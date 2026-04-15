@@ -88,7 +88,7 @@ jobs:
           HEAD_BRANCH=$(gh pr view "$PR_NUMBER" --json headRefName -q .headRefName)
           BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName)
           # Pull comment body and commenter from the event JSON safely — NEVER
-          # interpolate user-controlled content via ${{ }} into shell.
+          # interpolate user-controlled content via Actions template syntax into shell.
           COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH")
           COMMENTER=$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")
 
@@ -104,7 +104,7 @@ jobs:
           # propagated to downstream Claude steps via a dedicated env var.
 
           # Determine mode from comment body (grep on the bash variable, never
-          # expanded via ${{ }} so no shell-injection risk).
+          # expanded via Actions template syntax so no shell-injection risk).
           #   override            → admin force-pass
           #   auto-complete       → review + fix loop (preferred name)
           #   resolve all issues  → alias for auto-complete (backward-compat)
@@ -167,7 +167,7 @@ jobs:
       #
       # SECURITY: Branch names are attacker-controlled (PR author creates
       # the branch). All branch/PR values are passed via env: not
-      # interpolated into shell via ${{ }}.
+      # interpolated into shell via Actions template syntax.
       - name: Conflict pre-flight (Tier 1 + 2)
         id: conflicts
         env:
@@ -297,7 +297,7 @@ jobs:
       # add subagents back once we verify subagent auth works with the proxy.
       #
       # SECURITY: No user-controlled content is interpolated into this prompt
-      # via ${{ }}. The comment body / commenter / mode / etc. are not embedded
+      # via Actions template syntax. The comment body / commenter / mode / etc. are not embedded
       # here — the Claude session fetches everything it needs via gh CLI
       # using trusted identifiers (PR number, repo, head SHA) only.
       - name: SDK Review (Session A — Review)
@@ -409,7 +409,7 @@ jobs:
       # Parse verdict from review output.
       # SECURITY: steps.review.outputs.result is the full Claude session
       # output — which can contain shell metacharacters from PR content
-      # the model echoes back. Never interpolate it into shell via ${{ }};
+      # the model echoes back. Never interpolate it into shell via Actions template syntax;
       # always pass it through env: so it's just a string to the shell.
       - name: Parse verdict
         id: verdict
