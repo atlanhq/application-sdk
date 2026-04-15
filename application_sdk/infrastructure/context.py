@@ -11,6 +11,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from typing import Any
+
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
@@ -25,12 +27,16 @@ class InfrastructureContext:
 
     Created once at startup by ``main.py`` and stored in a ContextVar so that
     activities can access it via ``get_infrastructure()``.
+
+    The optional ``_dapr_client`` field holds the shared ``AsyncDaprClient``
+    so it can be closed on shutdown via :func:`close_infrastructure`.
     """
 
     state_store: "StateStore | None" = field(default=None)
     secret_store: "SecretStore | None" = field(default=None)
     storage: "ObjectStore | None" = field(default=None)
     event_binding: "Binding | None" = field(default=None)
+    _dapr_client: Any = field(default=None, repr=False)
 
 
 _infrastructure_ctx: ContextVar[InfrastructureContext | None] = ContextVar(
@@ -57,3 +63,14 @@ def set_infrastructure(ctx: InfrastructureContext) -> None:
         ctx: The infrastructure context to set.
     """
     _infrastructure_ctx.set(ctx)
+
+
+async def close_infrastructure() -> None:
+    """Close the shared Dapr client held by the current infrastructure context.
+
+    Safe to call multiple times or when no context is set.
+    Should be called during graceful shutdown to avoid httpx connection pool leaks.
+    """
+    ctx = _infrastructure_ctx.get()
+    if ctx and ctx._dapr_client is not None:
+        await ctx._dapr_client.close()

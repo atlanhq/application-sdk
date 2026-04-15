@@ -430,6 +430,7 @@ async def _create_infrastructure(
                 if EVENT_STORE_NAME in registered_components
                 else None
             ),
+            _dapr_client=dapr_client,
         )
     else:
         # No Dapr — use InMemory implementations
@@ -667,6 +668,9 @@ async def run_worker_mode(config: AppConfig) -> None:
         async with worker:
             await shutdown_event.wait()
 
+    from application_sdk.infrastructure.context import close_infrastructure
+
+    await close_infrastructure()
     await _flush_observability()
     if auth_manager is not None:
         await auth_manager.shutdown()
@@ -932,6 +936,9 @@ async def run_combined_mode(config: AppConfig) -> None:
                 shutdown_event.wait(),
             )
 
+    from application_sdk.infrastructure.context import close_infrastructure
+
+    await close_infrastructure()
     await _flush_observability()
     if auth_manager is not None:
         await auth_manager.shutdown()
