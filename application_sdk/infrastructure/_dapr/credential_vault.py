@@ -35,18 +35,6 @@ class _SecretMode(Enum):
     SINGLE_KEY = "single-key"
 
 
-def _handle_single_key_secret(key: str, value: Any) -> dict[str, Any]:
-    """Handle single-key secret — attempt JSON parse, fall back to {key: value}."""
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception:
-            pass
-    return {key: value}
-
-
 def _resolve_credentials(
     credential_config: dict[str, Any], secret_data: dict[str, Any]
 ) -> dict[str, Any]:

@@ -245,3 +245,107 @@ class TestDaprBinding:
         self.client.invoke_binding.side_effect = RuntimeError("boom")
         with pytest.raises(BindingError):
             await self.binding.invoke("get")
+
+
+# ---------------------------------------------------------------------------
+# DaprPubSub.subscribe / DaprSubscription
+# ---------------------------------------------------------------------------
+
+
+class TestDaprSubscription:
+    def setup_method(self):
+        self.client = MagicMock(spec=AsyncDaprClient)
+        self.pubsub = DaprPubSub(self.client, pubsub_name="mypubsub")
+
+    async def test_subscribe_returns_subscription(self):
+        from application_sdk.infrastructure._dapr.client import DaprSubscription
+
+        handler = AsyncMock()
+        sub = await self.pubsub.subscribe("my-topic", handler)
+        assert isinstance(sub, DaprSubscription)
+        assert sub.topic == "my-topic"
+        assert sub.is_active is True
+
+    async def test_unsubscribe_deactivates(self):
+        handler = AsyncMock()
+        sub = await self.pubsub.subscribe("my-topic", handler)
+        assert sub.is_active is True
+        await sub.unsubscribe()
+        assert sub.is_active is False
+
+    async def test_subscribe_multiple_topics(self):
+        sub1 = await self.pubsub.subscribe("topic-a", AsyncMock())
+        sub2 = await self.pubsub.subscribe("topic-b", AsyncMock())
+        assert sub1.topic == "topic-a"
+        assert sub2.topic == "topic-b"
+        await sub1.unsubscribe()
+        assert sub1.is_active is False
+        assert sub2.is_active is True
+
+
+# ---------------------------------------------------------------------------
+# is_dapr_component_registered
+# ---------------------------------------------------------------------------
+
+
+class TestIsDaprComponentRegistered:
+    async def test_returns_true_for_registered_component(self):
+        from unittest.mock import patch
+
+        from application_sdk.infrastructure._dapr.client import (
+            is_dapr_component_registered,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.get_metadata.return_value = {
+            "components": [
+                {"name": "statestore", "type": "state.in-memory"},
+                {"name": "pubsub", "type": "pubsub.in-memory"},
+            ]
+        }
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "application_sdk.infrastructure._dapr.client.AsyncDaprClient",
+            return_value=mock_client,
+        ):
+            assert await is_dapr_component_registered("statestore") is True
+
+    async def test_returns_false_for_unknown_component(self):
+        from unittest.mock import patch
+
+        from application_sdk.infrastructure._dapr.client import (
+            is_dapr_component_registered,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.get_metadata.return_value = {
+            "components": [{"name": "statestore", "type": "state.in-memory"}]
+        }
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "application_sdk.infrastructure._dapr.client.AsyncDaprClient",
+            return_value=mock_client,
+        ):
+            assert await is_dapr_component_registered("nonexistent") is False
+
+    async def test_returns_false_on_metadata_failure(self):
+        from unittest.mock import patch
+
+        from application_sdk.infrastructure._dapr.client import (
+            is_dapr_component_registered,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.get_metadata.side_effect = RuntimeError("connection refused")
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "application_sdk.infrastructure._dapr.client.AsyncDaprClient",
+            return_value=mock_client,
+        ):
+            assert await is_dapr_component_registered("statestore") is False

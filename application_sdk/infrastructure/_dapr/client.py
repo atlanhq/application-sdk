@@ -153,14 +153,29 @@ class DaprSecretStore:
             return None
 
     async def get_bulk(self, names: list[str]) -> dict[str, str]:
-        """Get multiple secrets via Dapr."""
+        """Get multiple secrets via Dapr.
+
+        Note:
+            Assumes single-key-per-secret-name convention. If a Dapr secret
+            contains multiple keys (e.g. ``{"db": {"user": "u", "pass": "p"}}``),
+            only the first value is returned. Use ``get()`` for multi-key secrets.
+        """
         try:
             result = await self._client.get_bulk_secret(store_name=self._store_name)
-            return {
-                name: next(iter(result[name].values()), "")
-                for name in names
-                if name in result
-            }
+            bulk: dict[str, str] = {}
+            for name in names:
+                if name not in result:
+                    continue
+                inner = result[name]
+                if len(inner) > 1:
+                    logger.warning(
+                        "Secret '%s' has %d keys; get_bulk() returns only the first value. "
+                        "Use get() for multi-key secrets.",
+                        name,
+                        len(inner),
+                    )
+                bulk[name] = next(iter(inner.values()), "")
+            return bulk
         except Exception as e:
             raise SecretStoreError(
                 f"Failed to get bulk secrets: {e}",

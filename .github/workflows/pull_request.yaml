@@ -124,7 +124,7 @@ jobs:
 
       - name: Install Temporal CLI
         run: |
-          curl -sSf https://temporal.download/cli.sh | sh
+          curl -sSf https://temporal.download/cli.sh | sh -s -- --version v1.3.0
           echo "$HOME/.temporalio/bin" >> $GITHUB_PATH
 
       - name: Start Temporal dev server

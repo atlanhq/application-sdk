@@ -178,6 +178,14 @@ class AsyncDaprClient:
         data: bytes | None = None,
         metadata: dict[str, str] | None = None,
     ) -> BindingResult:
+        """Invoke a Dapr output binding.
+
+        Note:
+            ``data`` is decoded as UTF-8 text before JSON-encoding into the
+            request body.  This means only text-compatible payloads are
+            supported.  Binary data (protobuf, compressed) should be
+            base64-encoded by the caller before passing to this method.
+        """
         body: dict[str, Any] = {
             "operation": operation,
             "metadata": metadata or {},

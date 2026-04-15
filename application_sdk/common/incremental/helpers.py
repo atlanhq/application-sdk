@@ -21,10 +21,10 @@ from application_sdk.constants import (
     MARKER_TIMESTAMP_FORMAT,
     PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE,
     TEMPORARY_PATH,
-    UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.ops import download_file, list_keys
+from application_sdk.storage.batch import list_keys
+from application_sdk.storage.ops import download_file
 
 logger = get_logger(__name__)
 
@@ -216,7 +216,6 @@ async def download_marker_from_s3(
 async def download_s3_prefix_with_structure(
     s3_prefix: str,
     local_destination: Path,
-    store_name: str = UPSTREAM_OBJECT_STORE_NAME,
 ) -> None:
     """Download files from S3 preserving relative directory structure.
 
@@ -226,7 +225,6 @@ async def download_s3_prefix_with_structure(
     Args:
         s3_prefix: S3 prefix path to download from
         local_destination: Local directory to download files into
-        store_name: Object store binding name
 
     Raises:
         Exception: If listing or downloading fails

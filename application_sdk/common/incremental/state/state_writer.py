@@ -54,7 +54,7 @@ from application_sdk.common.incremental.storage.duckdb_utils import (
 from application_sdk.constants import INCREMENTAL_DIFF_SUBPATH_TEMPLATE
 from application_sdk.execution._temporal.activity_utils import get_object_store_prefix
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.ops import download_prefix, upload_prefix
+from application_sdk.storage.batch import download_prefix, upload_prefix
 
 logger = get_logger(__name__)
 

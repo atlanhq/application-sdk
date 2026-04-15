@@ -10,7 +10,6 @@ Usage:
 """
 
 from application_sdk.infrastructure._dapr import (
-    AsyncDaprClient,
     DaprBinding,
     DaprCredentialVault,
     DaprPubSub,
@@ -64,7 +63,6 @@ from application_sdk.infrastructure.state import (
 )
 
 __all__ = [
-    "AsyncDaprClient",
     "DaprBinding",
     "DaprCredentialVault",
     "DaprPubSub",

@@ -107,7 +107,7 @@ def _make_vault_patches(vault_return=None, vault_side_effect=None):
     mock_dapr_instance = MagicMock()
     mock_dapr_instance.close = AsyncMock()
     p_dapr = patch(
-        "application_sdk.infrastructure.AsyncDaprClient",
+        "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
         MagicMock(return_value=mock_dapr_instance),
     )
     return p_vault, p_dapr, mock_vault
@@ -155,7 +155,7 @@ class TestGuidResolutionPath:
                 MagicMock(return_value=mock_vault),
             ),
             patch(
-                "application_sdk.infrastructure.AsyncDaprClient",
+                "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
                 MagicMock(return_value=mock_dapr),
             ),
         ):

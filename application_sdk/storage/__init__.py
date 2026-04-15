@@ -36,6 +36,13 @@ Migration from v2:
 
 from __future__ import annotations
 
+from application_sdk.storage.batch import (
+    delete_prefix,
+    download_prefix,
+    list_keys,
+    upload_file_from_bytes,
+    upload_prefix,
+)
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.errors import (
     StorageConfigError,
@@ -47,17 +54,14 @@ from application_sdk.storage.factory import create_local_store, create_memory_st
 from application_sdk.storage.ops import (
     delete,
     delete_file,
-    delete_prefix,
     download_file,
-    download_prefix,
     exists,
-    list_files,
-    list_keys,
     normalize_key,
     upload_file,
-    upload_file_from_bytes,
-    upload_prefix,
 )
+
+#: v2-compatible alias
+list_files = list_keys
 
 __all__ = [
     # Store factories

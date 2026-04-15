@@ -19,7 +19,8 @@ from application_sdk.common.error_codes import CommonError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
-from application_sdk.storage.ops import download_file, download_prefix
+from application_sdk.storage.batch import download_prefix
+from application_sdk.storage.ops import download_file
 
 logger = get_logger(__name__)
 
