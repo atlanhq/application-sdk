@@ -4,7 +4,6 @@ import os
 from opentelemetry.sdk.resources import Resource
 
 from application_sdk.constants import (
-    APP_BUILD_ID,
     APP_SDK_VERSION,
     APP_TENANT_ID,
     APP_TYPE,
@@ -102,17 +101,15 @@ def build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource:
         resource_attributes["service.version"] = SERVICE_VERSION
     if OTEL_WF_NODE_NAME:
         resource_attributes["k8s.workflow.node.name"] = OTEL_WF_NODE_NAME
-    # App Vitals: ensure app identity is on every OTLP export
-    if "app.name" not in resource_attributes:
-        resource_attributes["app.name"] = APPLICATION_NAME
+    # tenant.id — deployment-scoped tenant identifier
     if "tenant.id" not in resource_attributes:
         resource_attributes["tenant.id"] = APP_TENANT_ID
     # Deployment-level attributes — constant per pod, don't duplicate in log attrs.
-    # Only set if the env var was provided (Helm may not always inject these).
+    # NOTE: app.name is intentionally NOT a resource attribute — a deployment
+    # can host multiple apps; app_name stays in log attrs per-event.
+    # app.build_id is also omitted — app.version carries the same signal.
     if APPLICATION_VERSION:
         resource_attributes["app.version"] = APPLICATION_VERSION
-    if APP_BUILD_ID:
-        resource_attributes["app.build_id"] = APP_BUILD_ID
     if RELEASE_ID:
         resource_attributes["app.release_id"] = RELEASE_ID
     if RELEASE_CHANNEL:
@@ -124,7 +121,7 @@ def build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource:
     if PUBLISHED_AT:
         resource_attributes["app.published_at"] = PUBLISHED_AT
     if DOMAIN_NAME:
-        resource_attributes["tenant.domain"] = DOMAIN_NAME
+        resource_attributes["k8s.domain.name"] = DOMAIN_NAME
     pod_name = os.environ.get("K8S_POD_NAME") or os.environ.get("HOSTNAME", "")
     if pod_name:
         resource_attributes["k8s.pod.name"] = pod_name

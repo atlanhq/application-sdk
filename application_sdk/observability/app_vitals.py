@@ -34,9 +34,7 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
-# APPLICATION_NAME imported for test compatibility (tests patch this module attr).
-# Deployment-level identity now flows via build_otel_resource(), not per-event attrs.
-from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME  # noqa: F401
+from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
 from application_sdk.observability.error_classifier import (
     classify_error,
     extract_cause_chain,
@@ -153,10 +151,12 @@ def _compute_error_fingerprint(
 def _build_common_attrs() -> dict[str, str]:
     """Build the per-event identity attributes.
 
-    Only workflow/activity-scoped fields live here. Deployment-level attributes
-    (app_name, app_version, release_id, sdk_version, pod_name, domain_name,
-    etc.) are set on the OTel Resource by build_otel_resource() and appear as
-    ResourceAttributes.* in ClickHouse — no need to duplicate in every log row.
+    Deployment-level attributes (app.version, release_id, sdk_version, pod_name,
+    k8s.domain.name, etc.) are set on the OTel Resource by build_otel_resource()
+    and appear as ResourceAttributes.* in ClickHouse — not duplicated here.
+
+    ``app_name`` stays in log attrs (not resource) because a single deployment
+    can host multiple apps; app_name is conceptually per-event, not per-pod.
 
     The ``app_vitals: "true"`` flag is a deterministic marker for filtering
     the materialized view (more reliable than Body LIKE 'app_vitals.%').
@@ -164,6 +164,7 @@ def _build_common_attrs() -> dict[str, str]:
     trace_id, span_id = get_trace_context()
     return {
         "app_vitals": "true",
+        "app_name": APPLICATION_NAME,
         "tenant_id": _get_tenant_id(),
         "correlation_id": _get_correlation_id(),
         "trace_id": trace_id,
