@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 from application_sdk.common.error_codes import IOError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.ops import download_file as _download_file
 from application_sdk.storage.batch import download_prefix as _download_prefix
+from application_sdk.storage.ops import download_file as _download_file
 from application_sdk.storage.ops import normalize_key
 
 JSON_FILE_EXTENSION = ".json"

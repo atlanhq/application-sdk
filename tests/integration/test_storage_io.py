@@ -15,18 +15,15 @@ from application_sdk.infrastructure.context import (
     InfrastructureContext,
     set_infrastructure,
 )
-from application_sdk.storage.factory import create_local_store
-from application_sdk.storage.formats.utils import download_files
 from application_sdk.storage.batch import (
     download_prefix,
     list_keys,
     upload_file_from_bytes,
     upload_prefix,
 )
-from application_sdk.storage.ops import (
-    download_file,
-    upload_file,
-)
+from application_sdk.storage.factory import create_local_store
+from application_sdk.storage.formats.utils import download_files
+from application_sdk.storage.ops import download_file, upload_file
 
 
 @pytest.fixture
