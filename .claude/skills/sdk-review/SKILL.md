@@ -20,12 +20,20 @@ architecture, all 11 ADRs, and the full review checklist.
 Comment on a PR:
 ```
 @sdk-review                              → Review only
-@sdk-review please resolve all issues    → Review + auto-fix loop
+@sdk-review auto-complete                → Review + fix loop until clean
+@sdk-review stop                         → Cancel in-progress auto-complete
 @sdk-review override: <reason>           → Force-pass (repo admins only)
 @sdk-review --iteration=N --max=M        → Internal loop continuation
 ```
 
+Aliases (backward-compat):
+- `resolve all issues` == `auto-complete`
+- `cancel` == `stop`
+
 PR number comes from the GitHub event context — no need to specify it.
+
+Only repo owners, members, and collaborators can trigger (enforced
+via `author_association` check — external fork contributors cannot).
 
 ---
 
@@ -122,12 +130,20 @@ Every run, always. No exceptions.
 
 #### 1a. Parse Command
 ```
-"@sdk-review"                         → auto_fix = false
-"@sdk-review resolve all"             → auto_fix = true
-"@sdk-review please resolve all ..."  → auto_fix = true  (contains "resolve")
+"@sdk-review"                         → auto_fix = false (review only)
+"@sdk-review auto-complete"           → auto_fix = true  (preferred)
+"@sdk-review resolve all"             → auto_fix = true  (alias, backward-compat)
+"@sdk-review stop"                    → cancel mode (routes to sdk-review-stop job)
+"@sdk-review cancel"                  → cancel mode (alias for stop)
 "@sdk-review override: ..."           → override mode (skip to override logic)
 "@sdk-review --iteration=N --max=M"   → auto_fix = true, iteration = N
 ```
+
+Routing: `stop`/`cancel` comments bypass the main sdk-review job's
+`if:` condition and are handled by a dedicated `sdk-review-stop` job
+that cancels in-progress runs via `gh run cancel` and sets the
+`sdk-review-stopped` label so the auto-complete loop's next
+iteration self-skips.
 
 #### 1b. PR State
 ```bash
