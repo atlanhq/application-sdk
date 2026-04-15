@@ -599,6 +599,104 @@ jobs:
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
           echo "Review verdict: $VERDICT"
 
+      # Adversarial review (Wave 2 — GPT-5.3-codex via LiteLLM).
+      # Second-opinion cross-model check on Claude Opus's review.
+      # Asks Codex: "what did Claude miss, what are false positives,
+      # what severities are wrong?" — posts a separate comment with a
+      # distinct SDK_REVIEW_V2_ADVERSARIAL marker.
+      #
+      # Informational only — does NOT change the verdict, doesn't
+      # re-post inline comments. The Opus review remains authoritative
+      # for the sdk-review status check.
+      #
+      # Skipped for override/challenge modes (they have their own
+      # flows) and when there's no review comment to adversarially
+      # re-examine.
+      - name: Adversarial review (GPT-5.3-codex)
+        if: |
+          steps.pr.outputs.mode != 'override' &&
+          steps.pr.outputs.mode != 'challenge' &&
+          steps.verdict.outputs.verdict != ''
+        continue-on-error: true
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          VERDICT: ${{ steps.verdict.outputs.verdict }}
+        run: |
+          # Fetch the most recent SDK_REVIEW_V2 comment (what Claude just posted)
+          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --jq '[.[] | select(.body | contains("SDK_REVIEW_V2")
+              and (.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not))] | last | .body // ""')
+
+          if [ -z "$CLAUDE_REVIEW" ]; then
+            echo "No SDK_REVIEW_V2 comment found — skipping adversarial pass."
+            exit 0
+          fi
+
+          # Fetch diff — truncate to 40KB to stay well under context limits
+          DIFF=$(gh pr diff "$PR_NUMBER" 2>/dev/null | head -c 40000)
+
+          if [ -z "$DIFF" ]; then
+            echo "PR diff is empty — skipping adversarial pass."
+            exit 0
+          fi
+
+          # Build JSON request safely (jq handles all escaping)
+          REQUEST_BODY=$(jq -n \
+            --arg diff "$DIFF" \
+            --arg claude "$CLAUDE_REVIEW" \
+            --arg verdict "$VERDICT" \
+            '{
+              model: "gpt-5.3-codex",
+              messages: [
+                {
+                  role: "system",
+                  content: "You are a senior Python engineer doing an adversarial re-review. Another reviewer (Claude Opus) just reviewed this PR on atlanhq/application-sdk. Your job: find what they missed, call out false positives in their findings, flag severity mismatches. Be terse. No preamble. No flattery."
+                },
+                {
+                  role: "user",
+                  content: ("## Verdict the other reviewer arrived at: " + $verdict + "\n\n## PR diff (may be truncated)\n\n```\n" + $diff + "\n```\n\n## The other reviewer\u0027s full comment\n\n" + $claude + "\n\n## Output format (use exactly these sections)\n\n### What was missed\n- [TAG] file:line — description — why it matters\n(write \"None\" if nothing was missed)\n\n### False positives in the other review\n- [TAG] file:line — their claim: \"<quote>\" — why it is wrong\n(write \"None\" if no false positives)\n\n### Severity disagreements\n- file:line — they said <level>, should be <level> because <reason>\n(write \"None\" if severities are correct)\n\n### Summary (1 line)\n- Whether the review is sufficient, or needs more work.\n\nIf you fully agree with the review, write exactly: \"Agreed with the Opus review. No disagreements.\" and nothing else.")
+                }
+              ],
+              temperature: 0.3,
+              max_tokens: 2000
+            }')
+
+          echo "Calling GPT-5.3-codex via LiteLLM..."
+          RESPONSE=$(curl -sS -X POST "https://llmproxy.atlan.dev/v1/chat/completions" \
+            -H "Authorization: Bearer $LITELLM_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$REQUEST_BODY" 2>&1)
+
+          # Extract message content; if request failed, show err info
+          CODEX_ANSWER=$(printf '%s' "$RESPONSE" | jq -r '.choices[0].message.content // ""' 2>/dev/null)
+
+          if [ -z "$CODEX_ANSWER" ]; then
+            ERR=$(printf '%s' "$RESPONSE" | jq -r '.error.message // ""' 2>/dev/null || echo "")
+            echo "::warning::GPT-5.3-codex returned no content. Error: ${ERR:-unknown} (raw response truncated)"
+            exit 0
+          fi
+
+          # Post as a distinct comment with its own marker
+          BODY=$(printf '%s\n' \
+            "<!-- SDK_REVIEW_V2_ADVERSARIAL -->" \
+            "## 🤖 Adversarial review (GPT-5.3-codex)" \
+            "" \
+            "> Cross-model second opinion on the Opus review above. Flags" \
+            "> what the primary reviewer may have missed, false positives," \
+            "> and severity disagreements." \
+            "" \
+            "${CODEX_ANSWER}" \
+            "" \
+            "---" \
+            "<sub>Adversarial review is informational. It does NOT change the verdict or approve/block the PR. The Opus review above is authoritative for the \`sdk-review\` status check.</sub>")
+
+          gh pr comment "$PR_NUMBER" --body "$BODY"
+          echo "Posted adversarial review comment."
+
       # Fix session (Session B — only if auto-fix mode and not clean)
       - name: SDK Fix (Session B — Auto-Fix)
         if: |
