@@ -1,27 +1,16 @@
 # SDK Review v2 — Setup Instructions
 
-## 1. Add the workflow changes to claude.yml
+## ✅ Workflows Already Deployed
 
-Copy the jobs from `claude-yml-additions.yml` into `.github/workflows/claude.yml`:
-- Add `sdk-review` job (after the existing `challenge` job)
-- Add `reset-review-status` job (after `sdk-review`)
-- Add `refactor-v3` to the `pull_request` trigger branches list
+This PR ships the workflows directly into `.github/workflows/`:
+- `.github/workflows/claude.yml` — extended with `sdk-review` and `reset-review-status` jobs
+- `.github/workflows/branch-keeper.yml` — new workflow for post-approval branch maintenance
 
-Also ensure the top-level `permissions` include:
-```yaml
-permissions:
-  id-token: write
-  contents: write      # was 'read' — needs write for pushing fixes
-  issues: write
-  pull-requests: write
-  statuses: write      # NEW — needed for commit status API
-```
+No manual workflow installation needed. Once this PR merges, the system is live.
 
-## 2. Add branch-keeper.yml
+## ⚠️ One-Time Manual Step: Branch Protection (Required)
 
-Copy `branch-keeper.yml` to `.github/workflows/branch-keeper.yml`.
-
-## 3. Configure Branch Protection (Required)
+To make `sdk-review` a required check that blocks merge, configure branch protection:
 
 Go to: **Settings → Branches → Branch protection rules**
 
@@ -36,41 +25,42 @@ Go to: **Settings → Branches → Branch protection rules**
    authors update manually and the status check persists)
 6. Save changes
 
-### For `main` (later, after refactor-v3 merges):
+### For `main` (later, after refactor-v3 merges to main):
 
 Same as above but for branch pattern `main`. Also update
-`branch-keeper.yml` to trigger on `main` instead of `refactor-v3`.
+`branch-keeper.yml` to trigger on `main` instead of `refactor-v3`
+(or in addition to).
 
-## 4. Verify Secrets
+## Secrets — All Already Configured
 
-All secrets should already exist. Verify in **Settings → Secrets and variables → Actions**:
+| Secret | Status | Notes |
+|--------|--------|-------|
+| `LITELLM_API_KEY` | ✅ Already exists | Routes both Claude and GPT models via `llmproxy.atlan.dev` |
+| `GLOBALPROTECT_USERNAME` | ✅ Already exists | VPN access |
+| `GLOBALPROTECT_PASSWORD` | ✅ Already exists | VPN access |
+| `GITHUB_TOKEN` | ✅ Auto-provided | No action needed |
 
-| Secret | Required | Notes |
-|--------|----------|-------|
-| `LITELLM_API_KEY` | Yes | Routes both Claude and GPT models via llmproxy.atlan.dev |
-| `GLOBALPROTECT_USERNAME` | Yes | VPN access |
-| `GLOBALPROTECT_PASSWORD` | Yes | VPN access |
+**Nothing new to add.**
 
-No new secrets needed. `GITHUB_TOKEN` is automatic.
+## Optional: Pre-Create Labels
 
-## 5. Create Labels (Optional — skill auto-creates them)
-
-The skill creates labels on first use, but you can pre-create them:
+The skill auto-creates labels on first use, but you can pre-create them:
 
 ```bash
 gh label create "sdk-review-approved" --color "0e8a16" --description "PR passed SDK review" --force
+gh label create "sdk-review-auto-maintained" --color "1d76db" --description "Bot keeps this PR up-to-date with base" --force
 gh label create "needs-human-review" --color "d93f0b" --description "SDK review needs human decision" --force
 gh label create "needs-rebase" --color "e4e669" --description "PR has conflicts needing manual rebase" --force
 ```
 
-## 6. Test the Setup
+## Test the Setup (After Merge)
 
 1. Create a test PR against `refactor-v3`
 2. Comment: `@sdk-review`
 3. Verify:
-   - Status check appears as "pending" immediately
-   - Review runs (6 Opus agents + GPT-5.3-codex adversarial)
-   - Summary comment posted with findings
+   - Status check `sdk-review` appears as "pending" immediately
+   - Review runs (3 Opus agents + GPT-5.3-codex adversarial)
+   - Summary comment posted with findings grouped by file
    - Inline comments posted on specific lines
    - Status check set to pass/fail based on verdict
    - Merge button is blocked if review has Critical findings
@@ -78,6 +68,7 @@ gh label create "needs-rebase" --color "e4e669" --description "PR has conflicts 
 4. Test auto-fix: Comment `@sdk-review please resolve all issues`
 5. Test override: Comment `@sdk-review override: testing the override mechanism`
    (must be repo admin)
+6. Test Q&A: Reply to an inline comment with a question; the bot should respond.
 
 ## Usage Summary
 

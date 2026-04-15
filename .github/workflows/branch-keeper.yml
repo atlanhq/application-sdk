@@ -85,12 +85,7 @@ jobs:
               gh label create "needs-rebase" --color "e4e669" --force 2>/dev/null
               gh pr edit "$pr" --add-label "needs-rebase"
 
-              gh pr comment "$pr" --body "$(cat <<'COMMENT'
-Branch has conflicts after base branch update that cannot be auto-resolved.
-
-**Action needed:** Please rebase or merge the base branch manually, then run `@sdk-review` again.
-COMMENT
-)"
+              gh pr comment "$pr" --body "Branch has conflicts after base branch update that cannot be auto-resolved. **Action needed:** Please rebase or merge the base branch manually, then run \`@sdk-review\` again."
             fi
 
             # Return to base branch for next iteration
