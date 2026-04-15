@@ -69,16 +69,10 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "span_id",
         "correlation_id",
         # ── App Vitals ───────────────────────────────────────────────────
-        # Identity
-        "app_version",
-        "app_build_id",
-        "release_id",
-        "release_channel",
-        "sdk_version",
-        "app_type",
+        # Deterministic filter flag — marks every App Vitals log event
+        "app_vitals",
+        # Per-workflow identity (deployment-level fields are on OTel Resource)
         "tenant_id",
-        "domain_name",
-        "pod_name",
         # Outcome
         "status",
         "error_type",

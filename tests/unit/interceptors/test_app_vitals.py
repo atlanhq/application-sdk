@@ -1093,9 +1093,8 @@ class TestLoggerAdaptorExtraKeysAllowlist:
     """
 
     APP_VITALS_LOG_FIELDS = [
-        # Identity
-        "app_name",
-        "app_version",
+        # Identity — only per-workflow fields. Deployment attrs are on OTel Resource.
+        "app_vitals",
         "tenant_id",
         # Execution context
         "workflow_id",
@@ -1161,8 +1160,7 @@ class TestLoggerAdaptorExtraKeysAllowlist:
 
         # Realistic example: a failed activity event
         sample_extra = {
-            "app_name": "snowflake",
-            "app_version": "2.4.2",
+            "app_vitals": "true",
             "tenant_id": "tenant_123",
             "workflow_id": "wf-abc",
             "run_id": "run-def",

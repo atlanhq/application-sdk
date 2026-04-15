@@ -34,17 +34,9 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
-from application_sdk.constants import (
-    APP_BUILD_ID,
-    APP_RELEASE_CHANNEL,
-    APP_RELEASE_ID,
-    APP_SDK_VERSION,
-    APP_TENANT_ID,
-    APP_TYPE,
-    APP_VERSION_SEMVER,
-    APPLICATION_NAME,
-    DOMAIN_NAME,
-)
+# APPLICATION_NAME imported for test compatibility (tests patch this module attr).
+# Deployment-level identity now flows via build_otel_resource(), not per-event attrs.
+from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME  # noqa: F401
 from application_sdk.observability.error_classifier import (
     classify_error,
     extract_cause_chain,
@@ -136,11 +128,6 @@ def _extract_assets_processed(result: Any) -> int | None:
     return None
 
 
-def _get_pod_name() -> str:
-    """Get the pod name from K8s-injected env vars."""
-    return os.environ.get("K8S_POD_NAME", os.environ.get("HOSTNAME", ""))
-
-
 def _format_stack_trace(exc: BaseException) -> str:
     """Format a full stack trace, truncated to 2000 chars."""
     try:
@@ -164,24 +151,20 @@ def _compute_error_fingerprint(
 
 
 def _build_common_attrs() -> dict[str, str]:
-    """Build the identity attributes present on every event.
+    """Build the per-event identity attributes.
 
-    Includes trace_id and span_id from the current OTel span context (if a
-    tracer is active). These are empty strings when no tracer is running,
-    which is fine — they become useful the moment the traces pipeline lands.
+    Only workflow/activity-scoped fields live here. Deployment-level attributes
+    (app_name, app_version, release_id, sdk_version, pod_name, domain_name,
+    etc.) are set on the OTel Resource by build_otel_resource() and appear as
+    ResourceAttributes.* in ClickHouse — no need to duplicate in every log row.
+
+    The ``app_vitals: "true"`` flag is a deterministic marker for filtering
+    the materialized view (more reliable than Body LIKE 'app_vitals.%').
     """
     trace_id, span_id = get_trace_context()
     return {
-        "app_name": APPLICATION_NAME,
-        "app_version": APP_VERSION_SEMVER or APP_BUILD_ID or "",
-        "app_build_id": APP_BUILD_ID or "",
-        "release_id": APP_RELEASE_ID,
-        "release_channel": APP_RELEASE_CHANNEL,
-        "sdk_version": APP_SDK_VERSION,
-        "app_type": APP_TYPE,
+        "app_vitals": "true",
         "tenant_id": _get_tenant_id(),
-        "domain_name": DOMAIN_NAME,
-        "pod_name": _get_pod_name(),
         "correlation_id": _get_correlation_id(),
         "trace_id": trace_id,
         "span_id": span_id,
@@ -544,9 +527,10 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             except Exception:
                 pass  # summary is best-effort; never block the workflow
 
+            # Metric labels: only workflow-scoped fields. Deployment-level
+            # attributes (app_name, app_version, release_id, etc.) are on the
+            # OTel Resource and exported with every metric point automatically.
             metric_labels = {
-                "app_name": common["app_name"],
-                "app_version": common["app_version"],
                 "tenant_id": common["tenant_id"],
                 "workflow_type": info.workflow_type or "",
                 "task_queue": info.task_queue or "",
@@ -728,9 +712,9 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
 
             _emit_log_event("app_vitals.act.completed", event_attrs)
 
+            # Metric labels: only activity/workflow-scoped fields. Deployment
+            # attributes live on the OTel Resource.
             metric_labels = {
-                "app_name": common["app_name"],
-                "app_version": common["app_version"],
                 "tenant_id": common["tenant_id"],
                 "workflow_id": info.workflow_id or "",
                 "workflow_run_id": info.workflow_run_id or "",

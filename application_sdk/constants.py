@@ -49,17 +49,20 @@ APP_TENANT_ID = os.getenv("ATLAN_TENANT_ID", "default")
 # Domain Name of the tenant
 DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
 
-# Marketplace / Release metadata (injected by Helm via Local Marketplace sync)
-#: Semantic version of the app (e.g., "2.14.3")
-APP_VERSION_SEMVER = os.getenv("ATLAN_APPLICATION_VERSION", "")
-#: Release ID from Global Marketplace (unique per release)
-APP_RELEASE_ID = os.getenv("ATLAN_RELEASE_ID", "")
-#: Release channel (e.g., "stable", "beta", "all")
-APP_RELEASE_CHANNEL = os.getenv("ATLAN_RELEASE_CHANNEL", "")
-#: SDK version the app was built against
+# App Vitals / Release metadata (injected by Local Marketplace into HelmRelease).
+# Naming aligned with Anuj's LM-integration PR so they merge cleanly.
+#: Semantic version of the app release (e.g., "1.2.3")
+APPLICATION_VERSION = os.getenv("ATLAN_APPLICATION_VERSION", "")
+#: Release UUID from Global Marketplace
+RELEASE_ID = os.getenv("ATLAN_RELEASE_ID", "")
+#: Release channel (all, beta, staging, specific)
+RELEASE_CHANNEL = os.getenv("ATLAN_RELEASE_CHANNEL", "")
+#: SDK version used to build this app image
 APP_SDK_VERSION = os.getenv("ATLAN_SDK_VERSION", "")
-#: App type from marketplace (e.g., "connector", "governance", "automation")
+#: App type from Global Marketplace (connector, system, etc.)
 APP_TYPE = os.getenv("ATLAN_APP_TYPE", "")
+#: Release publication timestamp from Global Marketplace (ISO 8601)
+PUBLISHED_AT = os.getenv("ATLAN_PUBLISHED_AT", "")
 #: Host address for the application's dashboard
 APP_DASHBOARD_HOST = str(os.getenv("ATLAN_APP_DASHBOARD_HOST", "localhost"))
 #: Port number for the application's dashboard
