@@ -6,6 +6,7 @@
 - PR review automation: comment `@sdk-review` on any PR to trigger the review pipeline.
   - `@sdk-review auto-complete` — review + fix loop until clean (max 3 iterations).
   - `@sdk-review stop` — cancel an in-progress auto-complete run.
+  - `@sdk-review override: <reason>` — admin override (repo admins only; audit-logged).
 
 ## Pre-commit Checks
 
