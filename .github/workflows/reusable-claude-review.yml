@@ -12,7 +12,7 @@ on:
         default: 25
         description: 'Timeout for the review job in minutes'
     secrets:
-      AI_GATEWAY_KEY:
+      LITELLM_API_KEY:
         required: true
 
 jobs:
@@ -45,7 +45,7 @@ jobs:
       - name: Run Claude Code Review
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.AI_GATEWAY_KEY }}
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
           model: ${{ inputs.model }}
           timeout_minutes: ${{ inputs.timeout_minutes }}
           prompt: |
