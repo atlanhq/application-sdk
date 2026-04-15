@@ -356,6 +356,8 @@ jobs:
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
   # ── Job 4: Security scan — Trivy + Snyk + allowlist gate (non-blocking on merge path) ──
+  # Note: continue-on-error is not supported on reusable workflow calls (uses:).
+  # Downstream jobs use if: always() to avoid being blocked by scan failures.
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
