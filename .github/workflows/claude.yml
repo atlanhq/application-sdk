@@ -14,6 +14,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  statuses: write
 
 env:
   ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
@@ -45,6 +46,7 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
+      statuses: write
     timeout-minutes: 30
     concurrency:
       group: sdk-review-${{ github.event.issue.number }}
@@ -106,21 +108,29 @@ jobs:
           echo "iteration=$ITERATION" >> "$GITHUB_OUTPUT"
           echo "max_iter=$MAX_ITER" >> "$GITHUB_OUTPUT"
 
-      # Instant UX feedback: 👀 reaction + acknowledgment comment.
-      # No status check is posted yet — we'll add that back once the
-      # pipeline is proven stable.
+      # Instant UX feedback: 👀 reaction + pending status + ack comment.
+      # All happen in the first ~5s so the user immediately sees that
+      # @sdk-review was picked up.
       - name: Acknowledge trigger
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ github.event.comment.id }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           MODE: ${{ steps.pr.outputs.mode }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # 👀 reaction on the triggering comment
           gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=eyes 2>/dev/null || true
+
+          # Set sdk-review status check to pending
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f state=pending \
+            -f context=sdk-review \
+            -f description="SDK Review starting... (takes ~5-8 min)" \
+            -f target_url="${RUN_URL}" 2>/dev/null || true
 
           # Post an acknowledgment comment with a link to the Actions run
           BODY="🔄 **SDK Review starting** (mode: \`${MODE}\`) — takes ~5-8 min. [Watch live progress](${RUN_URL})"
@@ -243,8 +253,15 @@ jobs:
           contains(steps.resolve.outputs.result, 'ABORTED')
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           PR: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f state=failure \
+            -f context=sdk-review \
+            -f description="Conflicts require manual resolution." 2>/dev/null || true
+
           gh label create "needs-rebase" --color "e4e669" --force 2>/dev/null
           gh pr edit "$PR" --add-label "needs-rebase"
 
@@ -474,6 +491,7 @@ jobs:
           PR: ${{ steps.pr.outputs.number }}
           MODE: ${{ steps.pr.outputs.mode }}
           REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           # Update branch
           gh api "repos/${REPO}/pulls/$PR/update-branch" \
@@ -484,6 +502,9 @@ jobs:
           echo "Checking CI status..."
           if ! gh pr checks "$PR" --required --watch --fail-fast 2>/dev/null; then
             echo "CI checks failing after branch update. Not approving."
+            gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+              -f state=failure -f context=sdk-review \
+              -f description="SDK Review: Clean but CI failing after branch update" 2>/dev/null || true
             exit 0
           fi
 
@@ -505,6 +526,12 @@ jobs:
           gh pr edit "$PR" --remove-label "needs-human-review" 2>/dev/null || true
           gh pr edit "$PR" --remove-label "needs-rebase" 2>/dev/null || true
 
+          # Final status on the (possibly updated) HEAD SHA
+          NEW_SHA=$(gh pr view "$PR" --json headRefOid -q .headRefOid)
+          gh api "repos/${REPO}/statuses/${NEW_SHA}" \
+            -f state=success -f context=sdk-review \
+            -f description="SDK Review: Approved. Ready to merge." 2>/dev/null || true
+
   # ── Reset review status on new commits ──────────────────────
   # When the author pushes new code, reset the sdk-review check
   # to pending so the PR stays blocked until re-reviewed.
@@ -523,6 +550,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      statuses: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -554,24 +582,53 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Reset sdk-review labels (author commits only)
+      - name: Reset sdk-review status (author commits only)
         if: steps.check.outputs.is_bot == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-
           # Check if PR was previously approved (we'll notify only on first reset)
           WAS_APPROVED=$(gh pr view "$PR_NUMBER" --json labels \
             --jq '.labels[].name' | grep -c "sdk-review-approved" || true)
+
+          # Set status to pending — PR is blocked until @sdk-review runs
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f state=pending \
+            -f context=sdk-review \
+            -f description="New commits pushed. Comment @sdk-review to unblock." 2>/dev/null || true
 
           # Remove approved and auto-maintained labels
           gh pr edit "$PR_NUMBER" --remove-label "sdk-review-approved" 2>/dev/null || true
           gh pr edit "$PR_NUMBER" --remove-label "sdk-review-auto-maintained" 2>/dev/null || true
 
           # Only post a comment if the PR was previously approved.
-          # This avoids noise on every push to non-approved PRs.
+          # This avoids noise on every push to non-approved PRs (the
+          # status check description is enough for those).
           if [ "$WAS_APPROVED" -gt 0 ]; then
             gh pr comment "$PR_NUMBER" --body \
               "New commits detected. The previous SDK Review approval has been reset because the code changed. Comment \`@sdk-review\` (or \`@sdk-review resolve all issues\`) to re-review."
           fi
+
+      - name: Preserve approval for bot commits (branch updates)
+        if: steps.check.outputs.is_bot == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Re-set the status to success on the NEW commit SHA so
+          # the required check passes on the updated branch
+          # (only if the PR was previously approved).
+          HAS_LABEL=$(gh pr view "$PR_NUMBER" --json labels \
+            --jq '.labels[].name' | grep -c "sdk-review-approved" || true)
+
+          if [ "$HAS_LABEL" -gt 0 ]; then
+            gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+              -f state=success \
+              -f context=sdk-review \
+              -f description="SDK Review: Approved. Branch updated automatically." 2>/dev/null || true
+          fi
