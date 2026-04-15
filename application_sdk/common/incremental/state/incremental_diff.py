@@ -464,6 +464,10 @@ def _detect_deleted_columns_for_updated_tables(
         current_col_files = list(current_column_dir.glob("*.json"))
 
     if not current_col_files:
+        # Edge case: if no current column files exist at all, we cannot determine
+        # which columns belong to UPDATED tables vs other tables. Column deletions
+        # for UPDATED tables will be missed in this scenario. This is acceptable
+        # because an empty current extraction implies a broader issue upstream.
         return 0
 
     with managed_duckdb_connection(conn) as active_conn:

@@ -47,6 +47,7 @@ from application_sdk.common.incremental.state.table_scope import (
     close_scope,
     get_current_table_scope,
     get_scope_length,
+    get_table_qns_from_columns,
 )
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnectionManager,
@@ -428,10 +429,6 @@ async def create_current_state_snapshot(
             )
 
             # Track which tables have extracted columns
-            from application_sdk.common.incremental.state.table_scope import (
-                get_table_qns_from_columns,
-            )
-
             tables_with_columns = (
                 get_table_qns_from_columns(
                     current_state_dir.joinpath(EntityType.COLUMN.value), conn=conn
