@@ -1,0 +1,101 @@
+# branch-keeper.yml
+# Copy this to .github/workflows/branch-keeper.yml when ready to deploy.
+#
+# Keeps auto-maintained PRs up-to-date when the base branch changes.
+# ONLY runs for PRs that went through "@sdk-review resolve all" AND got approved.
+# Regular "@sdk-review" (review-only) PRs are NOT auto-maintained.
+#
+# Trigger: push to base branch (another PR merged).
+# Does NOT re-review — only updates branches and resolves conflicts.
+
+name: Keep auto-maintained PRs up-to-date
+
+on:
+  push:
+    branches: [refactor-v3]  # Change to [main] after refactor-v3 merges
+
+jobs:
+  update-auto-maintained-prs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find and update auto-maintained PRs that are behind
+        run: |
+          BASE_BRANCH="${{ github.ref_name }}"
+
+          # ONLY find PRs with BOTH labels:
+          # - sdk-review-approved (review passed)
+          # - sdk-review-auto-maintained (went through "resolve all" flow)
+          prs=$(gh pr list \
+            --repo "${{ github.repository }}" \
+            --base "$BASE_BRANCH" \
+            --state open \
+            --label "sdk-review-auto-maintained" \
+            --json number,headRefName,mergeStateStatus \
+            --jq '.[] | select(.mergeStateStatus != "CLEAN" and .mergeStateStatus != "HAS_HOOKS") | .number')
+
+          if [ -z "$prs" ]; then
+            echo "No approved PRs need updating."
+            exit 0
+          fi
+
+          for pr in $prs; do
+            echo "::group::Updating PR #$pr"
+
+            # Try GitHub's update-branch API first (cleanest)
+            if gh api "repos/${{ github.repository }}/pulls/$pr/update-branch" \
+              -X PUT -f update_method=merge 2>/dev/null; then
+              echo "PR #$pr branch updated via API."
+              # Re-set the sdk-review status on the new HEAD so the
+              # required check stays green after the branch update
+              sleep 5  # wait for GitHub to process the merge commit
+              NEW_SHA=$(gh pr view "$pr" --json headRefOid -q .headRefOid)
+              gh api "repos/${{ github.repository }}/statuses/$NEW_SHA" \
+                -f state=success \
+                -f context=sdk-review \
+                -f description="SDK Review: Approved. Branch updated automatically."
+              echo "::endgroup::"
+              continue
+            fi
+
+            # API failed — likely conflicts. Try git merge.
+            head_branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
+            echo "API update failed for PR #$pr ($head_branch). Attempting git merge..."
+
+            git fetch origin "$BASE_BRANCH" "$head_branch"
+            git checkout "$head_branch"
+
+            if git merge "origin/$BASE_BRANCH" --no-edit; then
+              git push origin "$head_branch"
+              echo "PR #$pr conflicts auto-resolved and pushed."
+            else
+              git merge --abort
+              echo "PR #$pr has unresolvable conflicts."
+
+              # Remove approved label, add needs-rebase
+              gh pr edit "$pr" --remove-label "sdk-review-approved" 2>/dev/null || true
+              gh label create "needs-rebase" --color "e4e669" --force 2>/dev/null
+              gh pr edit "$pr" --add-label "needs-rebase"
+
+              gh pr comment "$pr" --body "$(cat <<'COMMENT'
+Branch has conflicts after base branch update that cannot be auto-resolved.
+
+**Action needed:** Please rebase or merge the base branch manually, then run `@sdk-review` again.
+COMMENT
+)"
+            fi
+
+            # Return to base branch for next iteration
+            git checkout "$BASE_BRANCH" 2>/dev/null || true
+            echo "::endgroup::"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

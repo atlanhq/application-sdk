@@ -1,0 +1,507 @@
+# ============================================================
+# ADD THESE JOBS to .github/workflows/claude.yml
+# ============================================================
+#
+# 1. Add 'refactor-v3' to the pull_request branches list in the
+#    existing 'on:' trigger (it currently only has 'main').
+#
+# 2. Add these two new jobs below the existing 'challenge' job.
+# ============================================================
+
+  # ── @sdk-review handler ─────────────────────────────────────
+  # Triggered by @sdk-review comments on PRs.
+  # Runs the full multi-model review pipeline.
+  sdk-review:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@sdk-review')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    timeout-minutes: 30
+    concurrency:
+      group: sdk-review-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Connect to VPN
+        uses: ./.github/actions/globalprotect-connect
+        with:
+          portal-url: vpn2.atlan.app
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Resolve PR metadata
+        id: pr
+        run: |
+          PR_NUMBER="${{ github.event.issue.number }}"
+          HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
+          HEAD_BRANCH=$(gh pr view "$PR_NUMBER" --json headRefName -q .headRefName)
+          BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName)
+          COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH")
+          COMMENTER=$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")
+
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "head_branch=$HEAD_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "base_branch=$BASE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "comment=$COMMENT_BODY" >> "$GITHUB_OUTPUT"
+          echo "commenter=$COMMENTER" >> "$GITHUB_OUTPUT"
+
+          # Determine mode
+          if echo "$COMMENT_BODY" | grep -qi "override"; then
+            echo "mode=override" >> "$GITHUB_OUTPUT"
+          elif echo "$COMMENT_BODY" | grep -qi "resolve"; then
+            echo "mode=auto-fix" >> "$GITHUB_OUTPUT"
+          elif echo "$COMMENT_BODY" | grep -qi "\-\-iteration="; then
+            echo "mode=auto-fix" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=review-only" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Set status to pending immediately
+      - name: Set review status to pending
+        run: |
+          gh api "repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.head_sha }}" \
+            -f state=pending \
+            -f context=sdk-review \
+            -f description="SDK Review in progress..."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Pre-flight: Try to resolve conflicts BEFORE running the review
+      # Tier 1: GitHub API update-branch
+      # Tier 2: git merge
+      # Tier 3: Claude Code semantic resolver (next step, only if needed)
+      - name: Conflict pre-flight (Tier 1 + 2)
+        id: conflicts
+        run: |
+          PR="${{ steps.pr.outputs.number }}"
+          BASE="${{ steps.pr.outputs.base_branch }}"
+          HEAD="${{ steps.pr.outputs.head_branch }}"
+
+          MERGE_STATE=$(gh pr view "$PR" --json mergeStateStatus -q .mergeStateStatus)
+          MERGEABLE=$(gh pr view "$PR" --json mergeable -q .mergeable)
+
+          if [ "$MERGEABLE" = "MERGEABLE" ] && [ "$MERGE_STATE" = "CLEAN" ]; then
+            echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
+            echo "No conflicts."
+            exit 0
+          fi
+
+          # Tier 1: API update-branch
+          if gh api "repos/${{ github.repository }}/pulls/$PR/update-branch" \
+             -X PUT -f update_method=merge 2>/dev/null; then
+            echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
+            echo "Resolved via Tier 1 (API update-branch)."
+            exit 0
+          fi
+
+          # Tier 2: git merge
+          git fetch origin "$BASE" "$HEAD"
+          git checkout "$HEAD"
+          if git merge "origin/$BASE" --no-edit; then
+            git push origin "$HEAD"
+            echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
+            echo "Resolved via Tier 2 (git merge)."
+            exit 0
+          fi
+
+          # Tier 2 failed — abort and signal Tier 3 needed
+          git merge --abort
+          echo "needs_resolution=true" >> "$GITHUB_OUTPUT"
+          echo "Tiers 1+2 failed. Will spawn Tier 3 (Claude semantic resolver)."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Tier 3: Claude Code semantic conflict resolver
+      # Only runs if Tiers 1+2 failed.
+      - name: Resolve conflicts (Tier 3 — Claude session)
+        id: resolve
+        if: steps.conflicts.outputs.needs_resolution == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          show_full_output: true
+          prompt: |
+            Resolve merge conflicts on PR #${{ steps.pr.outputs.number }}.
+
+            Branch: ${{ steps.pr.outputs.head_branch }} (PR)
+            Base:   ${{ steps.pr.outputs.base_branch }}
+
+            Process:
+            1. git fetch origin ${{ steps.pr.outputs.base_branch }} ${{ steps.pr.outputs.head_branch }}
+            2. git checkout ${{ steps.pr.outputs.head_branch }}
+            3. git merge origin/${{ steps.pr.outputs.base_branch }} --no-edit
+               (this creates conflict markers)
+            4. List conflicting files: git diff --name-only --diff-filter=U
+            5. For each conflicting file:
+               a. Read the FULL file (with conflict markers)
+               b. Understand each side's intent from surrounding context
+               c. Resolve markers based on intent
+               d. Common patterns:
+                  - Both added imports → combine, let isort sort
+                  - Both added tests in same class → include both
+                  - Function renamed in base, called with old name in PR
+                    → update call sites to new name
+                  - Same function modified differently → merge if intents
+                    are compatible
+
+            6. SAFETY GUARDRAILS — ABORT if any conflict involves:
+               - Business logic changes in the same function in
+                 incompatible ways
+               - Security-sensitive code (auth, credentials, secrets)
+               - Infrastructure/deployment configuration
+               - Database migrations or schema changes
+               - Removed in one branch, modified in the other
+
+            7. Verify:
+               a. uv run pre-commit run --all-files
+               b. uv run pytest tests/unit/ -x --timeout=120
+
+            8. If verification passes:
+               git add <resolved files>
+               git commit -m "merge: resolve conflicts with ${{ steps.pr.outputs.base_branch }} (auto-resolved)"
+               git push origin ${{ steps.pr.outputs.head_branch }}
+               Output: RESOLVED
+
+            9. If anything fails or guardrail tripped:
+               git merge --abort
+               Output: ABORTED:<reason>
+
+            Be conservative. When in doubt, ABORT and let a human handle it.
+          claude_args: |
+            --model claude-opus-4-6
+            --timeout 600
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git fetch:*),Bash(git checkout:*),Bash(git merge:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(uv run:*)"
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+          GH_TOKEN: ${{ github.token }}
+
+      # If Tier 3 aborted, stop here and ask for human intervention
+      - name: Handle Tier 3 abort
+        if: |
+          steps.conflicts.outputs.needs_resolution == 'true' &&
+          contains(steps.resolve.outputs.result, 'ABORTED')
+        run: |
+          PR="${{ steps.pr.outputs.number }}"
+
+          gh api "repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.head_sha }}" \
+            -f state=failure \
+            -f context=sdk-review \
+            -f description="Conflicts require manual resolution."
+
+          gh label create "needs-rebase" --color "e4e669" --force 2>/dev/null
+          gh pr edit "$PR" --add-label "needs-rebase"
+
+          gh pr comment "$PR" --body "$(cat <<'COMMENT'
+          Merge conflicts require manual resolution. Auto-resolution attempts:
+
+          - Tier 1 (GitHub API update-branch): failed
+          - Tier 2 (git merge): failed
+          - Tier 3 (Claude Code semantic resolver): aborted (likely
+            involves business logic, security, or infra config)
+
+          Please rebase manually and re-run @sdk-review.
+          COMMENT
+          )"
+
+          exit 1  # Stop the workflow here
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Main review session (Opus)
+      - name: SDK Review (Session A — Review)
+        id: review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          show_full_output: true
+          prompt: |
+            You are running the SDK Review pipeline on PR #${{ steps.pr.outputs.number }}.
+
+            Command from user: "${{ steps.pr.outputs.comment }}"
+            Mode: ${{ steps.pr.outputs.mode }}
+            Commenter: ${{ steps.pr.outputs.commenter }}
+            PR base branch: ${{ steps.pr.outputs.base_branch }}
+
+            IMPORTANT: Full git history is already checked out locally. Do NOT run git fetch.
+
+            Execute the /sdk-review skill. Follow the SKILL.md stages exactly:
+            - Stage 1: Orient (CI, branch, conflicts, previous review)
+            - Stage 2: Review (holistic assessment, 6 Opus agents, 1 GPT-5.3-codex adversarial via curl)
+            - Stage 3: Post review (summary comment, inline comments, status check, labels)
+
+            For the adversarial review (Wave 2), call GPT-5.3-codex via:
+            curl -s "https://llmproxy.atlan.dev/v1/chat/completions" \
+              -H "Authorization: Bearer $LITELLM_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d '{"model": "gpt-5.3-codex", "temperature": 0.2, "max_tokens": 12000, "messages": [...]}'
+
+            If mode is "override", check if the commenter is a repo admin:
+            gh api repos/atlanhq/application-sdk/collaborators/${{ steps.pr.outputs.commenter }}/permission --jq .permission
+            Only admins can override.
+
+            After completing the review, output the verdict as the LAST LINE of your response:
+            VERDICT:<verdict>
+            Where verdict is: READY_TO_MERGE, NEEDS_FIXES, BLOCKED, or NEEDS_HUMAN
+
+            Do NOT proceed to auto-fix — that is a separate step.
+          claude_args: |
+            --model claude-opus-4-6
+            --timeout 900
+            --allowedTools "Read,Write,Edit,Glob,Grep,Agent,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh label:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(git fetch:*),Bash(git checkout:*),Bash(git merge:*),Bash(git push:*),Bash(curl:*),Bash(cat:*),Bash(jq:*)"
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+          GH_TOKEN: ${{ github.token }}
+
+      # Parse verdict from review output
+      - name: Parse verdict
+        id: verdict
+        run: |
+          VERDICT=$(echo "${{ steps.review.outputs.result }}" | grep -oP 'VERDICT:\K.*' | tail -1 || echo "NEEDS_FIXES")
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+          echo "Review verdict: $VERDICT"
+
+      # Fix session (Session B — only if auto-fix mode and not clean)
+      - name: SDK Fix (Session B — Auto-Fix)
+        if: |
+          steps.pr.outputs.mode == 'auto-fix' &&
+          steps.verdict.outputs.verdict == 'NEEDS_FIXES'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          show_full_output: true
+          prompt: |
+            You are a code fixer for the Atlan application-sdk.
+            A review has been posted on PR #${{ steps.pr.outputs.number }} with exact fix instructions.
+
+            IMPORTANT: Full git history is already checked out. Do NOT run git fetch.
+
+            Follow this process exactly:
+
+            1. Read the most recent SDK review comment on this PR:
+               gh api repos/atlanhq/application-sdk/issues/${{ steps.pr.outputs.number }}/comments \
+                 --jq '.[] | select(.body | contains("SDK_REVIEW_V2")) | .body' | tail -1
+
+            2. Parse the REVIEW_DATA JSON block from the comment.
+               Extract findings with status "open" and scope "PATCH" or "MIGRATE".
+
+            3. For each PATCH finding (has fix instructions):
+               a. Read the full file to understand context
+               b. Think about WHY this fix is needed — does it make sense?
+               c. Apply the exact code change specified
+               d. Run: uv run pre-commit run --files <changed_file>
+               e. If a corresponding test file exists, run: uv run pytest <test_file> -x
+               f. If pre-commit or tests fail → revert ONLY this fix, note why
+
+            4. For each MIGRATE finding:
+               a. Read all caller files listed in the finding
+               b. Plan: which callers to update, what replacement to use
+               c. Update each caller to use the v3 replacement
+               d. Run pre-commit on all changed files
+               e. Run tests for affected modules
+               f. If tests fail → revert, note why
+
+            5. SKIP all REFACTOR and DESIGN_CHANGE findings. Do not touch them.
+
+            6. If any fixes were successfully applied:
+               git add <specific changed files>
+               git commit -m "fix(review): address SDK review findings (iteration $ITERATION)"
+               git push origin ${{ steps.pr.outputs.head_branch }}
+
+            7. Do NOT change anything beyond what the review specifies.
+               Do NOT add features, refactor, or "improve" code.
+               Do NOT modify files the PR doesn't touch.
+
+            After completing, output: FIXES_APPLIED:<count> or FIXES_APPLIED:0
+          claude_args: |
+            --model claude-opus-4-6
+            --timeout 600
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(uv run:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git diff:*),Bash(git checkout:*),Bash(git status:*),Bash(gh api:*),Bash(gh pr view:*),Bash(cat:*),Bash(jq:*)"
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+          GH_TOKEN: ${{ github.token }}
+
+      # Trigger next iteration (fresh session via new Action run)
+      - name: Trigger re-review iteration
+        if: |
+          steps.pr.outputs.mode == 'auto-fix' &&
+          steps.verdict.outputs.verdict == 'NEEDS_FIXES'
+        run: |
+          # Parse current iteration
+          CURRENT=$(echo "${{ steps.pr.outputs.comment }}" | grep -oP '\-\-iteration=\K\d+' || echo "1")
+          MAX=$(echo "${{ steps.pr.outputs.comment }}" | grep -oP '\-\-max=\K\d+' || echo "5")
+          NEXT=$((CURRENT + 1))
+
+          if [ "$NEXT" -gt "$MAX" ]; then
+            echo "Max iterations ($MAX) reached."
+            gh pr comment "${{ steps.pr.outputs.number }}" --body \
+              "SDK Review: Max iterations ($MAX) reached. Remaining findings need manual attention."
+            gh label create "needs-human-review" --color "d93f0b" --force 2>/dev/null
+            gh pr edit "${{ steps.pr.outputs.number }}" --add-label "needs-human-review"
+            exit 0
+          fi
+
+          # Post self-triggering comment for next iteration
+          gh pr comment "${{ steps.pr.outputs.number }}" --body \
+            "@sdk-review --iteration=$NEXT --max=$MAX"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Finalize if clean (approve + update branch)
+      - name: Finalize (approve if clean)
+        if: steps.verdict.outputs.verdict == 'READY_TO_MERGE'
+        run: |
+          PR="${{ steps.pr.outputs.number }}"
+
+          # Update branch
+          gh api "repos/${{ github.repository }}/pulls/$PR/update-branch" \
+            -X PUT -f update_method=merge 2>/dev/null || echo "Branch already up to date"
+
+          # Wait for CI after branch update
+          sleep 15
+          echo "Checking CI status..."
+          if ! gh pr checks "$PR" --required --watch --fail-fast 2>/dev/null; then
+            echo "CI checks failing after branch update. Not approving."
+            gh api "repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.head_sha }}" \
+              -f state=failure -f context=sdk-review \
+              -f description="SDK Review: Clean but CI failing after branch update"
+            exit 0
+          fi
+
+          # Approve
+          gh pr review "$PR" --approve \
+            --body "SDK Review v2: All findings resolved. CI passing. Branch up to date. Approved."
+
+          # Labels
+          gh label create "sdk-review-approved" --color "0e8a16" --force 2>/dev/null
+          gh pr edit "$PR" --add-label "sdk-review-approved"
+          gh pr edit "$PR" --remove-label "needs-human-review" 2>/dev/null || true
+          gh pr edit "$PR" --remove-label "needs-rebase" 2>/dev/null || true
+
+          # Final status
+          NEW_SHA=$(gh pr view "$PR" --json headRefOid -q .headRefOid)
+          gh api "repos/${{ github.repository }}/statuses/$NEW_SHA" \
+            -f state=success -f context=sdk-review \
+            -f description="SDK Review: Approved. Ready to merge."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # ── Reset review status on new commits ──────────────────────
+  # When the author pushes new code, reset the sdk-review check
+  # to pending so the PR stays blocked until re-reviewed.
+  #
+  # IMPORTANT: We must distinguish between:
+  # - Author pushes new code → reset review (author's commit)
+  # - Branch-keeper merges base → do NOT reset (merge commit from bot)
+  # - Auto-fix session pushes → do NOT reset (handled by the loop)
+  #
+  # We check: if the commit author is github-actions[bot] or the
+  # commit message matches "fix(review):" (auto-fix) or starts with
+  # "Merge branch" (branch-keeper), skip the reset.
+  reset-review-status:
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.action == 'synchronize' &&
+      (github.event.pull_request.base.ref == 'refactor-v3' ||
+       github.event.pull_request.base.ref == 'main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check if this is a bot/auto commit or author commit
+        id: check
+        run: |
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          COMMIT_AUTHOR=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" \
+            --jq '.author.login // .commit.author.name')
+          COMMIT_MSG=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" \
+            --jq '.commit.message' | head -1)
+
+          echo "author=$COMMIT_AUTHOR" >> "$GITHUB_OUTPUT"
+          echo "message=$COMMIT_MSG" >> "$GITHUB_OUTPUT"
+
+          # Skip reset if:
+          # - Commit is from github-actions bot (branch-keeper or auto-fix)
+          # - Commit message is a merge from base branch (branch-keeper)
+          # - Commit message is an auto-fix iteration
+          if [[ "$COMMIT_AUTHOR" == "github-actions"* ]] || \
+             [[ "$COMMIT_MSG" == "Merge branch"* ]] || \
+             [[ "$COMMIT_MSG" == "fix(review):"* ]]; then
+            echo "is_bot=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_bot=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Reset sdk-review status (author commits only)
+        if: steps.check.outputs.is_bot == 'false'
+        run: |
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+
+          # Check if PR was previously approved (we'll notify only on first reset)
+          WAS_APPROVED=$(gh pr view "$PR_NUMBER" --json labels \
+            --jq '.labels[].name' | grep -c "sdk-review-approved" || true)
+
+          # Set status to pending — PR is blocked until @sdk-review runs
+          gh api "repos/${{ github.repository }}/statuses/$HEAD_SHA" \
+            -f state=pending \
+            -f context=sdk-review \
+            -f description="New commits pushed. Comment @sdk-review to unblock."
+
+          # Remove approved and auto-maintained labels
+          gh pr edit "$PR_NUMBER" --remove-label "sdk-review-approved" 2>/dev/null || true
+          gh pr edit "$PR_NUMBER" --remove-label "sdk-review-auto-maintained" 2>/dev/null || true
+
+          # Only post a comment if the PR was previously approved.
+          # This avoids noise on every push to non-approved PRs (the
+          # status check description is enough for those).
+          if [ "$WAS_APPROVED" -gt 0 ]; then
+            gh pr comment "$PR_NUMBER" --body \
+              "New commits detected. The previous SDK Review approval has been reset because the code changed. Comment \`@sdk-review\` (or \`@sdk-review resolve all issues\`) to re-review."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Preserve approval for bot commits (branch updates)
+        if: steps.check.outputs.is_bot == 'true'
+        run: |
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+
+          # Re-set the status to success on the NEW commit SHA so
+          # the required check passes on the updated branch
+          # (only if the PR was previously approved)
+          HAS_LABEL=$(gh pr view "$PR_NUMBER" --json labels \
+            --jq '.labels[].name' | grep -c "sdk-review-approved" || true)
+
+          if [ "$HAS_LABEL" -gt 0 ]; then
+            gh api "repos/${{ github.repository }}/statuses/$HEAD_SHA" \
+              -f state=success \
+              -f context=sdk-review \
+              -f description="SDK Review: Approved. Branch updated automatically."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
