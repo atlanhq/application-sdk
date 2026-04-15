@@ -61,9 +61,7 @@ class TestDaprStateStore:
         self.client.get_state.return_value = json.dumps({"a": 1})
         result = await self.store.load("k1")
         assert result == {"a": 1}
-        self.client.get_state.assert_awaited_once_with(
-            store_name="mystate", key="k1"
-        )
+        self.client.get_state.assert_awaited_once_with(store_name="mystate", key="k1")
 
     async def test_load_returns_none_when_empty(self):
         self.client.get_state.return_value = None
@@ -139,9 +137,7 @@ class TestDaprSecretStore:
         }
         result = await self.store.get_bulk(["a", "c", "missing"])
         assert result == {"a": "val_a", "c": "val_c"}
-        self.client.get_bulk_secret.assert_awaited_once_with(
-            store_name="mysecrets"
-        )
+        self.client.get_bulk_secret.assert_awaited_once_with(store_name="mysecrets")
 
     async def test_get_bulk_error(self):
         self.client.get_bulk_secret.side_effect = RuntimeError("boom")
@@ -228,9 +224,7 @@ class TestDaprBinding:
         )
 
     async def test_invoke_with_data_and_metadata(self):
-        self.client.invoke_binding.return_value = BindingResult(
-            data=b"ok", metadata={}
-        )
+        self.client.invoke_binding.return_value = BindingResult(data=b"ok", metadata={})
         resp = await self.binding.invoke(
             "create", data=b"payload", metadata={"key": "val"}
         )
@@ -243,9 +237,7 @@ class TestDaprBinding:
         )
 
     async def test_invoke_none_data_response(self):
-        self.client.invoke_binding.return_value = BindingResult(
-            data=None, metadata={}
-        )
+        self.client.invoke_binding.return_value = BindingResult(data=None, metadata={})
         resp = await self.binding.invoke("delete")
         assert resp.data is None
         assert resp.metadata == {}
