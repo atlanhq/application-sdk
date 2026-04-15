@@ -80,12 +80,11 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Connect to VPN
-        uses: ./.github/actions/globalprotect-connect
-        with:
-          portal-url: vpn2.atlan.app
-          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
-          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+      # NOTE: VPN connect is intentionally AFTER Resolve PR metadata and
+      # Acknowledge trigger. Those first two steps only talk to GitHub
+      # (api.github.com, not behind VPN), and we want the 👀 reaction,
+      # pending status check, and ack comment to appear within ~3 seconds
+      # of the @sdk-review comment — not after the 30-60s VPN negotiation.
 
       - name: Resolve PR metadata
         id: pr
@@ -214,6 +213,18 @@ jobs:
 
           BODY="🔄 **SDK ${VERB} starting** (${LABEL}) — takes ~5-8 min. [Watch live progress](${RUN_URL})${STOP_HINT}"
           gh pr comment "$PR_NUMBER" --body "$BODY"
+
+      # Connect to VPN AFTER the ack (Resolve + Acknowledge only need
+      # api.github.com, not the internal VPN'd services). This means
+      # the 👀 reaction, pending status, and ack comment appear in ~3s
+      # instead of ~30-60s. VPN is required for the Claude session
+      # below to reach llmproxy.atlan.dev.
+      - name: Connect to VPN
+        uses: ./.github/actions/globalprotect-connect
+        with:
+          portal-url: vpn2.atlan.app
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
       # Pre-flight: Try to resolve conflicts BEFORE running the review
       # Tier 1: GitHub API update-branch
