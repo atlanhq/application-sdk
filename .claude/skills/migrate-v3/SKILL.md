@@ -872,14 +872,26 @@ async def _build_client(credentials: list[HandlerCredential]) -> MyClient:
 
 ### Payload safety and `allow_unbounded_fields`
 
-v3 enforces strict types on `Input`/`Output` contracts. `dict[str, Any]` fields will raise `PayloadSafetyError` at import time. For top-level input models that receive arbitrary config from AE/Heracles (connection dicts, metadata dicts), use:
+v3 enforces strict types on `Input`/`Output` contracts. `dict[str, Any]` fields raise `PayloadSafetyError` at import time. Using `dict[str, Any]` directly as a `@task` parameter raises `TaskContractError` at decoration time. Every task MUST use `Input`/`Output` subclasses.
 
+For top-level input models that receive arbitrary config from AE/Heracles (connection dicts, metadata dicts), use `allow_unbounded_fields=True` as an escape hatch — replace with bounded typed fields once the dict's contents are known:
 ```python
 class MyExtractionInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
     credentials: dict[str, Any] = {}
     connection: dict[str, Any] = {}
     metadata: dict[str, Any] = {}
+```
+
+For connectors migrating from v2 where helper functions expect dicts, create thin wrappers:
+```python
+class WorkflowArgsInput(Input, allow_unbounded_fields=True):
+    # Escape hatch — replace with bounded typed fields once contents are known.
+    args: dict[str, Any] = {}
+
+class StatsOutput(Output):
+    total_record_count: int = 0
+    chunk_count: int = 0
 ```
 
 For inter-task contracts, prefer typed fields with `MaxItems` or `FileReference`.
@@ -1059,14 +1071,14 @@ class LocalParquetWriter:
         self._chunk = 0
         self._rows = 0
 
-    def write_batches(self, batches):
+    def write_batches(self, batches: list[Any]) -> None:
         for df in batches:
             if df is not None and len(df) > 0:
                 df.to_parquet(os.path.join(self.path, f"part-{self._chunk}.parquet"), index=False)
                 self._rows += len(df)
                 self._chunk += 1
 
-    def close(self) -> dict:
+    def close(self) -> dict[str, int]:
         return {"total_record_count": self._rows, "chunk_count": self._chunk}
 ```
 
@@ -1103,13 +1115,16 @@ async def _get_client(self, workflow_args: dict[str, Any]):
         creds = await self.context.resolve_credential_raw(
             legacy_credential_ref(credential_guid)
         )
+        # creds is a dict[str, Any] — access fields directly:
+        host = creds.get("host")
+        password = creds.get("password")
 ```
 
 Note: `application_sdk.services.secretstore.SecretStore` (v2) does not exist in v3 — importing it raises `ModuleNotFoundError`.
 
 ### QueryBasedTransformer needs workflow_id and workflow_run_id
 
-`transform_metadata()` requires `workflow_id` and `workflow_run_id` as **explicit keyword args** — passing them inside a `**kwargs` dict raises `TypeError: missing required positional argument`. Pass them explicitly:
+`transform_metadata()` requires `workflow_id` and `workflow_run_id` as explicit keyword args — they are easy to accidentally omit when building a kwargs dict. Pass them explicitly to make the requirement visible:
 ```python
 transformer.transform_metadata(
     typename=typename,
@@ -1194,9 +1209,38 @@ The v2 `ActivitiesInterface.get_workflow_args()` does:
 
 The skill must replicate ALL of these steps. Missing the StateStore lookup means `credential_guid` won't be found in production (platform stores it in state store, not in the workflow start input).
 
+**Skeleton v3 equivalent** (adapt to your connector's input contract):
+```python
+@task
+async def get_workflow_args(self, input: MyWorkflowInput) -> MyWorkflowArgsOutput:
+    workflow_id = self.context.run_id
+
+    # Step 1+2: load full config from state store; fall back to inline input
+    from application_sdk.services.statestore import StateStore, StateType
+    config = await StateStore.get_state(workflow_id, StateType.WORKFLOWS) or {}
+    if not config:
+        config = dict(input.workflow_config)  # AE / direct-invoke path
+
+    # Step 3: normalize connection (handle nested, flat, and SDK shapes)
+    connection = config.get("connection", config)
+
+    # Step 4: build output path
+    output_path = str(Path(tempfile.gettempdir()) / "my-app" / workflow_id)
+
+    # Step 5: credential resolution (see "Credential resolution" gotcha above)
+    credential_guid = config.get("credential_guid", "")
+
+    return MyWorkflowArgsOutput(
+        workflow_id=workflow_id,
+        credential_guid=credential_guid,
+        connection=connection,
+        output_path=output_path,
+    )
+```
+
 ### Empty nested column dirs cause 60s Dapr timeouts
 
-Applies to connectors that write hierarchical column data across relation-level subdirectories (e.g. Glue-style connectors). When `process_column_data` creates empty relation level directories (levels 3-15 with no data), the `ParquetFileReader` in `transform_data` tries to read from them, finds no local parquet files, falls back to Dapr objectstore (60s health check timeout each).
+Applies to connectors that write hierarchical column data across relation-level subdirectories (e.g. Glue-style connectors). When `process_column_data` creates empty relation level directories (levels 3-15 with no data), the `ParquetFileReader` in `transform_data` tries to read from them, finds no local parquet files, falls back to Dapr objectstore (60s health check timeout each). See also: "Write to local disk" and "auto_heartbeat_seconds" gotchas for other Dapr timeout sources.
 
 **Fix:** Check for local parquet files before creating a reader:
 ```python
@@ -1209,10 +1253,14 @@ if not local_parquets:
 
 `run_dev_combined()` defaults to `localhost:7233`. In production (v3 base image), the Temporal host comes from environment variables set by Helm. Hardcoding localhost causes `ConnectionRefused` in deployed pods.
 
-**Fix:** Prefer `ATLAN_TEMPORAL_HOST` (combined `host:port`, v3 primary) with fallback to v2 split vars:
+**Fix:** `ATLAN_TEMPORAL_HOST` is `host:port` in production (set by Helm). Some environments (e.g. scale-tests) set it as host-only with a separate `ATLAN_TEMPORAL_PORT`. Guard for both, then fall back to v2 split vars:
 ```python
+_th = os.environ.get("ATLAN_TEMPORAL_HOST", "")
+if _th and ":" not in _th:
+    # host-only — append port
+    _th = f"{_th}:{os.environ.get('ATLAN_TEMPORAL_PORT', '7233')}"
 temporal_host = (
-    os.environ.get("ATLAN_TEMPORAL_HOST")
+    _th
     or f"{os.environ.get('ATLAN_WORKFLOW_HOST', 'localhost')}:{os.environ.get('ATLAN_WORKFLOW_PORT', '7233')}"
 )
 await run_dev_combined(MyApp, temporal_host=temporal_host)
@@ -1221,21 +1269,6 @@ await run_dev_combined(MyApp, temporal_host=temporal_host)
 ### run_dev_combined() does not accept handler_class
 
 Handler is auto-discovered by type inspection — importing the handler class in the App module is sufficient. Do NOT pass `handler_class=` to `run_dev_combined()`.
-
-### @task enforces typed Input/Output — no raw dicts
-
-`dict[str, Any]` as a `@task` parameter raises `TaskContractError` when the `@task` decorator validates the method signature (at decoration time). Every task MUST use Input/Output subclasses (see also: "Payload safety and `allow_unbounded_fields`" above). For connectors migrating from v2 where helper functions expect dicts, create thin wrappers:
-
-```python
-class WorkflowArgsInput(Input, allow_unbounded_fields=True):
-    # allow_unbounded_fields=True is an escape hatch — replace with
-    # bounded typed fields once the dict's contents are known.
-    args: dict[str, Any] = {}
-
-class StatsOutput(Output):
-    total_record_count: int = 0
-    chunk_count: int = 0
-```
 
 ### pyproject.toml — local path fails in Docker
 
