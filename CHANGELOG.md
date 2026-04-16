@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.8.7 (April 16, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.6...v2.8.7
+
+### Features
+
+- enable @sdk-review on main (#1327) (by @vaibhavatlan in [a71b4d4](https://github.com/atlanhq/application-sdk/commit/a71b4d4))
+- add @sdk-review challenge mode + retrospective learning (#1345) (by @vaibhavatlan in [4b59bba](https://github.com/atlanhq/application-sdk/commit/4b59bba))
+- centralize base allowlist and dashboard template (#1325) (by @mananjain99 in [767936b](https://github.com/atlanhq/application-sdk/commit/767936b))
+- remove inline-QA job (deferred), keep auto-resolve (#1365) (by @vaibhavatlan in [2fd5e08](https://github.com/atlanhq/application-sdk/commit/2fd5e08))
+- gate publish and SDR dispatch on security scan — enforcement enabled (#1332) (by @adityachoudhury-cloud in [0ead801](https://github.com/atlanhq/application-sdk/commit/0ead801))
+
+### Bug Fixes
+
+- resolve auth failure + add instant UX feedback (#1330) (by @vaibhavatlan in [bc52434](https://github.com/atlanhq/application-sdk/commit/bc52434))
+- hotfix — workflow rejected on main due to empty ${{ }} in comments (#1334) (by @vaibhavatlan in [f3a02d7](https://github.com/atlanhq/application-sdk/commit/f3a02d7))
+- parse verdict from PR comment + restore status check (#1337) (by @vaibhavatlan in [6826126](https://github.com/atlanhq/application-sdk/commit/6826126))
+- context-aware approve message (drop 'v2', distinguish review vs re-review) (#1341) (by @vaibhavatlan in [6a0c0c1](https://github.com/atlanhq/application-sdk/commit/6a0c0c1))
+- Re-review verb flows through Claude comment + ack + status (#1343) (by @vaibhavatlan in [5a107b9](https://github.com/atlanhq/application-sdk/commit/5a107b9))
+- demo-prep — inline Q&A, tighter verdict, auto-resolve, clearer CI msg (#1351) (by @vaibhavatlan in [8efaa8b](https://github.com/atlanhq/application-sdk/commit/8efaa8b))
+- hotfix adversarial jq + inline-QA 404 (#1359) (by @vaibhavatlan in [ca8ac91](https://github.com/atlanhq/application-sdk/commit/ca8ac91))
+- correct inline-QA API endpoint (1-line fix) (#1361) (by @vaibhavatlan in [70707e0](https://github.com/atlanhq/application-sdk/commit/70707e0))
+- inline-QA OIDC + ack-before-VPN + ~10min estimate (#1363) (by @vaibhavatlan in [11f3351](https://github.com/atlanhq/application-sdk/commit/11f3351))
+- CI-fix loop (Session C) + branch-keeping (#1367) (by @vaibhavatlan in [0152866](https://github.com/atlanhq/application-sdk/commit/0152866))
+- add missing top-level permissions (actions, workflows) (#1369) (by @vaibhavatlan in [f07e7cf](https://github.com/atlanhq/application-sdk/commit/f07e7cf))
+- remove invalid 'workflows' permission, use git merge fallback (#1371) (by @vaibhavatlan in [28802b6](https://github.com/atlanhq/application-sdk/commit/28802b6))
+- fix branch-update fallback (auth + 422 handling) (#1373) (by @vaibhavatlan in [0d76208](https://github.com/atlanhq/application-sdk/commit/0d76208))
+- remove per-repo allowlist — base-allowlist is single source of truth (#1375) (by @adityachoudhury-cloud in [5151867](https://github.com/atlanhq/application-sdk/commit/5151867))
+
+### Reverts
+
+- revert "fix: resilient thread-based heartbeater for all activities" (#1376) (by @SanilK2108 in [f17993e](https://github.com/atlanhq/application-sdk/commit/f17993e))
+
+
 ## v2.8.6 (April 15, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.5...v2.8.6
