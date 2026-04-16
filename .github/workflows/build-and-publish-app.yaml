@@ -357,10 +357,8 @@ jobs:
 
   # ── Job 4: Security scan — Trivy + Snyk + allowlist gate ─────────────────────
   # Runs after merge; publish and SDR dispatch both wait for it.
-  # fail_on_findings is kept false during the Phase 2 structural rollout so the
-  # scan is informational but publish/dispatch still block on job completion.
-  # Enforcement (fail_on_findings: true) flips after Phase 1 allowlist rollout
-  # reaches adequate adoption — tracked separately.
+  # If the scan finds CRITICAL/HIGH CVEs not covered by the allowlist, it fails
+  # and publish + SDR dispatch are skipped — no vulnerable image reaches GM.
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
@@ -369,7 +367,7 @@ jobs:
       image: ${{ needs.prepare.outputs.ghcr_image }}
       snyk_org: partner-images
       snyk_monitor: ${{ inputs.snyk_monitor }}
-      fail_on_findings: false
+      fail_on_findings: true
     secrets: inherit
 
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
