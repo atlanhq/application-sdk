@@ -225,6 +225,22 @@ jobs:
             echo "touches_workflows=false" >> "$GITHUB_OUTPUT"
           fi
 
+          # Classify PR complexity for smart agent routing.
+          #   tests-only → all changed .py files are under tests/ (no production code)
+          #                 → dispatch ONLY Agent B (QUALITY/TEST), skip A + C + Codex
+          #   standard   → full 3-agent + Codex pipeline
+          ALL_FILES=$(gh pr view "$PR_NUMBER" --json files --jq '.files[].path')
+          PY_FILES=$(printf '%s' "$ALL_FILES" | grep '\.py$' || echo "")
+          NON_TEST_PY=$(printf '%s' "$PY_FILES" | grep -v '^tests/' || echo "")
+
+          if [ -n "$PY_FILES" ] && [ -z "$NON_TEST_PY" ]; then
+            COMPLEXITY="tests-only"
+          else
+            COMPLEXITY="standard"
+          fi
+          echo "complexity=$COMPLEXITY" >> "$GITHUB_OUTPUT"
+          echo "Classified PR complexity: $COMPLEXITY"
+
       # Instant UX feedback: 👀 reaction + pending status check + ack comment.
       # All three happen in the first ~5 s so the user sees @sdk-review
       # was picked up.
@@ -650,9 +666,15 @@ jobs:
             ## Orchestrator setup
 
             You are the ORCHESTRATOR. Do NOT review the PR yourself.
-            Dispatch 3 Task subagents IN PARALLEL (single message, 3
-            Task tool uses). Consolidate their findings into ONE
-            SDK_REVIEW_V2 comment.
+            The env var SDK_REVIEW_COMPLEXITY is either "tests-only"
+            or "standard". Use it to decide how many subagents:
+
+            - "tests-only" → dispatch ONLY Agent B (QUALITY/TEST).
+              Skip Agent A and Agent C — there's no production code
+              to review for architecture/security/structure.
+            - "standard"   → dispatch all 3 agents in parallel.
+
+            In both cases, consolidate into ONE SDK_REVIEW_V2 comment.
 
             ### Step 1 — Prepare shared context (prompt-caching optimization)
 
@@ -871,6 +893,7 @@ jobs:
           # Claude must use this exact verb in the SDK_REVIEW_V2 comment
           # heading and summary for consistent messaging across UI.
           SDK_REVIEW_VERB: ${{ steps.ack.outputs.verb }}
+          SDK_REVIEW_COMPLEXITY: ${{ steps.pr.outputs.complexity }}
 
       # Adversarial review (Wave 2 — GPT-5.3-codex via LiteLLM).
       # Second cross-model opinion. Posts a separate comment with
@@ -882,7 +905,8 @@ jobs:
         id: adversarial
         if: |
           steps.pr.outputs.mode != 'override' &&
-          steps.pr.outputs.mode != 'challenge'
+          steps.pr.outputs.mode != 'challenge' &&
+          steps.pr.outputs.complexity != 'tests-only'
         continue-on-error: true
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
@@ -891,10 +915,10 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --jq '[.[] | select(.body | contains("SDK_REVIEW_V2")
-              and (.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
-              and (.body | contains("SDK_REVIEW_V2_RECONCILED") | not))] | last | .body // ""')
+          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --per-page 100 \
+            | jq -r '[.[] | select(.body | contains("SDK_REVIEW_V2"))
+              | select(.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
+              | select(.body | contains("SDK_REVIEW_V2_RECONCILED") | not)] | last | .body // ""')
 
           if [ -z "$CLAUDE_REVIEW" ]; then
             echo "No SDK_REVIEW_V2 comment found — skipping adversarial pass."
@@ -1616,10 +1640,21 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PARENT_ID: ${{ github.event.comment.in_reply_to_id }}
         run: |
-          PARENT_AUTHOR=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/comments/${PARENT_ID}" \
-            --jq '.user.login' 2>/dev/null || echo "unknown")
+          # Fetch the parent comment. The in_reply_to_id might refer to
+          # either a PR review comment (/pulls/N/comments/ID) or an
+          # issue comment (/issues/N/comments/ID). Try both endpoints;
+          # if both 404, fall back to "unknown".
+          PARENT_AUTHOR="unknown"
+          RESULT=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/comments/${PARENT_ID}" 2>/dev/null) || \
+          RESULT=$(gh api "repos/${REPO}/issues/comments/${PARENT_ID}" 2>/dev/null) || \
+          RESULT=""
+
+          if [ -n "$RESULT" ]; then
+            PARENT_AUTHOR=$(printf '%s' "$RESULT" | jq -r '.user.login // "unknown"')
+          fi
+
           echo "parent_author=$PARENT_AUTHOR" >> "$GITHUB_OUTPUT"
-          if [ "$PARENT_AUTHOR" = "github-actions[bot]" ]; then
+          if [ "$PARENT_AUTHOR" = "github-actions[bot]" ] || [ "$PARENT_AUTHOR" = "claude[bot]" ]; then
             echo "is_bot_parent=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_bot_parent=false" >> "$GITHUB_OUTPUT"
