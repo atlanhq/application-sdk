@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-04-15",
+  "_updated": "2026-04-16",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 60 days. HIGH: 90 days. Review before expiry.",
   "SNYK-GOLANG-GOOGLEGOLANGORGGRPC-15691172": {
     "package": "google.golang.org/grpc",
@@ -128,5 +128,12 @@
     "reason": "Base image \u2014 OpenTelemetry Go dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
+  },
+  "CVE-2024-35515": {
+    "package": "sqlitedict==2.1.0",
+    "severity": "HIGH",
+    "reason": "No patched version of sqlitedict available — upstream has not released a fix as of 2026-04-16",
+    "expires": "2026-07-16",
+    "added_by": "TechyMT"
   }
 }
