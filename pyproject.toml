@@ -60,6 +60,10 @@ pandas = [
 daft = [
     "daft>=0.7.1,<0.8.0",
 ]
+lakehouse = [
+    "pyiceberg>=0.7.0,<0.9.0",
+    "daft>=0.7.1,<0.8.0",
+]
 sqlalchemy = [
     "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
 ]
