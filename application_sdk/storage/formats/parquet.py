@@ -20,7 +20,7 @@ from application_sdk.storage.batch import delete_prefix as _delete_prefix
 from application_sdk.storage.formats import DataframeType, Reader, WriteMode, Writer
 from application_sdk.storage.formats.utils import (
     PARQUET_FILE_EXTENSION,
-    download_files,
+    _download_files,
     is_empty_dataframe,
     path_gen,
 )
@@ -188,7 +188,7 @@ class ParquetFileReader(Reader):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await download_files(
+            parquet_files = await _download_files(
                 self.path, PARQUET_FILE_EXTENSION, self.file_names
             )
             # Track downloaded files for cleanup on close
@@ -248,7 +248,7 @@ class ParquetFileReader(Reader):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await download_files(
+            parquet_files = await _download_files(
                 self.path, PARQUET_FILE_EXTENSION, self.file_names
             )
             # Track downloaded files for cleanup on close
@@ -300,7 +300,7 @@ class ParquetFileReader(Reader):
             import daft  # type: ignore
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await download_files(
+            parquet_files = await _download_files(
                 self.path, PARQUET_FILE_EXTENSION, self.file_names
             )
             # Track downloaded files for cleanup on close
@@ -359,7 +359,7 @@ class ParquetFileReader(Reader):
             import daft  # type: ignore
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await download_files(
+            parquet_files = await _download_files(
                 self.path, PARQUET_FILE_EXTENSION, self.file_names
             )
             # Track downloaded files for cleanup on close
