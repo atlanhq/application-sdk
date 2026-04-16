@@ -173,9 +173,6 @@ class TestAppVitalsActivityInterceptor:
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
             mock.patch(
-                "application_sdk.observability.app_vitals._emit_metric"
-            ) as mock_metric,
-            mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
@@ -205,10 +202,6 @@ class TestAppVitalsActivityInterceptor:
             assert log_attrs["workflow_id"] == "wf-abc-123"
             assert log_attrs["duration_ms"] >= 0
 
-            assert mock_metric.call_count >= 2
-            metric_calls = [c[0][0] for c in mock_metric.call_args_list]
-            assert "app_vitals.reliability.activity_completed" in metric_calls
-            assert "app_vitals.performance.activity_runtime" in metric_calls
 
     @pytest.mark.asyncio
     async def test_failed_activity_emits_error_type(
@@ -230,7 +223,6 @@ class TestAppVitalsActivityInterceptor:
             mock.patch(
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
-            mock.patch("application_sdk.observability.app_vitals._emit_metric"),
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
@@ -263,10 +255,9 @@ class TestAppVitalsActivityInterceptor:
             mock.patch(
                 "application_sdk.observability.app_vitals.activity"
             ) as mock_activity_mod,
-            mock.patch("application_sdk.observability.app_vitals._emit_log_event"),
             mock.patch(
-                "application_sdk.observability.app_vitals._emit_metric"
-            ) as mock_metric,
+                "application_sdk.observability.app_vitals._emit_log_event"
+            ) as mock_log,
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
@@ -278,15 +269,13 @@ class TestAppVitalsActivityInterceptor:
 
             await interceptor.execute_activity(MockExecuteActivityInput())
 
-            metric_calls = [c[0][0] for c in mock_metric.call_args_list]
-            assert "app_vitals.reliability.activity_retries" in metric_calls
-
-            retry_call = next(
-                c
-                for c in mock_metric.call_args_list
-                if c[0][0] == "app_vitals.reliability.activity_retries"
+            # Verify the act.completed event captured the retry attempt
+            completed_call = next(
+                c for c in mock_log.call_args_list
+                if c[0][0] == "app_vitals.act.completed"
             )
-            assert retry_call[0][1] == 2.0  # attempt 3 means 2 retries
+            attrs = completed_call[0][1]
+            assert attrs["attempt"] == 3
 
 
 class TestAppVitalsWorkflowInterceptor:
@@ -320,9 +309,6 @@ class TestAppVitalsWorkflowInterceptor:
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
             mock.patch(
-                "application_sdk.observability.app_vitals._emit_metric"
-            ) as mock_metric,
-            mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
@@ -352,10 +338,6 @@ class TestAppVitalsWorkflowInterceptor:
             assert log_attrs["workflow_id"] == "wf-abc-123"
             assert log_attrs["workflow_type"] == "metadata_crawl"
 
-            assert mock_metric.call_count == 2
-            metric_calls = [c[0][0] for c in mock_metric.call_args_list]
-            assert "app_vitals.reliability.wf_completed" in metric_calls
-            assert "app_vitals.performance.wf_runtime" in metric_calls
 
     @pytest.mark.asyncio
     async def test_failed_workflow_emits_error(self, mock_next_workflow, workflow_info):
@@ -375,7 +357,6 @@ class TestAppVitalsWorkflowInterceptor:
             mock.patch(
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
-            mock.patch("application_sdk.observability.app_vitals._emit_metric"),
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
@@ -506,9 +487,6 @@ class TestAppVitalsEfficiencyMetrics:
             ) as mock_activity_mod,
             mock.patch("application_sdk.observability.app_vitals._emit_log_event"),
             mock.patch(
-                "application_sdk.observability.app_vitals._emit_metric"
-            ) as mock_metric,
-            mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
@@ -519,11 +497,8 @@ class TestAppVitalsEfficiencyMetrics:
 
             await interceptor.execute_activity(MockExecuteActivityInput())
 
-            metric_names = [c[0][0] for c in mock_metric.call_args_list]
             # Efficiency metrics should be emitted if psutil works on this platform
             # (may be 0.0 values, but metrics are emitted)
-            if "app_vitals.efficiency.activity_cpu_seconds" in metric_names:
-                assert "app_vitals.efficiency.activity_mem_gb_sec" in metric_names
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +536,6 @@ class TestAppVitalsTraceIdAttachment:
             mock.patch(
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
-            mock.patch("application_sdk.observability.app_vitals._emit_metric"),
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
@@ -598,7 +572,6 @@ class TestAppVitalsTraceIdAttachment:
             mock.patch(
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
-            mock.patch("application_sdk.observability.app_vitals._emit_metric"),
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
@@ -722,7 +695,6 @@ class TestAppVitalsRichErrorFields:
             mock.patch(
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
-            mock.patch("application_sdk.observability.app_vitals._emit_metric"),
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
@@ -768,7 +740,6 @@ class TestAppVitalsRichErrorFields:
             mock.patch(
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
-            mock.patch("application_sdk.observability.app_vitals._emit_metric"),
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
@@ -806,7 +777,6 @@ class TestAppVitalsRichErrorFields:
             mock.patch(
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
-            mock.patch("application_sdk.observability.app_vitals._emit_metric"),
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
@@ -858,7 +828,6 @@ class TestLifecycleStartEvents:
             mock.patch(
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
-            mock.patch("application_sdk.observability.app_vitals._emit_metric"),
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
@@ -959,9 +928,6 @@ class TestAssetsProcessed:
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
             mock.patch(
-                "application_sdk.observability.app_vitals._emit_metric"
-            ) as mock_metric,
-            mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
@@ -979,8 +945,6 @@ class TestAssetsProcessed:
             )
             assert completed_call[0][1]["assets_processed"] == 12345
 
-            metric_names = [c[0][0] for c in mock_metric.call_args_list]
-            assert "app_vitals.performance.activity_assets_processed" in metric_names
 
 
 # ---------------------------------------------------------------------------
@@ -1012,7 +976,6 @@ class TestWorkflowSummary:
             mock.patch(
                 "application_sdk.observability.app_vitals._emit_log_event"
             ) as mock_log,
-            mock.patch("application_sdk.observability.app_vitals._emit_metric"),
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
@@ -1190,89 +1153,8 @@ class TestLoggerAdaptorExtraKeysAllowlist:
             assert k in out, f"{k} was dropped by _build_extra_dict"
 
 
-class TestDurationMetricsUseHistogram:
-    """Regression for audit finding: emitting durations as MetricType.GAUGE
-    hits create_observable_gauge() in metrics_adaptor which doesn't support
-    .add() — errors are caught silently. Durations must use HISTOGRAM.
-    """
 
-    @pytest.fixture
-    def mock_next_activity(self):
-        mock_next = mock.AsyncMock()
-        mock_next.execute_activity = mock.AsyncMock(return_value="ok")
-        return mock_next
+# TestDurationMetricsUseHistogram removed — Path 2 (OTel metrics) was removed;
+# all analytics are now computed from Path 1 (log events → MV).
 
-    @pytest.mark.asyncio
-    async def test_activity_duration_emitted_as_histogram(self, mock_next_activity):
-        from application_sdk.observability.app_vitals import (
-            _AppVitalsActivityInboundInterceptor,
-        )
 
-        interceptor = _AppVitalsActivityInboundInterceptor(mock_next_activity)
-
-        with (
-            mock.patch(
-                "application_sdk.observability.app_vitals.activity"
-            ) as mock_activity_mod,
-            mock.patch("application_sdk.observability.app_vitals._emit_log_event"),
-            mock.patch(
-                "application_sdk.observability.app_vitals._emit_metric"
-            ) as mock_metric,
-            mock.patch(
-                "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
-            ),
-            mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
-            ),
-        ):
-            mock_activity_mod.info.return_value = MockActivityInfo()
-
-            await interceptor.execute_activity(MockExecuteActivityInput())
-
-            # Map each emitted metric name to its type
-            by_name = {c[0][0]: c[0][2] for c in mock_metric.call_args_list}
-
-            for duration_metric in (
-                "app_vitals.performance.activity_runtime",
-                "app_vitals.performance.activity_schedule_to_start",
-            ):
-                assert duration_metric in by_name, f"{duration_metric} was not emitted"
-                assert by_name[duration_metric] == "histogram", (
-                    f"{duration_metric} must be histogram, got "
-                    f"{by_name[duration_metric]!r}. ObservableGauge.add() "
-                    f"doesn't exist — gauge emissions are silently dropped."
-                )
-
-    @pytest.mark.asyncio
-    async def test_workflow_duration_emitted_as_histogram(self):
-        from application_sdk.observability.app_vitals import (
-            _AppVitalsWorkflowInboundInterceptor,
-        )
-
-        mock_next = mock.AsyncMock()
-        mock_next.execute_workflow = mock.AsyncMock(return_value="ok")
-        interceptor = _AppVitalsWorkflowInboundInterceptor(mock_next)
-
-        with (
-            mock.patch(
-                "application_sdk.observability.app_vitals.workflow"
-            ) as mock_wf_mod,
-            mock.patch("application_sdk.observability.app_vitals._emit_log_event"),
-            mock.patch(
-                "application_sdk.observability.app_vitals._emit_metric"
-            ) as mock_metric,
-            mock.patch(
-                "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
-            ),
-            mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
-            ),
-        ):
-            mock_wf_mod.info.return_value = MockWorkflowInfo()
-            mock_wf_mod.unsafe.is_replaying.return_value = False
-
-            await interceptor.execute_workflow(MockExecuteWorkflowInput())
-
-            by_name = {c[0][0]: c[0][2] for c in mock_metric.call_args_list}
-
-            assert by_name.get("app_vitals.performance.wf_runtime") == "histogram"

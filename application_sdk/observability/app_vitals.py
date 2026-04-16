@@ -1,11 +1,11 @@
-"""App Vitals interceptor — automatic lifecycle metrics for workflows and activities.
+"""App Vitals interceptor — automatic lifecycle events for workflows and activities.
 
-Emits two paths on every workflow/activity completion:
-  Path 1: Structured log event via AtlanLoggerAdapter (→ otel_logs in ClickHouse)
-  Path 2: OTel metric via AtlanMetricsAdapter (counter + gauge for dashboards)
+Emits structured log events via AtlanLoggerAdapter on every workflow/activity
+lifecycle transition. Events land in otel_logs.service_logs and are extracted
+into horizon.app_vitals_events via a ClickHouse Materialized View.
 
-Both paths carry the full execution context: app_name, tenant_id, workflow_id,
-activity_id, status, error_type, duration_ms, etc.
+All analytics (success rates, P95 durations, error breakdowns, etc.) are
+computed at query time from the raw events — no pre-aggregated OTel metrics.
 
 Registration order: AFTER ExecutionContextInterceptor and CorrelationContextInterceptor
 (reads from both ContextVars).
@@ -189,41 +189,6 @@ def _emit_log_event(
         logger = get_logger("app_vitals")
         level = "error" if attrs.get("status") == "failed" else "info"
         getattr(logger, level)(event_name, **attrs)
-    except Exception:
-        pass
-
-
-def _emit_metric(
-    name: str,
-    value: float,
-    metric_type_str: str,
-    labels: dict[str, str],
-    unit: str | None = None,
-) -> None:
-    """Emit an OTel metric (Path 2: → metrics pipeline).
-
-    Always passes a non-None description and unit because OTel's
-    ``MeterProvider._register_instrument`` constructs an instrument key as
-    ``",".join([name, type, unit, description])`` which raises ``TypeError``
-    if any element is ``None``.
-    """
-    try:
-        from application_sdk.observability.metrics_adaptor import get_metrics
-        from application_sdk.observability.models import MetricType
-
-        type_map = {
-            "counter": MetricType.COUNTER,
-            "gauge": MetricType.GAUGE,
-            "histogram": MetricType.HISTOGRAM,
-        }
-        get_metrics().record_metric(
-            name=name,
-            value=value,
-            metric_type=type_map[metric_type_str],
-            labels=labels,
-            description="App Vitals signal",
-            unit=unit or "1",
-        )
     except Exception:
         pass
 
@@ -504,40 +469,6 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             except Exception:
                 pass  # summary is best-effort; never block the workflow
 
-            # Metric labels: only workflow-scoped fields. Deployment-level
-            # attributes (app_name, app_version, release_id, etc.) are on the
-            # OTel Resource and exported with every metric point automatically.
-            metric_labels = {
-                "workflow_type": info.workflow_type or "",
-                "task_queue": info.task_queue or "",
-                "status": status,
-                "error_type": error_type,
-                "workflow_id": info.workflow_id or "",
-                "workflow_run_id": info.run_id or "",
-                "namespace": info.namespace or "",
-                "correlation_id": common["correlation_id"],
-            }
-
-            _emit_metric(
-                "app_vitals.reliability.wf_completed",
-                1.0,
-                "counter",
-                metric_labels,
-                unit="1",
-            )
-
-            # Histogram — durations need percentile aggregation (p50/p95/p99).
-            # GAUGE here would hit create_observable_gauge() which doesn't support
-            # direct .add()/.record() and silently drops data via the adapter's
-            # exception handler.
-            _emit_metric(
-                "app_vitals.performance.wf_runtime",
-                duration_ms,
-                "histogram",
-                metric_labels,
-                unit="ms",
-            )
-
 
 class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
     """Emits lifecycle events on activity start AND completion."""
@@ -698,94 +629,13 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
 
             _emit_log_event("app_vitals.act.completed", event_attrs)
 
-            # Metric labels: only activity/workflow-scoped fields. Deployment
-            # attributes live on the OTel Resource.
-            metric_labels = {
-                "workflow_id": info.workflow_id or "",
-                "workflow_run_id": info.workflow_run_id or "",
-                "workflow_type": getattr(info, "workflow_type", ""),
-                "activity_type": info.activity_type or "",
-                "activity_id": info.activity_id or "",
-                "task_queue": info.task_queue or "",
-                "attempt": str(info.attempt),
-                "namespace": getattr(info, "namespace", ""),
-                "status": status,
-                "error_type": error_type,
-                "correlation_id": common["correlation_id"],
-            }
-
-            _emit_metric(
-                "app_vitals.reliability.activity_completed",
-                1.0,
-                "counter",
-                metric_labels,
-                unit="1",
-            )
-
-            # Histogram — durations need p50/p95/p99; GAUGE silently fails
-            # (see wf_runtime comment above).
-            _emit_metric(
-                "app_vitals.performance.activity_runtime",
-                duration_ms,
-                "histogram",
-                metric_labels,
-                unit="ms",
-            )
-
-            if schedule_to_start_ms is not None:
-                _emit_metric(
-                    "app_vitals.performance.activity_schedule_to_start",
-                    schedule_to_start_ms,
-                    "histogram",
-                    metric_labels,
-                    unit="ms",
-                )
-
-            if info.attempt > 1:
-                _emit_metric(
-                    "app_vitals.reliability.activity_retries",
-                    float(info.attempt - 1),
-                    "counter",
-                    metric_labels,
-                    unit="1",
-                )
-
-            # Efficiency signals — RFC DESIGN.md §4.1 #10 and #11.
-            # Process-level samples via psutil; see resource_sampler.py for scope limits.
-            if start_resource is not None and end_resource is not None:
-                _emit_metric(
-                    "app_vitals.efficiency.activity_cpu_seconds",
-                    cpu_seconds,
-                    "counter",
-                    metric_labels,
-                    unit="s",
-                )
-                _emit_metric(
-                    "app_vitals.efficiency.activity_mem_gb_sec",
-                    mem_gb_sec,
-                    "counter",
-                    metric_labels,
-                    unit="GiB.s",
-                )
-
-            # Throughput: assets_processed (L9) — universal denominator for
-            # cost-per-asset and efficiency comparisons across apps.
-            if assets_processed is not None:
-                _emit_metric(
-                    "app_vitals.performance.activity_assets_processed",
-                    float(assets_processed),
-                    "counter",
-                    metric_labels,
-                    unit="{assets}",
-                )
-
 
 class AppVitalsInterceptor(Interceptor):
-    """Temporal interceptor that emits App Vitals lifecycle metrics.
+    """Temporal interceptor that emits App Vitals lifecycle events.
 
-    Emits on every workflow/activity completion:
-      - Structured log event (Path 1) with full execution context
-      - OTel metric (Path 2) for counters, gauges, histograms
+    Emits structured log events (Path 1) on every workflow/activity
+    lifecycle transition. These land in otel_logs.service_logs and are
+    extracted into horizon.app_vitals_events via a ClickHouse MV.
 
     Registration order: AFTER ExecutionContextInterceptor and
     CorrelationContextInterceptor so that ContextVars are populated.
