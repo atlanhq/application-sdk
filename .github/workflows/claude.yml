@@ -891,10 +891,10 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --jq '[.[] | select(.body | contains("SDK_REVIEW_V2")
-              and (.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
-              and (.body | contains("SDK_REVIEW_V2_RECONCILED") | not))] | last | .body // ""')
+          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --per-page 100 \
+            | jq -r '[.[] | select(.body | contains("SDK_REVIEW_V2"))
+              | select(.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
+              | select(.body | contains("SDK_REVIEW_V2_RECONCILED") | not)] | last | .body // ""')
 
           if [ -z "$CLAUDE_REVIEW" ]; then
             echo "No SDK_REVIEW_V2 comment found — skipping adversarial pass."
@@ -1616,10 +1616,21 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PARENT_ID: ${{ github.event.comment.in_reply_to_id }}
         run: |
-          PARENT_AUTHOR=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/comments/${PARENT_ID}" \
-            --jq '.user.login' 2>/dev/null || echo "unknown")
+          # Fetch the parent comment. The in_reply_to_id might refer to
+          # either a PR review comment (/pulls/N/comments/ID) or an
+          # issue comment (/issues/N/comments/ID). Try both endpoints;
+          # if both 404, fall back to "unknown".
+          PARENT_AUTHOR="unknown"
+          RESULT=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/comments/${PARENT_ID}" 2>/dev/null) || \
+          RESULT=$(gh api "repos/${REPO}/issues/comments/${PARENT_ID}" 2>/dev/null) || \
+          RESULT=""
+
+          if [ -n "$RESULT" ]; then
+            PARENT_AUTHOR=$(printf '%s' "$RESULT" | jq -r '.user.login // "unknown"')
+          fi
+
           echo "parent_author=$PARENT_AUTHOR" >> "$GITHUB_OUTPUT"
-          if [ "$PARENT_AUTHOR" = "github-actions[bot]" ]; then
+          if [ "$PARENT_AUTHOR" = "github-actions[bot]" ] || [ "$PARENT_AUTHOR" = "claude[bot]" ]; then
             echo "is_bot_parent=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_bot_parent=false" >> "$GITHUB_OUTPUT"
