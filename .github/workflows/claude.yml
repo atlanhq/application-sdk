@@ -359,7 +359,6 @@ jobs:
           PR: ${{ steps.pr.outputs.number }}
           BASE: ${{ steps.pr.outputs.base_branch }}
           HEAD: ${{ steps.pr.outputs.head_branch }}
-          TOUCHES_WORKFLOWS: ${{ steps.pr.outputs.touches_workflows }}
         run: |
           # Set git identity BEFORE any merge/commit so we don't cascade
           # into 'empty ident name' errors if a tier step runs.
@@ -584,7 +583,7 @@ jobs:
             and without sycophancy.
 
             1. Fetch the most recent prior SDK_REVIEW_V2 comment:
-               gh api repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments \
+               gh api repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments --paginate \
                  --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | last | .body'
 
             2. Fetch the triggering challenge comment body via $GITHUB_EVENT_PATH
@@ -944,7 +943,7 @@ jobs:
 
             1. Fetch the most recent SDK_REVIEW_V2 comment (NOT
                _ADVERSARIAL, NOT _RECONCILED):
-               gh api "repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments" \
+               gh api "repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments" --paginate \
                  --jq '[.[] | select(.body | contains("SDK_REVIEW_V2")
                    and (.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
                    and (.body | contains("SDK_REVIEW_V2_RECONCILED") | not))] | last'
@@ -1066,7 +1065,7 @@ jobs:
             Process:
 
             1. Read the most recent SDK review comment on this PR:
-               gh api repos/atlanhq/application-sdk/issues/${{ steps.pr.outputs.number }}/comments \
+               gh api repos/atlanhq/application-sdk/issues/${{ steps.pr.outputs.number }}/comments --paginate \
                  --jq '.[] | select(.body | contains("SDK_REVIEW_V2")) | .body' | tail -1
 
             2. Parse REVIEW_DATA — extract findings with status "open"
