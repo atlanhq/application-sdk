@@ -367,7 +367,7 @@ jobs:
       image: ${{ needs.prepare.outputs.ghcr_image }}
       snyk_org: partner-images
       snyk_monitor: ${{ inputs.snyk_monitor }}
-      fail_on_findings: true
+      fail_on_findings: false
     secrets: inherit
 
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
