@@ -12,6 +12,7 @@ from application_sdk.activities.common.utils import (
     auto_heartbeater,
     get_object_store_prefix,
     get_workflow_id,
+    send_periodic_heartbeat,
     send_periodic_heartbeat_sync,
 )
 
@@ -206,51 +207,29 @@ class TestAutoHeartbeater:
     """Test cases for auto_heartbeater decorator."""
 
     @patch("application_sdk.activities.common.utils.activity")
-    async def test_auto_heartbeater_async_success(self, mock_activity):
-        """Test successful auto_heartbeater decorator with async function."""
-        mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=0.3)
+    @patch("application_sdk.activities.common.utils.send_periodic_heartbeat")
+    async def test_auto_heartbeater_success(self, mock_send_heartbeat, mock_activity):
+        """Test successful auto_heartbeater decorator."""
+        # Mock activity info
+        mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=60)
 
+        # Create a mock async function
         @auto_heartbeater
         async def test_activity():
-            await asyncio.sleep(0.2)
             return "success"
 
         result = await test_activity()
 
         assert result == "success"
-        mock_activity.heartbeat.assert_called()
+        mock_send_heartbeat.assert_called_once()
 
     @patch("application_sdk.activities.common.utils.activity")
-    async def test_auto_heartbeater_async_uses_thread(self, mock_activity):
-        """Test that async auto_heartbeater uses a background thread, not asyncio task."""
-        mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=0.3)
-        heartbeat_thread_ids = []
-        main_thread_id = threading.current_thread().ident
-
-        original_heartbeat = mock_activity.heartbeat
-
-        def capture_thread(*args, **kwargs):
-            heartbeat_thread_ids.append(threading.current_thread().ident)
-            return original_heartbeat(*args, **kwargs)
-
-        mock_activity.heartbeat = capture_thread
-
-        @auto_heartbeater
-        async def test_activity():
-            await asyncio.sleep(0.3)
-            return "done"
-
-        result = await test_activity()
-        assert result == "done"
-        assert len(heartbeat_thread_ids) > 0, "Heartbeat should have been called"
-        for tid in heartbeat_thread_ids:
-            assert (
-                tid != main_thread_id
-            ), "Heartbeat should run on a background thread, not the main thread"
-
-    @patch("application_sdk.activities.common.utils.activity")
-    async def test_auto_heartbeater_default_timeout(self, mock_activity):
+    @patch("application_sdk.activities.common.utils.send_periodic_heartbeat")
+    async def test_auto_heartbeater_default_timeout(
+        self, mock_send_heartbeat, mock_activity
+    ):
         """Test auto_heartbeater with default timeout."""
+        # Mock activity info with no heartbeat timeout
         mock_activity.info.return_value.heartbeat_timeout = None
 
         @auto_heartbeater
@@ -258,10 +237,15 @@ class TestAutoHeartbeater:
             return "success"
 
         result = await test_activity()
+
         assert result == "success"
+        mock_send_heartbeat.assert_called_once()
 
     @patch("application_sdk.activities.common.utils.activity")
-    async def test_auto_heartbeater_runtime_error(self, mock_activity):
+    @patch("application_sdk.activities.common.utils.send_periodic_heartbeat")
+    async def test_auto_heartbeater_runtime_error(
+        self, mock_send_heartbeat, mock_activity
+    ):
         """Test auto_heartbeater when activity.info() raises RuntimeError."""
         mock_activity.info.side_effect = RuntimeError("No activity context")
 
@@ -270,10 +254,15 @@ class TestAutoHeartbeater:
             return "success"
 
         result = await test_activity()
+
         assert result == "success"
+        mock_send_heartbeat.assert_called_once()
 
     @patch("application_sdk.activities.common.utils.activity")
-    async def test_auto_heartbeater_function_error(self, mock_activity):
+    @patch("application_sdk.activities.common.utils.send_periodic_heartbeat")
+    async def test_auto_heartbeater_function_error(
+        self, mock_send_heartbeat, mock_activity
+    ):
         """Test auto_heartbeater when the decorated function raises an error."""
         mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=60)
 
@@ -283,6 +272,9 @@ class TestAutoHeartbeater:
 
         with pytest.raises(ValueError, match="Function error"):
             await test_activity()
+
+        # Heartbeat task should still be created and cancelled
+        mock_send_heartbeat.assert_called_once()
 
     @patch("application_sdk.activities.common.utils.activity")
     def test_auto_heartbeater_sync_function_returns_value(self, mock_activity):
@@ -340,8 +332,11 @@ class TestAutoHeartbeater:
         assert result == "a_b_c"
 
     @patch("application_sdk.activities.common.utils.activity")
-    async def test_auto_heartbeater_async_with_arguments(self, mock_activity):
-        """Test auto_heartbeater with async function arguments."""
+    @patch("application_sdk.activities.common.utils.send_periodic_heartbeat")
+    async def test_auto_heartbeater_with_arguments(
+        self, mock_send_heartbeat, mock_activity
+    ):
+        """Test auto_heartbeater with function arguments."""
         mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=60)
 
         @auto_heartbeater
@@ -349,80 +344,68 @@ class TestAutoHeartbeater:
             return f"{arg1}_{arg2}_{kwarg1}"
 
         result = await test_activity("a", "b", kwarg1="c")
+
         assert result == "a_b_c"
+        mock_send_heartbeat.assert_called_once()
+
+
+class TestSendPeriodicHeartbeat:
+    """Test cases for send_periodic_heartbeat function."""
 
     @patch("application_sdk.activities.common.utils.activity")
-    async def test_heartbeat_continues_when_event_loop_blocked(self, mock_activity):
-        """Test that heartbeats are sent from a background thread even when
-        the event loop is blocked by synchronous code inside an async activity.
-
-        This is the core scenario the thread-based heartbeater fixes: an async
-        activity that calls blocking (sync) code would starve an asyncio-task
-        heartbeater, but a thread-based heartbeater keeps running.
-        """
-        mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=0.3)
-        heartbeat_count = 0
-
-        def count_heartbeat(*args, **kwargs):
-            nonlocal heartbeat_count
-            heartbeat_count += 1
-
-        mock_activity.heartbeat = count_heartbeat
-
-        @auto_heartbeater
-        async def blocking_async_activity():
-            # Block the event loop — an asyncio-task heartbeater would starve
-            time.sleep(0.5)
-            return "done"
-
-        result = await blocking_async_activity()
-        assert result == "done"
-        # heartbeat_interval = 0.3/3 = 0.1s; activity blocks for 0.5s
-        # Thread-based heartbeater should have sent at least 3 heartbeats
-        assert heartbeat_count >= 3, (
-            f"Expected >= 3 heartbeats during 0.5s event-loop block "
-            f"with 0.1s interval, got {heartbeat_count}"
-        )
+    @patch("application_sdk.activities.common.utils.asyncio.sleep")
+    async def test_send_periodic_heartbeat_success(self, mock_sleep, mock_activity):
+        mock_sleep.return_value = None
+        task = asyncio.create_task(send_periodic_heartbeat(0.1, "test_detail"))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        # Just ensure no exception is raised (heartbeat may not be called before cancel)
 
     @patch("application_sdk.activities.common.utils.activity")
-    async def test_async_activity_stops_when_heartbeat_thread_crashes(
-        self, mock_activity
+    @patch("application_sdk.activities.common.utils.asyncio.sleep")
+    async def test_send_periodic_heartbeat_multiple_details(
+        self, mock_sleep, mock_activity
     ):
-        """Test that an async activity is cancelled when the heartbeat thread
-        exits unexpectedly (e.g. a BaseException that escapes the retry logic).
-        """
-        mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=0.3)
-        # SystemExit is a BaseException — it escapes `except Exception` in the
-        # heartbeat loop and triggers the thread_failed event.
-        mock_activity.heartbeat.side_effect = SystemExit("simulated crash")
-
-        @auto_heartbeater
-        async def long_activity():
-            await asyncio.sleep(10)
-            return "should not reach"
-
-        with pytest.raises(RuntimeError, match="Heartbeat thread stopped unexpectedly"):
-            await long_activity()
+        mock_sleep.return_value = None
+        task = asyncio.create_task(send_periodic_heartbeat(0.1, "detail1", "detail2"))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        # Just ensure no exception is raised
 
     @patch("application_sdk.activities.common.utils.activity")
-    def test_sync_activity_stops_when_heartbeat_thread_crashes(self, mock_activity):
-        """Test that a sync activity raises after completion when the heartbeat
-        thread crashed during execution.
+    @patch("application_sdk.activities.common.utils.asyncio.sleep")
+    async def test_send_periodic_heartbeat_no_details(self, mock_sleep, mock_activity):
+        mock_sleep.return_value = None
+        task = asyncio.create_task(send_periodic_heartbeat(0.1))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        # Just ensure no exception is raised
 
-        Note: Python cannot safely interrupt a running sync function mid-
-        execution, so the failure is detected after the function returns.
-        """
-        mock_activity.info.return_value.heartbeat_timeout = timedelta(seconds=0.3)
-        mock_activity.heartbeat.side_effect = SystemExit("simulated crash")
+    @patch("application_sdk.activities.common.utils.activity")
+    @patch("application_sdk.activities.common.utils.asyncio.sleep")
+    async def test_send_periodic_heartbeat_sleep_error(self, mock_sleep, mock_activity):
+        """Test periodic heartbeat when sleep raises an error."""
+        mock_sleep.side_effect = asyncio.CancelledError()
 
-        @auto_heartbeater
-        def sync_activity():
-            # Give heartbeat thread time to crash (interval = 0.1s)
-            time.sleep(0.5)
-            return "done"
+        task = asyncio.create_task(send_periodic_heartbeat(0.1))
 
-        with pytest.raises(RuntimeError, match="Heartbeat thread stopped unexpectedly"):
-            sync_activity()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Heartbeat should not be called if sleep fails
+        mock_activity.heartbeat.assert_not_called()
 
 
 class TestSendPeriodicHeartbeatSync:
@@ -454,35 +437,3 @@ class TestSendPeriodicHeartbeatSync:
         stop_event.set()
         send_periodic_heartbeat_sync(1.0, stop_event)
         mock_activity.heartbeat.assert_not_called()
-
-    @patch("application_sdk.activities.common.utils.activity")
-    def test_retries_on_transient_failure(self, mock_activity):
-        """Test that heartbeat retries after transient failure instead of dying."""
-        call_count = 0
-
-        def heartbeat_side_effect(*args):
-            nonlocal call_count
-            call_count += 1
-            if call_count <= 2:
-                raise Exception("transient gRPC error")
-            # Succeeds on 3rd+ call
-
-        mock_activity.heartbeat.side_effect = heartbeat_side_effect
-
-        stop_event = threading.Event()
-        thread = threading.Thread(
-            target=send_periodic_heartbeat_sync,
-            args=(0.05, stop_event),
-            daemon=True,
-        )
-        thread.start()
-        # Wait for at least 4 calls (2 failures + 2 successes)
-        deadline = time.monotonic() + 10
-        while mock_activity.heartbeat.call_count < 4 and time.monotonic() < deadline:
-            time.sleep(0.01)
-        stop_event.set()
-        thread.join(timeout=2)
-        assert not thread.is_alive(), "Heartbeat thread failed to terminate"
-        assert (
-            mock_activity.heartbeat.call_count >= 4
-        ), "Heartbeat should have retried and recovered"
