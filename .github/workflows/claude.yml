@@ -296,18 +296,19 @@ jobs:
           # Bucketed so users aren't misled by a fixed "~5-8 min" when
           # they've pushed a 3,000-line PR that will realistically take
           # 15-25 min (big diff → bigger subagent context → slower).
+          # Simple honest estimate — ~10 min for most PRs.
+          # With 3 subagents + Codex adversarial + reconcile + CI wait,
+          # even small PRs take ~8-10 min. Large PRs or auto-complete
+          # can take longer.
           TOTAL_LINES=$(gh pr view "$PR_NUMBER" --json files \
             --jq '[.files[] | (.additions // 0) + (.deletions // 0)] | add // 0' 2>/dev/null || echo 0)
-          if [ "$TOTAL_LINES" -lt 50 ]; then
-            EST="~3-5 min"
-          elif [ "$TOTAL_LINES" -lt 500 ]; then
-            EST="~5-10 min"
+          if [ "$TOTAL_LINES" -lt 500 ]; then
+            EST="~10 min"
           elif [ "$TOTAL_LINES" -lt 2000 ]; then
             EST="~10-15 min"
           else
             EST="~15-25 min (large PR)"
           fi
-          # Auto-complete mode can take longer (fix loop adds iterations)
           if [ "$MODE" = "auto-fix" ]; then
             EST="${EST}, possibly longer with fix iterations"
           fi
