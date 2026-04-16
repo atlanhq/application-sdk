@@ -8,11 +8,34 @@ from typing import TYPE_CHECKING, Any
 
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 
+from application_sdk.constants import TEMPORAL_PROMETHEUS_BIND_ADDRESS
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+_prometheus_runtime: Runtime | None = None
+
+
+def _get_prometheus_runtime() -> Runtime:
+    """Get or create the process-level Temporal Runtime with Prometheus metrics.
+
+    The Runtime binds a Prometheus metrics endpoint on the configured address.
+    It is created at most once per process — subsequent calls return the same
+    instance. This prevents port-already-in-use errors when create_temporal_client
+    is called more than once (e.g., after a reconnect or in tests).
+    """
+    global _prometheus_runtime
+    if _prometheus_runtime is None:
+        _prometheus_runtime = Runtime(
+            telemetry=TelemetryConfig(
+                metrics=PrometheusConfig(bind_address=TEMPORAL_PROMETHEUS_BIND_ADDRESS)
+            )
+        )
+    return _prometheus_runtime
+
 
 if TYPE_CHECKING:
     from datetime import timedelta
@@ -291,6 +314,12 @@ async def create_temporal_client(
     }
     if api_key:
         kwargs["api_key"] = api_key
+
+    # Configure Temporal runtime with Prometheus metrics (process-level singleton)
+    kwargs["runtime"] = _get_prometheus_runtime()
+    logger.info(
+        "Temporal Prometheus metrics enabled on %s", TEMPORAL_PROMETHEUS_BIND_ADDRESS
+    )
 
     last_exc: Exception | None = None
     delay = connect_retry_delay_seconds
