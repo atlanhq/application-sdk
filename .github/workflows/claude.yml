@@ -1173,10 +1173,10 @@ jobs:
           if gh api "repos/${REPO}/actions/workflows/claude.yml/dispatches" \
                -X POST \
                -f ref="${DEFAULT_BRANCH}" \
-               -F "inputs[pr_number]=${PR_NUMBER}" \
-               -F "inputs[iteration]=${NEXT}" \
-               -F "inputs[max_iter]=${MAX}" \
-               -F "inputs[trigger_reason]=auto-complete iteration ${NEXT}/${MAX}"; then
+               -f "inputs[pr_number]=${PR_NUMBER}" \
+               -f "inputs[iteration]=${NEXT}" \
+               -f "inputs[max_iter]=${MAX}" \
+               -f "inputs[trigger_reason]=auto-complete iteration ${NEXT}/${MAX}"; then
             # Post a short informational comment on the PR (not a
             # trigger — just user-facing visibility).
             gh pr comment "$PR_NUMBER" --body \
@@ -1451,10 +1451,10 @@ jobs:
           if gh api "repos/${REPO}/actions/workflows/claude.yml/dispatches" \
                -X POST \
                -f ref="${DEFAULT_BRANCH}" \
-               -F "inputs[pr_number]=${PR_NUMBER}" \
-               -F "inputs[iteration]=${NEXT}" \
-               -F "inputs[max_iter]=${MAX}" \
-               -F "inputs[trigger_reason]=CI remediation iteration ${NEXT}/${MAX}"; then
+               -f "inputs[pr_number]=${PR_NUMBER}" \
+               -f "inputs[iteration]=${NEXT}" \
+               -f "inputs[max_iter]=${MAX}" \
+               -f "inputs[trigger_reason]=CI remediation iteration ${NEXT}/${MAX}"; then
             gh pr comment "$PR_NUMBER" --body \
               "🔁 **CI fix pushed — re-review iteration ${NEXT}/${MAX} dispatched.** [Watch live progress](${{ github.server_url }}/${{ github.repository }}/actions/workflows/claude.yml)"
           else
