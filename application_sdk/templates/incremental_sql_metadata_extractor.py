@@ -685,13 +685,13 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     async def write_current_state(
         self, input: WriteCurrentStateInput
     ) -> WriteCurrentStateOutput:
-        """Create the current-state snapshot, merge ancestral columns, and upload to S3.
+        """Create lightweight current-state snapshot with deletion detection and upload to S3.
 
         Steps:
         1. Build ``transformed_dir`` from ``input.output_path``.
         2. Download previous state via ``prepare_previous_state()``.
         3. Get ``current_state_dir`` via ``get_persistent_artifacts_path()``.
-        4. Call ``create_current_state_snapshot()`` (merge + diff + upload).
+        4. Call ``create_current_state_snapshot()`` (copy + diff + delete detection + upload).
         5. Clean up temporary previous state directory.
         """
         from application_sdk.common.incremental.helpers import (
@@ -710,7 +710,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         app_name = input.application_name
 
         logger.info(
-            "Starting write_current_state with ancestral merge: workflow_id=%s run_id=%s",
+            "Starting write_current_state: workflow_id=%s run_id=%s",
             input.workflow_id,
             run_id,
         )
@@ -740,7 +740,6 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 run_id=run_id,
                 application_name=app_name,
                 copy_workers=input.copy_workers,
-                column_chunk_size=input.column_chunk_size,
             )
 
             return WriteCurrentStateOutput(
