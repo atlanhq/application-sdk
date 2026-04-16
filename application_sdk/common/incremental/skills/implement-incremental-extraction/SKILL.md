@@ -136,13 +136,18 @@ See the reference files for detailed implementation of each step:
 ## Quick Start: Minimal Implementation
 
 ```python
-# app/activities/metadata_extraction/your_db.py
+# connector/app.py
 
-from application_sdk.activities.metadata_extraction.incremental import (
-    IncrementalSQLMetadataExtractionActivities,
+from application_sdk.templates import IncrementalSqlMetadataExtractor
+from application_sdk.app import task
+from application_sdk.templates.contracts.sql_metadata import (
+    FetchDatabasesInput, FetchDatabasesOutput,
+    FetchSchemasInput, FetchSchemasOutput,
+    FetchTablesInput, FetchTablesOutput,
+    TransformInput, TransformOutput,
 )
 
-class YourDBActivities(IncrementalSQLMetadataExtractionActivities):
+class YourDBExtractor(IncrementalSqlMetadataExtractor):
     sql_client_class = YourDBClient
 
     # All SQL queries are auto-loaded from app/sql/ by the SDK:
@@ -155,30 +160,26 @@ class YourDBActivities(IncrementalSQLMetadataExtractionActivities):
     #
     # No need to set these manually — just place the SQL files in app/sql/.
 
+    @task(timeout_seconds=3600)
+    async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
+        ...
+
+    @task(timeout_seconds=3600)
+    async def fetch_schemas(self, input: FetchSchemasInput) -> FetchSchemasOutput:
+        ...
+
+    @task(timeout_seconds=3600)
+    async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
+        ...
+
+    @task(timeout_seconds=3600)
+    async def transform_data(self, input: TransformInput) -> TransformOutput:
+        ...
+
     def build_incremental_column_sql(self, table_ids, workflow_args):
         """Build SQL for incremental column extraction."""
         # Your database-specific SQL building logic here
-        # See references/activities-implementation.md for patterns
         ...
-
-    def resolve_database_placeholders(self, sql, workflow_args):
-        """Replace database-specific placeholders (optional override)."""
-        # Only needed if your SQL has custom placeholders beyond {marker_timestamp}
-        ...
-```
-
-```python
-# app/workflows/metadata_extraction/your_db.py
-
-from temporalio import workflow
-from application_sdk.workflows.metadata_extraction.incremental_sql import (
-    IncrementalSQLMetadataExtractionWorkflow,
-)
-
-@workflow.defn
-class YourDBWorkflow(IncrementalSQLMetadataExtractionWorkflow):
-    activities_cls = YourDBActivities
-    # That's it! Everything else is inherited.
 ```
 
 ## Key Patterns and Best Practices

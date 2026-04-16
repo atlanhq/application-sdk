@@ -866,6 +866,7 @@ jobs:
           steps.pr.outputs.mode != 'override' &&
           steps.pr.outputs.mode != 'challenge' &&
           steps.pr.outputs.complexity != 'tests-only'
+        timeout-minutes: 8
         continue-on-error: true
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}

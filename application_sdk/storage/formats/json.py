@@ -10,8 +10,8 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.storage.formats.utils import (
     JSON_FILE_EXTENSION,
+    _download_files,
     convert_datetime_to_epoch,
-    download_files,
     path_gen,
     process_null_fields,
 )
@@ -151,7 +151,7 @@ class JsonFileReader(Reader):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            json_files = await download_files(
+            json_files = await _download_files(
                 self.path, self.extension, self.file_names
             )
             # Track downloaded files for cleanup on close
@@ -175,7 +175,7 @@ class JsonFileReader(Reader):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            json_files = await download_files(
+            json_files = await _download_files(
                 self.path, self.extension, self.file_names
             )
             # Track downloaded files for cleanup on close
@@ -200,7 +200,7 @@ class JsonFileReader(Reader):
             import daft
 
             # Ensure files are available (local or downloaded)
-            json_files = await download_files(
+            json_files = await _download_files(
                 self.path, self.extension, self.file_names
             )
             # Track downloaded files for cleanup on close
@@ -221,7 +221,7 @@ class JsonFileReader(Reader):
             import daft
 
             # Ensure files are available (local or downloaded)
-            json_files = await download_files(
+            json_files = await _download_files(
                 self.path, self.extension, self.file_names
             )
             # Track downloaded files for cleanup on close
