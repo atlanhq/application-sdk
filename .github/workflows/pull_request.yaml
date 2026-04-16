@@ -7,11 +7,11 @@ on:
 
 permissions:
   id-token: write
-  contents: write
-  issues: write
+  contents: read
+  issues: read
   pull-requests: write
   security-events: write
-  actions: write
+  actions: read
 
 jobs:
   # Detect which files changed

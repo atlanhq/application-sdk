@@ -7,11 +7,11 @@ on:
 
 permissions:
   id-token: write
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
+  issues: read
+  pull-requests: read
   security-events: write
-  actions: write
+  actions: read
 
 jobs:
   # Testing
