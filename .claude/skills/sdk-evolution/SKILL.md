@@ -94,6 +94,16 @@ uv run pre-commit run --files <changed_files>
 ```
 Re-run after auto-formatting. Check 0 errors in pyright (warnings OK).
 
+**Step A.5: Validate the fix is worthwhile — ask "is this even a real problem?"**
+Before writing any fix, re-examine the finding with fresh eyes:
+- **Call frequency:** Is the flagged code in a hot loop (thousands of calls) or called a few times per workflow? A per-call allocation that runs 3 times is fine; one that runs 10,000 times is not.
+- **Proposed fix side effects:** Does the fix introduce new coupling (e.g., importing from an unrelated module)? Could it pollute a shared resource (e.g., reusing an executor meant for a different purpose)?
+- **Would a senior engineer on this team care?** If you showed them the finding and the proposed fix, would they approve the PR or say "this is fine as-is"?
+
+If the answer is "the current code is acceptable," **cancel the ticket** with a clear explanation rather than shipping a questionable fix. A canceled finding with good reasoning is better than a merged PR that a human reviewer has to revert.
+
+*Lesson from 2026-04-16 run: PR #1407 was closed after human review found the ThreadPoolExecutor-per-query pattern was acceptable (low call frequency). The fix would have polluted the heartbeat executor. Gate 1 should have killed this finding.*
+
 **Step B: Run existing unit tests**
 ```bash
 uv run pytest tests/unit/ -x -q --timeout=60
@@ -174,7 +184,19 @@ The 2026-04-09 run stopped at Stage 5 (tickets only, 0 PRs). The 2026-04-14 run 
 4. Verify all Linear tickets for Gate 2-passed PRs are set to "In Review"
 5. If ANY of these fail, you are NOT done — keep going
 
-### 20. Labels are STATE TRANSITIONS, not defaults — never apply labels prematurely
+### 20. Gate 2 agents MUST read PR diffs from GitHub, NEVER local working tree
+The 2026-04-16 run had Gate 2 agents reading local files (which were on different branches) instead of the actual PR diff. This caused false "needs-changes" verdicts for PRs whose changes were correct on GitHub but invisible locally.
+
+**Gate 2 agent prompts MUST include this instruction:**
+```
+IMPORTANT: Do NOT read local files to verify PR changes. The working directory may be
+on a different branch. Instead, use Bash to run:
+  gh pr diff {pr_number} --repo atlanhq/application-sdk
+This gives you the actual diff that will be merged. Only use Read on files for
+understanding context (existing code around the change), not to verify the change itself.
+```
+
+### 21. Labels are STATE TRANSITIONS, not defaults — never apply labels prematurely
 Labels reflect actual pipeline state. Do NOT batch-apply labels before running the stage that determines them.
 - `needs-review` → apply ONLY after PR creation (Stage 6), before Gate 2
 - After Gate 2 passes → `@sdk-review auto-complete` is posted and the GHA workflow manages subsequent labels
