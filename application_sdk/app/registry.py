@@ -200,8 +200,14 @@ class AppRegistry:
                 raise AppNotFoundError(name, version)
             return versions[version]
 
-        # Return latest version (simple string sort - semver would be better)
-        latest_version = sorted(versions.keys())[-1]
+        # Return latest version using proper semver sorting
+        try:
+            from packaging.version import Version
+
+            latest_version = sorted(versions.keys(), key=lambda v: Version(v))[-1]
+        except Exception:
+            # Fall back to lexicographic sort if version parsing fails
+            latest_version = sorted(versions.keys())[-1]
         return versions[latest_version]
 
     def get_all_versions(self, name: str) -> list[AppMetadata]:

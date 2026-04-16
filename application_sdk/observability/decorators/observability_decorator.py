@@ -194,7 +194,7 @@ def observability(
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> T:
-            # Generate trace ID and span ID
+            # Safe: observability decorators run in activity context, not workflow sandbox
             trace_id = str(uuid.uuid4())
             span_id = str(uuid.uuid4())
             start_time = time.time()
@@ -239,7 +239,7 @@ def observability(
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> T:
-            # Generate trace ID and span ID
+            # Safe: observability decorators run in activity context, not workflow sandbox
             trace_id = str(uuid.uuid4())
             span_id = str(uuid.uuid4())
             start_time = time.time()

@@ -1,4 +1,3 @@
-import asyncio
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -31,8 +30,9 @@ def sql_client():
     return client
 
 
+@pytest.mark.asyncio
 @patch("sqlalchemy.create_engine")
-def test_load(mock_create_engine: Any, sql_client: BaseSQLClient):
+async def test_load(mock_create_engine: Any, sql_client: BaseSQLClient):
     """Test basic loading functionality with fixed configuration"""
     # Mock the engine and connection
     mock_engine = MagicMock()
@@ -42,7 +42,7 @@ def test_load(mock_create_engine: Any, sql_client: BaseSQLClient):
     mock_engine.connect.return_value = mock_connection
 
     # Run the load function
-    asyncio.run(sql_client.load(credentials))
+    await sql_client.load(credentials)
 
     # Assertions to verify behavior
     assert sql_client.DB_CONFIG is not None
@@ -91,7 +91,8 @@ async def test_load_uses_asyncio_to_thread_for_ping(
     credentials=sql_credentials_strategy, connect_args=sqlalchemy_connect_args_strategy
 )
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-def test_load_property_based(
+@pytest.mark.asyncio
+async def test_load_property_based(
     sql_client: BaseSQLClient,
     credentials: Dict[str, Any],
     connect_args: Dict[str, Any],
@@ -109,7 +110,7 @@ def test_load_property_based(
         sql_client.DB_CONFIG.connect_args = connect_args
 
         # Run the load function
-        asyncio.run(sql_client.load(credentials))
+        await sql_client.load(credentials)
 
         # Assertions to verify behavior
         mock_create_engine.assert_called_once_with(
@@ -256,7 +257,8 @@ async def test_run_query_with_error(
 
 @given(connection_string=sql_connection_string_strategy)
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-def test_connection_string_property_based(
+@pytest.mark.asyncio
+async def test_connection_string_property_based(
     sql_client: BaseSQLClient, connection_string: str
 ):
     """Property-based test for various connection string formats"""
@@ -274,7 +276,7 @@ def test_connection_string_property_based(
         credentials = {"username": "test_user", "password": "test_password"}
 
         # Run the load function
-        asyncio.run(sql_client.load(credentials))
+        await sql_client.load(credentials)
 
         # Assertions to verify behavior
         assert sql_client.DB_CONFIG is not None

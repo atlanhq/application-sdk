@@ -1009,24 +1009,26 @@ async def run_dev_combined(
     infra = await _create_infrastructure(credential_stores=credential_stores)
     set_infrastructure(infra)
 
-    print(f"\nDev server running at http://{host}:{port}")
-    print("  POST /workflows/v1/start                         - Start workflow")
-    print("  POST /workflows/v1/stop/{workflow_id}/{run_id}   - Stop workflow")
-    print("  GET  /workflows/v1/result/{workflow_id}          - Get result")
-    print("  GET  /workflows/v1/status/{workflow_id}/{run_id} - Get status")
-    print("  GET  /health                                      - Health check")
-    print("\nExample:")
+    logger.info("Dev server running at http://%s:%d", host, port)
+    logger.info("  POST /workflows/v1/start                         - Start workflow")
+    logger.info("  POST /workflows/v1/stop/{workflow_id}/{run_id}   - Stop workflow")
+    logger.info("  GET  /workflows/v1/result/{workflow_id}          - Get result")
+    logger.info("  GET  /workflows/v1/status/{workflow_id}/{run_id} - Get status")
+    logger.info("  GET  /health                                      - Health check")
+    logger.info("Example:")
     if example_input is not None:
         example_json = _json.dumps(example_input, indent=2)
-        print(f"  curl -X POST http://{host}:{port}/workflows/v1/start \\")
-        print('    -H "Content-Type: application/json" \\')
-        print(f"    -d '{example_json}'")
+        logger.info("  curl -X POST http://%s:%d/workflows/v1/start \\", host, port)
+        logger.info('    -H "Content-Type: application/json" \\')
+        logger.info("    -d '%s'", example_json)
     else:
-        print(
-            f"  curl -X POST http://{host}:{port}/workflows/v1/start"
-            f' -H "Content-Type: application/json" -d \'{{"name": "World"}}\''
+        logger.info(
+            "  curl -X POST http://%s:%d/workflows/v1/start"
+            ' -H "Content-Type: application/json" -d \'{"name": "World"}\'',
+            host,
+            port,
         )
-    print(f"\n  curl http://{host}:{port}/workflows/v1/result/{{workflow_id}}\n")
+    logger.info("  curl http://%s:%d/workflows/v1/result/{workflow_id}", host, port)
 
     await run_combined_mode(config)
 
