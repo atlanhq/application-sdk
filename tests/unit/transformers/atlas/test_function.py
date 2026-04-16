@@ -39,9 +39,9 @@ def assert_attributes(
     """Helper function to assert attribute values match expected values."""
     attr_type = "customAttributes" if is_custom else "attributes"
     for attr in attributes:
-        assert (
-            transformed_data[attr_type][attr] == expected_data[attr_type][attr]
-        ), f"Mismatch in {'custom ' if is_custom else ''}{attr}"
+        assert transformed_data[attr_type][attr] == expected_data[attr_type][attr], (
+            f"Mismatch in {'custom ' if is_custom else ''}{attr}"
+        )
 
 
 def test_function_initialization():

@@ -327,9 +327,9 @@ class TestCleanupStorage:
                     result = await app.cleanup_storage(StorageCleanupInput())
 
         # No list calls for run-scoped prefix when include_prefix_cleanup=False
-        assert not any(
-            "artifacts/apps/" in c for c in list_calls
-        ), f"Unexpected prefix list calls: {list_calls}"
+        assert not any("artifacts/apps/" in c for c in list_calls), (
+            f"Unexpected prefix list calls: {list_calls}"
+        )
         assert result == StorageCleanupOutput()
 
     # ------------------------------------------------------------------

@@ -18,7 +18,9 @@ metadata_sql_strategy = st.one_of(
     st.just("SELECT * FROM information_schema.columns"),
     st.just("SELECT * FROM information_schema.views"),
     st.builds(
-        lambda schema: f"SELECT * FROM information_schema.tables WHERE table_schema = '{schema}'",
+        lambda schema: (
+            f"SELECT * FROM information_schema.tables WHERE table_schema = '{schema}'"
+        ),
         schema=st.text(),
     ),
 )

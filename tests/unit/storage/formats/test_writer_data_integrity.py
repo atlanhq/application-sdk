@@ -95,9 +95,9 @@ class TestWriterDataIntegrity:
             expected_ids = set(range(total_records))
             missing_ids = expected_ids - ids_in_store
 
-            assert (
-                not missing_ids
-            ), f"PANDAS data loss: missing IDs {sorted(missing_ids)[:20]}"
+            assert not missing_ids, (
+                f"PANDAS data loss: missing IDs {sorted(missing_ids)[:20]}"
+            )
             assert len(ids_in_store) == total_records
 
     @pytest.mark.asyncio
@@ -149,9 +149,9 @@ class TestWriterDataIntegrity:
             expected_ids = set(range(total_records))
             missing_ids = expected_ids - ids_in_store
 
-            assert (
-                not missing_ids
-            ), f"DAFT data loss: missing IDs {sorted(missing_ids)[:20]}"
+            assert not missing_ids, (
+                f"DAFT data loss: missing IDs {sorted(missing_ids)[:20]}"
+            )
             assert len(ids_in_store) == total_records
 
     @pytest.mark.asyncio

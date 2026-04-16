@@ -139,17 +139,17 @@ async def test_publish_event_activity_receives_correctly_reconstructed_event(
             )
 
     # publish_event should have been called at least for workflow_start and workflow_end
-    assert (
-        len(captured_events) >= 2
-    ), f"Expected at least 2 events (workflow start + end), got {len(captured_events)}"
+    assert len(captured_events) >= 2, (
+        f"Expected at least 2 events (workflow start + end), got {len(captured_events)}"
+    )
 
     # Every captured call must have received a proper Event instance, not a dict
     from application_sdk.contracts.events import Event
 
     for event in captured_events:
-        assert isinstance(
-            event, Event
-        ), f"_publish_event_via_binding received {type(event)!r}, expected Event"
+        assert isinstance(event, Event), (
+            f"_publish_event_via_binding received {type(event)!r}, expected Event"
+        )
 
 
 @pytest.mark.integration
@@ -170,9 +170,9 @@ async def test_event_interceptor_emits_workflow_start_event(
             )
 
     event_names = [e.event_name for e in captured_events]
-    assert (
-        ApplicationEventNames.WORKFLOW_START.value in event_names
-    ), f"workflow_start not found in published events: {event_names}"
+    assert ApplicationEventNames.WORKFLOW_START.value in event_names, (
+        f"workflow_start not found in published events: {event_names}"
+    )
 
 
 @pytest.mark.integration
@@ -200,9 +200,9 @@ async def test_event_interceptor_emits_workflow_end_event_with_completed_state(
     assert end_events, "No workflow_end event found"
 
     end_event = end_events[-1]
-    assert (
-        end_event.metadata.workflow_state == WorkflowStates.COMPLETED.value
-    ), f"Expected workflow_state=completed, got {end_event.metadata.workflow_state!r}"
+    assert end_event.metadata.workflow_state == WorkflowStates.COMPLETED.value, (
+        f"Expected workflow_state=completed, got {end_event.metadata.workflow_state!r}"
+    )
 
 
 @pytest.mark.integration
@@ -223,12 +223,12 @@ async def test_event_interceptor_emits_activity_start_and_end_events(
             )
 
     event_names = [e.event_name for e in captured_events]
-    assert (
-        ApplicationEventNames.ACTIVITY_START.value in event_names
-    ), f"activity_start not found in published events: {event_names}"
-    assert (
-        ApplicationEventNames.ACTIVITY_END.value in event_names
-    ), f"activity_end not found in published events: {event_names}"
+    assert ApplicationEventNames.ACTIVITY_START.value in event_names, (
+        f"activity_start not found in published events: {event_names}"
+    )
+    assert ApplicationEventNames.ACTIVITY_END.value in event_names, (
+        f"activity_end not found in published events: {event_names}"
+    )
 
 
 @pytest.mark.integration
@@ -288,7 +288,7 @@ async def test_activity_end_event_contains_duration_ms(
     assert end_events, "No activity_end event found"
 
     for end_event in end_events:
-        assert (
-            "duration_ms" in end_event.data
-        ), f"activity_end event missing duration_ms in data: {end_event.data}"
+        assert "duration_ms" in end_event.data, (
+            f"activity_end event missing duration_ms in data: {end_event.data}"
+        )
         assert isinstance(end_event.data["duration_ms"], (int, float))

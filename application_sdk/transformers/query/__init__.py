@@ -185,7 +185,7 @@ class QueryBasedTransformer(TransformerInterface):
         # This will be used for transforming the dataframe
         sql_query = textwrap.dedent(f"""
         SELECT
-            {','.join(columns)}
+            {",".join(columns)}
         FROM dataframe
         """)
         return sql_query, literal_columns or None

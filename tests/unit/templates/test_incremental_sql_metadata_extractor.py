@@ -314,6 +314,6 @@ class TestContractTypes:
 
     def test_no_workflow_args_in_task_inputs(self) -> None:
         for cls in self._input_types:
-            assert (
-                "workflow_args" not in cls.model_fields
-            ), f"{cls.__name__} still has workflow_args field"
+            assert "workflow_args" not in cls.model_fields, (
+                f"{cls.__name__} still has workflow_args field"
+            )

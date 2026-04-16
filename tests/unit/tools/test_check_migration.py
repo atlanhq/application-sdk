@@ -455,7 +455,7 @@ class TestNoDaprClient:
     """FAIL fires for DaprClient() in production files; skipped in test files."""
 
     def test_dapr_client_detected_in_prod(self, tmp_path: Path) -> None:
-        source = "from dapr.clients import DaprClient\n\n" "client = DaprClient()\n"
+        source = "from dapr.clients import DaprClient\n\nclient = DaprClient()\n"
         path = _write(tmp_path, "service.py", source)
         results = check_file(path, is_test=False)
         assert any(r.rule == "no-dapr-client" and r.level == FAIL for r in results)

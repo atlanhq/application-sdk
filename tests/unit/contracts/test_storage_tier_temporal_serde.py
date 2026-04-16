@@ -127,9 +127,9 @@ async def test_storage_tier_survives_temporal_round_trip(
         ):
             echoed = await _run_echo(env.client, original)
 
-    assert (
-        echoed.tier == tier
-    ), f"Expected tier={tier!r} but got {echoed.tier!r} after Temporal round-trip"
+    assert echoed.tier == tier, (
+        f"Expected tier={tier!r} but got {echoed.tier!r} after Temporal round-trip"
+    )
     assert echoed.storage_path == storage_path
     assert echoed.is_durable is True
     assert echoed.file_count == 3
