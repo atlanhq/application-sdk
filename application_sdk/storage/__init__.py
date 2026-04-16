@@ -33,6 +33,7 @@ from application_sdk.storage.batch import (
     upload_prefix,
 )
 from application_sdk.storage.binding import create_store_from_binding
+from application_sdk.storage.cloud import CloudStore
 from application_sdk.storage.errors import (
     StorageConfigError,
     StorageError,
@@ -49,6 +50,8 @@ from application_sdk.storage.ops import (
 )
 
 __all__ = [
+    # Cloud store (external customer buckets)
+    "CloudStore",
     # Store factories
     "create_store_from_binding",
     "create_local_store",

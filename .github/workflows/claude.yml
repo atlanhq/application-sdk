@@ -676,94 +676,46 @@ jobs:
             Stop here if mode is "challenge". Do not proceed to the
             regular review flow below.
 
-            Otherwise, do the review using the MULTI-AGENT ORCHESTRATOR pattern:
+            Otherwise, do the review:
 
-            ## Orchestrator setup
+            ## Review setup
 
-            You are the ORCHESTRATOR. Do NOT review the PR yourself.
-            The complexity (provided in Setup above) is either "tests-only"
-            or "standard". Use it to decide how many subagents:
-
-            - "tests-only" → dispatch ONLY Agent B (QUALITY/TEST).
-              Skip Agent A and Agent C — there's no production code
-              to review for architecture/security/structure.
-            - "standard"   → dispatch all 3 agents in parallel.
-
-            In both cases, consolidate into ONE SDK_REVIEW_V2 comment.
-
-            ### Step 1 — Prepare shared context (prompt-caching optimization)
-
-            Each subagent narrows to 2-3 relevant rule files (not all 6),
-            but the full rule set is enumerated here for reference:
-              - .claude/skills/sdk-review/references/v3-architecture-rules.md
-              - .claude/skills/sdk-review/references/code-quality-rules.md
-              - .claude/skills/sdk-review/references/security-rules.md
-              - .claude/skills/sdk-review/references/test-quality-rules.md
-              - .claude/skills/sdk-review/references/dx-rules.md
-              - .claude/skills/sdk-review/references/structural-rules.md
-              - .claude/skills/sdk-review/references/retro-log.md
-                (learned-not-to-flag — patterns previously withdrawn
-                after author challenges. DO NOT flag these again without
-                additional evidence beyond what was present in the
-                prior false-positive case.)
-
-            The PR diff and file list have been pre-fetched to disk by a
-            prior workflow step. They are already available at:
+            The PR diff and file list have been pre-fetched to disk:
               - /tmp/sdkreview/diff.patch (the full PR diff)
               - /tmp/sdkreview/files.txt (list of changed file paths)
+            Read these directly — do NOT re-fetch via gh pr diff.
 
-            Do NOT re-fetch these — just read them directly.
+            1. Read the diff from /tmp/sdkreview/diff.patch.
 
-            ### Step 2 — Dispatch 3 subagents in PARALLEL
+            2. Read the changed files in full using Read tool.
 
-            Issue a SINGLE assistant message containing 3 Task tool
-            uses. Use subagent_type: "general-purpose" for all three.
+            3. Read these SDK review rules (ALL of them):
+               - .claude/skills/sdk-review/references/v3-architecture-rules.md
+               - .claude/skills/sdk-review/references/code-quality-rules.md
+               - .claude/skills/sdk-review/references/security-rules.md
+               - .claude/skills/sdk-review/references/test-quality-rules.md
+               - .claude/skills/sdk-review/references/dx-rules.md
+               - .claude/skills/sdk-review/references/structural-rules.md
+               - .claude/skills/sdk-review/references/retro-log.md
+                 (learned-not-to-flag — patterns previously withdrawn
+                 after author challenges. DO NOT flag these again
+                 without additional evidence.)
 
-            AGENT A — CORRECTNESS (arch + security + bugs). Prompt:
-              "You are a CORRECTNESS reviewer. Read diff at
-              /tmp/sdkreview/diff.patch and files at
-              /tmp/sdkreview/files.txt. Apply rules from
-              .claude/skills/sdk-review/references/v3-architecture-rules.md,
-              security-rules.md, retro-log.md (avoid re-flagging
-              withdrawn patterns). Output JSON array of findings with
-              fields {severity: Critical|Important|Minor, tag:
-              ARCH|SEC|BUG, file, line, description, fix}. If none: []"
+               If $SDK_REVIEW_COMPLEXITY is "tests-only", you may skip
+               v3-architecture-rules.md, security-rules.md, and
+               structural-rules.md (no production code to check).
 
-            AGENT B — QUALITY (code quality + tests + DX). Prompt:
-              "You are a QUALITY reviewer. Read /tmp/sdkreview/diff.patch.
-              Apply rules from code-quality-rules.md, test-quality-rules.md,
-              dx-rules.md, retro-log.md. Severity: lint-rejectable
-              (bare except, f-string in logger, print, unused imports,
-              mutable defaults) is at LEAST Important. Missing types /
-              docstrings / formatting → Minor. Output JSON findings
-              with tag: QUAL|TEST|DX."
+            4. Analyze the PR across these 3 dimensions:
+               - CORRECTNESS: architecture (ADR compliance, contract
+                 safety, determinism), security (secrets, injection,
+                 isolation), logical bugs
+               - QUALITY: code quality (imports, logging, naming,
+                 size), test coverage, developer experience
+               - STRUCTURE: holistic — symptoms vs causes, file
+                 health, dependency direction, v3 replacements
 
-            AGENT C — STRUCTURE (holistic, design). Prompt:
-              "You are a STRUCTURE reviewer. Read full files (not
-              just diff) from /tmp/sdkreview/files.txt. Apply
-              structural-rules.md, v3-architecture-rules.md,
-              retro-log.md. Find: dumping grounds, dep direction
-              violations, god functions, v3-replacement opportunities.
-              Output JSON findings with tag: STRUCT|ARCH and extra
-              field design_change: true|false when the fix requires
-              architectural rework (not a simple patch)."
-
-            ### Step 3 — Consolidate
-
-            Merge all 3 JSON arrays. De-duplicate by (file, line, ~description):
-            keep the HIGHEST severity and merge descriptions. If a SEC
-            tag conflicts with QUAL on same line, SEC wins.
-
-            Check guardrails G1-G8. Any Critical [SEC] → BLOCKED.
-
-            ### Step 4 — Fallback (if any subagent fails)
-
-            If any Task call errors (auth / timeout / parse failure),
-            log it to stderr and proceed with whichever subagents
-            succeeded. If ALL fail, fall back to direct review:
-            read the diff + the 6 rule files and review yourself.
-            This fallback keeps the pipeline healthy if the LiteLLM
-            subagent auth issue ever resurfaces.
+            5. Check guardrails G1-G8 (defined in the reference
+               rules). Any violation is a blocker.
 
             6. Post a summary comment to the PR using `gh pr comment`.
                Use the verb "${{ steps.ack.outputs.verb }}" in the heading.
@@ -875,9 +827,9 @@ jobs:
             9. Verdict rules:
 
                - Any Critical security finding [SEC] → BLOCKED.
-               - Any Critical non-security finding OR 3+ Important findings
-                 OR 5+ Minor findings → NEEDS_FIXES.
-               - No Critical, fewer than 3 Important, fewer than 5 Minor →
+               - Any Critical non-security finding OR any Important
+                 finding OR 3+ Minor findings → NEEDS_FIXES.
+               - No Critical, zero Important, fewer than 3 Minor →
                  READY_TO_MERGE.
                - Major design smells (god function, dependency direction
                  violation, dumping ground, contract break) that aren't
@@ -886,15 +838,14 @@ jobs:
             10. Output the verdict as the LAST LINE of your response:
                 VERDICT:<verdict>
 
-            Use the Task tool (Wave 1 — 3 parallel subagents) as
-            instructed above. Each subagent is a "general-purpose"
-            agent with a narrow, focused prompt. This is the
-            orchestrator pattern; do NOT review the PR directly.
+            Do NOT use the Task or Agent tool — do everything
+            directly in this session. Subagents hang on the LiteLLM
+            proxy and cause timeouts.
             Do NOT set a commit status check (Finalize handles that).
             Do NOT proceed to auto-fix — that is a separate workflow step.
           claude_args: |
             --model claude-opus-4-6
-            --allowedTools "Task,Read,Glob,Grep,Write,Bash(mkdir:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh label:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(cat:*),Bash(jq:*),Bash(python3:*),Bash(python:*),Bash(wc:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(grep:*),Bash(find:*),Bash(echo:*),Bash(tr:*),Bash(cut:*),Bash(uniq:*),Bash(diff:*),Bash(xargs:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(tee:*),Bash(stat:*),Bash(file:*),Bash(sed:*),Bash(awk:*)"
+            --allowedTools "Read,Glob,Grep,Bash(mkdir:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh label:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(cat:*),Bash(jq:*),Bash(python3:*),Bash(python:*),Bash(wc:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(grep:*),Bash(find:*),Bash(echo:*),Bash(tr:*),Bash(cut:*),Bash(uniq:*),Bash(diff:*),Bash(xargs:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(tee:*),Bash(stat:*),Bash(file:*),Bash(sed:*),Bash(awk:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
@@ -978,30 +929,9 @@ jobs:
           # Save JSON to disk for the Reconcile step
           printf '%s' "$CODEX_JSON" > /tmp/codex_disagreements.json
 
-          # Post an informational comment so humans see the raw Codex output
-          HUMAN_SUMMARY=$(printf '%s' "$CODEX_JSON" | jq -r '
-            def list(name; arr): if (arr|length) > 0 then
-              "### " + name + "\n" + (arr | map("- [\(.tag // "?")] `\(.file // "?"):\(.line // "?")` — \(.description // "")") | join("\n")) + "\n"
-            else "### " + name + "\nNone\n" end;
-            list("What was missed"; .missed // []) +
-            list("False positives"; .false_positives // []) +
-            (if (.severity_changes // [] | length) > 0 then
-               "### Severity disagreements\n" +
-               ((.severity_changes // []) | map("- `\(.file):\(.line)` — was \(.from), should be \(.to) — \(.reason)") | join("\n"))
-             else "### Severity disagreements\nNone" end)' 2>/dev/null || echo "Codex output malformed.")
-
-          BODY=$(printf '%s\n' \
-            "<!-- SDK_REVIEW_V2_ADVERSARIAL -->" \
-            "## 🤖 Adversarial review (GPT-5.3-codex)" \
-            "" \
-            "> Cross-model second opinion. These disagreements feed into the reconciled Opus review above." \
-            "" \
-            "${HUMAN_SUMMARY}" \
-            "" \
-            "---" \
-            "<sub>Reconciled with Opus's findings automatically — see the updated SDK Review comment.</sub>")
-
-          gh pr comment "$PR_NUMBER" --body "$BODY"
+          # Codex findings saved to /tmp/codex_disagreements.json.
+          # The Reconcile step will fold them into the main Opus review
+          # comment in-place — no separate comment needed.
           echo "ran=true" >> "$GITHUB_OUTPUT"
 
       # Reconcile — fold Codex disagreements into the Opus SDK_REVIEW_V2
@@ -1047,7 +977,7 @@ jobs:
                  a Critical).
                - Re-evaluate verdict with the reconciled findings
                  using the standard rules (Critical [SEC] → BLOCKED,
-                 3+ Important or 5+ Minor → NEEDS_FIXES, etc.).
+                 any Important or 3+ Minor → NEEDS_FIXES, etc.).
                - Add a new section "### Cross-model reconciliation"
                  BEFORE the Findings list that summarizes what was
                  added/removed/adjusted. Example:
@@ -1542,6 +1472,9 @@ jobs:
             -f state=failure -f context=sdk-review \
             -f description="SDK Review: BLOCKED — critical security finding." 2>/dev/null || true
 
+          gh pr comment "$PR" --body \
+            "🔒 **SDK Review complete — BLOCKED.** Critical security finding detected. See the review comment above for details. This PR cannot be merged until the issue is resolved and \`@sdk-review\` is re-run."
+
       # Mark status = failure and add label for NEEDS_FIXES in review-only mode
       # (so the PR visibly blocks on merge until author fixes & re-runs)
       - name: Set status (NEEDS_FIXES, review-only)
@@ -1557,6 +1490,9 @@ jobs:
           gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
             -f state=failure -f context=sdk-review \
             -f description="SDK Review: NEEDS_FIXES — see review comment." 2>/dev/null || true
+
+          gh pr comment "$PR" --body \
+            "📋 **SDK Review complete — NEEDS FIXES.** See the review comment above for findings. Address the issues and comment \`@sdk-review\` to re-review, or \`@sdk-review auto-complete\` to auto-fix."
 
   # ── Reset review status on new commits ──────────────────────
   # When the author pushes new code, reset the sdk-review check
