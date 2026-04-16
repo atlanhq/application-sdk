@@ -107,6 +107,8 @@ jobs:
       issues: write
       id-token: write
       statuses: write
+      actions: write        # needed to dispatch workflow_dispatch iterations
+      workflows: write      # needed to update branches on PRs that touch .github/workflows/
     timeout-minutes: 30
     concurrency:
       group: sdk-review-${{ github.event.issue.number }}
@@ -1242,6 +1244,7 @@ jobs:
 
       # Finalize if clean (approve + update branch + status = success)
       - name: Finalize (approve if clean)
+        id: finalize
         if: steps.verdict.outputs.verdict == 'READY_TO_MERGE'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1249,31 +1252,34 @@ jobs:
           MODE: ${{ steps.pr.outputs.mode }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-          TOUCHES_WORKFLOWS: ${{ steps.pr.outputs.touches_workflows }}
         run: |
-          # Update branch. Skip if the PR touches workflow files —
-          # GITHUB_TOKEN lacks 'workflows' scope so update-branch would
-          # 403. The author needs to update the branch manually (or a
-          # maintainer with a PAT that has workflow scope).
-          if [ "$TOUCHES_WORKFLOWS" = "true" ]; then
-            echo "PR touches .github/workflows/* — skipping branch update (GITHUB_TOKEN lacks workflow scope)."
-          else
-            gh api "repos/${REPO}/pulls/$PR/update-branch" \
-              -X PUT -f update_method=merge 2>/dev/null || echo "Branch already up to date"
-          fi
+          # Update branch (workflows: write permission allows this even
+          # for PRs that touch .github/workflows/).
+          gh api "repos/${REPO}/pulls/$PR/update-branch" \
+            -X PUT -f update_method=merge 2>/dev/null || echo "Branch already up to date"
 
           # Wait for CI after branch update
           sleep 15
           echo "Checking CI status..."
           if ! gh pr checks "$PR" --required --watch --fail-fast 2>/dev/null; then
-            echo "CI checks failing after branch update. Not approving."
+            echo "CI checks failing after branch update."
+            if [ "$MODE" = "auto-fix" ]; then
+              # In auto-fix mode, signal Session C to fix CI issues
+              echo "ci_failed=true" >> "$GITHUB_OUTPUT"
+              gh pr comment "$PR" --body \
+                "⏳ **SDK Review verdict: READY TO MERGE** — but CI is failing after branch update. Auto-fix will attempt to resolve CI issues (pre-commit, tests)."
+              exit 0
+            fi
+            # In review-only / override / challenge mode, just report
             gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
               -f state=failure -f context=sdk-review \
               -f description="Review verdict READY TO MERGE, but required CI checks are failing. Fix CI, then re-run @sdk-review." 2>/dev/null || true
             gh pr comment "$PR" --body \
               "ℹ️ **SDK Review verdict: READY TO MERGE** — but required CI checks on this branch are failing. The \`sdk-review\` status is set to \`failure\` to prevent merge. Fix CI (e.g. pre-commit, tests), push, and re-run \`@sdk-review\`."
+            echo "ci_failed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "ci_failed=false" >> "$GITHUB_OUTPUT"
 
           # Compose context-aware approve message.
           #
@@ -1383,6 +1389,107 @@ jobs:
           gh api "repos/${REPO}/statuses/${NEW_SHA}" \
             -f state=success -f context=sdk-review \
             -f description="SDK Review: Approved. Ready to merge." 2>/dev/null || true
+
+      # Fix CI (Session C — auto-fix only). Runs when the review
+      # verdict is READY_TO_MERGE but CI checks are failing after
+      # the branch update (e.g. pre-commit, lint, tests). This
+      # avoids the dead end where auto-complete gives up after a
+      # clean review just because CI is red.
+      - name: Fix CI (Session C — CI remediation)
+        id: ci_fix
+        if: |
+          steps.pr.outputs.mode == 'auto-fix' &&
+          steps.verdict.outputs.verdict == 'READY_TO_MERGE' &&
+          steps.finalize.outputs.ci_failed == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
+          show_full_output: true
+          prompt: |
+            CI checks are failing on PR #${{ steps.pr.outputs.number }} after a
+            branch update merge. The review verdict was READY TO MERGE — there
+            are no review findings to fix. Your job is to make CI green.
+
+            Branch: ${{ steps.pr.outputs.head_branch }}
+            Base:   ${{ steps.pr.outputs.base_branch }}
+
+            IMPORTANT RULES:
+            - Follow CLAUDE.md commit conventions (Conventional Commits format)
+            - NEVER add Co-Authored-By lines to commits
+            - Full git history is already checked out. Do NOT run git fetch.
+
+            Process:
+
+            1. Identify what's failing:
+               gh pr checks ${{ steps.pr.outputs.number }} --required --json name,state,description \
+                 --jq '.[] | select(.state != "SUCCESS" and .state != "SKIPPED")'
+
+            2. Run pre-commit on all files to catch lint/formatting issues:
+               uv run pre-commit run --all-files
+               If it fails, review the output, fix the issues, and re-run.
+
+            3. Run unit tests:
+               uv run pytest tests/unit/ -x --timeout=120
+               If tests fail, read the traceback, fix the root cause.
+
+            4. Run type checking on changed files:
+               uv run pyright $(git diff --name-only origin/${{ steps.pr.outputs.base_branch }}...HEAD -- '*.py') 2>/dev/null || true
+
+            5. After all fixes:
+               git add <specific changed files>
+               git commit -m "fix(ci): resolve CI failures after branch update"
+               git push origin ${{ steps.pr.outputs.head_branch }}
+
+            Output: CI_FIXED:<count of files changed> or CI_FIXED:0 if nothing needed fixing.
+          claude_args: |
+            --model claude-opus-4-6
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(uv run:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git diff:*),Bash(git checkout:*),Bash(git status:*),Bash(gh pr:*),Bash(gh api:*),Bash(cat:*),Bash(jq:*)"
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
+          GH_TOKEN: ${{ github.token }}
+
+      # After Session C fixes CI, re-dispatch to re-review and finalize.
+      - name: Trigger re-review after CI fix
+        if: |
+          steps.pr.outputs.mode == 'auto-fix' &&
+          steps.verdict.outputs.verdict == 'READY_TO_MERGE' &&
+          steps.finalize.outputs.ci_failed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          CURRENT: ${{ steps.pr.outputs.iteration }}
+          MAX: ${{ steps.pr.outputs.max_iter }}
+        run: |
+          NEXT=$((CURRENT + 1))
+
+          if [ "$NEXT" -gt "$MAX" ]; then
+            echo "Max iterations ($MAX) reached during CI fix."
+            gh pr comment "$PR_NUMBER" --body \
+              "SDK Review: CI fix attempted but max iterations ($MAX) reached. Remaining CI issues need manual attention."
+            gh label create "needs-human-review" --color "d93f0b" --force 2>/dev/null
+            gh pr edit "$PR_NUMBER" --add-label "needs-human-review"
+            exit 0
+          fi
+
+          DEFAULT_BRANCH=$(gh api "repos/${REPO}" --jq '.default_branch')
+          echo "Dispatching iteration ${NEXT}/${MAX} after CI fix..."
+
+          if gh api "repos/${REPO}/actions/workflows/claude.yml/dispatches" \
+               -X POST \
+               -f ref="${DEFAULT_BRANCH}" \
+               -F "inputs[pr_number]=${PR_NUMBER}" \
+               -F "inputs[iteration]=${NEXT}" \
+               -F "inputs[max_iter]=${MAX}" \
+               -F "inputs[trigger_reason]=CI remediation iteration ${NEXT}/${MAX}"; then
+            gh pr comment "$PR_NUMBER" --body \
+              "🔁 **CI fix pushed — re-review iteration ${NEXT}/${MAX} dispatched.** [Watch live progress](${{ github.server_url }}/${{ github.repository }}/actions/workflows/claude.yml)"
+          else
+            gh pr comment "$PR_NUMBER" --body \
+              "⚠️ CI fix iteration ${NEXT}/${MAX} could not be dispatched. Re-run manually by commenting \`@sdk-review auto-complete\`."
+          fi
 
       # Mark status = failure for BLOCKED verdict
       - name: Set status (BLOCKED)
