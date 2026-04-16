@@ -521,8 +521,8 @@ class TestDownloadFilesIsolation:
             tmp2 = str(local2.parents[2])
 
             assert tmp1 != tmp2, f"Concurrent downloads used same destination: {tmp1}"
-            assert tmp1.startswith("local/tmp/")
-            assert tmp2.startswith("local/tmp/")
+            assert Path(tmp1).parts[:2] == ("local", "tmp"), f"Unexpected path: {tmp1}"
+            assert Path(tmp2).parts[:2] == ("local", "tmp"), f"Unexpected path: {tmp2}"
 
     @pytest.mark.asyncio
     async def test_file_names_with_relative_path_match_correctly(self):
