@@ -154,8 +154,8 @@ class IncrementalDiffResult(BaseModel):
         tables_deleted: Count of deleted tables (previous - current)
         columns_total: Total columns for changed tables
         columns_deleted: Count of deleted columns (cascade + updated table diffs)
-        schemas_total: Total schemas in diff
-        databases_total: Total databases in diff
+        schemas_total: Number of schema **files** copied to diff (file count, not entity count)
+        databases_total: Number of database **files** copied to diff (file count, not entity count)
         total_files: Total JSON files written
         is_incremental: Whether this was an incremental run (vs first run)
     """
@@ -173,7 +173,12 @@ class IncrementalDiffResult(BaseModel):
 
     @property
     def total_changed_entities(self) -> int:
-        """Total count of all changed and deleted entities."""
+        """Total count of changed and deleted table/column entities.
+
+        Schemas and databases are excluded because: (a) they are always present
+        in every incremental diff regardless of changes, and (b) their counts
+        represent file counts (not entity counts) from ``copy_directory_parallel``.
+        """
         return (
             self.tables_created
             + self.tables_updated
@@ -181,8 +186,6 @@ class IncrementalDiffResult(BaseModel):
             + self.tables_deleted
             + self.columns_total
             + self.columns_deleted
-            + self.schemas_total
-            + self.databases_total
         )
 
 

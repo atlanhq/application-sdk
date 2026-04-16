@@ -341,6 +341,8 @@ class TestWriteMetadata:
             assert meta["total_changed_entities"] == result.total_changed_entities
 
     def test_metadata_total_changed_entities(self):
+        # schemas_total and databases_total are file counts, not entity counts,
+        # and are excluded from total_changed_entities.
         result = IncrementalDiffResult(
             tables_created=1,
             tables_updated=2,
@@ -351,7 +353,7 @@ class TestWriteMetadata:
             schemas_total=1,
             databases_total=1,
         )
-        assert result.total_changed_entities == 27
+        assert result.total_changed_entities == 25
 
 
 # ---------------------------------------------------------------------------

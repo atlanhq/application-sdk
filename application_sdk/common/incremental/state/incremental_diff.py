@@ -249,12 +249,13 @@ def _detect_deletions(
         return counts
 
     with managed_duckdb_connection(conn) as active_conn:
-        # Load previous state tables
+        # Load previous state tables and current scope QNs into temp tables
         del_prev_tables = "del_prev_tables"
         del_current_qns = "del_current_qns"
+        del_deleted_tables = "del_deleted_tables"  # materialized anti-join
 
-        active_conn.execute(f"DROP TABLE IF EXISTS {del_prev_tables}")
-        active_conn.execute(f"DROP TABLE IF EXISTS {del_current_qns}")
+        for tbl in [del_prev_tables, del_current_qns, del_deleted_tables]:
+            active_conn.execute(f"DROP TABLE IF EXISTS {tbl}")
 
         active_conn.execute(f"""
             CREATE TABLE {del_prev_tables} AS
@@ -270,32 +271,28 @@ def _detect_deletions(
                 [(qn,) for qn in current_table_qns],
             )
 
-        # Step A: Find deleted tables (in previous but not in current)
-        deleted_count_result = active_conn.execute(f"""
-            SELECT COUNT(*)
+        # Step A: Materialize deleted tables once — avoids running the anti-join
+        # three separate times (count, COPY, QN fetch).
+        active_conn.execute(f"""
+            CREATE TABLE {del_deleted_tables} AS
+            SELECT pt.*
             FROM {del_prev_tables} pt
             LEFT JOIN {del_current_qns} cq
               ON pt.attributes.qualifiedName = cq.qualified_name
             WHERE cq.qualified_name IS NULL
-        """).fetchone()
+        """)
 
-        deleted_table_count = deleted_count_result[0] if deleted_count_result else 0
+        deleted_table_count = active_conn.execute(
+            f"SELECT COUNT(*) FROM {del_deleted_tables}"
+        ).fetchone()[0]
 
         if deleted_table_count > 0:
             delete_table_dir = delete_dir.joinpath(EntityType.TABLE.value)
             delete_table_dir.mkdir(parents=True, exist_ok=True)
-
-            dest_file = delete_table_dir.joinpath("chunk-0.json")
-            dest_file_str = str(dest_file).replace("'", "''")
+            dest_file_str = str(delete_table_dir / "chunk-0.json").replace("'", "''")
 
             active_conn.execute(f"""
-                COPY (
-                    SELECT pt.*
-                    FROM {del_prev_tables} pt
-                    LEFT JOIN {del_current_qns} cq
-                      ON pt.attributes.qualifiedName = cq.qualified_name
-                    WHERE cq.qualified_name IS NULL
-                )
+                COPY (SELECT * FROM {del_deleted_tables})
                 TO '{dest_file_str}'
                 (FORMAT JSON, ARRAY false)
             """)
@@ -303,15 +300,12 @@ def _detect_deletions(
             counts["tables_deleted"] = deleted_table_count
             logger.info("Detected %d deleted tables", deleted_table_count)
 
-            # Get the deleted table QNs for column cascade
-            deleted_table_qns_result = active_conn.execute(f"""
-                SELECT pt.attributes.qualifiedName
-                FROM {del_prev_tables} pt
-                LEFT JOIN {del_current_qns} cq
-                  ON pt.attributes.qualifiedName = cq.qualified_name
-                WHERE cq.qualified_name IS NULL
-            """).fetchall()
-            deleted_table_qns = {row[0] for row in deleted_table_qns_result}
+            deleted_table_qns = {
+                row[0]
+                for row in active_conn.execute(
+                    f"SELECT attributes.qualifiedName FROM {del_deleted_tables}"
+                ).fetchall()
+            }
 
             # Cascade: delete columns belonging to deleted tables
             cascade_count = _detect_deleted_columns_for_tables(
