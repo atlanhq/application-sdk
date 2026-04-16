@@ -8,7 +8,7 @@ Every application that uses the SDK worker automatically exposes ~40 built-in Te
 
 ### Endpoint
 
-The metrics endpoint is bound at startup when `load()` is called:
+The metrics endpoint is bound at startup when `create_temporal_client()` is called:
 
 ```
 http://<host>:9464/metrics
