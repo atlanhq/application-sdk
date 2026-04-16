@@ -1,4 +1,8 @@
-"""Clean test fixture — no findings expected."""
+"""Clean test fixture — no findings expected.
+
+This trivial commit tests that reset-review-status dismisses the
+bot's prior approval and removes the sdk-review-approved label.
+"""
 
 from __future__ import annotations
 
