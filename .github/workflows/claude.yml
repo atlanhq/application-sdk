@@ -1256,21 +1256,32 @@ jobs:
           BASE_BRANCH: ${{ steps.pr.outputs.base_branch }}
         run: |
           # Update branch. Try the API first (fast, no checkout needed).
-          # If it 403s (e.g. PR touches .github/workflows/ — the API
-          # requires a PAT with 'workflows' OAuth scope for that), fall
-          # back to git merge + push which works with contents: write.
-          if ! gh api "repos/${REPO}/pulls/$PR/update-branch" \
-               -X PUT -f update_method=merge 2>/dev/null; then
-            echo "API update-branch failed (likely workflow-touching PR). Falling back to git merge."
-            git fetch origin "$BASE_BRANCH" "$HEAD_BRANCH"
-            git checkout "$HEAD_BRANCH"
-            if git merge "origin/$BASE_BRANCH" --no-edit; then
-              git push origin "$HEAD_BRANCH"
-            else
-              echo "Merge conflict during branch update — aborting."
-              git merge --abort
-            fi
-          fi
+          # The API returns 422 when already up-to-date, 403 when the PR
+          # touches .github/workflows/ (needs PAT with 'workflows' OAuth
+          # scope). Capture the HTTP status to distinguish these cases.
+          HTTP_STATUS=$(gh api "repos/${REPO}/pulls/$PR/update-branch" \
+            -X PUT -f update_method=merge \
+            --include 2>&1 | head -1 | grep -oP '\d{3}' || echo "000")
+
+          case "$HTTP_STATUS" in
+            200) echo "Branch updated via API." ;;
+            422) echo "Branch already up to date." ;;
+            *)
+              echo "API update-branch returned $HTTP_STATUS. Falling back to git merge."
+              # Configure git auth using GITHUB_TOKEN (actions/checkout
+              # may not persist credentials for push in all cases).
+              git config --local http.https://github.com/.extraheader \
+                "Authorization: basic $(echo -n "x-access-token:${GH_TOKEN}" | base64)"
+              git fetch origin "$BASE_BRANCH" "$HEAD_BRANCH"
+              git checkout "$HEAD_BRANCH"
+              if git merge "origin/$BASE_BRANCH" --no-edit; then
+                git push origin "$HEAD_BRANCH" || echo "Push failed — branch update skipped."
+              else
+                echo "Merge conflict during branch update — aborting."
+                git merge --abort
+              fi
+              ;;
+          esac
 
           # Wait for CI after branch update
           sleep 15
