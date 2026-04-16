@@ -1,0 +1,117 @@
+# Allowlist Approval Gate — enforces that changes to .security/ are approved
+# by a designated approver, not just any code reviewer.
+#
+# Triggers on every PR and every review submission. Checks if the PR touches
+# .security/ files; if not, exits early with success (so it doesn't block
+# unrelated PRs when set as a required status check).
+#
+# The authorized approver list is read from .security/approvers.json on the
+# BASE branch (main), not the PR branch — so adding yourself to the approver
+# list in a PR doesn't let you self-approve.
+#
+# Make this a REQUIRED STATUS CHECK on main to enforce.
+#
+name: Allowlist Approval
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  check-approval:
+    name: Authorized Approver Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check if PR modifies .security/
+        id: check-files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request?.number || context.issue?.number;
+            if (!prNumber) {
+              console.log('Could not determine PR number — skipping');
+              core.setOutput('touches_security', 'false');
+              return;
+            }
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              per_page: 100,
+            });
+            const touchesSecurity = files.some(f => f.filename.startsWith('.security/'));
+            core.setOutput('touches_security', touchesSecurity.toString());
+            if (!touchesSecurity) {
+              console.log('PR does not modify .security/ — no approval required');
+            } else {
+              console.log(`PR modifies .security/ files: ${files.filter(f => f.filename.startsWith('.security/')).map(f => f.filename).join(', ')}`);
+            }
+
+      - name: Checkout base branch (to read current approvers, not PR's version)
+        if: steps.check-files.outputs.touches_security == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Verify authorized approver
+        if: steps.check-files.outputs.touches_security == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Read authorized approvers from BASE branch's .security/approvers.json
+            let authorized;
+            try {
+              const config = JSON.parse(fs.readFileSync('.security/approvers.json', 'utf8'));
+              authorized = config.allowlist_approvers || [];
+            } catch (e) {
+              core.setFailed(`Could not read .security/approvers.json from base branch: ${e.message}`);
+              return;
+            }
+
+            if (authorized.length === 0) {
+              core.setFailed('No approvers configured in .security/approvers.json');
+              return;
+            }
+
+            const prNumber = context.payload.pull_request?.number || context.issue?.number;
+            if (!prNumber) {
+              core.setFailed('Could not determine PR number');
+              return;
+            }
+
+            // List all reviews on this PR
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            // Only count the latest review state per user (handles re-reviews)
+            const latestReviewByUser = {};
+            for (const review of reviews) {
+              latestReviewByUser[review.user.login] = review.state;
+            }
+
+            const authorizedApprovals = authorized.filter(
+              user => latestReviewByUser[user] === 'APPROVED'
+            );
+
+            if (authorizedApprovals.length === 0) {
+              const currentApprovals = Object.entries(latestReviewByUser)
+                .filter(([_, state]) => state === 'APPROVED')
+                .map(([user, _]) => user);
+
+              core.setFailed(
+                `Changes to .security/ require approval from a designated approver.\n\n` +
+                `Authorized approvers: ${authorized.join(', ')}\n` +
+                `Current approvals from: ${currentApprovals.length > 0 ? currentApprovals.join(', ') : 'none'}\n\n` +
+                `Ask one of the authorized approvers to review and approve this PR.`
+              );
+            } else {
+              console.log(`✅ Approved by authorized approver(s): ${authorizedApprovals.join(', ')}`);
+            }
