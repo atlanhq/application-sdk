@@ -476,7 +476,7 @@ jobs:
             Be conservative. When in doubt, ABORT and let a human handle it.
           claude_args: |
             --model claude-opus-4-6
-            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git fetch:*),Bash(git checkout:*),Bash(git merge:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(uv run:*)"
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git fetch:*),Bash(git checkout:*),Bash(git merge:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git status:*),Bash(git log:*),Bash(git show:*),Bash(uv run:*),Bash(python3:*),Bash(python:*),Bash(cat:*),Bash(ls:*),Bash(wc:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(sed:*),Bash(awk:*),Bash(echo:*),Bash(mkdir:*),Bash(ruff:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
@@ -894,7 +894,7 @@ jobs:
             Do NOT proceed to auto-fix — that is a separate workflow step.
           claude_args: |
             --model claude-opus-4-6
-            --allowedTools "Task,Read,Glob,Grep,Write,Bash(mkdir:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh label:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(cat:*),Bash(jq:*)"
+            --allowedTools "Task,Read,Glob,Grep,Write,Bash(mkdir:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr checks:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh label:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(cat:*),Bash(jq:*),Bash(python3:*),Bash(python:*),Bash(wc:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(grep:*),Bash(find:*),Bash(echo:*),Bash(tr:*),Bash(cut:*),Bash(uniq:*),Bash(diff:*),Bash(xargs:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(tee:*),Bash(stat:*),Bash(file:*),Bash(sed:*),Bash(awk:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
@@ -1071,7 +1071,7 @@ jobs:
             output VERDICT:UNCHANGED.
           claude_args: |
             --model claude-opus-4-6
-            --allowedTools "Read,Bash(gh api:*),Bash(cat:*),Bash(jq:*)"
+            --allowedTools "Read,Glob,Grep,Bash(gh api:*),Bash(cat:*),Bash(jq:*),Bash(python3:*),Bash(python:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(wc:*),Bash(echo:*),Bash(sed:*),Bash(awk:*),Bash(cut:*),Bash(tr:*),Bash(sort:*),Bash(diff:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
@@ -1180,7 +1180,7 @@ jobs:
             Output: FIXES_APPLIED:<count> or FIXES_APPLIED:0
           claude_args: |
             --model claude-opus-4-6
-            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(uv run:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git diff:*),Bash(git checkout:*),Bash(git status:*),Bash(gh api:*),Bash(gh pr view:*),Bash(cat:*),Bash(jq:*)"
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(uv run:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git diff:*),Bash(git checkout:*),Bash(git status:*),Bash(gh api:*),Bash(gh pr view:*),Bash(cat:*),Bash(jq:*),Bash(python3:*),Bash(python:*),Bash(wc:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(grep:*),Bash(find:*),Bash(echo:*),Bash(tr:*),Bash(cut:*),Bash(uniq:*),Bash(diff:*),Bash(xargs:*),Bash(sed:*),Bash(awk:*),Bash(ruff:*),Bash(pip:*),Bash(mkdir:*),Bash(tee:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
@@ -1482,7 +1482,7 @@ jobs:
             Output: CI_FIXED:<count of files changed> or CI_FIXED:0 if nothing needed fixing.
           claude_args: |
             --model claude-opus-4-6
-            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(uv run:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git diff:*),Bash(git checkout:*),Bash(git status:*),Bash(gh pr:*),Bash(gh api:*),Bash(cat:*),Bash(jq:*)"
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(uv run:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git diff:*),Bash(git checkout:*),Bash(git status:*),Bash(gh pr:*),Bash(gh api:*),Bash(cat:*),Bash(jq:*),Bash(python3:*),Bash(python:*),Bash(wc:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(grep:*),Bash(find:*),Bash(echo:*),Bash(tr:*),Bash(cut:*),Bash(uniq:*),Bash(diff:*),Bash(xargs:*),Bash(sed:*),Bash(awk:*),Bash(ruff:*),Bash(pip:*),Bash(mkdir:*),Bash(tee:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
