@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sys
 import time
 import traceback
@@ -35,7 +34,7 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
-from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME  # noqa: F401 — APP_TENANT_ID kept for test patch compat
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.error_classifier import (
     classify_error,
     extract_cause_chain,
@@ -184,6 +183,8 @@ def _emit_log_event(
         pass
 
     try:
+        # Deferred import: logger_adaptor may not be initialized yet during early
+        # workflow lifecycle events (interceptor runs before full app setup).
         from application_sdk.observability.logger_adaptor import get_logger
 
         logger = get_logger("app_vitals")
@@ -394,80 +395,104 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             try:
                 info = workflow.info()
             except Exception:
-                return
+                info = None
 
-            common = _build_common_attrs()
-
-            # Workflow-level timeout budget — same pattern as activity timeout
-            wf_timeout_budget_total_ms: float | None = None
-            wf_timeout_budget_used_pct: float | None = None
-            execution_timeout = getattr(info, "execution_timeout", None)
-            if execution_timeout is not None:
-                total_ms = execution_timeout.total_seconds() * 1000
-                wf_timeout_budget_total_ms = total_ms
-                if total_ms > 0:
-                    wf_timeout_budget_used_pct = round(
-                        (duration_ms / total_ms) * 100, 2
-                    )
-
-            # History length — proxy for workflow complexity / CaN pressure
-            history_length: int | None = None
-            try:
-                history_length = info.get_current_history_length()
-            except Exception:
-                pass
-
-            event_attrs: dict[str, Any] = {
-                **common,
-                "workflow_id": info.workflow_id or "",
-                "workflow_run_id": info.run_id or "",
-                "workflow_type": info.workflow_type or "",
-                "task_queue": info.task_queue or "",
-                "namespace": info.namespace or "",
-                "parent_workflow_id": info.parent.workflow_id if info.parent else "",
-                "parent_run_id": info.parent.run_id if info.parent else "",
-                "continued_run_id": info.continued_run_id or "",
-                "cron_schedule": info.cron_schedule or "",
-                "status": status,
-                "error_type": error_type,
-                "duration_ms": round(duration_ms, 1),
-                "dimension": "reliability",
-                "source": "temporal",
-                "metric_name": "app_vitals.reliability.wf_completed",
-            }
-            if wf_timeout_budget_total_ms is not None:
-                event_attrs["wf_timeout_budget_total_ms"] = round(
-                    wf_timeout_budget_total_ms, 1
+            # Guard: skip event emission if workflow info unavailable.
+            # MUST NOT use `return` in finally — that would swallow exceptions.
+            if info is not None:
+                self._emit_completion_events(
+                    info,
+                    status,
+                    duration_ms,
+                    error_type,
+                    error_message,
+                    error_class,
+                    cause_chain,
+                    retriable,
+                    stack_trace,
                 )
-                event_attrs["wf_timeout_budget_used_pct"] = wf_timeout_budget_used_pct
-            if history_length is not None:
-                event_attrs["history_length"] = history_length
-            if error_message:
-                event_attrs["error_message"] = error_message
-                event_attrs["error_class"] = error_class
-                event_attrs["is_retriable"] = retriable
-                event_attrs["error_fingerprint"] = _compute_error_fingerprint(
-                    info.workflow_type or "", error_type, error_class
-                )
-                if stack_trace:
-                    event_attrs["stack_trace"] = stack_trace
-                if cause_chain:
-                    event_attrs["error_cause_chain"] = cause_chain
 
-            _emit_log_event("app_vitals.wf.completed", event_attrs)
+    def _emit_completion_events(
+        self,
+        info: Any,
+        status: str,
+        duration_ms: float,
+        error_type: str,
+        error_message: str,
+        error_class: str,
+        cause_chain: list[str],
+        retriable: bool,
+        stack_trace: str,
+    ) -> None:
+        """Emit workflow completed + summary events. Extracted to avoid return-in-finally."""
+        common = _build_common_attrs()
 
-            # Workflow summary event (L1) — rolls up all activities observed
-            # during this workflow execution. One row per workflow run with the
-            # full shape of the pipeline: counts, first failure, bottleneck.
-            # Does NOT replace per-activity events — they are still the source
-            # of truth (RFC D2). This is a query-time convenience.
-            try:
-                summary_attrs = self._build_summary_attrs(
-                    common, info, status, duration_ms
-                )
-                _emit_log_event("app_vitals.wf.summary", summary_attrs)
-            except Exception:
-                pass  # summary is best-effort; never block the workflow
+        # Workflow-level timeout budget — same pattern as activity timeout
+        wf_timeout_budget_total_ms: float | None = None
+        wf_timeout_budget_used_pct: float | None = None
+        execution_timeout = getattr(info, "execution_timeout", None)
+        if execution_timeout is not None:
+            total_ms = execution_timeout.total_seconds() * 1000
+            wf_timeout_budget_total_ms = total_ms
+            if total_ms > 0:
+                wf_timeout_budget_used_pct = round((duration_ms / total_ms) * 100, 2)
+
+        # History length — proxy for workflow complexity / CaN pressure
+        history_length: int | None = None
+        try:
+            history_length = info.get_current_history_length()
+        except Exception:
+            pass
+
+        event_attrs: dict[str, Any] = {
+            **common,
+            "workflow_id": info.workflow_id or "",
+            "workflow_run_id": info.run_id or "",
+            "workflow_type": info.workflow_type or "",
+            "task_queue": info.task_queue or "",
+            "namespace": info.namespace or "",
+            "parent_workflow_id": info.parent.workflow_id if info.parent else "",
+            "parent_run_id": info.parent.run_id if info.parent else "",
+            "continued_run_id": info.continued_run_id or "",
+            "cron_schedule": info.cron_schedule or "",
+            "status": status,
+            "error_type": error_type,
+            "duration_ms": round(duration_ms, 1),
+            "dimension": "reliability",
+            "source": "temporal",
+            "metric_name": "app_vitals.reliability.wf_completed",
+        }
+        if wf_timeout_budget_total_ms is not None:
+            event_attrs["wf_timeout_budget_total_ms"] = round(
+                wf_timeout_budget_total_ms, 1
+            )
+            event_attrs["wf_timeout_budget_used_pct"] = wf_timeout_budget_used_pct
+        if history_length is not None:
+            event_attrs["history_length"] = history_length
+        if error_message:
+            event_attrs["error_message"] = error_message
+            event_attrs["error_class"] = error_class
+            event_attrs["is_retriable"] = retriable
+            event_attrs["error_fingerprint"] = _compute_error_fingerprint(
+                info.workflow_type or "", error_type, error_class
+            )
+            if stack_trace:
+                event_attrs["stack_trace"] = stack_trace
+            if cause_chain:
+                event_attrs["error_cause_chain"] = cause_chain
+
+        _emit_log_event("app_vitals.wf.completed", event_attrs)
+
+        # Workflow summary event (L1) — rolls up all activities observed
+        # during this workflow execution. One row per workflow run with the
+        # full shape of the pipeline: counts, first failure, bottleneck.
+        # Does NOT replace per-activity events — they are still the source
+        # of truth (RFC D2). This is a query-time convenience.
+        try:
+            summary_attrs = self._build_summary_attrs(common, info, status, duration_ms)
+            _emit_log_event("app_vitals.wf.summary", summary_attrs)
+        except Exception:
+            pass  # summary is best-effort; never block the workflow
 
 
 class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):

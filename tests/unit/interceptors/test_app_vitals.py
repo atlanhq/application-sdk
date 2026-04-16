@@ -176,7 +176,7 @@ class TestAppVitalsActivityInterceptor:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_activity_mod.info.return_value = activity_info
@@ -227,7 +227,7 @@ class TestAppVitalsActivityInterceptor:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_activity_mod.info.return_value = activity_info
@@ -262,7 +262,7 @@ class TestAppVitalsActivityInterceptor:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_activity_mod.info.return_value = activity_info
@@ -312,7 +312,7 @@ class TestAppVitalsWorkflowInterceptor:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_wf_mod.info.return_value = workflow_info
@@ -361,7 +361,7 @@ class TestAppVitalsWorkflowInterceptor:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_wf_mod.info.return_value = workflow_info
@@ -490,7 +490,7 @@ class TestAppVitalsEfficiencyMetrics:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_activity_mod.info.return_value = activity_info
@@ -540,7 +540,7 @@ class TestAppVitalsTraceIdAttachment:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
             mock.patch(
                 "application_sdk.observability.app_vitals.get_trace_context",
@@ -576,7 +576,7 @@ class TestAppVitalsTraceIdAttachment:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
             mock.patch(
                 "application_sdk.observability.app_vitals.get_trace_context",
@@ -699,7 +699,7 @@ class TestAppVitalsRichErrorFields:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_activity_mod.info.return_value = activity_info
@@ -744,7 +744,7 @@ class TestAppVitalsRichErrorFields:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_activity_mod.info.return_value = activity_info
@@ -781,7 +781,7 @@ class TestAppVitalsRichErrorFields:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_activity_mod.info.return_value = activity_info  # 5-min timeout
@@ -832,7 +832,7 @@ class TestLifecycleStartEvents:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_activity_mod.info.return_value = info
@@ -931,7 +931,7 @@ class TestAssetsProcessed:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_activity_mod.info.return_value = MockActivityInfo()
@@ -980,7 +980,7 @@ class TestWorkflowSummary:
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
             mock.patch(
-                "application_sdk.observability.app_vitals.APP_TENANT_ID", "tenant_123"
+                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
             ),
         ):
             mock_wf_mod.info.return_value = MockWorkflowInfo()

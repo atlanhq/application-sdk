@@ -180,8 +180,6 @@ def create_worker(
     # executions. When enabled, our AppVitalsInterceptor picks up real trace_ids
     # on every event (otherwise trace_id is empty).
     # Gated behind ATLAN_ENABLE_OTLP_TRACES so apps not using traces pay nothing.
-    import os
-
     if os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true":
         try:
             from temporalio.contrib.opentelemetry import TracingInterceptor

@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - 'gaurav/app-vitals'  # feature branch — build image on every push for testing
     paths:
       - 'Dockerfile'
       - 'pyproject.toml'
