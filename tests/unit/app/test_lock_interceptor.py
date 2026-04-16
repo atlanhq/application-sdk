@@ -9,20 +9,6 @@ import pytest
 
 from application_sdk.constants import LOCK_METADATA_KEY
 
-
-class _AwaitableHandle:
-    """Mock activity handle that is awaitable (resolves to a result)."""
-
-    def __init__(self, result=None):
-        self._result = result
-
-    def __await__(self):
-        async def _resolve():
-            return self._result
-
-        return _resolve().__await__()
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -44,6 +30,19 @@ def _make_start_activity_input(
     inp.activity = activity_name
     inp.schedule_to_close_timeout = schedule_to_close_timeout
     return inp
+
+
+class _AwaitableHandle:
+    """Mock activity handle that is awaitable (resolves to a result)."""
+
+    def __init__(self, result=None):
+        self._result = result
+
+    def __await__(self):
+        async def _resolve():
+            return self._result
+
+        return _resolve().__await__()
 
 
 def _make_outbound_interceptor(activities: dict | None = None):
@@ -268,7 +267,9 @@ class TestStartActivityWithLock:
                 raise ConnectionError("redis down")
             return None
 
-        next_mock.start_activity = AsyncMock(return_value=_AwaitableHandle())
+        next_mock.start_activity = AsyncMock(
+            return_value=_AwaitableHandle(result={"status": "done"})
+        )
 
         wf_info = MagicMock()
         wf_info.run_id = "run-3"
@@ -349,7 +350,9 @@ class TestStartActivityWithLock:
                 return {"resource_id": "lock-x", "owner_id": "app:run-x"}
             return None
 
-        next_mock.start_activity = AsyncMock(return_value=_AwaitableHandle())
+        next_mock.start_activity = AsyncMock(
+            return_value=_AwaitableHandle(result={"status": "done"})
+        )
 
         wf_info = MagicMock()
         wf_info.run_id = "run-x"
