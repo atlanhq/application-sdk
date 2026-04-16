@@ -275,3 +275,8 @@ class TestCloudStoreOps:
                     "extra": "not-valid-json{{{",
                 }
             )
+
+    async def test_upload_nonexistent_file_raises(self, tmp_path):
+        store = self._make_store(tmp_path)
+        with pytest.raises(StorageError):
+            await store.upload(tmp_path / "does-not-exist.txt", "key.txt")

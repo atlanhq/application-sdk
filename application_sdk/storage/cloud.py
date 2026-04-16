@@ -269,16 +269,21 @@ class CloudStore:
         normalized_filter = (
             {s.lower() for s in suffix_filter} if suffix_filter else None
         )
-        keys: list[str] = []
-        for batch in obs.list(self._store, prefix=list_prefix or None):
-            for item in batch:
-                obj_path = str(item["path"])
-                if normalized_filter:
-                    ext = Path(obj_path).suffix.lower()
-                    if ext not in normalized_filter:
-                        continue
-                keys.append(obj_path)
-        return sorted(keys)
+        try:
+            keys: list[str] = []
+            for batch in obs.list(self._store, prefix=list_prefix or None):
+                for item in batch:
+                    obj_path = str(item["path"])
+                    if normalized_filter:
+                        ext = Path(obj_path).suffix.lower()
+                        if ext not in normalized_filter:
+                            continue
+                    keys.append(obj_path)
+            return sorted(keys)
+        except Exception as exc:
+            raise StorageError(
+                f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
+            ) from exc
 
     async def _list_keys(
         self, list_prefix: str, suffix_filter: set[str] | None = None
@@ -318,9 +323,12 @@ class CloudStore:
         Returns:
             Number of bytes uploaded.
         """
-        path = Path(local_path)
-        data = path.read_bytes()
-        await obs.put_async(self._store, key, data)
+        try:
+            path = Path(local_path)
+            data = path.read_bytes()
+            await obs.put_async(self._store, key, data)
+        except Exception as exc:
+            raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
         logger.info("Uploaded key=%s size=%d", key, len(data))
         return len(data)
 
@@ -334,7 +342,10 @@ class CloudStore:
         Returns:
             Number of bytes uploaded.
         """
-        await obs.put_async(self._store, key, data)
+        try:
+            await obs.put_async(self._store, key, data)
+        except Exception as exc:
+            raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
         return len(data)
 
     async def upload_dir(
