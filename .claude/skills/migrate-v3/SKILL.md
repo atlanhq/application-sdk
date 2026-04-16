@@ -1151,23 +1151,24 @@ class GlueApp(App):
 
 Every migrated connector will hit this. The skill MUST check the v2 `@workflow.defn` class name and carry it over.
 
-### Credential resolution — dual path required
+### Credential resolution — use context.resolve_credential_raw()
 
-`self.context.get_secret(guid)` only does a raw secret store lookup. In production, credentials require **two-step resolution**: state store config + secret store values (handled by `SecretStore.get_credentials()`). For local dev, `InMemorySecretStore` is used via `context.get_secret()`.
+`self.context.get_secret(guid)` only does a raw secret store lookup. In production, credentials require **two-step resolution**: state store config + secret store values. `context.get_secret()` alone will not find platform-issued credentials.
 
-**Fix:** Try v3 path first, fall back to v2:
+**Fix:** Use `context.resolve_credential_raw()` with `legacy_credential_ref()`. This checks the local secret store first (for in-process/test credentials) and falls back to `DaprCredentialVault` for platform-issued GUIDs:
 ```python
+from application_sdk.credentials.ref import legacy_credential_ref
+
 async def _get_client(self, workflow_args):
     credential_guid = workflow_args.get("credential_guid")
     if credential_guid:
-        try:
-            creds_json = await self.context.get_secret(credential_guid)
-            creds = json.loads(creds_json) if isinstance(creds_json, str) else creds_json
-        except Exception:
-            from application_sdk.services.secretstore import SecretStore
-            creds = await SecretStore.get_credentials(credential_guid)
+        creds = await self.context.resolve_credential_raw(
+            legacy_credential_ref(credential_guid)
+        )
     ...
 ```
+
+Note: `application_sdk.services.secretstore.SecretStore` (v2) does not exist in v3. Any code that imports it will raise `ModuleNotFoundError`.
 
 ### get_workflow_args must replicate v2 StateStore fallback
 
