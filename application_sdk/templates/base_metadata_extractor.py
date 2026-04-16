@@ -92,15 +92,15 @@ class BaseMetadataExtractor(App):
         semaphore = asyncio.Semaphore(5)
 
         async def _migrate_one(file_path: str) -> None:
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp_path = tmp.name
-            try:
-                async with semaphore:
+            async with semaphore:
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp_path = tmp.name
+                try:
                     await download_file(file_path, tmp_path, store=deployment_store)
                     await upload_file(file_path, tmp_path, store=upstream_store)
-            finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
 
         results = await asyncio.gather(
             *[_migrate_one(fp) for fp in files_to_migrate],

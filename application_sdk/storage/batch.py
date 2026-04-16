@@ -131,6 +131,13 @@ async def delete_prefix(
             return await delete(k, resolved, normalize=False)
 
     results = await asyncio.gather(*[_del(k) for k in keys], return_exceptions=True)
+    errors = [r for r in results if isinstance(r, Exception)]
+    if errors:
+        from application_sdk.storage.errors import StorageError
+
+        raise StorageError(
+            f"{len(errors)} delete(s) failed under prefix '{prefix}'"
+        ) from errors[0]
     return sum(1 for r in results if r is True)
 
 
