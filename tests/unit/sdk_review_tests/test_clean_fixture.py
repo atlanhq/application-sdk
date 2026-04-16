@@ -23,9 +23,7 @@ def normalize_name(name: str) -> str:
     return name.strip().lower()
 
 
-def merge_metadata(
-    base: dict[str, Any], override: dict[str, Any]
-) -> dict[str, Any]:
+def merge_metadata(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Return a new dict with base merged under override."""
     merged = dict(base)
     merged.update(override)
