@@ -138,11 +138,9 @@ See the reference files for detailed implementation of each step:
 ```python
 # app/activities/metadata_extraction/your_db.py
 
-from application_sdk.activities.metadata_extraction.incremental import (
-    IncrementalSQLMetadataExtractionActivities,
-)
+from application_sdk.templates import IncrementalSqlMetadataExtractor
 
-class YourDBActivities(IncrementalSQLMetadataExtractionActivities):
+class YourDBActivities(IncrementalSqlMetadataExtractor):
     sql_client_class = YourDBClient
 
     # All SQL queries are auto-loaded from app/sql/ by the SDK:
@@ -168,17 +166,9 @@ class YourDBActivities(IncrementalSQLMetadataExtractionActivities):
 ```
 
 ```python
-# app/workflows/metadata_extraction/your_db.py
-
-from temporalio import workflow
-from application_sdk.workflows.metadata_extraction.incremental_sql import (
-    IncrementalSQLMetadataExtractionWorkflow,
-)
-
-@workflow.defn
-class YourDBWorkflow(IncrementalSQLMetadataExtractionWorkflow):
-    activities_cls = YourDBActivities
-    # That's it! Everything else is inherited.
+# No separate workflow class needed in v3.
+# IncrementalSqlMetadataExtractor is itself the App — it handles
+# workflow orchestration internally. Just subclass it (see above).
 ```
 
 ## Key Patterns and Best Practices

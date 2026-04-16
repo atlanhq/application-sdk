@@ -9,12 +9,9 @@ from typing import Any, Dict, List, Optional
 
 from temporalio import activity
 
-from application_sdk.activities.metadata_extraction.incremental import (
-    IncrementalSQLMetadataExtractionActivities,
-)
-from application_sdk.common.incremental.models import IncrementalWorkflowArgs
+from application_sdk.templates import IncrementalSqlMetadataExtractor
 
-class YourDBActivities(IncrementalSQLMetadataExtractionActivities):
+class YourDBActivities(IncrementalSqlMetadataExtractor):
     """Activities for YourDB incremental metadata extraction."""
 
     sql_client_class = YourDBClient

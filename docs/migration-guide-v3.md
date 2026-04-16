@@ -136,13 +136,13 @@ class MyIncrementalActivities(BaseSQLIncrementalMetadataExtractionActivities):
 from application_sdk.templates import IncrementalSqlMetadataExtractor
 from application_sdk.templates.contracts.incremental_sql import (
     IncrementalExtractionInput, IncrementalExtractionOutput,
-    FetchColumnsInput, FetchColumnsOutput,
+    FetchColumnsIncrementalInput, FetchColumnsOutput,
 )
 from application_sdk.app import task
 
 class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
     @task(timeout_seconds=1800)
-    async def fetch_columns(self, input: FetchColumnsInput) -> FetchColumnsOutput:
+    async def fetch_columns(self, input: FetchColumnsIncrementalInput) -> FetchColumnsOutput:
         ...
 ```
 
@@ -191,7 +191,7 @@ class MyHandler(Handler):
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         # return connector config
-        return MetadataOutput(fields=[])
+        return MetadataOutput(objects=[])
 ```
 
 The `load()` method is removed — handler context (secrets, state) is injected automatically via `self.context`. Access credentials in handler methods with `await self.context.get_secret(name)`.
@@ -359,29 +359,39 @@ import them directly unless you are building a custom `App` from scratch.
 ### FileReference: passing large data between tasks
 
 Temporal has a payload size limit (~2 MB). Use `FileReference` to store large data in object
-storage and pass only a lightweight reference through the workflow:
+storage and pass only a lightweight reference through the workflow.
+
+The framework handles upload and download **automatically and transparently** around every
+`@task` boundary:
+
+- **After** a task returns, any `FileReference` with `local_path` set (ephemeral) is
+  uploaded to the object store and the reference is made durable before it enters the
+  Temporal payload.
+- **Before** a task runs, any durable `FileReference` (with `storage_path` set) is
+  downloaded to a local temp path so `local_path` is populated when your method is called.
+
+You only need to declare `FileReference` fields in your contracts and use
+`FileReference.from_local()` when writing — no manual upload/download calls required:
 
 ```python
 from application_sdk.contracts import Input, Output
 from application_sdk.contracts.types import FileReference
 
 class FetchOutput(Output):
-    results: FileReference  # stored in object store, safe to pass between tasks
+    results: FileReference  # auto-uploaded by the framework after fetch() returns
 
 class ProcessInput(Input):
-    results: FileReference
+    results: FileReference  # auto-downloaded by the framework before process() runs
 
-# In the fetch task — write to a local file, then upload:
+# In the fetch task — write locally and return; the framework uploads automatically:
 async def fetch(self, input: FetchInput) -> FetchOutput:
     local_path = "/tmp/results.parquet"
     write_parquet(data, local_path)
-    ref = await self.context.upload_file("output/results.parquet", local_path)
-    return FetchOutput(results=ref)
+    return FetchOutput(results=FileReference.from_local(local_path))
 
-# In the next task — download and read:
+# In the next task — local_path is already populated by the framework:
 async def process(self, input: ProcessInput) -> ProcessOutput:
-    local_path = await self.context.download_file(input.results.storage_path)
-    data = read_parquet(local_path)
+    data = read_parquet(input.results.local_path)
     ...
 ```
 
@@ -403,8 +413,8 @@ You do not need to create `DaprClient` instances in your code.
 | `services.statestore.StateStore.get_state(...)` | `await self.context.load_state(key)` |
 | `services.statestore.StateStore.save_state(...)` | `await self.context.save_state(key, value)` |
 | `services.secretstore.SecretStore.get_credentials(...)` | `await self.context.get_secret(name)` |
-| `services.objectstore.ObjectStore.get_content(key)` | `await self.context.download_bytes(key)` |
-| `services.objectstore.ObjectStore.upload_file(src, key)` | `await self.context.upload_bytes(key, data)` |
+| `services.objectstore.ObjectStore.get_content(key)` | `await download_file(key, local_path, self.context.storage)` |
+| `services.objectstore.ObjectStore.upload_file(src, key)` | `await upload_file(key, local_path, self.context.storage)` |
 | `services.eventstore.EventStore.publish_event(event)` | Automatic via interceptor |
 
 ### Infrastructure available in handlers
@@ -426,9 +436,10 @@ data = await ObjectStore.get_content("config/settings.json")
 files = await ObjectStore.list_files(prefix="output/")
 await ObjectStore.delete_file("output/old.parquet")
 
-# v3 — inside an @task method, use self.context:
-await self.context.upload_bytes("output/file.parquet", data)
-data = await self.context.download_bytes("config/settings.json")
+# v3 — inside an @task method, use the storage module with self.context.storage:
+from application_sdk.storage import upload_file, download_file
+await upload_file("output/file.parquet", "/local/file.parquet", self.context.storage)
+await download_file("config/settings.json", "/tmp/settings.json", self.context.storage)
 
 # v3 — outside an App (standalone scripts, utilities): use the storage module directly
 from application_sdk.storage import upload_file, download_file, list_keys, delete
@@ -448,7 +459,7 @@ summary = await AtlanStorage(store, atlan_store).migrate_from_objectstore_to_atl
 
 # v3 — use the built-in App.upload() framework task, or compose storage calls directly
 # Inside a workflow run():
-await self.upload(source_prefix="output/", destination_prefix="atlan/")
+await self.upload(UploadInput(local_path="output/"))
 ```
 
 ### Local development with custom secrets
@@ -715,10 +726,10 @@ Two cleanup tasks are built into every `App`. Call them from `run()` or `on_comp
 ```python
 async def on_complete(self, success: bool) -> None:
     # Remove local temp files tracked via FileReference
-    await self.cleanup_files()
+    await self.cleanup_files(CleanupInput())
 
     # Remove object store artifacts uploaded during this run
-    await self.cleanup_storage()
+    await self.cleanup_storage(StorageCleanupInput())
 ```
 
 `cleanup_files()` and `cleanup_storage()` are also available as individual workflow steps

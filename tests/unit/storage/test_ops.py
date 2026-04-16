@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import os
+from unittest.mock import patch
 
 import pytest
 
+import application_sdk.constants as constants
+from application_sdk.storage.batch import download_prefix, list_keys
+from application_sdk.storage.errors import StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import (
     _get_bytes,
-    _get_content,
     _put,
     delete,
     download_file,
-    list_keys,
     normalize_key,
     upload_file,
 )
@@ -43,12 +45,6 @@ class TestPutAndGet:
         await _put("empty", b"", store)
         result = await _get_bytes("empty", store)
         assert result == b""
-
-    async def test_get_content_alias(self, store) -> None:
-        """_get_content is the v2-compatible alias for _get_bytes."""
-        await _put("alias.txt", b"v2compat", store)
-        result = await _get_content("alias.txt", store)
-        assert result == b"v2compat"
 
 
 class TestDelete:
@@ -147,6 +143,23 @@ class TestNormalizeIntegration:
         assert "docs/a.txt" in keys
         assert "docs_extra/b.txt" not in keys
 
+    async def test_list_keys_suffix_filter(self, store) -> None:
+        await _put("data/table.parquet", b"p", store, normalize=False)
+        await _put("data/table.json", b"j", store, normalize=False)
+        await _put("data/stats.parquet", b"p2", store, normalize=False)
+
+        parquet_keys = await list_keys("data", store, suffix=".parquet")
+        assert len(parquet_keys) == 2
+        assert "data/table.parquet" in parquet_keys
+        assert "data/stats.parquet" in parquet_keys
+        assert "data/table.json" not in parquet_keys
+
+        json_keys = await list_keys("data", store, suffix=".json")
+        assert json_keys == ["data/table.json"]
+
+        all_keys = await list_keys("data", store)
+        assert len(all_keys) == 3
+
 
 class TestUploadFile:
     async def test_upload_file_roundtrip(self, store, tmp_path) -> None:
@@ -181,11 +194,107 @@ class TestUploadFile:
         raw = await _get_bytes("exact/key.bin", store, normalize=False)
         assert raw == b"exact"
 
+    async def test_upload_file_retain_local_copy_true(self, store, tmp_path) -> None:
+        f = tmp_path / "keep.bin"
+        f.write_bytes(b"keep me")
+        await upload_file("keep.bin", f, store, retain_local_copy=True)
+        assert f.exists(), "Local file should be retained"
+
+    async def test_upload_file_retain_local_copy_false_in_staging(
+        self, store, tmp_path
+    ) -> None:
+        # Simulate file inside TEMPORARY_PATH so it's allowed to be deleted
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        f = staging / "delete_me.bin"
+        f.write_bytes(b"delete me")
+
+        with patch.object(constants, "TEMPORARY_PATH", str(staging)):
+            await upload_file("del.bin", f, store, retain_local_copy=False)
+        assert not f.exists(), "Local file should be deleted after upload"
+
+    async def test_upload_file_retain_local_copy_false_outside_staging(
+        self, store, tmp_path
+    ) -> None:
+        # File outside TEMPORARY_PATH should NOT be deleted (path traversal protection)
+        f = tmp_path / "safe.bin"
+        f.write_bytes(b"safe")
+
+        with patch.object(constants, "TEMPORARY_PATH", str(tmp_path / "other")):
+            await upload_file("safe.bin", f, store, retain_local_copy=False)
+        assert f.exists(), "File outside staging should NOT be deleted"
+
+
+class TestDownloadPrefix:
+    async def test_download_prefix_basic(self, store, tmp_path) -> None:
+        await _put("myprefix/a.txt", b"aaa", store, normalize=False)
+        await _put("myprefix/b.txt", b"bbb", store, normalize=False)
+        await _put("other/c.txt", b"ccc", store, normalize=False)
+
+        paths = await download_prefix("myprefix", tmp_path, store=store)
+        assert len(paths) == 2
+        assert (tmp_path / "myprefix" / "a.txt").read_bytes() == b"aaa"
+        assert (tmp_path / "myprefix" / "b.txt").read_bytes() == b"bbb"
+
+    async def test_download_prefix_with_suffix_filter(self, store, tmp_path) -> None:
+        await _put("data/file.parquet", b"pq", store, normalize=False)
+        await _put("data/file.json", b"js", store, normalize=False)
+
+        paths = await download_prefix("data", tmp_path, store=store, suffix=".parquet")
+        assert len(paths) == 1
+        assert paths[0].endswith("file.parquet")
+
+    async def test_download_prefix_concurrent(self, store, tmp_path) -> None:
+        """Verify multiple files are downloaded concurrently."""
+        for i in range(8):
+            await _put(
+                f"batch/file_{i}.txt", f"content_{i}".encode(), store, normalize=False
+            )
+
+        paths = await download_prefix("batch", tmp_path, store=store, max_concurrency=3)
+        assert len(paths) == 8
+        for i in range(8):
+            assert (
+                tmp_path / f"batch/file_{i}.txt"
+            ).read_bytes() == f"content_{i}".encode()
+
+    async def test_download_prefix_empty(self, store, tmp_path) -> None:
+        """Empty prefix returns no files."""
+        paths = await download_prefix("nonexistent", tmp_path, store=store)
+        assert paths == []
+
+    async def test_download_prefix_respects_max_concurrency(
+        self, store, tmp_path
+    ) -> None:
+        """Verify semaphore limits concurrent downloads."""
+        from unittest.mock import patch
+
+        for i in range(6):
+            await _put(f"sem/f_{i}.txt", b"x", store, normalize=False)
+
+        max_active = 0
+        active = 0
+        original_download = download_file
+
+        async def tracking_download(*args, **kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            try:
+                return await original_download(*args, **kwargs)
+            finally:
+                active -= 1
+
+        with patch(
+            "application_sdk.storage.ops.download_file", side_effect=tracking_download
+        ):
+            await download_prefix("sem", tmp_path, store=store, max_concurrency=2)
+
+        assert max_active <= 2, f"Expected max 2 concurrent, got {max_active}"
+
 
 class TestDownloadFile:
     async def test_download_file_missing_key_raises(self, store, tmp_path) -> None:
-        from application_sdk.storage.errors import StorageNotFoundError
-
         with pytest.raises(StorageNotFoundError):
             await download_file("no/such/key.bin", tmp_path / "out.bin", store)
 

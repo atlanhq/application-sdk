@@ -98,11 +98,6 @@ class TestInterceptorSettingsDefaults:
         settings = InterceptorSettings()
         assert settings.enable_correlation_interceptor is True
 
-    def test_cleanup_interceptor_disabled_by_default(self) -> None:
-        # CleanupInterceptor is deprecated in v3; cleanup is via App.on_complete()
-        settings = InterceptorSettings()
-        assert settings.enable_cleanup_interceptor is False
-
 
 class TestLoadInterceptorSettingsFromEnv:
     """Tests for load_interceptor_settings() reading from environment."""
@@ -118,11 +113,6 @@ class TestLoadInterceptorSettingsFromEnv:
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_CORRELATION_INTERCEPTOR", "false")
         settings = load_interceptor_settings()
         assert settings.enable_correlation_interceptor is False
-
-    def test_disable_cleanup_interceptor(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
-        settings = load_interceptor_settings()
-        assert settings.enable_cleanup_interceptor is False
 
     def test_enable_via_true_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR", "true")

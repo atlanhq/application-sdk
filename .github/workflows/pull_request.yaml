@@ -124,7 +124,7 @@ jobs:
 
       - name: Install Temporal CLI
         run: |
-          curl -sSf https://temporal.download/cli.sh | sh
+          curl -sSf https://temporal.download/cli.sh | sh -s -- --version v1.3.0
           echo "$HOME/.temporalio/bin" >> $GITHUB_PATH
 
       - name: Start Temporal dev server
@@ -140,9 +140,31 @@ jobs:
             sleep 2
           done
 
+      - name: Install and start Dapr runtime (daprd)
+        run: |
+          wget -q https://raw.githubusercontent.com/dapr/cli/refs/tags/v1.16.2/install/install.sh -O - | /bin/bash -s 1.16.2
+          dapr init --runtime-version 1.16.0 --slim
+          mkdir -p tests/integration/dapr-data/objectstore
+          # Run daprd directly (no sidecar pattern) for deterministic behavior
+          $HOME/.dapr/bin/daprd \
+            --app-id integ-test \
+            --dapr-http-port 3500 \
+            --resources-path ./tests/integration/dapr-components \
+            --placement-host-address '' \
+            --scheduler-host-address '' \
+            --log-level warn &
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:3500/v1.0/metadata > /dev/null 2>&1; then
+              echo "daprd is ready"
+              break
+            fi
+            sleep 2
+          done
+
       - name: Run integration tests
         env:
           TEMPORAL_HOST: "localhost:7233"
+          DAPR_HTTP_PORT: "3500"
         run: uv run pytest tests/integration/ -m integration -v --timeout=120
 
   matrix-builder:
@@ -331,37 +353,3 @@ jobs:
         with:
           name: e2e-test-logs
           path: test-logs/
-
-  # Documentation
-  docs:
-    name: Docs
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: "./.github/actions/setup-deps"
-      - name: Install graphviz
-        run: |
-          sudo apt install graphviz
-      - name: Generate Sphinx Docs and UML Diagrams
-        run: |
-          uv run poe generate-apidocs
-
-      - name: Setup AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          aws-region: ap-south-1
-          # Only usable in atlanhq repositories
-          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
-
-      - name: Upload Docs to Kryptonite Bucket
-        run: |
-          aws s3 sync ./site s3://kryptonite-store/application-sdk/${{ github.head_ref }} --delete
-
-      - name: Comment Kryptonite URL on PR
-        uses: mshick/add-pr-comment@v2
-        with:
-          message-id: "docs"
-          message: |
-            🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}

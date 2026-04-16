@@ -5,8 +5,7 @@ the v3 infrastructure event binding. Falls back silently when no event
 binding is configured.
 """
 
-import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional, Type
 
 from temporalio import activity, workflow
@@ -39,7 +38,7 @@ workflow.logger = logger
 _event_token_service: "OAuthTokenService | None" = None
 
 
-def _get_event_token_service() -> "OAuthTokenService | None":
+async def _get_event_token_service() -> "OAuthTokenService | None":
     """Return the singleton OAuthTokenService for event auth, or None if unconfigured."""
     global _event_token_service  # noqa: PLW0603
 
@@ -58,8 +57,8 @@ def _get_event_token_service() -> "OAuthTokenService | None":
         from application_sdk.credentials.types import OAuthClientCredential
         from application_sdk.infrastructure.secrets import get_deployment_secret
 
-        client_id = get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
-        client_secret = get_deployment_secret(WORKFLOW_AUTH_CLIENT_SECRET_KEY)
+        client_id = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
+        client_secret = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_SECRET_KEY)
         token_url = AUTH_URL
 
         if not client_id or not client_secret or not token_url:
@@ -107,7 +106,7 @@ def _enrich_event_metadata(event: Event) -> Event:
         event.metadata = EventMetadata()
 
     event.metadata.application_name = APPLICATION_NAME
-    event.metadata.created_timestamp = int(datetime.now().timestamp())
+    event.metadata.created_timestamp = int(datetime.now(tz=UTC).timestamp())
     event.metadata.topic_name = event.get_topic_name()
 
     try:
@@ -235,11 +234,13 @@ async def _publish_event_via_binding(event: Event) -> None:
     event = _enrich_event_metadata(event)
     _send_lifecycle_event_to_segment(event)
 
-    payload = json.dumps(event.model_dump(mode="json")).encode()
+    import orjson  # lazy import: avoid top-level for interceptor module load time
+
+    payload = orjson.dumps(event.model_dump(mode="json"))
     binding_metadata: dict[str, str] = {"content-type": "application/json"}
 
     try:
-        token_service = _get_event_token_service()
+        token_service = await _get_event_token_service()
         if token_service is not None:
             binding_metadata.update(await token_service.get_headers())
     except Exception:

@@ -185,9 +185,7 @@ def _has_remote_otlp_endpoint() -> bool:
         return False
 
 
-# Re-exported from context.py for backward compatibility:
-# - request_context: ContextVar for request-scoped data (e.g., request_id)
-# - correlation_context: ContextVar for atlan- prefixed headers
+# Imported from context.py for use by logger internals (e.g. correlation bridge below):
 
 
 # Add a Loguru handler for the Python logging system

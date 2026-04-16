@@ -4,6 +4,13 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+# Re-export shared registry fixtures so all unit tests can use them without
+# explicit per-file imports (pytest discovers fixtures via conftest chain).
+from application_sdk.testing.fixtures import (  # noqa: F401
+    clean_app_registry,
+    clean_task_registry,
+)
+
 
 def _safe_patch(target, side_effect=None, mock_obj=None):
     """Create a patch context that gracefully handles unresolvable targets."""

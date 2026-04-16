@@ -99,8 +99,8 @@ class CredentialResolver:
 
         try:
             raw = await self._secret_store.get(ref.name)
-        except SecretNotFoundError:
-            raise CredentialNotFoundError(ref.name)
+        except SecretNotFoundError as exc:
+            raise CredentialNotFoundError(ref.name) from exc
         except Exception as exc:
             from application_sdk.credentials.errors import CredentialError
 
@@ -160,19 +160,18 @@ class CredentialResolver:
             )
 
         # Fall back to DaprCredentialVault for platform-issued GUIDs.
-        from dapr.clients import DaprClient
-
         from application_sdk.credentials.errors import CredentialNotFoundError
-        from application_sdk.infrastructure._dapr.client import DaprCredentialVault
+        from application_sdk.infrastructure import DaprCredentialVault
+        from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 
+        dapr_client = AsyncDaprClient()
         try:
-            with DaprClient() as dapr_client:
-                vault = DaprCredentialVault(dapr_client)
-                result: dict[str, Any] = await vault.get_credentials(
-                    ref.credential_guid
-                )
-                return result
+            vault = DaprCredentialVault(dapr_client)
+            result: dict[str, Any] = await vault.get_credentials(ref.credential_guid)
+            return result
         except CredentialNotFoundError:
             raise
         except Exception as exc:
             raise CredentialNotFoundError(ref.credential_guid) from exc
+        finally:
+            await dapr_client.close()

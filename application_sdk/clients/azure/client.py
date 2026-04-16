@@ -43,7 +43,7 @@ from application_sdk.clients import ClientInterface
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.clients.azure.auth import AzureAuthProvider
 from application_sdk.common.error_codes import ClientError
-from application_sdk.common.utils import run_sync
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -137,17 +137,17 @@ class AzureClient(ClientInterface):
 
             # Handle credential resolution
             if "credential_guid" in self.credentials:
-                from dapr.clients import DaprClient
+                from application_sdk.infrastructure import DaprCredentialVault
+                from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 
-                from application_sdk.infrastructure._dapr.client import (
-                    DaprCredentialVault,
-                )
-
-                with DaprClient() as dapr_client:
+                dapr_client = AsyncDaprClient()
+                try:
                     vault = DaprCredentialVault(dapr_client)
                     self.resolved_credentials = await vault.get_credentials(
                         self.credentials["credential_guid"]
                     )
+                finally:
+                    await dapr_client.close()
             else:
                 # If credentials are already resolved (direct format), use them as-is
                 # Check if credentials appear to need resolution but no credential_guid provided
@@ -289,7 +289,9 @@ class AzureClient(ClientInterface):
 
         try:
             # Test the credential by getting a token
-            await run_sync(self.credential.get_token)(AZURE_MANAGEMENT_API_ENDPOINT)
+            await run_in_thread(
+                self.credential.get_token, AZURE_MANAGEMENT_API_ENDPOINT
+            )
         except ClientAuthenticationError as e:
             raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
         except AzureError as e:

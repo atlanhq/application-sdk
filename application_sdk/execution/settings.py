@@ -42,17 +42,6 @@ class InterceptorSettings:
     enable_output_interceptor: bool = True
     """Enable structured output collection interceptor (metrics/artifacts)."""
 
-    enable_cleanup_interceptor: bool = False
-    """Enable temp-directory cleanup interceptor.
-
-    .. deprecated::
-        ``CleanupInterceptor`` is no longer registered by default. Post-run
-        cleanup is now handled by ``App.on_complete()`` / ``App.cleanup_files()``.
-        This setting and the ``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR`` env
-        var are still read by ``App.on_complete()`` to decide whether to run
-        cleanup, but the interceptor itself is no longer added to the worker.
-    """
-
 
 def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables."""
@@ -90,5 +79,4 @@ def load_interceptor_settings() -> InterceptorSettings:
             "APPLICATION_SDK_ENABLE_CORRELATION_INTERCEPTOR"
         ),
         enable_output_interceptor=_bool("APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR"),
-        enable_cleanup_interceptor=_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"),
     )

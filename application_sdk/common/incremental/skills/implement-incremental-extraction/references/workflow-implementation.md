@@ -2,26 +2,21 @@
 
 This reference covers the workflow class setup for incremental extraction.
 
-## Minimal Workflow
+## No Separate Workflow Class Needed
 
-For most databases, the workflow class is extremely minimal:
+In v3, `IncrementalSqlMetadataExtractor` is itself the App — it handles
+workflow orchestration internally. You only need to subclass it once:
 
 ```python
-from temporalio import workflow
-from application_sdk.workflows.metadata_extraction.incremental_sql import (
-    IncrementalSQLMetadataExtractionWorkflow,
-)
-from app.activities.metadata_extraction.your_db import YourDBActivities
+from application_sdk.templates import IncrementalSqlMetadataExtractor
 
+class YourDBActivities(IncrementalSqlMetadataExtractor):
+    """App for YourDB incremental metadata extraction."""
 
-@workflow.defn
-class YourDBWorkflow(IncrementalSQLMetadataExtractionWorkflow):
-    """Workflow for YourDB incremental metadata extraction."""
-
-    activities_cls = YourDBActivities
+    sql_client_class = YourDBClient
 ```
 
-That's it. The SDK's `IncrementalSQLMetadataExtractionWorkflow` provides:
+The SDK's `IncrementalSqlMetadataExtractor` provides:
 - `get_activities()` - registers all incremental activities
 - `run()` - 4-phase execution
 - `_run_incremental_column_extraction()` - parallel batch execution

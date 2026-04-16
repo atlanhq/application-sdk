@@ -36,12 +36,9 @@ from application_sdk.common.incremental.helpers import (
     normalize_marker_timestamp,
     prepone_marker_timestamp,
 )
-from application_sdk.constants import (
-    MARKER_TIMESTAMP_FORMAT,
-    UPSTREAM_OBJECT_STORE_NAME,
-)
+from application_sdk.constants import MARKER_TIMESTAMP_FORMAT
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.ops import upload_file
 
 logger = get_logger(__name__)
 
@@ -213,10 +210,9 @@ async def persist_marker_to_storage(
     # Upload marker to S3
     logger.info("Uploading marker to S3: %s", marker_s3_key)
     try:
-        await ObjectStore.upload_file(
-            source=str(local_marker_path),
-            destination=marker_s3_key,
-            store_name=UPSTREAM_OBJECT_STORE_NAME,
+        await upload_file(
+            local_path=str(local_marker_path),
+            key=marker_s3_key,
             retain_local_copy=True,
         )
         logger.info(
