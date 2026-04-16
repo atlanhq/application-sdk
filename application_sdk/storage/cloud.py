@@ -45,6 +45,8 @@ from typing import Any
 import obstore as obs
 from obstore.store import ObjectStore
 
+from application_sdk.storage.errors import StorageError, StorageNotFoundError
+
 # stdlib logger: cannot use get_logger here due to circular import
 # (observability -> storage -> cloud -> observability)
 logger = logging.getLogger(__name__)
@@ -131,14 +133,14 @@ class CloudStore:
             Raw bytes of the object.
 
         Raises:
-            FileNotFoundError: If the key does not exist.
+            StorageNotFoundError: If the key does not exist.
         """
         try:
             result = await obs.get_async(self._store, key)
             return bytes(await result.bytes_async())
         except Exception as exc:
             if "not found" in str(exc).lower() or "404" in str(exc):
-                raise FileNotFoundError(f"Key not found: {key}") from exc
+                raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
             raise
 
     async def download(
@@ -167,9 +169,8 @@ class CloudStore:
             List of local file paths that were downloaded.
 
         Raises:
-            ValueError: If no files found under the prefix.
+            StorageError: If no files found under the prefix.
         """
-
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
 
@@ -198,10 +199,45 @@ class CloudStore:
         max_concurrency: int,
     ) -> list[Path]:
         """Download all files under a prefix."""
-
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
         logger.info("Listing objects under prefix=%s", list_prefix)
 
+        keys = await self._list_keys(list_prefix, suffix_filter)
+
+        if not keys:
+            raise StorageError(
+                f"No files found under prefix: {list_prefix!r}"
+                + (f" (filter: {suffix_filter})" if suffix_filter else "")
+            )
+
+        resolved_output = output.resolve()
+        sem = asyncio.Semaphore(max_concurrency)
+
+        async def _dl(obj_key: str) -> Path:
+            async with sem:
+                rel = (
+                    obj_key[len(list_prefix) :]
+                    if list_prefix and obj_key.startswith(list_prefix)
+                    else Path(obj_key).name
+                )
+                local_path = (output / rel).resolve()
+                # Prevent path traversal from malicious remote keys
+                if not local_path.is_relative_to(resolved_output):
+                    raise StorageError(f"Path traversal detected in key: {obj_key!r}")
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                data = await self.get_bytes(obj_key)
+                local_path.write_bytes(data)
+                return local_path
+
+        results = await asyncio.gather(*[_dl(k) for k in keys])
+        downloaded = list(results)
+        logger.info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
+        return downloaded
+
+    def _list_keys_sync(
+        self, list_prefix: str, suffix_filter: set[str] | None = None
+    ) -> list[str]:
+        """Synchronous key listing helper (run via asyncio.to_thread)."""
         keys: list[str] = []
         for batch in obs.list(self._store, prefix=list_prefix or None):
             for item in batch:
@@ -211,32 +247,13 @@ class CloudStore:
                     if ext not in suffix_filter:
                         continue
                 keys.append(obj_path)
+        return sorted(keys)
 
-        if not keys:
-            raise ValueError(
-                f"No files found under prefix: {list_prefix!r}"
-                + (f" (filter: {suffix_filter})" if suffix_filter else "")
-            )
-
-        sem = asyncio.Semaphore(max_concurrency)
-        downloaded: list[Path] = []
-
-        async def _dl(obj_key: str) -> None:
-            async with sem:
-                rel = (
-                    obj_key[len(list_prefix) :]
-                    if list_prefix and obj_key.startswith(list_prefix)
-                    else Path(obj_key).name
-                )
-                local_path = output / rel
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                data = await self.get_bytes(obj_key)
-                local_path.write_bytes(data)
-                downloaded.append(local_path)
-
-        await asyncio.gather(*[_dl(k) for k in keys])
-        logger.info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
-        return downloaded
+    async def _list_keys(
+        self, list_prefix: str, suffix_filter: set[str] | None = None
+    ) -> list[str]:
+        """Async wrapper for key listing."""
+        return await asyncio.to_thread(self._list_keys_sync, list_prefix, suffix_filter)
 
     async def list(self, prefix: str = "", *, suffix: str = "") -> list[str]:
         """List object keys under a prefix.
@@ -248,19 +265,9 @@ class CloudStore:
         Returns:
             Sorted list of matching object keys.
         """
-
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
-
-        def _collect() -> list[str]:
-            keys: list[str] = []
-            for batch in obs.list(self._store, prefix=list_prefix or None):
-                for item in batch:
-                    key = str(item["path"])
-                    if not suffix or key.endswith(suffix):
-                        keys.append(key)
-            return sorted(keys)
-
-        return await asyncio.to_thread(_collect)
+        suffix_filter = {suffix} if suffix else None
+        return await self._list_keys(list_prefix, suffix_filter)
 
     # ------------------------------------------------------------------
     # Write operations
@@ -308,6 +315,10 @@ class CloudStore:
     ) -> list[str]:
         """Upload all files in a local directory to the cloud store.
 
+        Note: Unlike ``batch.upload_prefix``, this uploads to an *external*
+        store without SHA-256 hashing or key normalization — those features
+        are specific to the tenant's internal storage layer.
+
         Args:
             local_dir: Local directory to upload from.
             prefix: Destination key prefix.
@@ -316,7 +327,6 @@ class CloudStore:
         Returns:
             List of uploaded object keys.
         """
-
         local = Path(local_dir)
         files: list[tuple[str, Path]] = []
         for root, _dirs, filenames in os.walk(local, followlinks=False):
@@ -329,15 +339,14 @@ class CloudStore:
                 files.append((key, file_path))
 
         sem = asyncio.Semaphore(max_concurrency)
-        uploaded: list[str] = []
 
-        async def _up(key: str, path: Path) -> None:
+        async def _up(key: str, path: Path) -> str:
             async with sem:
                 await self.upload(path, key)
-                uploaded.append(key)
+                return key
 
-        await asyncio.gather(*[_up(k, p) for k, p in files])
-        return uploaded
+        results = await asyncio.gather(*[_up(k, p) for k, p in files])
+        return list(results)
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +367,7 @@ def _infer_auth_type(extra: dict[str, Any]) -> str:
 
 def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
     """Create an S3 store from credentials."""
+    # Lazy import: only load provider SDK when needed
     from obstore.store import S3Store
 
     bucket = extra.get("s3_bucket", "")
@@ -386,6 +396,7 @@ def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStor
 
 def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
     """Create a GCS store from credentials."""
+    # Lazy import: only load provider SDK when needed
     from obstore.store import GCSStore
 
     bucket = extra.get("gcs_bucket", "")
@@ -402,6 +413,7 @@ def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectSto
 
 def _create_azure_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
     """Create an Azure (ADLS) store from credentials."""
+    # Lazy import: only load provider SDK when needed
     from obstore.store import AzureStore
 
     storage_account = extra.get("storage_account_name", "")

@@ -94,11 +94,15 @@ class TestCloudStoreIntegration:
         assert len(files) == 2  # only .json files
 
     async def test_get_bytes_not_found(self, cloud_store):
-        with pytest.raises(Exception):
+        from application_sdk.storage.errors import StorageNotFoundError
+
+        with pytest.raises(StorageNotFoundError):
             await cloud_store.get_bytes("nonexistent/key.txt")
 
     async def test_download_empty_prefix_raises(self, cloud_store, tmp_path):
-        with pytest.raises(ValueError, match="No files found"):
+        from application_sdk.storage.errors import StorageError
+
+        with pytest.raises(StorageError):
             await cloud_store.download(
                 prefix="empty-prefix", output_dir=tmp_path / "empty"
             )
