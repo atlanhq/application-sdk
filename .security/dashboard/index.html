@@ -3,619 +3,359 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Security Vulnerability Dashboard</title>
+    <title>Security Dashboard</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f6f8fa; color: #1f2328; }
-        .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+        body { font-family: 'Inter', sans-serif; background: #f0f2f5; color: #1a1a2e; min-height: 100vh; }
 
-        /* Header */
-        .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
-        .header-left h1 { font-size: 22px; color: #1f2328; display: flex; align-items: center; gap: 8px; }
-        .header-left h1 span { font-size: 20px; }
-        .subtitle { color: #656d76; font-size: 13px; margin-top: 4px; }
-        .last-updated { color: #8b949e; font-size: 11px; margin-top: 2px; }
-        .header-right { display: flex; gap: 8px; }
-        .view-btn { background: #fff; border: 1px solid #d0d7de; color: #1f2328; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: all 0.15s; }
-        .view-btn:hover { background: #f3f4f6; }
-        .view-btn.active { background: #ddf4ff; border-color: #54aeff; color: #0969da; }
+        /* Nav */
+        .nav { background: #fff; border-bottom: 1px solid #e2e6ea; padding: 0 32px; display: flex; align-items: center; height: 56px; position: sticky; top: 0; z-index: 100; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+        .nav-logo { font-size: 16px; font-weight: 700; color: #1a1a2e; display: flex; align-items: center; gap: 8px; }
+        .nav-logo .shield { width: 28px; height: 28px; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 14px; }
+        .nav-right { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+        .nav-time { font-size: 11px; color: #8c8fa3; }
 
-        /* Stats */
-        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
-        .stat-card { background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 14px 16px; cursor: pointer; transition: all 0.15s; position: relative; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-        .stat-card:hover { border-color: #8b949e; transform: translateY(-1px); box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
-        .stat-card.active { border-color: #0969da; }
-        .stat-card .label { font-size: 11px; color: #656d76; text-transform: uppercase; letter-spacing: 0.5px; }
-        .stat-card .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
-        .stat-card .bar { position: absolute; bottom: 0; left: 0; height: 3px; border-radius: 0 0 8px 8px; }
-        .critical { color: #cf222e; }
-        .high { color: #bf5000; }
-        .allowlisted-color { color: #1a7f37; }
-        .new-color { color: #cf222e; }
+        .container { max-width: 1360px; margin: 0 auto; padding: 24px 32px; }
 
-        /* Charts section */
-        .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
-        .chart-card { background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-        .chart-card h3 { font-size: 13px; color: #656d76; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
-        .chart-bar-container { display: flex; flex-direction: column; gap: 8px; }
-        .chart-bar-row { display: flex; align-items: center; gap: 10px; }
-        .chart-bar-label { font-size: 12px; color: #656d76; min-width: 120px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .chart-bar-track { flex: 1; height: 20px; background: #eef1f5; border-radius: 4px; overflow: hidden; position: relative; }
-        .chart-bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; display: flex; align-items: center; padding-left: 8px; }
-        .chart-bar-fill span { font-size: 11px; font-weight: 600; white-space: nowrap; color: #fff; }
-        .chart-bar-value { font-size: 12px; color: #1f2328; min-width: 30px; font-weight: 600; }
+        /* Stats Row */
+        .stats-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 24px; }
+        .stat { background: #fff; border-radius: 12px; padding: 18px 20px; cursor: pointer; transition: all 0.2s; border: 2px solid transparent; position: relative; overflow: hidden; }
+        .stat:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
+        .stat.active { border-color: #6366f1; }
+        .stat-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; margin-bottom: 10px; }
+        .stat-value { font-size: 28px; font-weight: 700; line-height: 1; }
+        .stat-label { font-size: 11px; font-weight: 500; color: #8c8fa3; text-transform: uppercase; letter-spacing: 0.8px; margin-top: 4px; }
+        .stat-bar { position: absolute; bottom: 0; left: 0; height: 3px; transition: width 0.6s ease; }
 
-        /* Donut chart */
-        .donut-container { display: flex; align-items: center; gap: 24px; }
-        .donut { width: 120px; height: 120px; position: relative; }
-        .donut svg { transform: rotate(-90deg); }
-        .donut-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; }
-        .donut-center .num { font-size: 24px; font-weight: 700; color: #1f2328; }
-        .donut-center .txt { font-size: 10px; color: #656d76; }
-        .donut-legend { display: flex; flex-direction: column; gap: 6px; }
-        .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #1f2328; }
-        .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+        .icon-total .stat-icon { background: #f0f0ff; color: #6366f1; }
+        .icon-critical .stat-icon { background: #fef2f2; color: #ef4444; }
+        .icon-critical .stat-value { color: #ef4444; }
+        .icon-high .stat-icon { background: #fff7ed; color: #f97316; }
+        .icon-high .stat-value { color: #f97316; }
+        .icon-new .stat-icon { background: #fef2f2; color: #ef4444; }
+        .icon-new .stat-value { color: #ef4444; }
+        .icon-allowed .stat-icon { background: #f0fdf4; color: #22c55e; }
+        .icon-allowed .stat-value { color: #22c55e; }
 
-        /* Repo comparison */
-        .repo-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 20px; }
-        .repo-card { background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 16px; cursor: pointer; transition: all 0.15s; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-        .repo-card:hover { border-color: #8b949e; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
-        .repo-card.selected { border-color: #0969da; background: #f6fcff; }
-        .repo-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        .repo-card-name { font-size: 14px; font-weight: 600; color: #1f2328; }
-        .repo-card-time { font-size: 11px; color: #8b949e; }
-        .repo-card-stats { display: flex; gap: 12px; }
-        .repo-card-stat { text-align: center; }
-        .repo-card-stat .num { font-size: 18px; font-weight: 600; }
-        .repo-card-stat .lbl { font-size: 10px; color: #656d76; text-transform: uppercase; }
-        .repo-card-bar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; margin-top: 10px; gap: 2px; }
-        .repo-card-bar div { height: 100%; border-radius: 2px; }
+        /* Grid layout */
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+        .card { background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+        .card-title { font-size: 13px; font-weight: 600; color: #8c8fa3; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+
+        /* Donut */
+        .donut-wrap { display: flex; align-items: center; gap: 32px; }
+        .donut-svg { width: 130px; height: 130px; }
+        .donut-svg circle { transition: stroke-dasharray 0.8s ease, stroke-dashoffset 0.8s ease; }
+        .donut-center { font-size: 26px; font-weight: 700; fill: #1a1a2e; }
+        .donut-sub { font-size: 10px; fill: #8c8fa3; }
+        .legend { display: flex; flex-direction: column; gap: 8px; }
+        .legend-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+        .legend-dot { width: 12px; height: 12px; border-radius: 4px; }
+        .legend-val { font-weight: 600; margin-left: auto; }
+
+        /* Horizontal bars */
+        .hbar { margin-bottom: 10px; }
+        .hbar-header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
+        .hbar-label { color: #5c5f77; font-weight: 500; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .hbar-val { font-weight: 600; color: #1a1a2e; }
+        .hbar-track { height: 8px; background: #f0f2f5; border-radius: 4px; overflow: hidden; }
+        .hbar-fill { height: 100%; border-radius: 4px; transition: width 0.8s ease; }
+
+        /* Repo cards */
+        .repo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; margin-bottom: 24px; }
+        .repo-card { background: #fff; border-radius: 12px; padding: 18px 20px; cursor: pointer; transition: all 0.2s; border: 2px solid transparent; }
+        .repo-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
+        .repo-card.selected { border-color: #6366f1; }
+        .repo-name { font-size: 15px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+        .repo-name .dot { width: 8px; height: 8px; border-radius: 50%; }
+        .repo-stats { display: flex; gap: 16px; margin-bottom: 12px; }
+        .repo-stat { text-align: center; flex: 1; }
+        .repo-stat-val { font-size: 20px; font-weight: 700; }
+        .repo-stat-lbl { font-size: 10px; color: #8c8fa3; text-transform: uppercase; letter-spacing: 0.5px; }
+        .repo-bar { height: 6px; border-radius: 3px; display: flex; gap: 2px; overflow: hidden; }
+        .repo-bar div { height: 100%; border-radius: 3px; transition: width 0.6s ease; }
 
         /* Filters */
-        .filters { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 10px 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-        .filters label { font-size: 11px; color: #656d76; text-transform: uppercase; letter-spacing: 0.5px; }
-        select, input[type="text"] { background: #f6f8fa; border: 1px solid #d0d7de; color: #1f2328; padding: 5px 10px; border-radius: 6px; font-size: 12px; }
-        select:focus, input:focus { outline: none; border-color: #0969da; box-shadow: 0 0 0 3px rgba(9,105,218,0.15); }
-        .filter-clear { background: none; border: 1px solid #d0d7de; color: #656d76; padding: 5px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; margin-left: auto; }
-        .filter-clear:hover { color: #1f2328; border-color: #8b949e; }
+        .filters-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #fff; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+        .filter-group { display: flex; align-items: center; gap: 6px; }
+        .filter-group label { font-size: 11px; font-weight: 600; color: #8c8fa3; text-transform: uppercase; letter-spacing: 0.5px; }
+        select, input[type="text"] { font-family: 'Inter', sans-serif; background: #f0f2f5; border: 1px solid #e2e6ea; color: #1a1a2e; padding: 6px 12px; border-radius: 8px; font-size: 12px; transition: border-color 0.15s; }
+        select:focus, input:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
+        .btn-clear { background: #f0f2f5; border: 1px solid #e2e6ea; color: #5c5f77; padding: 6px 14px; border-radius: 8px; font-size: 11px; font-weight: 500; cursor: pointer; margin-left: auto; transition: all 0.15s; }
+        .btn-clear:hover { background: #e2e6ea; }
 
         /* Table */
-        .table-container { background: #fff; border: 1px solid #d0d7de; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-        .table-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid #d0d7de; }
-        .table-header .count { font-size: 12px; color: #656d76; }
-        .table-header .sort-info { font-size: 11px; color: #8b949e; }
+        .table-wrap { background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+        .table-top { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid #f0f2f5; }
+        .table-count { font-size: 13px; font-weight: 500; color: #5c5f77; }
+        .table-hint { font-size: 11px; color: #b0b3c6; }
         table { width: 100%; border-collapse: collapse; }
-        th { background: #f6f8fa; text-align: left; padding: 8px 14px; font-size: 11px; color: #656d76; text-transform: uppercase; letter-spacing: 0.5px; cursor: pointer; user-select: none; transition: color 0.15s; white-space: nowrap; border-bottom: 1px solid #d0d7de; }
-        th:hover { color: #1f2328; }
-        th.sorted { color: #0969da; }
-        th .sort-arrow { margin-left: 4px; font-size: 10px; }
-        td { padding: 8px 14px; border-bottom: 1px solid #eef1f5; font-size: 12px; }
+        th { text-align: left; padding: 10px 20px; font-size: 11px; font-weight: 600; color: #8c8fa3; text-transform: uppercase; letter-spacing: 0.8px; background: #fafbfc; border-bottom: 1px solid #f0f2f5; cursor: pointer; user-select: none; white-space: nowrap; transition: color 0.15s; }
+        th:hover { color: #1a1a2e; }
+        th.sorted { color: #6366f1; }
+        th .arrow { font-size: 10px; margin-left: 4px; }
+        td { padding: 12px 20px; border-bottom: 1px solid #f5f6f8; font-size: 13px; }
         tr { cursor: pointer; transition: background 0.1s; }
-        tr:hover { background: #f6f8fa; }
-        tr.expanded { background: #f6f8fa; }
+        tr:hover { background: #fafbfc; }
+        tr.expanded { background: #f8f8ff; }
+
         .detail-row { display: none; }
-        .detail-row.visible { display: table-row; }
-        .detail-row td { padding: 12px 14px 12px 28px; background: #fafbfc; border-bottom: 1px solid #eef1f5; }
-        .detail-content { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .detail-field { }
-        .detail-field .field-label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
-        .detail-field .field-value { font-size: 12px; color: #1f2328; }
+        .detail-row.show { display: table-row; }
+        .detail-row td { padding: 16px 20px 16px 36px; background: #fafbfc; }
+        .detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        .detail-item label { display: block; font-size: 10px; font-weight: 600; color: #8c8fa3; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+        .detail-item span { font-size: 13px; color: #1a1a2e; }
 
         /* Badges */
-        .badge { padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600; white-space: nowrap; }
-        .badge-critical { background: #ffebe9; color: #cf222e; }
-        .badge-high { background: #fff1e5; color: #bf5000; }
-        .badge-trivy { background: #ddf4ff; color: #0969da; }
-        .badge-snyk { background: #fbefff; color: #8250df; }
-        .badge-new { background: #ffebe9; color: #cf222e; }
-        .badge-allowlisted { background: #dafbe1; color: #1a7f37; }
-        .badge-expired { background: #fff8c5; color: #9a6700; }
-        .badge-base { background: #eef1f5; color: #656d76; }
-        .badge-app { background: #fff8c5; color: #9a6700; }
-        .repo-tag { padding: 2px 8px; border-radius: 12px; font-size: 10px; background: #eef1f5; color: #656d76; margin: 1px; display: inline-block; }
-        code { background: #eef1f5; padding: 1px 5px; border-radius: 3px; font-size: 11px; color: #1f2328; }
+        .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 10px; font-weight: 600; letter-spacing: 0.3px; }
+        .b-critical { background: #fef2f2; color: #dc2626; }
+        .b-high { background: #fff7ed; color: #ea580c; }
+        .b-trivy { background: #eff6ff; color: #2563eb; }
+        .b-snyk { background: #faf5ff; color: #7c3aed; }
+        .b-new { background: #fef2f2; color: #dc2626; }
+        .b-allowlisted { background: #f0fdf4; color: #16a34a; }
+        .b-expired { background: #fffbeb; color: #d97706; }
+        .b-base { background: #f0f2f5; color: #5c5f77; }
+        .b-app { background: #fffbeb; color: #d97706; }
+        .repo-tag { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 10px; font-weight: 500; background: #f0f2f5; color: #5c5f77; margin: 1px 2px; }
+        code { background: #f0f2f5; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-family: 'SF Mono', Menlo, monospace; }
 
-        .empty-state { text-align: center; padding: 48px; color: #656d76; font-size: 13px; }
-        .dedup-note { background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 12px; color: #656d76; display: flex; align-items: center; gap: 8px; }
-        .dedup-note strong { color: #1f2328; }
+        .empty { text-align: center; padding: 48px; color: #8c8fa3; font-size: 14px; }
 
         /* Tabs */
-        .tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 1px solid #d0d7de; }
-        .tab { padding: 8px 16px; font-size: 13px; color: #656d76; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
-        .tab:hover { color: #1f2328; }
-        .tab.active { color: #1f2328; border-bottom-color: #d4763c; font-weight: 600; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
+        .tabs { display: flex; gap: 0; margin-bottom: 24px; }
+        .tab { padding: 10px 20px; font-size: 13px; font-weight: 500; color: #8c8fa3; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
+        .tab:hover { color: #1a1a2e; }
+        .tab.active { color: #6366f1; border-bottom-color: #6366f1; font-weight: 600; }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; animation: fadeIn 0.3s ease; }
 
-        @media (max-width: 768px) {
-            .charts { grid-template-columns: 1fr; }
-            .detail-content { grid-template-columns: 1fr; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes countUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .stat-value { animation: countUp 0.5s ease; }
+
+        @media (max-width: 900px) {
+            .stats-row { grid-template-columns: repeat(2, 1fr); }
+            .grid-2 { grid-template-columns: 1fr; }
+            .detail-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
-<div class="container">
-    <div class="header">
-        <div class="header-left">
-            <h1><span>&#128737;</span> Security Vulnerability Dashboard</h1>
-            <p class="subtitle">CRITICAL and HIGH vulnerabilities across scanned repositories</p>
-            <p class="last-updated" id="lastUpdated"></p>
-        </div>
-    </div>
+<div class="nav">
+    <div class="nav-logo"><div class="shield">S</div> Security Dashboard</div>
+    <div class="nav-right"><span class="nav-time" id="lastUpdated"></span></div>
+</div>
 
-    <div class="stats" id="stats"></div>
+<div class="container">
+    <div class="stats-row" id="stats"></div>
 
     <div class="tabs">
         <div class="tab active" data-tab="overview">Overview</div>
-        <div class="tab" data-tab="repos">Repo Comparison</div>
-        <div class="tab" data-tab="vulns">All Vulnerabilities</div>
+        <div class="tab" data-tab="repos">Repos</div>
+        <div class="tab" data-tab="vulns">Vulnerabilities</div>
     </div>
 
-    <!-- Tab 1: Overview -->
-    <div class="tab-content active" id="tab-overview">
-        <div class="charts">
-            <div class="chart-card">
-                <h3>By Source</h3>
-                <div class="donut-container" id="sourceDonut"></div>
-            </div>
-            <div class="chart-card">
-                <h3>By Scanner</h3>
-                <div class="donut-container" id="scannerDonut"></div>
-            </div>
+    <div class="tab-panel active" id="tab-overview">
+        <div class="grid-2">
+            <div class="card"><div class="card-title">By Source</div><div id="srcDonut"></div></div>
+            <div class="card"><div class="card-title">By Scanner</div><div id="scanDonut"></div></div>
         </div>
-        <div class="charts">
-            <div class="chart-card">
-                <h3>Top Vulnerable Packages</h3>
-                <div class="chart-bar-container" id="packageChart"></div>
-            </div>
-            <div class="chart-card">
-                <h3>Vulnerabilities per Repo</h3>
-                <div class="chart-bar-container" id="repoChart"></div>
-            </div>
+        <div class="grid-2">
+            <div class="card"><div class="card-title">Top Packages</div><div id="pkgBars"></div></div>
+            <div class="card"><div class="card-title">Per Repo</div><div id="repoBars"></div></div>
         </div>
     </div>
 
-    <!-- Tab 2: Repo Comparison -->
-    <div class="tab-content" id="tab-repos">
-        <div class="repo-cards" id="repoCards"></div>
-        <div id="repoDetail"></div>
+    <div class="tab-panel" id="tab-repos">
+        <div class="repo-grid" id="repoCards"></div>
     </div>
 
-    <!-- Tab 3: All Vulnerabilities -->
-    <div class="tab-content" id="tab-vulns">
-        <div class="filters">
-            <label>Repo:</label>
-            <select id="repoFilter"><option value="all">All repos</option></select>
-            <label>Severity:</label>
-            <select id="severityFilter">
-                <option value="all">All</option>
-                <option value="CRITICAL">Critical</option>
-                <option value="HIGH">High</option>
-            </select>
-            <label>Status:</label>
-            <select id="statusFilter">
-                <option value="all">All</option>
-                <option value="new">New</option>
-                <option value="allowlisted">Allowlisted</option>
-                <option value="expired">Expired</option>
-            </select>
-            <label>Source:</label>
-            <select id="sourceFilter">
-                <option value="all">All</option>
-                <option value="base_image">Base image</option>
-                <option value="app">App dep</option>
-            </select>
-            <label>Search:</label>
-            <input type="text" id="searchFilter" placeholder="CVE or package..." style="width: 160px;">
-            <button class="filter-clear" onclick="clearFilters()">Clear</button>
+    <div class="tab-panel" id="tab-vulns">
+        <div class="filters-bar">
+            <div class="filter-group"><label>Repo</label><select id="fRepo"></select></div>
+            <div class="filter-group"><label>Severity</label><select id="fSev"><option value="all">All</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option></select></div>
+            <div class="filter-group"><label>Status</label><select id="fStatus"><option value="all">All</option><option value="new">New</option><option value="allowlisted">Allowlisted</option><option value="expired">Expired</option></select></div>
+            <div class="filter-group"><label>Source</label><select id="fSource"><option value="all">All</option><option value="base_image">Base image</option><option value="app">App dep</option></select></div>
+            <div class="filter-group"><label>Search</label><input type="text" id="fSearch" placeholder="CVE or package..." style="width:160px"></div>
+            <button class="btn-clear" onclick="clearFilters()">Clear</button>
         </div>
-
-        <div class="table-container">
-            <div class="table-header">
-                <span class="count" id="tableCount"></span>
-                <span class="sort-info">Click column headers to sort. Click rows to expand.</span>
-            </div>
+        <div class="table-wrap">
+            <div class="table-top"><span class="table-count" id="tblCount"></span><span class="table-hint">Click headers to sort, rows to expand</span></div>
             <table>
-                <thead>
-                    <tr>
-                        <th data-sort="severity" class="sorted">Severity <span class="sort-arrow">&#9650;</span></th>
-                        <th data-sort="id">ID</th>
-                        <th data-sort="package">Package</th>
-                        <th data-sort="scanner">Scanner</th>
-                        <th data-sort="source_type">Source</th>
-                        <th data-sort="status">Status</th>
-                        <th>Repos</th>
-                        <th data-sort="fixed">Fix</th>
-                    </tr>
-                </thead>
-                <tbody id="vulnTable"></tbody>
+                <thead><tr>
+                    <th data-s="severity" class="sorted">Severity <span class="arrow">&#9650;</span></th>
+                    <th data-s="id">ID</th>
+                    <th data-s="package">Package</th>
+                    <th data-s="scanner">Scanner</th>
+                    <th data-s="source_type">Source</th>
+                    <th data-s="status">Status</th>
+                    <th>Repos</th>
+                    <th data-s="fixed">Fix</th>
+                </tr></thead>
+                <tbody id="tbl"></tbody>
             </table>
         </div>
-        <div class="empty-state" id="emptyState" style="display:none">No vulnerabilities match the current filters.</div>
+        <div class="empty" id="empty" style="display:none">No vulnerabilities match filters.</div>
     </div>
 </div>
 
 <script>
-    let allData = { repos: {}, generated_at: '' };
-    let vulnMap = {};
-    let sortCol = 'severity';
-    let sortDir = 'asc';
+let D={repos:{},generated_at:''}, VM={}, sortCol='severity', sortDir='asc';
+const pct=(n,t)=>t>0?Math.round(n/t*100):0;
 
-    async function loadData() {
-        try {
-            // Load per-repo files from repos/ directory
-            const indexResp = await fetch('repos/');
-            if (indexResp.ok) {
-                const html = await indexResp.text();
-                const files = [...html.matchAll(/href="([^"]+\.json)"/g)].map(m => m[1]);
-                for (const file of files) {
-                    try {
-                        const resp = await fetch('repos/' + file);
-                        const repoData = await resp.json();
-                        if (repoData.repo) {
-                            allData.repos[repoData.repo] = repoData;
-                            allData.generated_at = repoData.scanned_at;
-                        }
-                    } catch (e) { console.warn('Failed to load', file, e); }
-                }
-            }
-            // Fallback: try legacy data.json
-            if (Object.keys(allData.repos).length === 0) {
-                const resp = await fetch('data.json');
-                allData = await resp.json();
-            }
-            buildVulnMap();
-            renderAll();
-        } catch (e) {
-            document.getElementById('emptyState').style.display = 'block';
-            document.getElementById('emptyState').textContent = 'No scan data available. Run the vulnerability scan to populate.';
-        }
-    }
+async function load(){
+    try{
+        const r=await fetch('repos/');
+        if(r.ok){const h=await r.text();const fs=[...h.matchAll(/href="([^"]+\.json)"/g)].map(m=>m[1]);
+            for(const f of fs){try{const rr=await fetch('repos/'+f);const d=await rr.json();if(d.repo){D.repos[d.repo]=d;D.generated_at=d.scanned_at;}}catch(e){}}}
+        if(!Object.keys(D.repos).length){const r2=await fetch('data.json');D=await r2.json();}
+        buildVM();renderAll();
+    }catch(e){document.getElementById('empty').style.display='block';document.getElementById('empty').textContent='No data yet.';}
+}
 
-    function buildVulnMap() {
-        vulnMap = {};
-        const repos = Object.keys(allData.repos);
-        repos.forEach(repo => {
-            (allData.repos[repo].vulnerabilities || []).forEach(v => {
-                if (!vulnMap[v.id]) {
-                    vulnMap[v.id] = { ...v, repos: [repo], statuses: {} };
-                } else {
-                    if (!vulnMap[v.id].repos.includes(repo)) vulnMap[v.id].repos.push(repo);
-                }
-                vulnMap[v.id].statuses[repo] = v.status || 'new';
-            });
-        });
-    }
-
-    function renderAll() {
-        renderStats();
-        renderOverview();
-        renderRepos();
-        renderTable();
-        document.getElementById('lastUpdated').textContent = 'Last updated: ' + formatDate(allData.generated_at);
-    }
-
-    function formatDate(d) {
-        if (!d) return 'N/A';
-        try { return new Date(d).toLocaleString(); } catch { return d; }
-    }
-
-    // ── Stats ──
-    function renderStats() {
-        const vulns = Object.values(vulnMap);
-        const repos = Object.keys(allData.repos);
-        const crit = vulns.filter(v => v.severity === 'CRITICAL').length;
-        const high = vulns.filter(v => v.severity === 'HIGH').length;
-        const newCount = vulns.filter(v => Object.values(v.statuses).includes('new')).length;
-        const allowlisted = vulns.filter(v => !Object.values(v.statuses).includes('new')).length;
-        const base = vulns.filter(v => v.source_type === 'base_image').length;
-
-        document.getElementById('stats').innerHTML = `
-            <div class="stat-card" onclick="quickFilter('all')">
-                <div class="label">Total Unique</div><div class="value">${vulns.length}</div>
-                <div class="bar" style="width:100%;background:#30363d"></div>
-            </div>
-            <div class="stat-card" onclick="quickFilter('CRITICAL')">
-                <div class="label">Critical</div><div class="value critical">${crit}</div>
-                <div class="bar" style="width:${pct(crit, vulns.length)}%;background:#f85149"></div>
-            </div>
-            <div class="stat-card" onclick="quickFilter('HIGH')">
-                <div class="label">High</div><div class="value high">${high}</div>
-                <div class="bar" style="width:${pct(high, vulns.length)}%;background:#db6d28"></div>
-            </div>
-            <div class="stat-card" onclick="quickFilter('new')">
-                <div class="label">New (Blocking)</div><div class="value new-color">${newCount}</div>
-                <div class="bar" style="width:${pct(newCount, vulns.length)}%;background:#f85149"></div>
-            </div>
-            <div class="stat-card" onclick="quickFilter('allowlisted')">
-                <div class="label">Allowlisted</div><div class="value allowlisted-color">${allowlisted}</div>
-                <div class="bar" style="width:${pct(allowlisted, vulns.length)}%;background:#3fb950"></div>
-            </div>
-            <div class="stat-card">
-                <div class="label">Base Image</div><div class="value">${base}</div>
-                <div class="bar" style="width:${pct(base, vulns.length)}%;background:#8b949e"></div>
-            </div>
-            <div class="stat-card">
-                <div class="label">Repos Scanned</div><div class="value">${repos.length}</div>
-            </div>
-        `;
-    }
-
-    function pct(n, total) { return total > 0 ? Math.round((n / total) * 100) : 0; }
-
-    function quickFilter(type) {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-        document.querySelector('[data-tab="vulns"]').classList.add('active');
-        document.getElementById('tab-vulns').classList.add('active');
-        clearFilters();
-        if (type === 'CRITICAL' || type === 'HIGH') document.getElementById('severityFilter').value = type;
-        else if (type === 'new' || type === 'allowlisted') document.getElementById('statusFilter').value = type;
-        renderTable();
-    }
-
-    // ── Overview Charts ──
-    function renderOverview() {
-        const vulns = Object.values(vulnMap);
-        renderDonut('sourceDonut', [
-            { label: 'Base image', count: vulns.filter(v => v.source_type === 'base_image').length, color: '#8b949e' },
-            { label: 'App dependency', count: vulns.filter(v => v.source_type === 'app').length, color: '#d29922' },
-        ]);
-        renderDonut('scannerDonut', [
-            { label: 'Trivy', count: vulns.filter(v => v.scanner === 'trivy').length, color: '#58a6ff' },
-            { label: 'Snyk', count: vulns.filter(v => v.scanner === 'snyk').length, color: '#a371f7' },
-        ]);
-        renderBarChart('packageChart', getTopPackages(vulns, 6));
-        renderRepoBarChart('repoChart');
-    }
-
-    function renderDonut(id, items) {
-        const total = items.reduce((s, i) => s + i.count, 0);
-        const el = document.getElementById(id);
-        let offset = 0;
-        const circles = items.map(item => {
-            const pctVal = total > 0 ? (item.count / total) * 100 : 0;
-            const dash = `${pctVal * 2.83} ${283 - pctVal * 2.83}`;
-            const c = `<circle cx="45" cy="45" r="36" fill="none" stroke="${item.color}" stroke-width="18" stroke-dasharray="${dash}" stroke-dashoffset="${-offset * 2.83}" opacity="0.85"/>`;
-            offset += pctVal;
-            return c;
-        });
-        const legend = items.map(i => `<div class="legend-item"><div class="legend-dot" style="background:${i.color}"></div>${i.label}: <strong>${i.count}</strong></div>`).join('');
-        el.innerHTML = `
-            <div class="donut">
-                <svg viewBox="0 0 90 90"><circle cx="45" cy="45" r="36" fill="none" stroke="#21262d" stroke-width="18"/>${circles.join('')}</svg>
-                <div class="donut-center"><div class="num">${total}</div><div class="txt">total</div></div>
-            </div>
-            <div class="donut-legend">${legend}</div>
-        `;
-    }
-
-    function getTopPackages(vulns, limit) {
-        const pkgMap = {};
-        vulns.forEach(v => { pkgMap[v.package] = (pkgMap[v.package] || 0) + 1; });
-        return Object.entries(pkgMap).sort((a, b) => b[1] - a[1]).slice(0, limit)
-            .map(([pkg, count]) => ({ label: pkg, value: count }));
-    }
-
-    function renderBarChart(id, items) {
-        const max = Math.max(...items.map(i => i.value), 1);
-        document.getElementById(id).innerHTML = items.map(i => `
-            <div class="chart-bar-row">
-                <div class="chart-bar-label" title="${i.label}">${i.label}</div>
-                <div class="chart-bar-track">
-                    <div class="chart-bar-fill" style="width:${pct(i.value, max)}%;background:${i.color || '#58a6ff40'}">
-                        <span>${i.value}</span>
-                    </div>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    function renderRepoBarChart(id) {
-        const repos = Object.keys(allData.repos);
-        const items = repos.map(r => {
-            const d = allData.repos[r];
-            return { label: r.split('/').pop(), value: d.total, crit: d.critical, high: d.high };
-        }).sort((a, b) => b.value - a.value);
-        const max = Math.max(...items.map(i => i.value), 1);
-        document.getElementById(id).innerHTML = items.map(i => `
-            <div class="chart-bar-row">
-                <div class="chart-bar-label" title="${i.label}">${i.label}</div>
-                <div class="chart-bar-track">
-                    <div class="chart-bar-fill" style="width:${pct(i.crit, max)}%;background:rgba(248,81,73,0.6)"></div>
-                    <div class="chart-bar-fill" style="width:${pct(i.high - i.crit, max)}%;background:rgba(219,109,40,0.5);position:absolute;left:${pct(i.crit, max)}%"></div>
-                </div>
-                <div class="chart-bar-value">${i.value}</div>
-            </div>
-        `).join('');
-    }
-
-    // ── Repo Comparison ──
-    function renderRepos() {
-        const repos = Object.keys(allData.repos);
-        document.getElementById('repoCards').innerHTML = repos.map(r => {
-            const d = allData.repos[r];
-            const total = d.total || 0;
-            const critW = pct(d.critical, total);
-            const highW = pct(d.high, total);
-            return `
-                <div class="repo-card" onclick="selectRepo('${r}')">
-                    <div class="repo-card-header">
-                        <div class="repo-card-name">${r.split('/').pop()}</div>
-                        <div class="repo-card-time">${formatDate(d.scanned_at)}</div>
-                    </div>
-                    <div class="repo-card-stats">
-                        <div class="repo-card-stat"><div class="num">${total}</div><div class="lbl">Total</div></div>
-                        <div class="repo-card-stat"><div class="num critical">${d.critical}</div><div class="lbl">Critical</div></div>
-                        <div class="repo-card-stat"><div class="num high">${d.high}</div><div class="lbl">High</div></div>
-                        <div class="repo-card-stat"><div class="num allowlisted-color">${d.allowlisted}</div><div class="lbl">Allowed</div></div>
-                        <div class="repo-card-stat"><div class="num new-color">${d.new || 0}</div><div class="lbl">New</div></div>
-                    </div>
-                    <div class="repo-card-bar">
-                        <div style="width:${critW}%;background:#f85149"></div>
-                        <div style="width:${highW}%;background:#db6d28"></div>
-                        <div style="width:${100-critW-highW}%;background:#21262d"></div>
-                    </div>
-                </div>
-            `;
-        }).join('');
-    }
-
-    function selectRepo(repo) {
-        document.querySelectorAll('.repo-card').forEach(c => c.classList.remove('selected'));
-        event.currentTarget.classList.add('selected');
-        document.getElementById('repoFilter').value = repo;
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-        document.querySelector('[data-tab="vulns"]').classList.add('active');
-        document.getElementById('tab-vulns').classList.add('active');
-        renderTable();
-    }
-
-    // ── Table ──
-    function getFilteredVulns() {
-        let vulns = Object.values(vulnMap);
-        const selRepo = document.getElementById('repoFilter').value;
-        const selSev = document.getElementById('severityFilter').value;
-        const selStatus = document.getElementById('statusFilter').value;
-        const selSource = document.getElementById('sourceFilter').value;
-        const search = document.getElementById('searchFilter').value.toLowerCase();
-
-        if (selRepo !== 'all') vulns = vulns.filter(v => v.repos.includes(selRepo));
-        if (selSev !== 'all') vulns = vulns.filter(v => v.severity === selSev);
-        if (selStatus !== 'all') {
-            vulns = vulns.filter(v => {
-                if (selRepo !== 'all') return v.statuses[selRepo] === selStatus;
-                return Object.values(v.statuses).includes(selStatus);
-            });
-        }
-        if (selSource !== 'all') vulns = vulns.filter(v => v.source_type === selSource);
-        if (search) vulns = vulns.filter(v => v.id.toLowerCase().includes(search) || v.package.toLowerCase().includes(search));
-
-        const order = { CRITICAL: 0, HIGH: 1 };
-        const scannerOrder = { trivy: 0, snyk: 1 };
-        vulns.sort((a, b) => {
-            let av, bv;
-            if (sortCol === 'severity') { av = order[a.severity] || 9; bv = order[b.severity] || 9; }
-            else if (sortCol === 'scanner') { av = scannerOrder[a.scanner] || 9; bv = scannerOrder[b.scanner] || 9; }
-            else { av = (a[sortCol] || '').toString().toLowerCase(); bv = (b[sortCol] || '').toString().toLowerCase(); }
-            if (av < bv) return sortDir === 'asc' ? -1 : 1;
-            if (av > bv) return sortDir === 'asc' ? 1 : -1;
-            return 0;
-        });
-        return vulns;
-    }
-
-    function renderTable() {
-        const repos = Object.keys(allData.repos);
-        const repoFilter = document.getElementById('repoFilter');
-        const currentVal = repoFilter.value;
-        repoFilter.innerHTML = '<option value="all">All repos (' + repos.length + ')</option>';
-        repos.forEach(r => {
-            const opt = document.createElement('option');
-            opt.value = r; opt.textContent = r.split('/').pop();
-            if (r === currentVal) opt.selected = true;
-            repoFilter.appendChild(opt);
-        });
-
-        const vulns = getFilteredVulns();
-        const selRepo = document.getElementById('repoFilter').value;
-
-        document.getElementById('tableCount').textContent = `${vulns.length} vulnerabilities`;
-        const tbody = document.getElementById('vulnTable');
-        tbody.innerHTML = '';
-
-        if (vulns.length === 0) {
-            document.getElementById('emptyState').style.display = 'block';
-            return;
-        }
-        document.getElementById('emptyState').style.display = 'none';
-
-        vulns.forEach((v, i) => {
-            const status = selRepo !== 'all' ? (v.statuses[selRepo] || 'new') :
-                Object.values(v.statuses).includes('new') ? 'new' :
-                Object.values(v.statuses).includes('expired') ? 'expired' : 'allowlisted';
-
-            const row = document.createElement('tr');
-            row.onclick = () => toggleDetail(i);
-            row.innerHTML = `
-                <td><span class="badge badge-${v.severity.toLowerCase()}">${v.severity}</span></td>
-                <td><code>${v.id.length > 35 ? v.id.slice(0,35)+'...' : v.id}</code></td>
-                <td><code>${v.package}</code></td>
-                <td><span class="badge badge-${v.scanner}">${v.scanner}</span></td>
-                <td><span class="badge badge-${v.source_type === 'base_image' ? 'base' : 'app'}">${v.source_type === 'base_image' ? 'Base' : 'App'}</span></td>
-                <td><span class="badge badge-${status}">${status}</span></td>
-                <td>${v.repos.map(r => '<span class="repo-tag">' + r.split('/').pop() + '</span>').join(' ')}</td>
-                <td>${v.fixed || '<span style="color:#484f58">No fix</span>'}</td>
-            `;
-            tbody.appendChild(row);
-
-            const detailRow = document.createElement('tr');
-            detailRow.className = 'detail-row';
-            detailRow.id = `detail-${i}`;
-            detailRow.innerHTML = `<td colspan="8">
-                <div class="detail-content">
-                    <div class="detail-field"><div class="field-label">Full ID</div><div class="field-value"><code>${v.id}</code></div></div>
-                    <div class="detail-field"><div class="field-label">Installed Version</div><div class="field-value">${v.installed}</div></div>
-                    <div class="detail-field"><div class="field-label">Fix Available</div><div class="field-value">${v.fixed || 'No fix available'}</div></div>
-                    <div class="detail-field"><div class="field-label">Scanner</div><div class="field-value">${v.scanner}</div></div>
-                    <div class="detail-field"><div class="field-label">Source</div><div class="field-value">${v.source_type === 'base_image' ? 'SDK Base Image' : 'App Dependency'}</div></div>
-                    <div class="detail-field"><div class="field-label">Affected Repos</div><div class="field-value">${v.repos.join(', ')}</div></div>
-                </div>
-            </td>`;
-            tbody.appendChild(detailRow);
-        });
-
-        // Update sort indicators
-        document.querySelectorAll('th[data-sort]').forEach(th => {
-            th.classList.toggle('sorted', th.dataset.sort === sortCol);
-            const arrow = th.querySelector('.sort-arrow');
-            if (arrow) arrow.textContent = th.dataset.sort === sortCol ? (sortDir === 'asc' ? '\u25B2' : '\u25BC') : '';
-        });
-    }
-
-    function toggleDetail(i) {
-        const row = document.getElementById(`detail-${i}`);
-        row.classList.toggle('visible');
-        row.previousElementSibling.classList.toggle('expanded');
-    }
-
-    function clearFilters() {
-        document.getElementById('repoFilter').value = 'all';
-        document.getElementById('severityFilter').value = 'all';
-        document.getElementById('statusFilter').value = 'all';
-        document.getElementById('sourceFilter').value = 'all';
-        document.getElementById('searchFilter').value = '';
-        renderTable();
-    }
-
-    // ── Sorting ──
-    document.querySelectorAll('th[data-sort]').forEach(th => {
-        th.addEventListener('click', () => {
-            const col = th.dataset.sort;
-            if (sortCol === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
-            else { sortCol = col; sortDir = 'asc'; }
-            renderTable();
+function buildVM(){
+    VM={};
+    Object.keys(D.repos).forEach(repo=>{
+        (D.repos[repo].vulnerabilities||[]).forEach(v=>{
+            if(!VM[v.id])VM[v.id]={...v,repos:[repo],statuses:{}};
+            else if(!VM[v.id].repos.includes(repo))VM[v.id].repos.push(repo);
+            VM[v.id].statuses[repo]=v.status||'new';
         });
     });
+}
 
-    // ── Tabs ──
-    document.querySelectorAll('.tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            tab.classList.add('active');
-            document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-        });
+function renderAll(){renderStats();renderOverview();renderRepos();renderTable();
+    document.getElementById('lastUpdated').textContent='Updated: '+(D.generated_at?new Date(D.generated_at).toLocaleString():'N/A');}
+
+function renderStats(){
+    const vs=Object.values(VM),repos=Object.keys(D.repos);
+    const c=vs.filter(v=>v.severity==='CRITICAL').length,h=vs.filter(v=>v.severity==='HIGH').length;
+    const nw=vs.filter(v=>Object.values(v.statuses).includes('new')).length;
+    const al=vs.length-nw;
+    document.getElementById('stats').innerHTML=`
+        <div class="stat icon-total" onclick="qf('all')"><div class="stat-icon">&#128202;</div><div class="stat-value">${vs.length}</div><div class="stat-label">Total CVEs</div><div class="stat-bar" style="width:100%;background:#6366f1"></div></div>
+        <div class="stat icon-critical" onclick="qf('CRITICAL')"><div class="stat-icon">&#9888;</div><div class="stat-value">${c}</div><div class="stat-label">Critical</div><div class="stat-bar" style="width:${pct(c,vs.length)}%;background:#ef4444"></div></div>
+        <div class="stat icon-high" onclick="qf('HIGH')"><div class="stat-icon">&#9650;</div><div class="stat-value">${h}</div><div class="stat-label">High</div><div class="stat-bar" style="width:${pct(h,vs.length)}%;background:#f97316"></div></div>
+        <div class="stat icon-new" onclick="qf('new')"><div class="stat-icon">&#10060;</div><div class="stat-value">${nw}</div><div class="stat-label">New</div><div class="stat-bar" style="width:${pct(nw,vs.length)}%;background:#ef4444"></div></div>
+        <div class="stat icon-allowed" onclick="qf('allowlisted')"><div class="stat-icon">&#10004;</div><div class="stat-value">${al}</div><div class="stat-label">Allowlisted</div><div class="stat-bar" style="width:${pct(al,vs.length)}%;background:#22c55e"></div></div>`;
+}
+
+function qf(t){
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));
+    document.querySelector('[data-tab="vulns"]').classList.add('active');
+    document.getElementById('tab-vulns').classList.add('active');
+    clearFilters();
+    if(t==='CRITICAL'||t==='HIGH')document.getElementById('fSev').value=t;
+    else if(t==='new'||t==='allowlisted')document.getElementById('fStatus').value=t;
+    renderTable();
+}
+
+function donut(id,items){
+    const total=items.reduce((s,i)=>s+i.count,0);
+    let off=0;const circles=items.map(i=>{
+        const p=total>0?(i.count/total)*100:0,d=`${p*2.51} ${251-p*2.51}`;
+        const c=`<circle cx="65" cy="65" r="40" fill="none" stroke="${i.color}" stroke-width="20" stroke-dasharray="${d}" stroke-dashoffset="${-off*2.51}" opacity="0.85"/>`;
+        off+=p;return c;}).join('');
+    const leg=items.map(i=>`<div class="legend-row"><div class="legend-dot" style="background:${i.color}"></div>${i.label}<span class="legend-val">${i.count}</span></div>`).join('');
+    document.getElementById(id).innerHTML=`<div class="donut-wrap"><svg class="donut-svg" viewBox="0 0 130 130"><circle cx="65" cy="65" r="40" fill="none" stroke="#f0f2f5" stroke-width="20"/>${circles}<text x="65" y="62" text-anchor="middle" class="donut-center">${total}</text><text x="65" y="78" text-anchor="middle" class="donut-sub">total</text></svg><div class="legend">${leg}</div></div>`;
+}
+
+function renderOverview(){
+    const vs=Object.values(VM);
+    donut('srcDonut',[{label:'Base image',count:vs.filter(v=>v.source_type==='base_image').length,color:'#6366f1'},{label:'App dependency',count:vs.filter(v=>v.source_type==='app').length,color:'#f97316'}]);
+    donut('scanDonut',[{label:'Trivy',count:vs.filter(v=>v.scanner==='trivy').length,color:'#2563eb'},{label:'Snyk',count:vs.filter(v=>v.scanner==='snyk').length,color:'#7c3aed'}]);
+
+    const pkgMap={};vs.forEach(v=>{pkgMap[v.package]=(pkgMap[v.package]||0)+1;});
+    const pkgs=Object.entries(pkgMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
+    const mx=Math.max(...pkgs.map(p=>p[1]),1);
+    document.getElementById('pkgBars').innerHTML=pkgs.map(([p,c])=>`<div class="hbar"><div class="hbar-header"><span class="hbar-label" title="${p}">${p}</span><span class="hbar-val">${c}</span></div><div class="hbar-track"><div class="hbar-fill" style="width:${pct(c,mx)}%;background:linear-gradient(90deg,#6366f1,#8b5cf6)"></div></div></div>`).join('');
+
+    const repos=Object.keys(D.repos).map(r=>({name:r.split('/').pop(),total:D.repos[r].total,c:D.repos[r].critical,h:D.repos[r].high})).sort((a,b)=>b.total-a.total);
+    const rmx=Math.max(...repos.map(r=>r.total),1);
+    document.getElementById('repoBars').innerHTML=repos.map(r=>`<div class="hbar"><div class="hbar-header"><span class="hbar-label">${r.name}</span><span class="hbar-val">${r.total}</span></div><div class="hbar-track"><div class="hbar-fill" style="width:${pct(r.total,rmx)}%;background:linear-gradient(90deg,#ef4444 ${pct(r.c,r.total)}%,#f97316 ${pct(r.c,r.total)}%)"></div></div></div>`).join('');
+}
+
+function renderRepos(){
+    const repos=Object.keys(D.repos);
+    document.getElementById('repoCards').innerHTML=repos.map(r=>{
+        const d=D.repos[r],t=d.total||1;
+        return`<div class="repo-card" onclick="selectRepo('${r}')">
+            <div class="repo-name"><div class="dot" style="background:${d.new>0?'#ef4444':'#22c55e'}"></div>${r.split('/').pop()}</div>
+            <div class="repo-stats">
+                <div class="repo-stat"><div class="repo-stat-val">${d.total}</div><div class="repo-stat-lbl">Total</div></div>
+                <div class="repo-stat"><div class="repo-stat-val" style="color:#ef4444">${d.critical}</div><div class="repo-stat-lbl">Critical</div></div>
+                <div class="repo-stat"><div class="repo-stat-val" style="color:#f97316">${d.high}</div><div class="repo-stat-lbl">High</div></div>
+                <div class="repo-stat"><div class="repo-stat-val" style="color:#22c55e">${d.allowlisted}</div><div class="repo-stat-lbl">OK</div></div>
+                <div class="repo-stat"><div class="repo-stat-val" style="color:#ef4444">${d.new||0}</div><div class="repo-stat-lbl">New</div></div>
+            </div>
+            <div class="repo-bar"><div style="width:${pct(d.critical,t)}%;background:#ef4444"></div><div style="width:${pct(d.high,t)}%;background:#f97316"></div><div style="width:${100-pct(d.critical,t)-pct(d.high,t)}%;background:#e2e6ea"></div></div>
+        </div>`;}).join('');
+}
+
+function selectRepo(r){document.querySelectorAll('.repo-card').forEach(c=>c.classList.remove('selected'));event.currentTarget.classList.add('selected');
+    document.getElementById('fRepo').value=r;
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));
+    document.querySelector('[data-tab="vulns"]').classList.add('active');document.getElementById('tab-vulns').classList.add('active');renderTable();}
+
+function getFiltered(){
+    let vs=Object.values(VM);
+    const r=document.getElementById('fRepo').value,sv=document.getElementById('fSev').value,st=document.getElementById('fStatus').value,src=document.getElementById('fSource').value,q=document.getElementById('fSearch').value.toLowerCase();
+    if(r!=='all')vs=vs.filter(v=>v.repos.includes(r));
+    if(sv!=='all')vs=vs.filter(v=>v.severity===sv);
+    if(st!=='all')vs=vs.filter(v=>{if(r!=='all')return v.statuses[r]===st;return Object.values(v.statuses).includes(st);});
+    if(src!=='all')vs=vs.filter(v=>v.source_type===src);
+    if(q)vs=vs.filter(v=>v.id.toLowerCase().includes(q)||v.package.toLowerCase().includes(q));
+    const ord={CRITICAL:0,HIGH:1};
+    vs.sort((a,b)=>{let av,bv;if(sortCol==='severity'){av=ord[a.severity]||9;bv=ord[b.severity]||9;}else{av=(a[sortCol]||'').toString().toLowerCase();bv=(b[sortCol]||'').toString().toLowerCase();}
+        return av<bv?(sortDir==='asc'?-1:1):av>bv?(sortDir==='asc'?1:-1):0;});
+    return vs;
+}
+
+function renderTable(){
+    const repos=Object.keys(D.repos),sel=document.getElementById('fRepo'),cur=sel.value;
+    sel.innerHTML=`<option value="all">All repos (${repos.length})</option>`;
+    repos.forEach(r=>{const o=document.createElement('option');o.value=r;o.textContent=r.split('/').pop();if(r===cur)o.selected=true;sel.appendChild(o);});
+    const vs=getFiltered(),sr=document.getElementById('fRepo').value;
+    document.getElementById('tblCount').textContent=vs.length+' vulnerabilities';
+    const tb=document.getElementById('tbl');tb.innerHTML='';
+    if(!vs.length){document.getElementById('empty').style.display='block';return;}
+    document.getElementById('empty').style.display='none';
+    vs.forEach((v,i)=>{
+        const status=sr!=='all'?(v.statuses[sr]||'new'):Object.values(v.statuses).includes('new')?'new':Object.values(v.statuses).includes('expired')?'expired':'allowlisted';
+        const r=document.createElement('tr');r.onclick=()=>toggle(i);
+        r.innerHTML=`<td><span class="badge b-${v.severity.toLowerCase()}">${v.severity}</span></td>
+            <td><code>${v.id.length>38?v.id.slice(0,38)+'...':v.id}</code></td>
+            <td><code>${v.package}</code></td>
+            <td><span class="badge b-${v.scanner}">${v.scanner}</span></td>
+            <td><span class="badge b-${v.source_type==='base_image'?'base':'app'}">${v.source_type==='base_image'?'Base':'App'}</span></td>
+            <td><span class="badge b-${status}">${status}</span></td>
+            <td>${v.repos.map(r=>'<span class="repo-tag">'+r.split('/').pop()+'</span>').join(' ')}</td>
+            <td>${v.fixed||'<span style="color:#b0b3c6">None</span>'}</td>`;
+        tb.appendChild(r);
+        const dr=document.createElement('tr');dr.className='detail-row';dr.id='d'+i;
+        dr.innerHTML=`<td colspan="8"><div class="detail-grid">
+            <div class="detail-item"><label>Full ID</label><span><code>${v.id}</code></span></div>
+            <div class="detail-item"><label>Installed</label><span>${v.installed||'N/A'}</span></div>
+            <div class="detail-item"><label>Fix Version</label><span>${v.fixed||'No fix'}</span></div>
+            <div class="detail-item"><label>Scanner</label><span>${v.scanner}</span></div>
+            <div class="detail-item"><label>Source</label><span>${v.source_type==='base_image'?'SDK Base Image':'App Dependency'}</span></div>
+            <div class="detail-item"><label>Affected Repos</label><span>${v.repos.join(', ')}</span></div>
+        </div></td>`;
+        tb.appendChild(dr);
     });
+    document.querySelectorAll('th[data-s]').forEach(th=>{th.classList.toggle('sorted',th.dataset.s===sortCol);const a=th.querySelector('.arrow');if(a)a.textContent=th.dataset.s===sortCol?(sortDir==='asc'?'\u25B2':'\u25BC'):'';});
+}
 
-    // ── Filters ──
-    document.querySelectorAll('.filters select, .filters input').forEach(el => {
-        el.addEventListener('change', renderTable);
-        el.addEventListener('input', renderTable);
-    });
+function toggle(i){const r=document.getElementById('d'+i);r.classList.toggle('show');r.previousElementSibling.classList.toggle('expanded');}
+function clearFilters(){['fRepo','fSev','fStatus','fSource'].forEach(id=>document.getElementById(id).value='all');document.getElementById('fSearch').value='';renderTable();}
 
-    loadData();
+document.querySelectorAll('th[data-s]').forEach(th=>th.addEventListener('click',()=>{const c=th.dataset.s;if(sortCol===c)sortDir=sortDir==='asc'?'desc':'asc';else{sortCol=c;sortDir='asc';}renderTable();}));
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active');}));
+document.querySelectorAll('.filters-bar select, .filters-bar input').forEach(el=>{el.addEventListener('change',renderTable);el.addEventListener('input',renderTable);});
+load();
 </script>
 </body>
 </html>
