@@ -23,7 +23,7 @@ from application_sdk.storage.batch import (
     upload_prefix,
 )
 from application_sdk.storage.factory import create_local_store
-from application_sdk.storage.formats.utils import download_files
+from application_sdk.storage.formats.utils import _download_files
 from application_sdk.storage.ops import download_file, upload_file
 
 
@@ -154,16 +154,16 @@ async def test_list_keys_suffix_filter(store, tmp_path):
 
 
 # ------------------------------------------------------------------
-# download_files deprecation warning
+# _download_files deprecation warning
 # ------------------------------------------------------------------
 
 
 @pytest.mark.integration
-async def test_download_files_emits_deprecation_warning(store, staging):
-    """download_files() should emit a DeprecationWarning."""
+async def test__download_files_emits_deprecation_warning(store, staging):
+    """_download_files() should emit a DeprecationWarning."""
     set_infrastructure(InfrastructureContext(storage=store))
 
-    # Upload a file so download_files has something to find
+    # Upload a file so _download_files has something to find
     src = staging / "test.parquet"
     src.write_bytes(b"parquet-data")
     await upload_file("depwarn/test.parquet", src, store)
@@ -171,7 +171,7 @@ async def test_download_files_emits_deprecation_warning(store, staging):
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         try:
-            await download_files(str(staging / "depwarn/test.parquet"), ".parquet")
+            await _download_files(str(staging / "depwarn/test.parquet"), ".parquet")
         except Exception:
             pass  # may fail on infra setup, we only care about the warning
 

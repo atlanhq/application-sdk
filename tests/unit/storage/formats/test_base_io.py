@@ -11,7 +11,7 @@ import pytest
 from application_sdk.common.error_codes import IOError as SDKIOError
 from application_sdk.storage.formats import Reader
 from application_sdk.storage.formats.utils import (
-    download_files,
+    _download_files,
     find_local_files_by_extension,
 )
 
@@ -53,22 +53,22 @@ class MockReaderNoPath(Reader):
 
 
 class TestReaderDownloadFiles:
-    """Test cases for Reader.download_files method."""
+    """Test cases for Reader._download_files method."""
 
     @pytest.mark.asyncio
-    async def test_download_files_no_path_attribute(self):
+    async def test__download_files_no_path_attribute(self):
         """Test that AttributeError is raised when input has no path attribute."""
         input_instance = MockReaderNoPath()
 
         with pytest.raises(
             AttributeError, match="'MockReaderNoPath' object has no attribute 'path'"
         ):
-            await download_files(
+            await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
     @pytest.mark.asyncio
-    async def test_download_files_empty_path(self):
+    async def test__download_files_empty_path(self):
         """Test behavior when path is empty."""
         input_instance = MockReader("")
 
@@ -82,25 +82,25 @@ class TestReaderDownloadFiles:
             ),
         ):
             with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
-                await download_files(
+                await _download_files(
                     input_instance.path, ".parquet", input_instance.file_names
                 )
 
     @pytest.mark.asyncio
-    async def test_download_files_local_single_file_exists(self):
+    async def test__download_files_local_single_file_exists(self):
         """Test successful local file discovery for single file."""
         path = "/data/test.parquet"
         input_instance = MockReader(path)
 
         with patch("os.path.isfile", return_value=True):
-            result = await download_files(
+            result = await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
         assert result == [path]
 
     @pytest.mark.asyncio
-    async def test_download_files_local_directory_exists(self):
+    async def test__download_files_local_directory_exists(self):
         """Test successful local file discovery for directory."""
         path = "/data"
         input_instance = MockReader(path)
@@ -111,14 +111,14 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=True),
             patch("glob.glob", return_value=expected_files),
         ):
-            result = await download_files(
+            result = await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
         assert result == expected_files
 
     @pytest.mark.asyncio
-    async def test_download_files_local_directory_with_file_names_filter(self):
+    async def test__download_files_local_directory_with_file_names_filter(self):
         """Test local file discovery with file_names filtering."""
         path = "/data"
         file_names = ["file1.parquet", "file3.parquet"]
@@ -135,28 +135,28 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=True),
             patch("glob.glob", return_value=all_files),
         ):
-            result = await download_files(
+            result = await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
         assert set(result) == set(expected_files)
 
     @pytest.mark.asyncio
-    async def test_download_files_single_file_with_file_names_match(self):
+    async def test__download_files_single_file_with_file_names_match(self):
         """Test single file with file_names filter that matches."""
         path = "/data/test.parquet"
         file_names = ["test.parquet"]
         input_instance = MockReader(path, file_names)
 
         with patch("os.path.isfile", return_value=True):
-            result = await download_files(
+            result = await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
         assert result == [path]
 
     @pytest.mark.asyncio
-    async def test_download_files_single_file_with_file_names_no_filtering(self):
+    async def test__download_files_single_file_with_file_names_no_filtering(self):
         """Test single file with file_names - MockInput allows this but single files are not filtered."""
         # This test documents that MockInput allows single file + file_names configuration
         # Real inputs (JsonInput, ParquetInput) prevent this at construction level
@@ -171,13 +171,13 @@ class TestReaderDownloadFiles:
         # MockInput allows this configuration, and single file will be found locally
         with patch("os.path.isfile", return_value=True):
             # Local single file exists and will be returned (no filtering applied)
-            result = await download_files(
+            result = await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
             assert result == ["/data/test.parquet"]
 
     @pytest.mark.asyncio
-    async def test_download_files_download_single_file_success(self):
+    async def test__download_files_download_single_file_success(self):
         """Test successful download of single file from object store."""
         path = "/data/test.parquet"
         input_instance = MockReader(path)
@@ -193,7 +193,7 @@ class TestReaderDownloadFiles:
             patch("uuid.uuid4") as mock_uuid4,
         ):
             mock_uuid4.return_value.hex = _FIXED_UUID_HEX
-            result = await download_files(
+            result = await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
@@ -208,7 +208,7 @@ class TestReaderDownloadFiles:
             assert result == [expected_destination]
 
     @pytest.mark.asyncio
-    async def test_download_files_download_directory_success(self):
+    async def test__download_files_download_directory_success(self):
         """Test successful download of directory from object store."""
         path = "/data"
         input_instance = MockReader(path)
@@ -230,7 +230,7 @@ class TestReaderDownloadFiles:
                 "application_sdk.storage.formats.utils.find_local_files_by_extension",
                 side_effect=[[], expected_files],
             ):
-                result = await download_files(
+                result = await _download_files(
                     input_instance.path, ".parquet", input_instance.file_names
                 )
 
@@ -238,7 +238,7 @@ class TestReaderDownloadFiles:
                 assert result == expected_files
 
     @pytest.mark.asyncio
-    async def test_download_files_download_specific_files_success(self):
+    async def test__download_files_download_specific_files_success(self):
         """Test successful download of specific files from object store."""
         path = "/data"
         file_names = ["file1.parquet", "file2.parquet"]
@@ -270,7 +270,7 @@ class TestReaderDownloadFiles:
             patch("uuid.uuid4") as mock_uuid4,
         ):
             mock_uuid4.return_value.hex = _FIXED_UUID_HEX
-            result = await download_files(
+            result = await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
@@ -287,7 +287,7 @@ class TestReaderDownloadFiles:
             assert result == expected_files
 
     @pytest.mark.asyncio
-    async def test_download_files_download_failure(self):
+    async def test__download_files_download_failure(self):
         """Test download failure from object store."""
         path = "/data/test.parquet"
         input_instance = MockReader(path)
@@ -303,12 +303,12 @@ class TestReaderDownloadFiles:
             ),
         ):
             with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
-                await download_files(
+                await _download_files(
                     input_instance.path, ".parquet", input_instance.file_names
                 )
 
     @pytest.mark.asyncio
-    async def test_download_files_download_success_but_no_files_found(self):
+    async def test__download_files_download_success_but_no_files_found(self):
         """Test download succeeds but no files found after download."""
         path = "/data"  # Use directory path
         input_instance = MockReader(path)
@@ -331,12 +331,12 @@ class TestReaderDownloadFiles:
         ):
             # Should raise error when no files found after download
             with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
-                await download_files(
+                await _download_files(
                     input_instance.path, ".parquet", input_instance.file_names
                 )
 
     @pytest.mark.asyncio
-    async def test_download_files_recursive_glob_pattern(self):
+    async def test__download_files_recursive_glob_pattern(self):
         """Test that recursive glob pattern is used for directory search."""
         path = "/data"
         input_instance = MockReader(path)
@@ -347,7 +347,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=True),
             patch("glob.glob", return_value=expected_files) as mock_glob,
         ):
-            result = await download_files(
+            result = await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
@@ -357,7 +357,7 @@ class TestReaderDownloadFiles:
             assert result == expected_files
 
     @pytest.mark.asyncio
-    async def test_download_files_file_extension_filtering(self):
+    async def test__download_files_file_extension_filtering(self):
         """Test that only files with correct extension are returned."""
         path = "/data"
         input_instance = MockReader(path)
@@ -368,14 +368,14 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=True),
             patch("glob.glob", return_value=expected_files),
         ):
-            result = await download_files(
+            result = await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
             assert result == expected_files
 
     @pytest.mark.asyncio
-    async def test_download_files_file_names_basename_matching(self):
+    async def test__download_files_file_names_basename_matching(self):
         """Test file_names matching works with both full path and basename."""
         path = "/data"
         file_names = ["file1.parquet"]  # Just basename
@@ -388,14 +388,14 @@ class TestReaderDownloadFiles:
             patch("os.path.isdir", return_value=True),
             patch("glob.glob", return_value=all_files),
         ):
-            result = await download_files(
+            result = await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
             assert result == expected_files
 
     @pytest.mark.asyncio
-    async def test_download_files_logging_messages(self):
+    async def test__download_files_logging_messages(self):
         """Test that appropriate logging messages are generated."""
         path = "/data/test.parquet"
         input_instance = MockReader(path)
@@ -404,7 +404,7 @@ class TestReaderDownloadFiles:
             patch("os.path.isfile", return_value=True),
             patch("application_sdk.storage.formats.utils.logger") as mock_logger,
         ):
-            await download_files(
+            await _download_files(
                 input_instance.path, ".parquet", input_instance.file_names
             )
 
@@ -416,7 +416,7 @@ class TestReaderDownloadFiles:
             )
 
     @pytest.mark.asyncio
-    async def test_download_files_logging_download_attempt(self):
+    async def test__download_files_logging_download_attempt(self):
         """Test logging when attempting download from object store."""
         path = "/data/test.parquet"
         input_instance = MockReader(path)
@@ -433,7 +433,7 @@ class TestReaderDownloadFiles:
             patch("application_sdk.storage.formats.utils.logger") as mock_logger,
         ):
             with pytest.raises(SDKIOError):
-                await download_files(
+                await _download_files(
                     input_instance.path, ".parquet", input_instance.file_names
                 )
 
@@ -451,12 +451,12 @@ class TestDownloadFilesIsolation:
 
     The bug: concurrent transform_data activities all download to
     ./local/tmp/ and overwrite each other's files. The fix uses a
-    UUID-isolated subdirectory per download_files() call.
+    UUID-isolated subdirectory per _download_files() call.
     """
 
     @pytest.mark.asyncio
     async def test_concurrent_downloads_get_isolated_directories(self):
-        """Two concurrent download_files calls must use DIFFERENT temp dirs."""
+        """Two concurrent _download_files calls must use DIFFERENT temp dirs."""
         path = "/raw/table"
 
         with (
@@ -479,8 +479,8 @@ class TestDownloadFilesIsolation:
             import asyncio
 
             results = await asyncio.gather(
-                download_files(path, ".parquet"),
-                download_files(path, ".parquet"),
+                _download_files(path, ".parquet"),
+                _download_files(path, ".parquet"),
             )
 
             assert len(results) == 2

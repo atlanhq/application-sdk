@@ -1,7 +1,6 @@
 import glob
 import os
 import uuid
-import warnings
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
@@ -89,34 +88,23 @@ def find_local_files_by_extension(
     return []
 
 
-async def download_files(
+async def _download_files(
     path: str, file_extension: str, file_names: Optional[List[str]] = None
 ) -> List[str]:
     """Download files from object store if not available locally.
 
-    .. deprecated::
-        Use :func:`application_sdk.storage.transfer.download` instead, which
-        provides SHA-256 integrity verification and skip-if-exists deduplication.
-
     Flow:
-    1. Check if files exist locally at self.path
+    1. Check if files exist locally at path
     2. If not, try to download from object store
-    3. Filter by self.file_names if provided
-    4. Return list of file paths for logging purposes
+    3. Filter by file_names if provided
+    4. Return list of local file paths
 
     Returns:
         List[str]: List of file paths
 
     Raises:
-        AttributeError: When the reader class doesn't support file operations or _extension
         IOError: When no files found locally or in object store
     """
-    warnings.warn(
-        "download_files() is deprecated. Use application_sdk.storage.transfer.download() "
-        "instead, which provides SHA-256 integrity verification and skip-if-exists deduplication.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
     # Step 1: Check if files exist locally
     local_files: List[str] = find_local_files_by_extension(
         path, file_extension, file_names

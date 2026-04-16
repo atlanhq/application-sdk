@@ -8,7 +8,7 @@ from hypothesis import HealthCheck, given, settings
 
 from application_sdk.common.types import DataframeType
 from application_sdk.storage.formats.parquet import ParquetFileReader
-from application_sdk.storage.formats.utils import download_files
+from application_sdk.storage.formats.utils import _download_files
 from application_sdk.testing.hypothesis.strategies.inputs.parquet_input import (
     parquet_input_config_strategy,
 )
@@ -60,7 +60,7 @@ async def test_not_download_file_that_exists() -> None:
             dataframe_type=DataframeType.pandas,
         )
 
-        result = await download_files(
+        result = await _download_files(
             parquet_input.path, ".parquet", parquet_input.file_names
         )
         mock_download.assert_not_called()
@@ -87,7 +87,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
             path=path, chunk_size=100000, dataframe_type=DataframeType.pandas
         )
 
-        result = await download_files(
+        result = await _download_files(
             parquet_input.path, ".parquet", parquet_input.file_names
         )
 
@@ -110,13 +110,13 @@ async def test_download_file_invoked_for_missing_files() -> None:
 
 
 @pytest.mark.asyncio
-async def test_download_files_uses_base_class() -> None:
-    """Test that ParquetFileReader uses the base class download_files method."""
+async def test__download_files_uses_base_class() -> None:
+    """Test that ParquetFileReader uses the base class _download_files method."""
     path = "/data/test.parquet"
     parquet_input = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
 
     with patch("os.path.isfile", return_value=True):
-        result = await download_files(
+        result = await _download_files(
             parquet_input.path, ".parquet", parquet_input.file_names
         )
 
@@ -196,13 +196,13 @@ async def test_read_with_mocked_pandas(monkeypatch) -> None:
     path = "/data/test.parquet"
     call_log = _install_dummy_pandas(monkeypatch)
 
-    # Mock download_files to return the path
+    # Mock _download_files to return the path
     async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return [path]  # Return the path as a list of files
 
-    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    # Mock the base Input class method since ParquetFileReader calls super()._download_files()
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -227,13 +227,13 @@ async def test_read_batches_with_mocked_pandas(monkeypatch) -> None:
     expected_chunksize = 30
     call_log = _install_dummy_pandas(monkeypatch)
 
-    # Mock download_files to return the path
+    # Mock _download_files to return the path
     async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return [path]  # Return the path as a list of files
 
-    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    # Mock the base Input class method since ParquetFileReader calls super()._download_files()
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -265,13 +265,13 @@ async def test_read_batches_with_chunk_size(monkeypatch) -> None:
     path = "/data/test.parquet"
     call_log = _install_dummy_pandas(monkeypatch)
 
-    # Mock download_files to return the path
+    # Mock _download_files to return the path
     async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return [path]  # Return the path as a list of files
 
-    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    # Mock the base Input class method since ParquetFileReader calls super()._download_files()
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -360,13 +360,13 @@ async def test_read(monkeypatch) -> None:
 
     call_log = _install_dummy_pandas(monkeypatch)
 
-    # Mock download_files to return a list of files
+    # Mock _download_files to return a list of files
     async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return [f"{path}/file1.parquet", f"{path}/file2.parquet"]
 
-    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    # Mock the base Input class method since ParquetFileReader calls super()._download_files()
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -391,7 +391,7 @@ async def test_read_with_file_names(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    # Mock download_files to return the specific files
+    # Mock _download_files to return the specific files
     async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return (
             [os.path.join(path, fn).replace(os.path.sep, "/") for fn in file_names]
@@ -399,9 +399,9 @@ async def test_read_with_file_names(monkeypatch) -> None:
             else []
         )
 
-    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    # Mock the base Input class method since ParquetFileReader calls super()._download_files()
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -430,13 +430,13 @@ async def test_read_with_input_prefix(monkeypatch) -> None:
 
     call_log = _install_dummy_pandas(monkeypatch)
 
-    # Mock download_files to return a list of files
+    # Mock _download_files to return a list of files
     async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return [f"{path}/file1.parquet", f"{path}/file2.parquet"]
 
-    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    # Mock the base Input class method since ParquetFileReader calls super()._download_files()
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -461,7 +461,7 @@ async def test_read_batches_with_file_names(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    # Mock download_files to return the specific files
+    # Mock _download_files to return the specific files
     async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return (
             [os.path.join(path, fn).replace(os.path.sep, "/") for fn in file_names]
@@ -469,9 +469,9 @@ async def test_read_batches_with_file_names(monkeypatch) -> None:
             else []
         )
 
-    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    # Mock the base Input class method since ParquetFileReader calls super()._download_files()
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -506,13 +506,13 @@ async def test_read_batches_without_file_names(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    # Mock download_files to return a list of files
+    # Mock _download_files to return a list of files
     async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return [f"{path}/file1.parquet", f"{path}/file2.parquet"]
 
-    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    # Mock the base Input class method since ParquetFileReader calls super()._download_files()
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -540,13 +540,13 @@ async def test_read_batches_no_input_prefix(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    # Mock download_files to return a list of files
+    # Mock _download_files to return a list of files
     async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return [f"{path}/file1.parquet", f"{path}/file2.parquet"]
 
-    # Mock the base Input class method since ParquetFileReader calls super().download_files()
+    # Mock the base Input class method since ParquetFileReader calls super()._download_files()
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -582,7 +582,7 @@ async def test_context_manager_calls_close(monkeypatch) -> None:
         return [path]
 
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -625,7 +625,7 @@ async def test_read_after_close_raises_error(monkeypatch) -> None:
         return [path]
 
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -681,7 +681,7 @@ async def test_cleanup_on_close_false_retains_files(monkeypatch) -> None:
         return downloaded_files
 
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -729,7 +729,7 @@ async def test_cleanup_on_close_true_cleans_files(monkeypatch) -> None:
         return downloaded_files
 
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )
@@ -775,7 +775,7 @@ async def test_downloaded_files_tracked_on_read(monkeypatch) -> None:
         return downloaded_files
 
     monkeypatch.setattr(
-        "application_sdk.storage.formats.parquet.download_files",
+        "application_sdk.storage.formats.parquet._download_files",
         dummy_download,
         raising=False,
     )

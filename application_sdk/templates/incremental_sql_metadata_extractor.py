@@ -1,4 +1,4 @@
-"""Incremental SQL metadata extraction App — v3 implementation.
+"""Incremental SQL metadata extraction App.
 
 Provides ``IncrementalSqlMetadataExtractor``, a concrete orchestrator for
 incremental metadata extraction built on top of ``SqlMetadataExtractor``.
@@ -7,16 +7,6 @@ The class provides the full incremental orchestration in ``run()`` and defines
 the typed contracts for all tasks. Connector implementers subclass this and
 implement the abstract tasks (``fetch_databases``, ``fetch_schemas``,
 ``fetch_tables``, ``transform_data``, ``build_incremental_column_sql``).
-
-Migration from v2::
-
-    # v2: IncrementalSQLMetadataExtractionActivities
-    from application_sdk.activities.metadata_extraction.incremental import (
-        IncrementalSQLMetadataExtractionActivities,
-    )
-
-    # v3: IncrementalSqlMetadataExtractor
-    from application_sdk.templates import IncrementalSqlMetadataExtractor
 
 Example subclass::
 
@@ -809,6 +799,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         conn_qn = input.connection.attributes.qualified_name
         application_name = os.getenv("ATLAN_APPLICATION_NAME", "")
 
+        # v2-compat: remove credential_guid fallback when all connectors use credential_ref.
         cred_ref = input.credential_ref
         if cred_ref is None and input.credential_guid:
             from application_sdk.credentials import legacy_credential_ref
