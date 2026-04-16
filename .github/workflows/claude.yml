@@ -1359,6 +1359,35 @@ jobs:
           gh pr edit "$PR" --remove-label "needs-human-review" 2>/dev/null || true
           gh pr edit "$PR" --remove-label "needs-rebase" 2>/dev/null || true
 
+          # Auto-resolve ALL remaining bot inline comment threads.
+          # PR is approved → all findings are either fixed or accepted.
+          # No reason to leave resolved/stale threads cluttering the
+          # Files Changed tab.
+          THREADS=$(gh api graphql -f query='
+            query($owner:String!,$name:String!,$num:Int!) {
+              repository(owner:$owner, name:$name) {
+                pullRequest(number:$num) {
+                  reviewThreads(first:100) {
+                    nodes { id isResolved
+                      comments(first:1) {
+                        nodes { author{login} }
+                      }
+                    }
+                  }
+                }
+              }
+            }' -F owner=atlanhq -F name=application-sdk -F num="$PR" \
+            --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | select(.comments.nodes[0].author.login == "claude[bot]" or .comments.nodes[0].author.login == "github-actions[bot]") | .id' 2>/dev/null || echo "")
+
+          for thread_id in $THREADS; do
+            gh api graphql -f query='
+              mutation($id:ID!) {
+                resolveReviewThread(input:{threadId:$id}) {
+                  thread { id isResolved }
+                }
+              }' -F id="$thread_id" 2>/dev/null || true
+          done
+
           # Final status on the (possibly updated) HEAD SHA
           NEW_SHA=$(gh pr view "$PR" --json headRefOid -q .headRefOid)
           gh api "repos/${REPO}/statuses/${NEW_SHA}" \
@@ -1627,11 +1656,14 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      id-token: write
     timeout-minutes: 5
     concurrency:
       group: sdk-review-qa-${{ github.event.comment.id }}
       cancel-in-progress: false
     steps:
+      # Parent-check + 👀 ack run BEFORE checkout/VPN so the user
+      # sees a reaction within seconds, not after 30-60s VPN.
       - name: Check if parent comment is from the bot
         id: parent_check
         env:
@@ -1639,12 +1671,8 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PARENT_ID: ${{ github.event.comment.in_reply_to_id }}
+          COMMENT_ID: ${{ github.event.comment.id }}
         run: |
-          # Fetch the parent comment. The in_reply_to_id might refer to
-          # either a PR review comment or an issue comment. GitHub's
-          # API for fetching a SINGLE PR review comment by ID is:
-          #   GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
-          # (NOT /pulls/{pull_number}/comments/{id} — that's a list endpoint).
           PARENT_AUTHOR="unknown"
           RESULT=$(gh api "repos/${REPO}/pulls/comments/${PARENT_ID}" 2>/dev/null) || \
           RESULT=$(gh api "repos/${REPO}/issues/comments/${PARENT_ID}" 2>/dev/null) || \
@@ -1657,6 +1685,9 @@ jobs:
           echo "parent_author=$PARENT_AUTHOR" >> "$GITHUB_OUTPUT"
           if [ "$PARENT_AUTHOR" = "github-actions[bot]" ] || [ "$PARENT_AUTHOR" = "claude[bot]" ]; then
             echo "is_bot_parent=true" >> "$GITHUB_OUTPUT"
+            # 👀 ack immediately — before VPN
+            gh api "repos/${REPO}/pulls/comments/${COMMENT_ID}/reactions" \
+              -f content=eyes 2>/dev/null || true
           else
             echo "is_bot_parent=false" >> "$GITHUB_OUTPUT"
           fi
@@ -1674,16 +1705,6 @@ jobs:
           portal-url: vpn2.atlan.app
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
-
-      - name: React with 👀 (ack that Q is being answered)
-        if: steps.parent_check.outputs.is_bot_parent == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          COMMENT_ID: ${{ github.event.comment.id }}
-        run: |
-          gh api "repos/${REPO}/pulls/comments/${COMMENT_ID}/reactions" \
-            -f content=eyes 2>/dev/null || true
 
       - name: Answer the question (lightweight Claude session)
         if: steps.parent_check.outputs.is_bot_parent == 'true'
