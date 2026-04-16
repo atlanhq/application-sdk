@@ -921,7 +921,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --per-page 100 \
+          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" \
             | jq -r '[.[] | select(.body | contains("SDK_REVIEW_V2"))
               | select(.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
               | select(.body | contains("SDK_REVIEW_V2_RECONCILED") | not)] | last | .body // ""')
