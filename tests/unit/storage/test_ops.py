@@ -13,7 +13,6 @@ from application_sdk.storage.errors import StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import (
     _get_bytes,
-    _get_content,
     _put,
     delete,
     download_file,
@@ -46,12 +45,6 @@ class TestPutAndGet:
         await _put("empty", b"", store)
         result = await _get_bytes("empty", store)
         assert result == b""
-
-    async def test_get_content_alias(self, store) -> None:
-        """_get_content is the v2-compatible alias for _get_bytes."""
-        await _put("alias.txt", b"v2compat", store)
-        result = await _get_content("alias.txt", store)
-        assert result == b"v2compat"
 
 
 class TestDelete:

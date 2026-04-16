@@ -121,6 +121,7 @@ def _pairs_to_flat(pairs: list[dict[str, str]]) -> dict[str, Any]:
     return flat
 
 
+# v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
 def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize v2 credential formats to v3 list[{key, value}] format.
 

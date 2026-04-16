@@ -17,12 +17,6 @@ from application_sdk.execution._temporal.interceptors.activity_failure_logging i
 )
 from application_sdk.observability.context import correlation_context
 
-# backwards-compat aliases used in assertions below
-ActivityFailureLoggingInterceptor = TaskFailureLoggingInterceptor
-ActivityFailureLoggingActivityInboundInterceptor = (
-    _TaskFailureLoggingActivityInboundInterceptor
-)
-
 
 @dataclass
 class MockExecuteActivityInput:
@@ -49,8 +43,8 @@ class MockActivityInfo:
     heartbeat_timeout: timedelta | None = timedelta(seconds=30)
 
 
-class TestActivityFailureLoggingActivityInboundInterceptor:
-    """Tests for ActivityFailureLoggingActivityInboundInterceptor."""
+class Test_TaskFailureLoggingActivityInboundInterceptor:
+    """Tests for _TaskFailureLoggingActivityInboundInterceptor."""
 
     @pytest.fixture
     def mock_next_activity(self):
@@ -62,7 +56,7 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
     @pytest.fixture
     def interceptor(self, mock_next_activity):
         """Create the interceptor instance."""
-        return ActivityFailureLoggingActivityInboundInterceptor(mock_next_activity)
+        return _TaskFailureLoggingActivityInboundInterceptor(mock_next_activity)
 
     @pytest.fixture
     def mock_activity_info(self):
@@ -309,13 +303,13 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
                 mock_logger.warning.assert_called()
 
 
-class TestActivityFailureLoggingInterceptor:
-    """Tests for the main ActivityFailureLoggingInterceptor class."""
+class TestTaskFailureLoggingInterceptor:
+    """Tests for the main TaskFailureLoggingInterceptor class."""
 
     @pytest.fixture
     def interceptor(self):
         """Create the main interceptor instance."""
-        return ActivityFailureLoggingInterceptor()
+        return TaskFailureLoggingInterceptor()
 
     def test_workflow_interceptor_class_returns_none(self, interceptor):
         """Test that workflow_interceptor_class returns None (activity-only)."""
@@ -331,7 +325,7 @@ class TestActivityFailureLoggingInterceptor:
 
         result = interceptor.intercept_activity(mock_next)
 
-        assert isinstance(result, ActivityFailureLoggingActivityInboundInterceptor)
+        assert isinstance(result, _TaskFailureLoggingActivityInboundInterceptor)
 
 
 class TestCollectTemporalContext:
@@ -346,7 +340,7 @@ class TestCollectTemporalContext:
     @pytest.fixture
     def interceptor(self, mock_next_activity):
         """Create the interceptor instance."""
-        return ActivityFailureLoggingActivityInboundInterceptor(mock_next_activity)
+        return _TaskFailureLoggingActivityInboundInterceptor(mock_next_activity)
 
     def test_collects_all_temporal_attributes(self, interceptor):
         """Test that all Temporal attributes are collected correctly."""

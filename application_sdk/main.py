@@ -183,6 +183,7 @@ class AppConfig:
             or _derive_service_name(app_module)
         )
 
+        # v2-compat: remove when all deployments use ATLAN_TEMPORAL_HOST instead.
         # v2 fallback: combine ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT into host:port
         _v2_workflow_host = _env("ATLAN_WORKFLOW_HOST")
         _v2_temporal_host = (

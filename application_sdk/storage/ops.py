@@ -19,21 +19,11 @@ Internal helpers (small payloads)
 ----------------------------------
 * ``_put(key, data)``    — write bytes (sidecars, metadata, JSON configs)
 * ``_get_bytes(key)``    — read bytes (sidecars, metadata, JSON configs)
-* ``_get_content(key)``  — v2-compatible alias for ``_get_bytes``
 
 Streaming API (large files)
 ----------------------------
 * ``upload_file(key, local_path)``   — streaming upload with adaptive multipart
 * ``download_file(key, local_path)`` — streaming download with optional hash
-
-Migration from v2
------------------
-* ``objectstore.get_content(key)``  →  ``upload_file`` / ``download_file``
-* ``objectstore.upload_bytes(key, data)``  →  ``_put(key, data)`` (internal)
-* ``objectstore.delete(key)``  →  ``delete(key)``
-* ``objectstore.exists(key)``  →  ``exists(key)``
-* ``objectstore.list_keys(prefix)``  →  ``list_keys(prefix)``
-* ``objectstore.delete_prefix(prefix)``  →  ``delete_prefix(prefix)``
 
 All calls that previously went through the implicit singleton store now
 resolve from the infrastructure context automatically.  Pass ``store=my_store``
@@ -351,10 +341,6 @@ async def _get_bytes(
         raise StorageError(f"Failed to get key '{key}'", key=key, cause=exc) from exc
 
 
-#: v2-compatible alias for :func:`_get_bytes` — internal use only.
-_get_content = _get_bytes
-
-
 async def _put(
     key: str,
     data: bytes,
@@ -473,7 +459,3 @@ async def exists(
         raise StorageError(
             f"Failed to check existence of key '{key}'", key=key, cause=exc
         ) from exc
-
-
-#: v2-compatible alias for :func:`delete`.
-delete_file = delete
