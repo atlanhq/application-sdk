@@ -18,6 +18,7 @@ both follow this — the data source is always the first positional argument.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -31,6 +32,8 @@ from application_sdk.storage.ops import (
     normalize_key,
     upload_file,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -131,14 +134,21 @@ async def delete_prefix(
             return await delete(k, resolved, normalize=False)
 
     results = await asyncio.gather(*[_del(k) for k in keys], return_exceptions=True)
-    errors = [r for r in results if isinstance(r, Exception)]
+    deleted = 0
+    errors = []
+    for i, r in enumerate(results):
+        if isinstance(r, Exception):
+            errors.append((keys[i], r))
+        elif r is True:
+            deleted += 1
     if errors:
         from application_sdk.storage.errors import StorageError
 
+        logger.warning("delete_prefix: %d/%d deletes failed", len(errors), len(keys))
         raise StorageError(
             f"{len(errors)} delete(s) failed under prefix '{prefix}'"
-        ) from errors[0]
-    return sum(1 for r in results if r is True)
+        ) from errors[0][1]
+    return deleted
 
 
 async def download_prefix(
