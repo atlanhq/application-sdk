@@ -49,4 +49,4 @@ async def test_create_temporal_client_passes_runtime(mock_connect, _reset_single
     mock_connect.assert_called_once()
     call_kwargs = mock_connect.call_args[1]
     assert "runtime" in call_kwargs
-    assert isinstance(call_kwargs["runtime"], Runtime)
+    assert call_kwargs["runtime"] is backend_module._prometheus_runtime

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 _prometheus_runtime: Runtime | None = None
+_prometheus_lock = threading.Lock()
 
 
 def _get_prometheus_runtime() -> Runtime:
@@ -28,12 +30,19 @@ def _get_prometheus_runtime() -> Runtime:
     is called more than once (e.g., after a reconnect or in tests).
     """
     global _prometheus_runtime
-    if _prometheus_runtime is None:
-        _prometheus_runtime = Runtime(
-            telemetry=TelemetryConfig(
-                metrics=PrometheusConfig(bind_address=TEMPORAL_PROMETHEUS_BIND_ADDRESS)
+    with _prometheus_lock:
+        if _prometheus_runtime is None:
+            _prometheus_runtime = Runtime(
+                telemetry=TelemetryConfig(
+                    metrics=PrometheusConfig(
+                        bind_address=TEMPORAL_PROMETHEUS_BIND_ADDRESS
+                    )
+                )
             )
-        )
+            logger.info(
+                "Temporal Prometheus metrics enabled on %s",
+                TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+            )
     return _prometheus_runtime
 
 
@@ -317,9 +326,6 @@ async def create_temporal_client(
 
     # Configure Temporal runtime with Prometheus metrics (process-level singleton)
     kwargs["runtime"] = _get_prometheus_runtime()
-    logger.info(
-        "Temporal Prometheus metrics enabled on %s", TEMPORAL_PROMETHEUS_BIND_ADDRESS
-    )
 
     last_exc: Exception | None = None
     delay = connect_retry_delay_seconds
