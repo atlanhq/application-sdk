@@ -3,8 +3,6 @@ name: Claude Code
 on:
   issue_comment:
     types: [created]
-  pull_request_review_comment:
-    types: [created]
   pull_request:
     types: [synchronize]
     branches:
@@ -531,38 +529,38 @@ jobs:
 
             ## Setup
 
-            The triggering commenter's GitHub login is in the environment
-            variable SDK_REVIEW_COMMENTER. This is the actual human who
-            posted "@sdk-review ..." (extracted from the issue_comment
-            event payload — NOT the last comment on the PR, which is
-            the bot's acknowledgment).
+            The triggering commenter's GitHub login is: ${{ steps.pr.outputs.commenter }}
+            This is the actual human who posted "@sdk-review ..."
+            (extracted from the issue_comment event payload — NOT the
+            last comment on the PR, which is the bot's acknowledgment).
 
-            The environment variable SDK_REVIEW_VERB is either
-            "Review" (first time this PR is being reviewed) or
-            "Re-review" (there's a prior SDK_REVIEW_V2 comment on this
-            PR from an earlier run). Use this verb in every heading /
-            summary you post — NEVER hard-code "SDK Review:".
+            The review verb is: ${{ steps.ack.outputs.verb }}
+            This is either "Review" (first time) or "Re-review" (prior
+            SDK_REVIEW_V2 comment exists). Use this exact verb in every
+            heading / summary you post — NEVER hard-code "SDK Review:".
+
+            The review complexity is: ${{ steps.pr.outputs.complexity }}
+            This is either "tests-only" or "standard".
 
             ## Review Process
 
             If the mode is "override":
             1. Check if the commenter is a repo admin:
-               gh api repos/${{ github.repository }}/collaborators/"$SDK_REVIEW_COMMENTER"/permission --jq .permission
+               gh api repos/${{ github.repository }}/collaborators/"${{ steps.pr.outputs.commenter }}"/permission --jq .permission
             2. Extract the override reason from the triggering comment body
                (everything after "@sdk-review override:"). Fall back to
                "no reason provided" if empty.
             3. If "admin" → post a PR comment with the EXACT format below
                (keep the SDK_REVIEW_V2 marker + the `### Verdict:` line —
-               downstream steps parse both). Substitute $SDK_REVIEW_VERB
-               into the heading (usually "Review", or "Re-review" if
-               a prior SDK_REVIEW_V2 comment exists):
+               downstream steps parse both). Use the verb "${{ steps.ack.outputs.verb }}"
+               in the heading:
 
                <!-- SDK_REVIEW_V2 -->
-               ## SDK $SDK_REVIEW_VERB: PR #<num> — <title>
+               ## SDK ${{ steps.ack.outputs.verb }}: PR #<num> — <title>
 
                ### Verdict: READY TO MERGE
 
-               > ⚠️ **Admin override** by @<SDK_REVIEW_COMMENTER>.
+               > ⚠️ **Admin override** by @${{ steps.pr.outputs.commenter }}.
                > **Reason:** <reason>
                >
                > This PR is being approved via admin override,
@@ -608,7 +606,7 @@ jobs:
                  Explain what changed your assessment.
 
             6. Post a new SDK_REVIEW_V2 comment with this format (use
-               \$SDK_REVIEW_VERB = "Re-review" since challenge implies
+               the verb = "Re-review" since challenge implies
                prior review exists):
 
                <!-- SDK_REVIEW_V2 -->
@@ -667,7 +665,7 @@ jobs:
             ## Orchestrator setup
 
             You are the ORCHESTRATOR. Do NOT review the PR yourself.
-            The env var SDK_REVIEW_COMPLEXITY is either "tests-only"
+            The complexity (provided in Setup above) is either "tests-only"
             or "standard". Use it to decide how many subagents:
 
             - "tests-only" → dispatch ONLY Agent B (QUALITY/TEST).
@@ -752,8 +750,8 @@ jobs:
             subagent auth issue ever resurfaces.
 
             6. Post a summary comment to the PR using `gh pr comment`.
-               Use $SDK_REVIEW_VERB (Review / Re-review) in the heading.
-               When $SDK_REVIEW_VERB is "Re-review", include a short
+               Use the verb "${{ steps.ack.outputs.verb }}" in the heading.
+               When the verb is "Re-review", include a short
                delta note in the summary line — did the latest changes
                resolve prior findings, introduce new ones, or neither?
                Look at the most recent prior SDK_REVIEW_V2 comment on
@@ -762,7 +760,7 @@ jobs:
                Format:
 
                <!-- SDK_REVIEW_V2 -->
-               ## SDK $SDK_REVIEW_VERB: PR #<num> — <title>
+               ## SDK ${{ steps.ack.outputs.verb }}: PR #<num> — <title>
 
                ### Verdict: READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW
 
@@ -771,7 +769,7 @@ jobs:
                > new issues were introduced by the latest changes>
 
                ### Delta from prior review
-               (INCLUDE THIS SECTION ONLY IF $SDK_REVIEW_VERB == "Re-review".
+               (INCLUDE THIS SECTION ONLY IF the verb is "Re-review".
                 For each finding in the prior SDK_REVIEW_V2 comment, emit
                 one bullet with one of the four markers. If no changes
                 for a category, write "- None".)
@@ -806,7 +804,7 @@ jobs:
 
             7b. AUTO-RESOLVE previously-flagged findings that are now fixed.
 
-                On a re-review (SDK_REVIEW_VERB=Re-review), fetch prior
+                On a re-review (when verb is "Re-review"), fetch prior
                 inline review threads authored by github-actions[bot]:
 
                   gh api graphql -f query='
@@ -886,15 +884,6 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
           GH_TOKEN: ${{ github.token }}
-          # Pass triggering commenter to Claude via env (not prompt interpolation)
-          # so override checks authenticate the real human, not comments[-1]
-          # (which is now the bot's acknowledgment).
-          SDK_REVIEW_COMMENTER: ${{ steps.pr.outputs.commenter }}
-          # "Review" or "Re-review" — computed in Acknowledge trigger.
-          # Claude must use this exact verb in the SDK_REVIEW_V2 comment
-          # heading and summary for consistent messaging across UI.
-          SDK_REVIEW_VERB: ${{ steps.ack.outputs.verb }}
-          SDK_REVIEW_COMPLEXITY: ${{ steps.pr.outputs.complexity }}
 
       # Adversarial review (Wave 2 — GPT-5.3-codex via LiteLLM).
       # Second cross-model opinion. Posts a separate comment with
@@ -1630,137 +1619,11 @@ jobs:
               "🛑 **Stop acknowledged.** No running SDK Review runs were found, but the \`sdk-review-stopped\` label has been set so any queued iteration will skip. Comment \`@sdk-review\` to start a fresh review."
           fi
 
-  # ── @sdk-review inline Q&A handler ──────────────────────────
-  # Lightweight responder: when a collaborator replies to a
-  # bot-posted inline review comment with a question, this job
-  # spawns a small Claude session that reads the original finding
-  # + the author's question + the file around that line, and
-  # posts a reply in the same thread.
+  # ── @sdk-review inline Q&A handler (DEFERRED) ──────────────
+  # Removed for now. Will be re-added once the core review
+  # pipeline is fully stable. For inline Q&A, use
+  # `@sdk-review challenge: <reason>` instead.
   #
-  # Not full re-review. Just Q&A on a single finding. If the
-  # author wants the bot to formally re-evaluate the finding
-  # (withdraw / stand by / soften), they should use
-  # `@sdk-review challenge: <reason>` on the PR instead.
-  #
-  # Gate: only fires when the PARENT comment is from
-  # github-actions[bot] and the replier is OWNER/MEMBER/COLLABORATOR.
-  sdk-review-inline-qa:
-    if: |
-      github.event_name == 'pull_request_review_comment' &&
-      github.event.action == 'created' &&
-      github.event.comment.in_reply_to_id != null &&
-      github.event.comment.user.login != 'github-actions[bot]' &&
-      (github.event.comment.author_association == 'OWNER' ||
-       github.event.comment.author_association == 'MEMBER' ||
-       github.event.comment.author_association == 'COLLABORATOR')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      id-token: write
-    timeout-minutes: 5
-    concurrency:
-      group: sdk-review-qa-${{ github.event.comment.id }}
-      cancel-in-progress: false
-    steps:
-      # Parent-check + 👀 ack run BEFORE checkout/VPN so the user
-      # sees a reaction within seconds, not after 30-60s VPN.
-      - name: Check if parent comment is from the bot
-        id: parent_check
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PARENT_ID: ${{ github.event.comment.in_reply_to_id }}
-          COMMENT_ID: ${{ github.event.comment.id }}
-        run: |
-          PARENT_AUTHOR="unknown"
-          RESULT=$(gh api "repos/${REPO}/pulls/comments/${PARENT_ID}" 2>/dev/null) || \
-          RESULT=$(gh api "repos/${REPO}/issues/comments/${PARENT_ID}" 2>/dev/null) || \
-          RESULT=""
-
-          if [ -n "$RESULT" ]; then
-            PARENT_AUTHOR=$(printf '%s' "$RESULT" | jq -r '.user.login // "unknown"')
-          fi
-
-          echo "parent_author=$PARENT_AUTHOR" >> "$GITHUB_OUTPUT"
-          if [ "$PARENT_AUTHOR" = "github-actions[bot]" ] || [ "$PARENT_AUTHOR" = "claude[bot]" ]; then
-            echo "is_bot_parent=true" >> "$GITHUB_OUTPUT"
-            # 👀 ack immediately — before VPN
-            gh api "repos/${REPO}/pulls/comments/${COMMENT_ID}/reactions" \
-              -f content=eyes 2>/dev/null || true
-          else
-            echo "is_bot_parent=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: actions/checkout@v4
-        if: steps.parent_check.outputs.is_bot_parent == 'true'
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Connect to VPN
-        if: steps.parent_check.outputs.is_bot_parent == 'true'
-        uses: ./.github/actions/globalprotect-connect
-        with:
-          portal-url: vpn2.atlan.app
-          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
-          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
-
-      - name: Answer the question (lightweight Claude session)
-        if: steps.parent_check.outputs.is_bot_parent == 'true'
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
-          show_full_output: true
-          prompt: |
-            An author replied to one of your prior SDK review inline
-            comments with a question. Answer it briefly.
-
-            ## Context
-
-            Repository: ${{ github.repository }}
-            PR number: ${{ github.event.pull_request.number }}
-            Parent (bot) review comment id: ${{ github.event.comment.in_reply_to_id }}
-            Reply comment id: ${{ github.event.comment.id }}
-
-            ## Your task
-
-            1. Fetch the parent (bot's original finding):
-               gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/${{ github.event.comment.in_reply_to_id }}
-               Extract its body, path, line.
-
-            2. Fetch the author's reply body:
-               gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/${{ github.event.comment.id }}
-
-            3. Read the file at the reported path around the reported
-               line (use Read tool with offset/limit).
-
-            4. Compose a short, direct answer to the author's question:
-               - If they're asking "what is this?" or "please explain" →
-                 give a one-paragraph explanation of WHY it's a problem
-                 with a concrete example (e.g. for f-string in logger:
-                 "If DEBUG level is off, the f-string still formats
-                 every call → wasted CPU. %-style defers formatting.")
-               - If they're arguing the finding is wrong → DO NOT
-                 withdraw here. Instead say: "If you believe this is
-                 wrong, comment `@sdk-review challenge: <your reason>`
-                 on the PR and I'll formally re-evaluate."
-               - If they're asking "how to fix" → give the exact
-                 replacement code.
-
-            5. Post the answer as a reply in the SAME thread:
-               gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments \
-                 -f body="<your answer>" \
-                 -f in_reply_to="${{ github.event.comment.in_reply_to_id }}"
-
-            Keep the answer ≤ 150 words. Plain text, no headers.
-            Start with the direct answer, not a preamble.
-          claude_args: |
-            --model claude-opus-4-6
-            --allowedTools "Read,Glob,Grep,Bash(gh api:*),Bash(cat:*),Bash(jq:*)"
-        env:
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
-          GH_TOKEN: ${{ github.token }}
+  # To re-enable later, add back:
+  #   - pull_request_review_comment trigger in on: block
+  #   - full sdk-review-inline-qa job definition (see git history)
