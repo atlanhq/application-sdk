@@ -232,3 +232,46 @@ class TestCloudStoreOps:
         assert len(files) == 1
         # Verify the downloaded file is inside output dir
         assert files[0].resolve().is_relative_to(out.resolve())
+
+    async def test_upload_dir_roundtrip(self, tmp_path):
+        store = self._make_store(tmp_path)
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.txt").write_text("aaa")
+        sub = src / "sub"
+        sub.mkdir()
+        (sub / "b.txt").write_text("bbb")
+        # Create symlink — should be skipped
+        (src / "link.txt").symlink_to(src / "a.txt")
+
+        keys = await store.upload_dir(src, prefix="up")
+        assert len(keys) == 2  # symlink skipped
+        assert any("a.txt" in k for k in keys)
+        assert any("b.txt" in k for k in keys)
+
+    async def test_download_key_and_prefix_mutual_exclusion(self, tmp_path):
+        store = self._make_store(tmp_path)
+        with pytest.raises(StorageConfigError, match="not both"):
+            await store.download(
+                key="file.txt", prefix="dir/", output_dir=tmp_path / "out"
+            )
+
+    async def test_suffix_filter_case_insensitive(self, tmp_path):
+        """Suffix filter matches regardless of case (.JSON matches .json filter)."""
+        store = self._make_store(tmp_path)
+        await store.upload_bytes("data/upper.JSON", b"upper")
+        await store.upload_bytes("data/lower.json", b"lower")
+        await store.upload_bytes("data/skip.txt", b"skip")
+
+        keys = await store.list(prefix="data", suffix=".json")
+        assert len(keys) == 2  # both .JSON and .json matched
+        assert all(".json" in k.lower() for k in keys)
+
+    async def test_invalid_extra_json_raises(self, tmp_path):
+        with pytest.raises(StorageConfigError, match="Invalid JSON"):
+            CloudStore.from_credentials(
+                {
+                    "authType": "s3",
+                    "extra": "not-valid-json{{{",
+                }
+            )

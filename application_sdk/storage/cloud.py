@@ -56,7 +56,7 @@ from application_sdk.storage.errors import (
     StorageNotFoundError,
 )
 
-# TODO(BLDX-966): Cannot use get_logger due to circular import
+# Cannot use get_logger due to circular import
 # (observability -> storage -> cloud -> observability). Resolve when
 # observability module decouples from storage.
 logger = logging.getLogger(__name__)
@@ -104,9 +104,18 @@ class CloudStore:
             StorageConfigError: If auth type cannot be determined or required
                 fields are missing.
         """
-        extra = credentials.get("extra") or credentials.get("extras") or {}
+        extra = credentials.get("extra")
+        if extra is None:
+            extra = credentials.get("extras")
+        if extra is None:
+            extra = {}
         if isinstance(extra, str):
-            extra = json.loads(extra) if extra else {}
+            try:
+                extra = json.loads(extra) if extra else {}
+            except json.JSONDecodeError as exc:
+                raise StorageConfigError(
+                    f"Invalid JSON in 'extra' field: {exc}"
+                ) from exc
 
         auth_type = (
             credentials.get("authType")
@@ -148,14 +157,15 @@ class CloudStore:
         try:
             result = await obs.get_async(self._store, key)
             return bytes(await result.bytes_async())
+        except FileNotFoundError as exc:
+            raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
         except Exception as exc:
-            # Check for obstore's NotFoundError first, then fall back to string matching
-            exc_type = type(exc).__name__
-            if exc_type == "NotFoundError" or (
-                "not found" in str(exc).lower() or "404" in str(exc)
-            ):
+            # obstore backends raise different exception types for not-found:
+            # - LocalStore: FileNotFoundError (caught above)
+            # - S3/GCS/Azure: obstore.exceptions.NotFoundError
+            if type(exc).__name__ == "NotFoundError":
                 raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
-            raise
+            raise StorageError(f"Failed to get key: {key}", cause=exc) from exc
 
     async def download(
         self,
@@ -185,6 +195,9 @@ class CloudStore:
         Raises:
             StorageError: If no files found under the prefix.
         """
+        if key and prefix:
+            raise StorageConfigError("Provide either 'key' or 'prefix', not both.")
+
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
 
@@ -252,13 +265,17 @@ class CloudStore:
         self, list_prefix: str, suffix_filter: set[str] | None = None
     ) -> list[str]:
         """Synchronous key listing helper (run via asyncio.to_thread)."""
+        # Normalize suffix filter to lowercase for case-insensitive matching
+        normalized_filter = (
+            {s.lower() for s in suffix_filter} if suffix_filter else None
+        )
         keys: list[str] = []
         for batch in obs.list(self._store, prefix=list_prefix or None):
             for item in batch:
                 obj_path = str(item["path"])
-                if suffix_filter:
+                if normalized_filter:
                     ext = Path(obj_path).suffix.lower()
-                    if ext not in suffix_filter:
+                    if ext not in normalized_filter:
                         continue
                 keys.append(obj_path)
         return sorted(keys)
@@ -400,7 +417,7 @@ def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStor
     if role_arn:
         config["aws_role_arn"] = role_arn
         config["aws_role_session_name"] = "cloud-store-session"
-        logger.info("S3 role-based auth role_arn=%s", role_arn)
+        logger.debug("S3 role-based auth configured")
 
     return S3Store(bucket=bucket, config=config)
 
