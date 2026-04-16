@@ -625,7 +625,7 @@ activities or tacked on as a final workflow step.
 
 #### on_complete
 
-`on_complete(success: bool)` is called after `run()` finishes, whether it succeeded or raised
+`on_complete()` is called after `run()` finishes, whether it succeeded or raised
 an exception. v2 had no equivalent — cleanup was either a final activity or omitted entirely.
 
 ```python
@@ -633,9 +633,7 @@ class MyConnector(App):
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
         ...
 
-    async def on_complete(self, success: bool) -> None:
-        if success:
-            await self.notify_downstream()
+    async def on_complete(self) -> None:
         await self.cleanup_files()    # remove local temp files tracked via FileReference
         await self.cleanup_storage()  # remove object store artifacts from this run
 ```

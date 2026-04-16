@@ -116,5 +116,4 @@ After successfully running your first application, explore these resources to le
 
 - Explore our [SQL Application Guide](./sql-application-guide.md) for building data applications
 - Learn about our [Architecture](./architecture.md)
-- Review our [Best Practices](./best-practices.md)
-- Check out our [Test Framework](./test-framework.md) for testing your applications
+- Review our [Best Practices](./best-practices.md) for coding patterns and testing
