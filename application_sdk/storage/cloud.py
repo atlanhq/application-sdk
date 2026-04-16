@@ -7,6 +7,11 @@ This is distinct from the tenant's own Dapr-configured store (``storage.ops``).
 Use ``CloudStore`` when an app needs to access a customer's cloud bucket
 using credentials they provide (e.g., cloud-sourced spec files, data imports).
 
+Note: File I/O (read_bytes/write_bytes) is synchronous within async methods.
+This is acceptable for typical use cases (spec files, config files) but not
+suitable for multi-GB payloads. For large file streaming, use the underlying
+``store`` property with obstore's streaming APIs directly.
+
 Usage::
 
     from application_sdk.storage.cloud import CloudStore
@@ -43,12 +48,17 @@ from pathlib import Path
 from typing import Any
 
 import obstore as obs
-from obstore.store import ObjectStore
+from obstore.store import AzureStore, GCSStore, ObjectStore, S3Store
 
-from application_sdk.storage.errors import StorageError, StorageNotFoundError
+from application_sdk.storage.errors import (
+    StorageConfigError,
+    StorageError,
+    StorageNotFoundError,
+)
 
-# stdlib logger: cannot use get_logger here due to circular import
-# (observability -> storage -> cloud -> observability)
+# TODO(BLDX-966): Cannot use get_logger due to circular import
+# (observability -> storage -> cloud -> observability). Resolve when
+# observability module decouples from storage.
 logger = logging.getLogger(__name__)
 
 
@@ -91,7 +101,7 @@ class CloudStore:
             Configured CloudStore instance.
 
         Raises:
-            ValueError: If auth type cannot be determined or required
+            StorageConfigError: If auth type cannot be determined or required
                 fields are missing.
         """
         extra = credentials.get("extra") or credentials.get("extras") or {}
@@ -111,12 +121,12 @@ class CloudStore:
         elif auth_type == "adls":
             store = _create_azure_store(credentials, extra)
         else:
-            raise ValueError(
+            raise StorageConfigError(
                 f"Cannot determine cloud provider from credentials. "
                 f"Set 'authType' to 's3', 'gcs', or 'adls'. Got: {auth_type!r}"
             )
 
-        logger.info("Created CloudStore provider=%s", auth_type)
+        logger.debug("Created CloudStore provider=%s", auth_type)
         return cls(store, provider=auth_type)
 
     # ------------------------------------------------------------------
@@ -139,7 +149,11 @@ class CloudStore:
             result = await obs.get_async(self._store, key)
             return bytes(await result.bytes_async())
         except Exception as exc:
-            if "not found" in str(exc).lower() or "404" in str(exc):
+            # Check for obstore's NotFoundError first, then fall back to string matching
+            exc_type = type(exc).__name__
+            if exc_type == "NotFoundError" or (
+                "not found" in str(exc).lower() or "404" in str(exc)
+            ):
                 raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
             raise
 
@@ -367,12 +381,9 @@ def _infer_auth_type(extra: dict[str, Any]) -> str:
 
 def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
     """Create an S3 store from credentials."""
-    # Lazy import: only load provider SDK when needed
-    from obstore.store import S3Store
-
     bucket = extra.get("s3_bucket", "")
     if not bucket:
-        raise ValueError("S3 bucket is required (extra.s3_bucket)")
+        raise StorageConfigError("S3 bucket is required (extra.s3_bucket)")
 
     config: dict[str, str] = {}
     region = extra.get("region", "")
@@ -396,12 +407,9 @@ def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStor
 
 def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
     """Create a GCS store from credentials."""
-    # Lazy import: only load provider SDK when needed
-    from obstore.store import GCSStore
-
     bucket = extra.get("gcs_bucket", "")
     if not bucket:
-        raise ValueError("GCS bucket is required (extra.gcs_bucket)")
+        raise StorageConfigError("GCS bucket is required (extra.gcs_bucket)")
 
     gcs_config: dict[str, str] = {}
     sa_json = creds.get("password") or ""
@@ -413,13 +421,10 @@ def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectSto
 
 def _create_azure_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
     """Create an Azure (ADLS) store from credentials."""
-    # Lazy import: only load provider SDK when needed
-    from obstore.store import AzureStore
-
     storage_account = extra.get("storage_account_name", "")
     container = extra.get("adls_container", "objectstore")
     if not storage_account:
-        raise ValueError(
+        raise StorageConfigError(
             "Azure storage account is required (extra.storage_account_name)"
         )
 

@@ -10,6 +10,7 @@ import pytest
 from obstore.store import LocalStore
 
 from application_sdk.storage.cloud import CloudStore
+from application_sdk.storage.errors import StorageError, StorageNotFoundError
 
 
 @pytest.fixture
@@ -42,13 +43,11 @@ class TestCloudStoreIntegration:
         assert data == b"hello world"
 
     async def test_upload_file_and_download(self, cloud_store, tmp_path):
-        # Upload
         src = tmp_path / "upload.json"
         src.write_text('{"uploaded": true}')
         size = await cloud_store.upload(src, "data/upload.json")
         assert size > 0
 
-        # Download single file
         dest = tmp_path / "downloaded"
         files = await cloud_store.download(key="data/upload.json", output_dir=dest)
         assert len(files) == 1
@@ -57,15 +56,12 @@ class TestCloudStoreIntegration:
     async def test_upload_dir_and_download_prefix(
         self, cloud_store, sample_files, tmp_path
     ):
-        # Upload directory
         keys = await cloud_store.upload_dir(sample_files, prefix="import")
         assert len(keys) == 3
 
-        # List
         all_keys = await cloud_store.list(prefix="import")
         assert len(all_keys) == 3
 
-        # Download prefix
         dest = tmp_path / "downloaded"
         files = await cloud_store.download(prefix="import", output_dir=dest)
         assert len(files) == 3
@@ -74,7 +70,7 @@ class TestCloudStoreIntegration:
         await cloud_store.upload_dir(sample_files, prefix="mixed")
 
         json_keys = await cloud_store.list(prefix="mixed", suffix=".json")
-        assert len(json_keys) == 2  # file1.json + subdir/nested.json
+        assert len(json_keys) == 2
         assert all(k.endswith(".json") for k in json_keys)
 
         yaml_keys = await cloud_store.list(prefix="mixed", suffix=".yaml")
@@ -91,17 +87,13 @@ class TestCloudStoreIntegration:
             output_dir=dest,
             suffix_filter={".json"},
         )
-        assert len(files) == 2  # only .json files
+        assert len(files) == 2
 
     async def test_get_bytes_not_found(self, cloud_store):
-        from application_sdk.storage.errors import StorageNotFoundError
-
         with pytest.raises(StorageNotFoundError):
             await cloud_store.get_bytes("nonexistent/key.txt")
 
     async def test_download_empty_prefix_raises(self, cloud_store, tmp_path):
-        from application_sdk.storage.errors import StorageError
-
         with pytest.raises(StorageError):
             await cloud_store.download(
                 prefix="empty-prefix", output_dir=tmp_path / "empty"
