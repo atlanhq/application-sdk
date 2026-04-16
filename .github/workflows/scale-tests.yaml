@@ -47,13 +47,13 @@ jobs:
       # Install Dapr
       - name: Install Dapr CLI
         run: |
-          wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.17.1
+          wget -q https://raw.githubusercontent.com/dapr/cli/refs/tags/v1.17.1/install/install.sh -O - | /bin/bash -s 1.17.1
           dapr init --runtime-version 1.17.3 --slim
 
       # Install Temporal
       - name: Install Temporal CLI and Start Server
         run: |
-          curl -sSf https://temporal.download/cli.sh | sh
+          curl -sSf https://temporal.download/cli.sh | sh -s -- --version v1.3.0
           export PATH="$HOME/.temporalio/bin:$PATH"
           temporal server start-dev --ip 0.0.0.0 --db-filename /tmp/temporal.db &
           sleep 10  # Give some time for Temporal to start
