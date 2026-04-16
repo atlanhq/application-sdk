@@ -133,6 +133,25 @@ uv run pytest tests/unit/ -x -q --timeout=60
 **Step E: Validate all CI checks pass**
 All pre-commit hooks, unit tests, and type checks must be green before pushing. Do NOT push if anything is red.
 
+**Step F: Verify the diff contains ONLY intended changes — no formatter noise**
+Before committing, run `git diff --stat` and verify:
+1. Only the files you intentionally changed are listed
+2. No unrelated files were reformatted by pre-commit (ruff-format, isort)
+3. The total line count is proportional to the fix — a 7-line permissions change should NOT produce a 400-line diff
+
+If pre-commit reformatted unrelated files (because the working tree had dirty files from other branches), `git checkout -- <unrelated_files>` to discard them before committing. Only `git add` the specific files you changed.
+
+*Lesson from 2026-04-16 run: PR #1405 was closed because it contained ~400 lines of auto-formatter rewrites across 15+ unrelated files. The actual permissions fix was 7 lines buried in noise. This happened because pre-commit ran on a dirty working tree.*
+
+**Step G: For CI/infrastructure changes, validate downstream impact**
+If the fix modifies GitHub Actions permissions, workflow triggers, Helm values, or Dapr configs:
+1. Identify every job/step that uses the changed permission or config
+2. Verify each one still works — don't assume `contents: read` is sufficient without checking
+3. For permission downgrades: search the workflow for actions that may need the old permission (e.g., `add-pr-comment` may need `contents: write` or `pull-requests: write`)
+4. For CI-only PRs: run the workflow on a test branch before merging to refactor-v3
+
+*Lesson from 2026-04-16 run: PR #1405 downgraded `contents: write` to `contents: read` without verifying the docs preview job (which uses add-pr-comment + S3 sync) still works.*
+
 If ANY step fails, fix the issue before committing. Do NOT push a PR that hasn't passed all steps.
 
 ### 8. Check for regressions in reformatted code
