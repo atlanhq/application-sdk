@@ -506,6 +506,20 @@ jobs:
 
           exit 1  # Stop the workflow here
 
+      # Pre-fetch the PR diff and file list so the Claude session can
+      # read them from disk instead of fetching via gh CLI. This avoids
+      # permission/sandbox issues with chained commands and output
+      # redirection inside claude-code-action.
+      - name: Pre-fetch PR diff and file list
+        if: steps.pr.outputs.mode != 'override' && steps.pr.outputs.mode != 'challenge'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/sdkreview
+          gh pr diff ${{ steps.pr.outputs.number }} > /tmp/sdkreview/diff.patch
+          gh pr view ${{ steps.pr.outputs.number }} --json files --jq '.files[].path' > /tmp/sdkreview/files.txt
+          echo "Pre-fetched diff ($(wc -l < /tmp/sdkreview/diff.patch) lines) and file list ($(wc -l < /tmp/sdkreview/files.txt) files)"
+
       # Main review session (Opus)
       # v1 implementation: single-session review (no Agent subagents).
       # The Agent tool (for subagents) caused auth failures because subagents
@@ -693,12 +707,12 @@ jobs:
                 additional evidence beyond what was present in the
                 prior false-positive case.)
 
-            Run once so all 3 subagents read from disk instead of
-            re-fetching through gh:
+            The PR diff and file list have been pre-fetched to disk by a
+            prior workflow step. They are already available at:
+              - /tmp/sdkreview/diff.patch (the full PR diff)
+              - /tmp/sdkreview/files.txt (list of changed file paths)
 
-                mkdir -p /tmp/sdkreview
-                gh pr diff ${{ steps.pr.outputs.number }} > /tmp/sdkreview/diff.patch
-                gh pr view ${{ steps.pr.outputs.number }} --json files --jq '.files[].path' > /tmp/sdkreview/files.txt
+            Do NOT re-fetch these — just read them directly.
 
             ### Step 2 — Dispatch 3 subagents in PARALLEL
 
