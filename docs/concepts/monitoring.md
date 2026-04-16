@@ -4,11 +4,11 @@ The Application SDK exposes built-in metrics for monitoring workflow execution h
 
 ## Temporal Prometheus Metrics
 
-Every application that uses `TemporalWorkflowClient` automatically exposes ~40 built-in Temporal SDK metrics. No code changes are required.
+Every application that uses `create_temporal_client()` automatically exposes ~40 built-in Temporal SDK metrics. No code changes are required.
 
 ### Endpoint
 
-The metrics endpoint is bound at startup when `load()` is called:
+The metrics endpoint is bound at startup when `create_temporal_client()` is called:
 
 ```
 http://<host>:9464/metrics
@@ -78,7 +78,7 @@ ports:
 
 ### Singleton Runtime
 
-The Temporal `Runtime` that binds the metrics port is a process-level singleton (`TemporalWorkflowClient._prometheus_runtime`). Multiple client instances or repeated `load()` calls within the same process reuse the same `Runtime` — the port is bound exactly once per process. See [Clients](clients.md#prometheus-metrics) for implementation details.
+The Temporal `Runtime` that binds the metrics port is a process-level singleton (`_prometheus_runtime` in `backend.py`). Multiple client instances or repeated `create_temporal_client()` calls within the same process reuse the same `Runtime` — the port is bound exactly once per process. See [Clients](clients.md#prometheus-metrics) for implementation details.
 
 ### Recommended Alerts
 
