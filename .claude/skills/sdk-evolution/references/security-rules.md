@@ -174,7 +174,9 @@ Flag:
 
 ### Pinned Dependencies
 
-- **GitHub Actions:** Flag only floating/mutable tags: `@main`, `@latest`, `@master`, or short major-only tags like `@v1` or `@v2` without minor/patch. Full semver tags like `@v6.0.2` are acceptable (deterministic, vendor-managed). SHA pinning is a best practice but not a required violation for this codebase. Reusable workflows referenced at `@main` with `secrets: inherit` are HIGH severity.
+- **GitHub Actions:** Flag only truly mutable refs: `@main`, `@latest`, `@master`. Reusable workflows referenced at `@main` with `secrets: inherit` are HIGH severity. **Do NOT flag major version tags (`@v4`, `@v3`) on official GitHub/Docker-maintained actions** (`actions/*`, `docker/*`, `github/*`) — these are the vendor-recommended pinning level and are extremely low risk. Only flag major-only tags on third-party/unknown action authors. Full semver tags like `@v6.0.2` are ideal but not required for official actions.
+
+*Lesson from 2026-04-16 run: PR #1408 was closed because pinning official Docker actions from @v3→@v4.1.0 and @v5→@v7.1.0 introduced breaking-change risk across a reusable workflow used by all app repos, with no real security benefit over the existing major version tags.*
 - Docker base images must use specific version tags (not `latest`)
 - Python dependencies should have upper bounds to prevent surprise upgrades
 
