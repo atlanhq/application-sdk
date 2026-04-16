@@ -1040,7 +1040,7 @@ output_path = str(Path(tempfile.gettempdir()) / "my-app" / self.run_id)
 
 ### Write to local disk, not ParquetFileWriter/JsonFileWriter
 
-`ParquetFileWriter` and `JsonFileWriter` internally call `ObjectStore` → `DaprClient()` → Dapr health check (60s timeout). This fails locally and adds unnecessary coupling. Write directly to local disk:
+`ParquetFileWriter` and `JsonFileWriter` upload via `ObjectStore` → `DaprClient()`. Without a Dapr sidecar, `ObjectStore.upload_file()` raises an exception and the workflow fails. Write directly to local disk instead:
 ```python
 # Parquet
 pandas_df.to_parquet(str(output_file))
@@ -1049,6 +1049,28 @@ pandas_df.to_parquet(str(output_file))
 with output_file.open("wb") as f:
     f.write(json.dumps(entity).encode() + b"\n")
 ```
+
+For cases where callers expect a writer-style interface, use a thin local wrapper (note: plain `def` — the methods are synchronous and must not block the event loop as `async def`):
+```python
+class LocalParquetWriter:
+    def __init__(self, path: str, typename: str = "") -> None:
+        os.makedirs(path, exist_ok=True)
+        self.path = path
+        self._chunk = 0
+        self._rows = 0
+
+    def write_batches(self, batches):
+        for df in batches:
+            if df is not None and len(df) > 0:
+                df.to_parquet(os.path.join(self.path, f"part-{self._chunk}.parquet"), index=False)
+                self._rows += len(df)
+                self._chunk += 1
+
+    def close(self) -> dict:
+        return {"total_record_count": self._rows, "chunk_count": self._chunk}
+```
+
+Use `ParquetFileReader` for reads (reads local files first, only falls back to objectstore if not found locally).
 
 ### workflows extra is required
 
@@ -1071,21 +1093,31 @@ await run_dev_combined(MyApp, credential_stores=credential_stores)
 
 ### Credential resolution only via credential_guid
 
-No `credentials` dict fallback. Always resolve from secret store inside `@task` methods:
+No `credentials` dict fallback. Always resolve credentials inside `@task` methods using `context.resolve_credential_raw()` with `legacy_credential_ref()` — this checks the local secret store first (dev) then falls back to `DaprCredentialVault` for platform-issued GUIDs. `context.get_secret()` alone only does a raw store lookup and will miss platform credentials:
 ```python
-creds_json = await self.context.get_secret(credential_guid)
-creds = json.loads(creds_json) if isinstance(creds_json, str) else creds_json
+from application_sdk.credentials.ref import legacy_credential_ref
+
+async def _get_client(self, workflow_args: dict[str, Any]):
+    credential_guid = workflow_args.get("credential_guid")
+    if credential_guid:
+        creds = await self.context.resolve_credential_raw(
+            legacy_credential_ref(credential_guid)
+        )
 ```
+
+Note: `application_sdk.services.secretstore.SecretStore` (v2) does not exist in v3 — importing it raises `ModuleNotFoundError`.
 
 ### QueryBasedTransformer needs workflow_id and workflow_run_id
 
-`transform_metadata()` requires `workflow_id` and `workflow_run_id` as kwargs. Use `self.context.run_id` for both:
+`transform_metadata()` requires `workflow_id` and `workflow_run_id` as **explicit keyword args** — passing them inside a `**kwargs` dict raises `TypeError: missing required positional argument`. Pass them explicitly:
 ```python
-transform_kwargs = {
-    "workflow_id": self.context.run_id,
-    "workflow_run_id": self.context.run_id,
-    ...
-}
+transformer.transform_metadata(
+    typename=typename,
+    dataframe=dataframe,
+    workflow_id=self.context.run_id,
+    workflow_run_id=self.context.run_id,
+    **remaining_kwargs,
+)
 ```
 
 ### Transformer output format
@@ -1151,25 +1183,6 @@ class GlueApp(App):
 
 Every migrated connector will hit this. The skill MUST check the v2 `@workflow.defn` class name and carry it over.
 
-### Credential resolution — use context.resolve_credential_raw()
-
-`self.context.get_secret(guid)` only does a raw secret store lookup. In production, credentials require **two-step resolution**: state store config + secret store values. `context.get_secret()` alone will not find platform-issued credentials.
-
-**Fix:** Use `context.resolve_credential_raw()` with `legacy_credential_ref()`. This checks the local secret store first (for in-process/test credentials) and falls back to `DaprCredentialVault` for platform-issued GUIDs:
-```python
-from application_sdk.credentials.ref import legacy_credential_ref
-
-async def _get_client(self, workflow_args):
-    credential_guid = workflow_args.get("credential_guid")
-    if credential_guid:
-        creds = await self.context.resolve_credential_raw(
-            legacy_credential_ref(credential_guid)
-        )
-    ...
-```
-
-Note: `application_sdk.services.secretstore.SecretStore` (v2) does not exist in v3. Any code that imports it will raise `ModuleNotFoundError`.
-
 ### get_workflow_args must replicate v2 StateStore fallback
 
 The v2 `ActivitiesInterface.get_workflow_args()` does:
@@ -1181,35 +1194,9 @@ The v2 `ActivitiesInterface.get_workflow_args()` does:
 
 The skill must replicate ALL of these steps. Missing the StateStore lookup means `credential_guid` won't be found in production (platform stores it in state store, not in the workflow start input).
 
-### ParquetFileWriter/JsonFileWriter require a running Dapr sidecar
-
-These writers upload via `ObjectStore` → `DaprClient()`. Without a Dapr sidecar (local dev or v3 base image), `ObjectStore.upload_file()` raises an exception and the workflow fails. Local files are **not** silently deleted — cleanup only runs after a successful upload — but the connector will not produce any output.
-
-**Fix:** Replace with direct local disk writes:
-```python
-class LocalParquetWriter:
-    def __init__(self, path, typename=""):
-        os.makedirs(path, exist_ok=True)
-        self.path = path
-        self._chunk = 0
-        self._rows = 0
-
-    async def write_batches(self, batches):
-        for df in batches:
-            if df is not None and len(df) > 0:
-                df.to_parquet(os.path.join(self.path, f"part-{self._chunk}.parquet"), index=False)
-                self._rows += len(df)
-                self._chunk += 1
-
-    async def close(self):
-        return {"total_record_count": self._rows, "chunk_count": self._chunk}
-```
-
-Use `ParquetFileReader` for reads (it works fine — reads local files first, only tries objectstore as fallback).
-
 ### Empty nested column dirs cause 60s Dapr timeouts
 
-When `process_column_data` creates empty relation level directories (levels 3-15 with no data), the `ParquetFileReader` in `transform_data` tries to read from them, finds no local parquet files, falls back to Dapr objectstore (60s health check timeout each).
+Applies to connectors that write hierarchical column data across relation-level subdirectories (e.g. Glue-style connectors). When `process_column_data` creates empty relation level directories (levels 3-15 with no data), the `ParquetFileReader` in `transform_data` tries to read from them, finds no local parquet files, falls back to Dapr objectstore (60s health check timeout each).
 
 **Fix:** Check for local parquet files before creating a reader:
 ```python
@@ -1235,27 +1222,14 @@ await run_dev_combined(MyApp, temporal_host=temporal_host)
 
 Handler is auto-discovered by type inspection — importing the handler class in the App module is sufficient. Do NOT pass `handler_class=` to `run_dev_combined()`.
 
-### QueryBasedTransformer.transform_metadata() signature changed
-
-v3 requires `workflow_id` and `workflow_run_id` as **explicit positional args**, not via `**kwargs`. Code that passes them in a kwargs dict will get `TypeError: missing required positional argument`.
-
-**Fix:** Extract and pass explicitly:
-```python
-transformer.transform_metadata(
-    typename=typename,
-    dataframe=dataframe,
-    workflow_id=workflow_id,
-    workflow_run_id=workflow_run_id,
-    **remaining_kwargs,
-)
-```
-
 ### @task enforces typed Input/Output — no raw dicts
 
-`dict[str, Any]` as a `@task` parameter raises `TaskContractError` at class definition time. Every task MUST use Input/Output subclasses. For connectors migrating from v2 where helper functions expect dicts, create thin wrappers:
+`dict[str, Any]` as a `@task` parameter raises `TaskContractError` when the `@task` decorator validates the method signature (at decoration time). Every task MUST use Input/Output subclasses (see also: "Payload safety and `allow_unbounded_fields`" above). For connectors migrating from v2 where helper functions expect dicts, create thin wrappers:
 
 ```python
 class WorkflowArgsInput(Input, allow_unbounded_fields=True):
+    # allow_unbounded_fields=True is an escape hatch — replace with
+    # bounded typed fields once the dict's contents are known.
     args: dict[str, Any] = {}
 
 class StatsOutput(Output):
@@ -1270,3 +1244,5 @@ class StatsOutput(Output):
 [tool.uv.sources]
 atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "refactor-v3" }
 ```
+
+Switch to `main` or a pinned release tag once v3 is merged to main.
