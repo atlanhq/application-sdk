@@ -6,126 +6,126 @@
   "SNYK-GOLANG-GOOGLEGOLANGORGGRPC-15691172": {
     "package": "google.golang.org/grpc",
     "severity": "CRITICAL",
-    "reason": "Base image \u2014 Dapr runtime dependency",
+    "reason": "Base image — Dapr runtime dependency",
     "expires": "2026-06-15",
     "added_by": "mananjain99"
   },
   "CVE-2026-33186": {
     "package": "google.golang.org/grpc",
     "severity": "CRITICAL",
-    "reason": "Base image \u2014 Dapr runtime dependency",
+    "reason": "Base image — Dapr runtime dependency",
     "expires": "2026-06-15",
     "added_by": "mananjain99"
   },
   "SNYK-GOLANG-GITHUBCOMGOJOSEGOJOSEV4-15875221": {
     "package": "github.com/go-jose/go-jose/v4",
     "severity": "HIGH",
-    "reason": "Base image \u2014 Dapr runtime dependency",
+    "reason": "Base image — Dapr runtime dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "SNYK-GOLANG-GITHUBCOMJACKCPGXV5PGPROTO3-15923570": {
     "package": "github.com/jackc/pgx/v5/pgproto3",
     "severity": "HIGH",
-    "reason": "Base image \u2014 Dapr runtime dependency",
+    "reason": "Base image — Dapr runtime dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "SNYK-GOLANG-GITHUBCOMJACKCPGXV5PGPROTO3-15923580": {
     "package": "github.com/jackc/pgx/v5/pgproto3",
     "severity": "HIGH",
-    "reason": "Base image \u2014 Dapr runtime dependency",
+    "reason": "Base image — Dapr runtime dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "CVE-2026-34986": {
     "package": "dapr-daprd-1.17",
     "severity": "HIGH",
-    "reason": "Base image \u2014 Dapr runtime package",
+    "reason": "Base image — Dapr runtime package",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "CVE-2026-4519": {
     "package": "python-3.10-base",
     "severity": "HIGH",
-    "reason": "Base image \u2014 Python runtime",
+    "reason": "Base image — Python runtime",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "CVE-2026-31812": {
     "package": "quinn-proto",
     "severity": "HIGH",
-    "reason": "Base image \u2014 Dapr Rust dependency",
+    "reason": "Base image — Dapr Rust dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "CVE-2026-34040": {
     "package": "github.com/docker/docker",
     "severity": "HIGH",
-    "reason": "Base image \u2014 Docker Go dependency",
+    "reason": "Base image — Docker Go dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "CVE-2026-25679": {
     "package": "stdlib (Go)",
     "severity": "HIGH",
-    "reason": "Base image \u2014 Go stdlib",
+    "reason": "Base image — Go stdlib",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "SNYK-GOLANG-GOOPENTELEMETRYIOOTELBAGGAGE-15928416": {
     "package": "go.opentelemetry.io/otel/baggage",
     "severity": "HIGH",
-    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "reason": "Base image — OpenTelemetry Go dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "SNYK-GOLANG-GOOPENTELEMETRYIOOTELINTERNALGLOBAL-15928418": {
     "package": "go.opentelemetry.io/otel/internal/global",
     "severity": "HIGH",
-    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "reason": "Base image — OpenTelemetry Go dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "SNYK-GOLANG-GOOPENTELEMETRYIOOTELPROPAGATION-15928420": {
     "package": "go.opentelemetry.io/otel/propagation",
     "severity": "HIGH",
-    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "reason": "Base image — OpenTelemetry Go dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "CVE-2026-39883": {
     "package": "go.opentelemetry.io/otel/sdk",
     "severity": "HIGH",
-    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "reason": "Base image — OpenTelemetry Go dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "CVE-2026-32280": {
     "package": "stdlib (Go)",
     "severity": "HIGH",
-    "reason": "Base image \u2014 Go stdlib",
+    "reason": "Base image — Go stdlib",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "CVE-2026-32282": {
     "package": "stdlib (Go)",
     "severity": "HIGH",
-    "reason": "Base image \u2014 Go stdlib",
+    "reason": "Base image — Go stdlib",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "SNYK-GOLANG-GOOPENTELEMETRYIOOTELEXPORTERSOTLPOTLPTRACEOTLPTRACEHTTP-15954196": {
     "package": "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp",
     "severity": "HIGH",
-    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "reason": "Base image — OpenTelemetry Go dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
   "SNYK-GOLANG-GOOPENTELEMETRYIOOTELSDKRESOURCE-15954212": {
     "package": "go.opentelemetry.io/otel/sdk/resource",
     "severity": "HIGH",
-    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "reason": "Base image — OpenTelemetry Go dependency",
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
@@ -135,5 +135,19 @@
     "reason": "No patched version of sqlitedict available — upstream has not released a fix as of 2026-04-16",
     "expires": "2026-07-16",
     "added_by": "TechyMT"
+  },
+  "CVE-2026-27137": {
+    "package": "stdlib (Go)",
+    "severity": "HIGH",
+    "reason": "Base image — Go stdlib; present in Dapr runtime (daprd-1.17); no fix available without Dapr upgrade",
+    "expires": "2026-07-16",
+    "added_by": "revantgupta"
+  },
+  "CVE-2026-33810": {
+    "package": "stdlib (Go)",
+    "severity": "HIGH",
+    "reason": "Base image — Go stdlib; present in Dapr runtime (daprd-1.17); no fix available without Dapr upgrade",
+    "expires": "2026-07-16",
+    "added_by": "revantgupta"
   }
 }
