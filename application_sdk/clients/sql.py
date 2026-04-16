@@ -6,8 +6,6 @@ database operations, supporting batch processing and server-side cursors.
 """
 
 import asyncio
-import concurrent
-from concurrent.futures import ThreadPoolExecutor
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -380,28 +378,28 @@ class BaseSQLClient(ClientInterface):
             if self.use_server_side_cursor:
                 connection = connection.execution_options(yield_per=batch_size)
 
-            with ThreadPoolExecutor() as pool:
-                from sqlalchemy import text
+            from sqlalchemy import text
 
-                cursor = await loop.run_in_executor(
-                    pool, connection.execute, text(query)
+            from application_sdk.execution.heartbeat import _BLOCKING_EXECUTOR
+
+            cursor = await loop.run_in_executor(
+                _BLOCKING_EXECUTOR, connection.execute, text(query)
+            )
+            if not cursor or not cursor.cursor:
+                raise ValueError("Cursor is not supported")
+            column_names: List[str] = [
+                description.name.lower() for description in cursor.cursor.description
+            ]
+
+            while True:
+                rows = await loop.run_in_executor(
+                    _BLOCKING_EXECUTOR, cursor.fetchmany, batch_size
                 )
-                if not cursor or not cursor.cursor:
-                    raise ValueError("Cursor is not supported")
-                column_names: List[str] = [
-                    description.name.lower()
-                    for description in cursor.cursor.description
-                ]
+                if not rows:
+                    break
 
-                while True:
-                    rows = await loop.run_in_executor(
-                        pool, cursor.fetchmany, batch_size
-                    )
-                    if not rows:
-                        break
-
-                    results = [dict(zip(column_names, row)) for row in rows]
-                    yield results
+                results = [dict(zip(column_names, row)) for row in rows]
+                yield results
             # Connection automatically closed by context manager
 
         logger.info("Query execution completed")
@@ -506,11 +504,12 @@ class BaseSQLClient(ClientInterface):
                     self._read_sql_query, query, chunksize=chunksize
                 )
         else:
-            # Run the blocking operation in a thread pool
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                return await asyncio.get_running_loop().run_in_executor(
-                    executor, self._execute_query, query, chunksize
-                )
+            # Run the blocking operation in the shared thread pool
+            from application_sdk.execution.heartbeat import _BLOCKING_EXECUTOR
+
+            return await asyncio.get_running_loop().run_in_executor(
+                _BLOCKING_EXECUTOR, self._execute_query, query, chunksize
+            )
 
     async def get_batched_results(
         self,
