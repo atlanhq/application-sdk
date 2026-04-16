@@ -41,6 +41,8 @@ permissions:
   issues: write
   pull-requests: write
   statuses: write
+  actions: write      # sdk-review-stop needs this to cancel runs
+  workflows: write    # sdk-review needs this to update branches on workflow-touching PRs
 
 env:
   ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
