@@ -1,14 +1,9 @@
 """Dapr client implementations."""
 
-import copy
 import json
-import re
-from enum import Enum
 from typing import Any
 
-from dapr.clients import DaprClient
-
-from application_sdk.infrastructure._secret_utils import process_secret_data
+from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import BindingError, BindingResponse
 from application_sdk.infrastructure.pubsub import MessageHandler, PubSubError
 from application_sdk.infrastructure.secrets import SecretNotFoundError, SecretStoreError
@@ -17,68 +12,9 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
-# Allowlist: UUIDs, hex strings, and similar safe identifiers.
-_SAFE_GUID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
-
-
-# ---------------------------------------------------------------------------
-# Private helpers for DaprCredentialVault
-# ---------------------------------------------------------------------------
-
-
-class _CredentialSource(str, Enum):
-    DIRECT = "direct"
-    AGENT = "agent"
-
-
-class _SecretMode(Enum):
-    MULTI_KEY = "multi-key"
-    SINGLE_KEY = "single-key"
-
-
-def _handle_single_key_secret(key: str, value: Any) -> dict[str, Any]:
-    """Handle single-key secret — attempt JSON parse, fall back to {key: value}."""
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception:
-            pass
-    return {key: value}
-
-
-# _process_secret_data is now provided by _secret_utils.process_secret_data.
-# Kept as a thin alias so existing internal callers don't require renaming.
-_process_secret_data = process_secret_data
-
-
-def _resolve_credentials(
-    credential_config: dict[str, Any], secret_data: dict[str, Any]
-) -> dict[str, Any]:
-    """Substitute secret references in *credential_config* with values from *secret_data*."""
-    credentials = copy.deepcopy(credential_config)
-    for key, value in list(credentials.items()):
-        if isinstance(value, str) and value in secret_data:
-            credentials[key] = secret_data[value]
-    if "extra" in credentials and isinstance(credentials["extra"], dict):
-        for key, value in list(credentials["extra"].items()):
-            if isinstance(value, str) and value in secret_data:
-                credentials["extra"][key] = secret_data[value]
-    return credentials
-
-
-def create_dapr_client() -> DaprClient:
-    """Create a Dapr client.
-
-    Returns:
-        Configured Dapr client.
-    """
-    return DaprClient()
-
 
 def create_dapr_secret_store(
-    client: DaprClient,
+    client: AsyncDaprClient,
     store_name: str = "secretstore",
 ) -> "DaprSecretStore":
     """Create a Dapr-backed secret store.
@@ -98,7 +34,7 @@ class DaprStateStore:
 
     def __init__(
         self,
-        client: DaprClient,
+        client: AsyncDaprClient,
         store_name: str = "statestore",
     ) -> None:
         """Initialize the Dapr state store.
@@ -113,7 +49,7 @@ class DaprStateStore:
     async def save(self, key: str, value: dict[str, Any]) -> None:
         """Save state via Dapr."""
         try:
-            self._client.save_state(
+            await self._client.save_state(
                 store_name=self._store_name,
                 key=key,
                 value=json.dumps(value),
@@ -129,12 +65,12 @@ class DaprStateStore:
     async def load(self, key: str) -> dict[str, Any] | None:
         """Load state via Dapr."""
         try:
-            result = self._client.get_state(
+            data = await self._client.get_state(
                 store_name=self._store_name,
                 key=key,
             )
-            if result.data:
-                return json.loads(result.data)
+            if data:
+                return json.loads(data)
             return None
         except Exception as e:
             raise StateStoreError(
@@ -147,7 +83,7 @@ class DaprStateStore:
     async def delete(self, key: str) -> bool:
         """Delete state via Dapr."""
         try:
-            self._client.delete_state(
+            await self._client.delete_state(
                 store_name=self._store_name,
                 key=key,
             )
@@ -178,7 +114,7 @@ class DaprSecretStore:
 
     def __init__(
         self,
-        client: DaprClient,
+        client: AsyncDaprClient,
         store_name: str = "secretstore",
     ) -> None:
         """Initialize the Dapr secret store.
@@ -193,12 +129,12 @@ class DaprSecretStore:
     async def get(self, name: str) -> str:
         """Get a secret via Dapr."""
         try:
-            result = self._client.get_secret(
+            result = await self._client.get_secret(
                 store_name=self._store_name,
                 key=name,
             )
-            if name in result.secret:
-                return result.secret[name]
+            if name in result:
+                return result[name]
             raise SecretNotFoundError(name)
         except SecretNotFoundError:
             raise
@@ -217,14 +153,29 @@ class DaprSecretStore:
             return None
 
     async def get_bulk(self, names: list[str]) -> dict[str, str]:
-        """Get multiple secrets via Dapr."""
+        """Get multiple secrets via Dapr.
+
+        Note:
+            Assumes single-key-per-secret-name convention. If a Dapr secret
+            contains multiple keys (e.g. ``{"db": {"user": "u", "pass": "p"}}``),
+            only the first value is returned. Use ``get()`` for multi-key secrets.
+        """
         try:
-            result = self._client.get_bulk_secret(store_name=self._store_name)
-            return {
-                name: result.secrets.get(name, {}).get(name, "")
-                for name in names
-                if name in result.secrets
-            }
+            result = await self._client.get_bulk_secret(store_name=self._store_name)
+            bulk: dict[str, str] = {}
+            for name in names:
+                if name not in result:
+                    continue
+                inner = result[name]
+                if len(inner) > 1:
+                    logger.warning(
+                        "Secret '%s' has %d keys; get_bulk() returns only the first value. "
+                        "Use get() for multi-key secrets.",
+                        name,
+                        len(inner),
+                    )
+                bulk[name] = next(iter(inner.values()), "")
+            return bulk
         except Exception as e:
             raise SecretStoreError(
                 f"Failed to get bulk secrets: {e}",
@@ -234,8 +185,8 @@ class DaprSecretStore:
     async def list_names(self) -> list[str]:
         """List secret names via Dapr."""
         try:
-            result = self._client.get_bulk_secret(store_name=self._store_name)
-            return list(result.secrets.keys())
+            result = await self._client.get_bulk_secret(store_name=self._store_name)
+            return list(result.keys())
         except Exception as e:
             raise SecretStoreError(
                 f"Failed to list secrets: {e}",
@@ -248,7 +199,7 @@ class DaprPubSub:
 
     def __init__(
         self,
-        client: DaprClient,
+        client: AsyncDaprClient,
         pubsub_name: str = "pubsub",
     ) -> None:
         """Initialize the Dapr pub/sub.
@@ -269,12 +220,11 @@ class DaprPubSub:
     ) -> None:
         """Publish a message via Dapr."""
         try:
-            self._client.publish_event(
+            await self._client.publish_event(
                 pubsub_name=self._pubsub_name,
-                topic_name=topic,
+                topic=topic,
                 data=json.dumps(data),
-                data_content_type="application/json",
-                publish_metadata=metadata or {},
+                metadata=metadata or {},
             )
         except Exception as e:
             raise PubSubError(
@@ -332,7 +282,7 @@ class DaprBinding:
 
     def __init__(
         self,
-        client: DaprClient,
+        client: AsyncDaprClient,
         binding_name: str,
     ) -> None:
         """Initialize the Dapr binding.
@@ -356,17 +306,15 @@ class DaprBinding:
     ) -> BindingResponse:
         """Invoke the binding via Dapr."""
         try:
-            result = self._client.invoke_binding(
+            result = await self._client.invoke_binding(
                 binding_name=self._binding_name,
                 operation=operation,
                 data=data or b"",
-                binding_metadata=metadata or {},
+                metadata=metadata or {},
             )
             return BindingResponse(
                 data=result.data if result.data else None,
-                metadata=dict(result.binding_metadata)
-                if result.binding_metadata
-                else {},
+                metadata=dict(result.metadata) if result.metadata else {},
             )
         except Exception as e:
             raise BindingError(
@@ -382,282 +330,23 @@ class DaprBinding:
 # ---------------------------------------------------------------------------
 
 
-def is_dapr_component_registered(component_name: str) -> bool:
+async def is_dapr_component_registered(component_name: str) -> bool:
     """Return ``True`` if a Dapr component with *component_name* is registered.
 
     Uses the Dapr metadata API.  Returns ``False`` (conservatively) when the
     metadata call fails.
     """
-    try:
-        with DaprClient() as client:
-            metadata = client.get_metadata()
-            return any(
-                c.name == component_name
-                for c in getattr(metadata, "registered_components", [])
-            )
-    except Exception:
-        logger.warning(
-            "Failed to read Dapr metadata for component %s; treating as unavailable",
-            component_name,
-            exc_info=True,
-        )
-        return False
-
-
-# ---------------------------------------------------------------------------
-# DaprCredentialVault
-# ---------------------------------------------------------------------------
-
-
-class DaprCredentialVault:
-    """Dapr-backed credential vault for GUID-based runtime credential resolution.
-
-    Fetches a credential config record from the upstream object store (S3 via
-    Dapr binding), then resolves secret references within it via the Dapr
-    secret store.
-    """
-
-    def __init__(
-        self,
-        client: DaprClient,
-        *,
-        upstream_binding_name: str | None = None,
-        secret_store_name: str | None = None,
-    ) -> None:
-        from application_sdk.constants import (
-            SECRET_STORE_NAME,
-            UPSTREAM_OBJECT_STORE_NAME,
-        )
-
-        self._client = client
-        self._upstream = DaprBinding(
-            client, upstream_binding_name or UPSTREAM_OBJECT_STORE_NAME
-        )
-        self._secret_store_name: str = secret_store_name or SECRET_STORE_NAME
-
-    async def get_credentials(self, credential_guid: str) -> dict[str, Any]:
-        """Resolve the full credential dict for *credential_guid*.
-
-        1. Fetches the credential config JSON from the upstream S3 store
-           (path: ``persistent-artifacts/apps/{app}/credentials/{guid}/config.json``).
-        2. Determines the secret resolution mode (multi-key or single-key).
-        3. Fetches secrets from the Dapr secret store.
-        4. Returns the merged credential dict.
-
-        Raises:
-            CredentialVaultError: If any step fails.
-        """
-        from application_sdk.infrastructure.credential_vault import CredentialVaultError
-
+    async with AsyncDaprClient() as client:
         try:
-            credential_config = await self._fetch_credential_config(credential_guid)
-
-            credential_source_str = credential_config.get(
-                "credentialSource", _CredentialSource.DIRECT.value
+            metadata = await client.get_metadata()
+            components = metadata.get(
+                "components", metadata.get("registeredComponents", [])
             )
-            try:
-                credential_source = _CredentialSource(credential_source_str)
-            except ValueError:
-                credential_source = _CredentialSource.DIRECT
-
-            secret_path = credential_config.get("secret-path")
-
-            if credential_source == _CredentialSource.DIRECT or secret_path:
-                mode = _SecretMode.MULTI_KEY
-            else:
-                mode = _SecretMode.SINGLE_KEY
-
-            secret_data: dict[str, Any] = {}
-
-            if mode == _SecretMode.MULTI_KEY:
-                key_to_fetch = (
-                    secret_path
-                    if credential_source == _CredentialSource.AGENT
-                    else credential_guid
-                )
-                try:
-                    logger.debug("Fetching multi-key secret: %s", key_to_fetch)
-                    secret_data = await self._get_secret(key_to_fetch)
-                except Exception:
-                    logger.warning(
-                        "Failed to fetch secret bundle: %s", key_to_fetch, exc_info=True
-                    )
-            else:
-                import asyncio
-
-                secret_data = await asyncio.to_thread(
-                    self._fetch_single_key_secrets, credential_config
-                )
-
-            if credential_source == _CredentialSource.DIRECT:
-                credential_config.update(secret_data)
-                return credential_config
-            else:
-                return _resolve_credentials(credential_config, secret_data)
-
-        except CredentialVaultError:
-            raise
-        except Exception as e:
-            raise CredentialVaultError(
-                f"Failed to resolve credentials for {credential_guid}: {e}",
-                credential_guid=credential_guid,
-                cause=e,
-            ) from e
-
-    async def _fetch_credential_config(self, credential_guid: str) -> dict[str, Any]:
-        """Fetch the credential config JSON from the upstream object store.
-
-        Raises:
-            CredentialVaultError: If the GUID contains unsafe characters or no
-                config is found in the upstream store.
-        """
-        import os
-
-        from application_sdk.constants import (
-            APPLICATION_NAME,
-            STATE_STORE_PATH_TEMPLATE,
-            TEMPORARY_PATH,
-        )
-        from application_sdk.infrastructure.credential_vault import CredentialVaultError
-        from application_sdk.storage.ops import normalize_key
-
-        # Validate before interpolation to prevent path traversal.
-        if not _SAFE_GUID_RE.match(credential_guid):
-            raise CredentialVaultError(
-                "Invalid credential GUID — must match [a-zA-Z0-9_-]+: %r"
-                % credential_guid,
-                credential_guid=credential_guid,
+            return any(c.get("name") == component_name for c in components)
+        except Exception:
+            logger.warning(
+                "Failed to read Dapr metadata for component %s; treating as unavailable",
+                component_name,
+                exc_info=True,
             )
-
-        raw_path = os.path.join(
-            TEMPORARY_PATH,
-            STATE_STORE_PATH_TEMPLATE.format(
-                application_name=APPLICATION_NAME,
-                state_type="credentials",
-                id=credential_guid,
-            ),
-        )
-        normalized_key = normalize_key(raw_path)
-
-        data = json.dumps({"key": normalized_key}).encode("utf-8")
-        metadata = {
-            "key": normalized_key,
-            "fileName": normalized_key,
-            "blobName": normalized_key,
-        }
-
-        response = await self._upstream.invoke("get", data=data, metadata=metadata)
-
-        if response.data is None:
-            raise CredentialVaultError(
-                "No credential config found for GUID %s in upstream store"
-                % credential_guid,
-                credential_guid=credential_guid,
-            )
-
-        return json.loads(response.data)
-
-    def _get_secret_sync(
-        self, secret_key: str, component_name: str | None = None
-    ) -> dict[str, Any]:
-        """Synchronous secret fetch — call via ``_get_secret`` to avoid blocking."""
-        from application_sdk.common.exc_utils import rewrap
-
-        store = component_name or self._secret_store_name
-        try:
-            result = self._client.get_secret(store_name=store, key=secret_key)
-            return process_secret_data(result.secret)
-        except Exception as e:
-            raise rewrap(e, "Failed to fetch secret (component=%s)" % store) from e
-
-    async def _get_secret(
-        self, secret_key: str, component_name: str | None = None
-    ) -> dict[str, Any]:
-        """Fetch and process a secret from the Dapr secret store.
-
-        Runs the synchronous gRPC call in a thread-pool executor so the async
-        event loop is not blocked.
-
-        Returns ``{}`` in local-environment deployments to avoid secret store
-        dependency during development.
-        """
-        import asyncio
-
-        from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
-
-        if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
-            return {}
-
-        return await asyncio.to_thread(
-            self._get_secret_sync, secret_key, component_name
-        )
-
-    def _fetch_single_key_secrets(
-        self, credential_config: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Fetch secrets in single-key mode — one lookup per string field value."""
-        logger.debug("Single-key mode: fetching secrets per field")
-        collected: dict[str, Any] = {}
-        failed_lookups: list[str] = []
-
-        def _try_fetch(label: str, value: str) -> None:
-            if not value.strip():
-                return
-            try:
-                single_secret = self._get_secret_sync(value)
-                if single_secret:
-                    for k, v in single_secret.items():
-                        if v is None or v == "":
-                            continue
-                        collected[k] = v
-            except Exception as e:
-                failed_lookups.append("  '%s' → '%s': %s" % (label, value, e))
-
-        for field, value in credential_config.items():
-            if isinstance(value, str):
-                _try_fetch(field, value)
-            elif field == "extra" and isinstance(value, dict):
-                for extra_key, extra_value in value.items():
-                    if isinstance(extra_value, str):
-                        _try_fetch(f"extra.{extra_key}", extra_value)
-
-        if not collected and failed_lookups:
-            logger.error(
-                "Single-key secret resolution failed: no secrets resolved. "
-                "%d attempted, all failed:\n%s",
-                len(failed_lookups),
-                "\n".join(failed_lookups),
-            )
-        elif failed_lookups:
-            logger.debug(
-                "Single-key mode: resolved %d secrets, skipped %d non-secret fields",
-                len(collected),
-                len(failed_lookups),
-            )
-
-        return collected
-
-
-def create_dapr_credential_vault(
-    client: DaprClient,
-    *,
-    upstream_binding_name: str | None = None,
-    secret_store_name: str | None = None,
-) -> "DaprCredentialVault":
-    """Create a Dapr-backed credential vault.
-
-    Args:
-        client: Dapr client instance.
-        upstream_binding_name: Dapr binding component for the upstream S3 store.
-            Defaults to the ``UPSTREAM_OBJECT_STORE_NAME`` constant.
-        secret_store_name: Dapr secret store component name.
-            Defaults to the ``SECRET_STORE_NAME`` constant.
-
-    Returns:
-        Configured DaprCredentialVault.
-    """
-    return DaprCredentialVault(
-        client,
-        upstream_binding_name=upstream_binding_name,
-        secret_store_name=secret_store_name,
-    )
+            return False

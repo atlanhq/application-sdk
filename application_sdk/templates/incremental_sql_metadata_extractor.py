@@ -428,11 +428,10 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             download_s3_prefix_with_structure,
             get_persistent_artifacts_path,
         )
-        from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
         from application_sdk.execution._temporal.activity_utils import (
             get_object_store_prefix,
         )
-        from application_sdk.services.objectstore import ObjectStore
+        from application_sdk.storage.batch import download_prefix, upload_prefix
 
         if not input.output_path:
             raise FileNotFoundError(
@@ -448,10 +447,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         transformed_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info("Downloading transformed files from S3: %s", transformed_s3_prefix)
-        await ObjectStore.download_prefix(
-            source=transformed_s3_prefix,
-            destination=str(transformed_dir),
-            store_name=UPSTREAM_OBJECT_STORE_NAME,
+        await download_prefix(
+            prefix=transformed_s3_prefix,
+            local_dir=str(transformed_dir),
         )
 
         batch_size = input.column_batch_size
@@ -554,10 +552,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         # Step 6: Upload batch files to S3
         batches_s3_prefix = get_object_store_prefix(str(batches_dir))
         logger.info("Uploading batch files to S3: %s", batches_s3_prefix)
-        await ObjectStore.upload_prefix(
-            source=str(batches_dir),
-            destination=batches_s3_prefix,
-            store_name=UPSTREAM_OBJECT_STORE_NAME,
+        await upload_prefix(
+            local_dir=str(batches_dir),
+            prefix=batches_s3_prefix,
             retain_local_copy=True,
         )
 
@@ -586,11 +583,10 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         import json
         import pathlib
 
-        from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
         from application_sdk.execution._temporal.activity_utils import (
             get_object_store_prefix,
         )
-        from application_sdk.services.objectstore import ObjectStore
+        from application_sdk.storage.ops import download_file
 
         if not input.output_path:
             raise ValueError("output_path is required in ExecuteColumnBatchInput")
@@ -620,10 +616,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         else:
             batches_s3_prefix = get_object_store_prefix(str(batches_dir))
 
-        await ObjectStore.download_file(
-            source=f"{batches_s3_prefix}/{batch_filename}",
-            destination=str(batch_file),
-            store_name=UPSTREAM_OBJECT_STORE_NAME,
+        await download_file(
+            key=f"{batches_s3_prefix}/{batch_filename}",
+            local_path=str(batch_file),
         )
 
         if not batch_file.exists():
