@@ -1,7 +1,7 @@
-# Added os import for path manipulations used in new tests
 import os
+from pathlib import Path
 from typing import Any, Dict
-from unittest.mock import call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -13,6 +13,11 @@ from application_sdk.storage.formats.utils import _download_files
 from application_sdk.testing.hypothesis.strategies.inputs.json_input import (
     json_input_config_strategy,
 )
+
+_MOCK_STORE = MagicMock()
+_FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+_DL_ID = _FIXED_HEX[:12]
+_EXPECTED_TMP = str(Path("./local/tmp/") / _DL_ID)
 
 # Configure Hypothesis settings at the module level
 settings.register_profile(
@@ -41,19 +46,21 @@ def test_init_single_file_with_file_names_raises_error() -> None:
 @pytest.mark.asyncio
 async def test_not_download_file_that_exists() -> None:
     """Test that no download occurs when a JSON file exists locally."""
-    path = "/data/test.json"  # Path with correct extension
-    # Don't use file_names with single file path due to validation
+    path = "/data/test.json"
 
     with (
         patch("os.path.isfile", return_value=True),
         patch("os.path.isdir", return_value=False),
-        patch("application_sdk.storage.formats.utils._download_file") as mock_download,
+        patch(
+            "application_sdk.storage.formats.utils._download_one",
+            new_callable=AsyncMock,
+        ) as mock_download_one,
     ):
-        json_input = JsonFileReader(path=path)  # No file_names
+        json_input = JsonFileReader(path=path)
 
         result = await _download_files(json_input.path, ".json", json_input.file_names)
-        mock_download.assert_not_called()
-        assert result == [path]  # Should return the local file
+        mock_download_one.assert_not_called()
+        assert result == [path]
 
 
 @pytest.mark.asyncio
@@ -62,26 +69,19 @@ async def test_download_file_invoked_for_missing_files() -> None:
     path = "/local"
     file_names = ["a.json", "b.json"]
 
-    # as_store_key strips leading "/" so destinations use the normalized key
-    # Downloads are isolated under a unique subdirectory
-    _FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
-    _DL_ID = _FIXED_HEX[:12]
-    expected_dest_a = os.path.join("./local/tmp/", _DL_ID, "local/a.json")
-    expected_dest_b = os.path.join("./local/tmp/", _DL_ID, "local/b.json")
-
-    def mock_isfile(p):
-        # Return False for initial local check, True for downloaded files
-        if p in [expected_dest_a, expected_dest_b]:
-            return True
-        return False
-
     with (
-        patch("os.path.isfile", side_effect=mock_isfile),
+        patch("os.path.isfile", return_value=False),
         patch("os.path.isdir", return_value=True),
         patch("glob.glob", side_effect=[[]]),
-        patch(  # Only for initial local check
-            "application_sdk.storage.formats.utils._download_file"
-        ) as mock_download,
+        patch(
+            "application_sdk.storage.formats.utils._resolve_store",
+            return_value=_MOCK_STORE,
+        ),
+        patch(
+            "application_sdk.storage.formats.utils._download_one",
+            new_callable=AsyncMock,
+            return_value=(True, "downloaded"),
+        ) as mock_download_one,
         patch("uuid.uuid4") as mock_uuid4,
     ):
         mock_uuid4.return_value.hex = _FIXED_HEX
@@ -91,13 +91,27 @@ async def test_download_file_invoked_for_missing_files() -> None:
 
         result = await _download_files(json_input.path, ".json", json_input.file_names)
 
-        # Each file should be attempted to be downloaded
-        expected_calls = [
-            call("local/a.json", expected_dest_a),
-            call("local/b.json", expected_dest_b),
+        mock_download_one.assert_has_calls(
+            [
+                call(
+                    _MOCK_STORE,
+                    "local/a.json",
+                    Path(_EXPECTED_TMP) / "local/a.json",
+                    skip_if_exists=False,
+                ),
+                call(
+                    _MOCK_STORE,
+                    "local/b.json",
+                    Path(_EXPECTED_TMP) / "local/b.json",
+                    skip_if_exists=False,
+                ),
+            ],
+            any_order=True,
+        )
+        assert result == [
+            str(Path(_EXPECTED_TMP) / "local/a.json"),
+            str(Path(_EXPECTED_TMP) / "local/b.json"),
         ]
-        mock_download.assert_has_calls(expected_calls, any_order=True)
-        assert result == [expected_dest_a, expected_dest_b]
 
 
 @pytest.mark.asyncio
@@ -110,7 +124,10 @@ async def test_download_file_not_invoked_when_file_present() -> None:
         patch("os.path.isfile", return_value=False),
         patch("os.path.isdir", return_value=True),
         patch("glob.glob", return_value=["/local/exists.json"]),
-        patch("application_sdk.storage.formats.utils._download_file") as mock_download,
+        patch(
+            "application_sdk.storage.formats.utils._download_one",
+            new_callable=AsyncMock,
+        ) as mock_download_one,
     ):
         json_input = JsonFileReader(
             path=path, file_names=file_names, dataframe_type=DataframeType.daft
@@ -118,7 +135,7 @@ async def test_download_file_not_invoked_when_file_present() -> None:
 
         result = await _download_files(json_input.path, ".json", json_input.file_names)
 
-        mock_download.assert_not_called()
+        mock_download_one.assert_not_called()
         assert result == ["/local/exists.json"]
 
 
@@ -128,13 +145,17 @@ async def test_download_file_error_propagation() -> None:
     path = "/local"
     file_names = ["bad.json"]
 
-    # Mock no local files found, then download failure
     with (
         patch("os.path.isfile", return_value=False),
         patch("os.path.isdir", return_value=True),
         patch("glob.glob", return_value=[]),
         patch(
-            "application_sdk.storage.formats.utils._download_file",
+            "application_sdk.storage.formats.utils._resolve_store",
+            return_value=_MOCK_STORE,
+        ),
+        patch(
+            "application_sdk.storage.formats.utils._download_one",
+            new_callable=AsyncMock,
             side_effect=Exception("Download failed"),
         ),
     ):

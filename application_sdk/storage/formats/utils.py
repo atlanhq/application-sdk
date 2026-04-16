@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 from application_sdk.common.error_codes import IOError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.batch import download_prefix as _download_prefix
-from application_sdk.storage.ops import download_file as _download_file
-from application_sdk.storage.ops import normalize_key
+from application_sdk.storage.batch import list_keys as _list_keys
+from application_sdk.storage.ops import _resolve_store, normalize_key
+from application_sdk.storage.transfer import _download_one
 
 JSON_FILE_EXTENSION = ".json"
 PARQUET_FILE_EXTENSION = ".parquet"
@@ -89,15 +89,19 @@ def find_local_files_by_extension(
 
 
 async def _download_files(
-    path: str, file_extension: str, file_names: Optional[List[str]] = None
+    path: str,
+    file_extension: str,
+    file_names: Optional[List[str]] = None,
 ) -> List[str]:
     """Download files from object store if not available locally.
 
+    Uses SHA-256 sidecar integrity checking (via transfer._download_one) for
+    each file fetched from the object store.
+
     Flow:
     1. Check if files exist locally at path
-    2. If not, try to download from object store
-    3. Filter by file_names if provided
-    4. Return list of local file paths
+    2. If not, download from object store with SHA-256 integrity verification
+    3. Return list of local file paths
 
     Returns:
         List[str]: List of file paths
@@ -105,28 +109,30 @@ async def _download_files(
     Raises:
         IOError: When no files found locally or in object store
     """
+    from pathlib import Path as _Path
+
     # Step 1: Check if files exist locally
     local_files: List[str] = find_local_files_by_extension(
         path, file_extension, file_names
     )
     if local_files:
         logger.info(
-            "Found files locally",
-            file_count=len(local_files),
-            file_extension=file_extension,
-            path=path,
+            "Found %d %s files locally at %s",
+            len(local_files),
+            file_extension,
+            path,
         )
         return local_files
 
-    # Step 2: Try to download from object store
+    # Step 2: Download from object store with SHA-256 integrity checking
     logger.info(
-        "No local files found, checking object store",
-        file_extension=file_extension,
-        path=path,
+        "No local %s files found at '%s', checking object store",
+        file_extension,
+        path,
     )
 
     try:
-        # Determine what to download based on path type and filters
+        resolved = _resolve_store(None)
         downloaded_paths: List[str] = []
 
         # Use a unique download directory per invocation to prevent race
@@ -138,34 +144,38 @@ async def _download_files(
         if path.endswith(file_extension):
             # Single file case
             store_key = normalize_key(path)
-            destination_path = os.path.join(isolated_tmp, store_key)
-            await _download_file(store_key, destination_path)
-            downloaded_paths.append(destination_path)
+            local_file = _Path(isolated_tmp) / store_key
+            await _download_one(resolved, store_key, local_file, skip_if_exists=False)
+            downloaded_paths.append(str(local_file))
 
         elif file_names:
-            # Directory with specific files - download each individually
+            # Directory with specific files — download each individually
             for file_name in file_names:
                 file_path = os.path.join(path, file_name)
                 store_key = normalize_key(file_path)
-                destination_path = os.path.join(isolated_tmp, store_key)
-                await _download_file(store_key, destination_path)
-                downloaded_paths.append(destination_path)
+                local_file = _Path(isolated_tmp) / store_key
+                await _download_one(
+                    resolved, store_key, local_file, skip_if_exists=False
+                )
+                downloaded_paths.append(str(local_file))
         else:
-            # Download entire directory
+            # Download entire prefix, filtered by extension; sidecars (.sha256)
+            # are naturally excluded by the suffix filter.
             prefix = normalize_key(path)
-            dest_dir = os.path.join(isolated_tmp, prefix)
-            await _download_prefix(prefix, isolated_tmp, suffix=file_extension)
-            found_files = find_local_files_by_extension(
-                dest_dir, file_extension, file_names
+            keys = await _list_keys(
+                prefix, resolved, suffix=file_extension, normalize=False
             )
-            downloaded_paths.extend(found_files)
+            for key in keys:
+                local_file = _Path(isolated_tmp) / key
+                await _download_one(resolved, key, local_file, skip_if_exists=False)
+                downloaded_paths.append(str(local_file))
 
         # Check results
         if downloaded_paths:
             logger.info(
-                "Successfully downloaded files from object store",
-                file_count=len(downloaded_paths),
-                file_extension=file_extension,
+                "Downloaded %d %s files from object store",
+                len(downloaded_paths),
+                file_extension,
             )
             return downloaded_paths
         else:

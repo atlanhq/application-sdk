@@ -1,7 +1,7 @@
-# Added os import for path manipulations used in new tests
 import os
+from pathlib import Path
 from typing import Any, Dict
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -12,6 +12,11 @@ from application_sdk.storage.formats.utils import _download_files
 from application_sdk.testing.hypothesis.strategies.inputs.parquet_input import (
     parquet_input_config_strategy,
 )
+
+_MOCK_STORE = MagicMock()
+_FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+_DL_ID = _FIXED_HEX[:12]
+_EXPECTED_TMP = str(Path("./local/tmp/") / _DL_ID)
 
 # Configure Hypothesis settings at the module level
 settings.register_profile(
@@ -47,23 +52,25 @@ def test_init_single_file_with_file_names_raises_error() -> None:
 @pytest.mark.asyncio
 async def test_not_download_file_that_exists() -> None:
     """Test that no download occurs when a parquet file exists locally."""
-    path = "/data/test.parquet"  # Path with correct extension
-    # Don't use file_names with single file path due to validation
+    path = "/data/test.parquet"
 
     with (
         patch("os.path.isfile", return_value=True),
-        patch("application_sdk.storage.formats.utils._download_file") as mock_download,
+        patch(
+            "application_sdk.storage.formats.utils._download_one",
+            new_callable=AsyncMock,
+        ) as mock_download_one,
     ):
         parquet_input = ParquetFileReader(
             path=path,
-            chunk_size=100000,  # No file_names
+            chunk_size=100000,
             dataframe_type=DataframeType.pandas,
         )
 
         result = await _download_files(
             parquet_input.path, ".parquet", parquet_input.file_names
         )
-        mock_download.assert_not_called()
+        mock_download_one.assert_not_called()
         assert result == [path]
 
 
@@ -72,14 +79,19 @@ async def test_download_file_invoked_for_missing_files() -> None:
     """Ensure that a download is triggered when no parquet files exist locally."""
     path = "/local/test.parquet"
 
-    _FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
-    _DL_ID = _FIXED_HEX[:12]
-
     with (
-        patch("os.path.isfile", side_effect=[False, True]),
+        patch("os.path.isfile", return_value=False),
         patch("os.path.isdir", return_value=False),
         patch("glob.glob", return_value=[]),
-        patch("application_sdk.storage.formats.utils._download_file") as mock_download,
+        patch(
+            "application_sdk.storage.formats.utils._resolve_store",
+            return_value=_MOCK_STORE,
+        ),
+        patch(
+            "application_sdk.storage.formats.utils._download_one",
+            new_callable=AsyncMock,
+            return_value=(True, "downloaded"),
+        ) as mock_download_one,
         patch("uuid.uuid4") as mock_uuid4,
     ):
         mock_uuid4.return_value.hex = _FIXED_HEX
@@ -91,17 +103,14 @@ async def test_download_file_invoked_for_missing_files() -> None:
             parquet_input.path, ".parquet", parquet_input.file_names
         )
 
-        # Should attempt to download the file
-        # as_store_key strips leading "/" so destination uses normalized key
-        # Downloads are isolated under a unique subdirectory
-        expected_destination = os.path.join(
-            "./local/tmp/", _DL_ID, "local/test.parquet"
+        expected_local = Path(_EXPECTED_TMP) / "local/test.parquet"
+        mock_download_one.assert_called_once_with(
+            _MOCK_STORE,
+            "local/test.parquet",
+            expected_local,
+            skip_if_exists=False,
         )
-        mock_download.assert_called_once_with(
-            "local/test.parquet", expected_destination
-        )
-        # Result should be the actual downloaded file path in temporary directory
-        assert result == [expected_destination]
+        assert result == [str(expected_local)]
 
 
 # ---------------------------------------------------------------------------
