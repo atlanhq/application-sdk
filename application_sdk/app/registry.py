@@ -1,5 +1,6 @@
 """App and Task discovery and registration."""
 
+import logging
 import types
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -9,6 +10,11 @@ if TYPE_CHECKING:
     from application_sdk.app.entrypoint import EntryPointMetadata
     from application_sdk.app.task import TaskMetadata
 
+try:
+    from packaging.version import Version as _Version
+except ImportError:
+    _Version = None
+
 from application_sdk.contracts.base import validate_is_contract
 from application_sdk.errors import (
     APP_ALREADY_REGISTERED,
@@ -16,6 +22,8 @@ from application_sdk.errors import (
     TASK_NOT_FOUND,
     ErrorCode,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -201,12 +209,17 @@ class AppRegistry:
             return versions[version]
 
         # Return latest version using proper semver sorting
-        try:
-            from packaging.version import Version
-
-            latest_version = sorted(versions.keys(), key=lambda v: Version(v))[-1]
-        except Exception:
-            # Fall back to lexicographic sort if version parsing fails
+        if _Version is not None:
+            ver_cls = _Version
+            try:
+                latest_version = sorted(versions.keys(), key=lambda v: ver_cls(v))[-1]
+            except Exception:
+                logger.debug(
+                    "Semver parsing failed, falling back to lexicographic sort",
+                    exc_info=True,
+                )
+                latest_version = sorted(versions.keys())[-1]
+        else:
             latest_version = sorted(versions.keys())[-1]
         return versions[latest_version]
 

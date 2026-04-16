@@ -30,7 +30,6 @@ def sql_client():
     return client
 
 
-@pytest.mark.asyncio
 @patch("sqlalchemy.create_engine")
 async def test_load(mock_create_engine: Any, sql_client: BaseSQLClient):
     """Test basic loading functionality with fixed configuration"""
@@ -91,7 +90,6 @@ async def test_load_uses_asyncio_to_thread_for_ping(
     credentials=sql_credentials_strategy, connect_args=sqlalchemy_connect_args_strategy
 )
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-@pytest.mark.asyncio
 async def test_load_property_based(
     sql_client: BaseSQLClient,
     credentials: Dict[str, Any],
@@ -257,7 +255,6 @@ async def test_run_query_with_error(
 
 @given(connection_string=sql_connection_string_strategy)
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-@pytest.mark.asyncio
 async def test_connection_string_property_based(
     sql_client: BaseSQLClient, connection_string: str
 ):
