@@ -1180,9 +1180,9 @@ The v2 `ActivitiesInterface.get_workflow_args()` does:
 
 The skill must replicate ALL of these steps. Missing the StateStore lookup means `credential_guid` won't be found in production (platform stores it in state store, not in the workflow start input).
 
-### ParquetFileWriter/JsonFileWriter lose files without Dapr
+### ParquetFileWriter/JsonFileWriter require a running Dapr sidecar
 
-These writers upload via `ObjectStore` → `DaprClient()`. Without a Dapr sidecar (local dev or v3 base image), the upload silently fails and `_cleanup_local_path()` deletes the local copy. Files are written, processed, transformed — then destroyed.
+These writers upload via `ObjectStore` → `DaprClient()`. Without a Dapr sidecar (local dev or v3 base image), `ObjectStore.upload_file()` raises an exception and the workflow fails. Local files are **not** silently deleted — cleanup only runs after a successful upload — but the connector will not produce any output.
 
 **Fix:** Replace with direct local disk writes:
 ```python
@@ -1221,11 +1221,13 @@ if not local_parquets:
 
 `run_dev_combined()` defaults to `localhost:7233`. In production (v3 base image), the Temporal host comes from environment variables set by Helm. Hardcoding localhost causes `ConnectionRefused` in deployed pods.
 
-**Fix:**
+**Fix:** Prefer `ATLAN_TEMPORAL_HOST` (combined `host:port`, v3 primary) with fallback to v2 split vars:
 ```python
-workflow_host = os.environ.get("ATLAN_WORKFLOW_HOST", "localhost")
-workflow_port = os.environ.get("ATLAN_WORKFLOW_PORT", "7233")
-await run_dev_combined(MyApp, temporal_host=f"{workflow_host}:{workflow_port}")
+temporal_host = (
+    os.environ.get("ATLAN_TEMPORAL_HOST")
+    or f"{os.environ.get('ATLAN_WORKFLOW_HOST', 'localhost')}:{os.environ.get('ATLAN_WORKFLOW_PORT', '7233')}"
+)
+await run_dev_combined(MyApp, temporal_host=temporal_host)
 ```
 
 ### run_dev_combined() does not accept handler_class
