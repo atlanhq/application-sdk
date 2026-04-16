@@ -9,7 +9,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-def get_deployment_secret(key: str) -> Any:
+async def get_deployment_secret(key: str) -> Any:
     """Get a specific key from deployment configuration in the deployment secret store.
 
     Checks whether the deployment secret store Dapr component is registered
@@ -37,34 +37,22 @@ def get_deployment_secret(key: str) -> Any:
         return None
 
     try:
-        from dapr.clients import DaprClient
+        from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 
-        with DaprClient() as client:
-            # Verify the component is registered before calling.
-            metadata = client.get_metadata()
-            registered = any(
-                c.name == DEPLOYMENT_SECRET_STORE_NAME
-                for c in getattr(metadata, "registered_components", [])
-            )
-            if not registered:
-                logger.warning(
-                    "Deployment secret store component not registered: %s",
-                    DEPLOYMENT_SECRET_STORE_NAME,
-                )
-                return None
-
+        client = AsyncDaprClient()
+        try:
             # Try multi-key bundle first.
-            result = client.get_secret(
-                store_name=DEPLOYMENT_SECRET_STORE_NAME, key=DEPLOYMENT_SECRET_PATH
+            result = await client.get_secret(
+                DEPLOYMENT_SECRET_STORE_NAME, DEPLOYMENT_SECRET_PATH
             )
-            secret_data = process_secret_data(result.secret)
+            secret_data = process_secret_data(result)
             if isinstance(secret_data, dict) and key in secret_data:
                 return secret_data[key]
 
             # Fall back to single-key lookup.
             logger.debug("Multi-key bundle lookup missed; trying single-key: %s", key)
-            result = client.get_secret(store_name=DEPLOYMENT_SECRET_STORE_NAME, key=key)
-            single_data = process_secret_data(result.secret)
+            result = await client.get_secret(DEPLOYMENT_SECRET_STORE_NAME, key)
+            single_data = process_secret_data(result)
             if isinstance(single_data, dict):
                 if key in single_data:
                     return single_data[key]
@@ -72,6 +60,8 @@ def get_deployment_secret(key: str) -> Any:
                     return list(single_data.values())[0]
 
             return None
+        finally:
+            await client.close()
 
     except Exception:
         logger.error("Failed to fetch deployment config key: %s", key, exc_info=True)

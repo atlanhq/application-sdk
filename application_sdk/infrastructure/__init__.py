@@ -9,6 +9,13 @@ Usage:
     from application_sdk.infrastructure.secrets import EnvironmentSecretStore
 """
 
+from application_sdk.infrastructure._dapr import (
+    DaprBinding,
+    DaprCredentialVault,
+    DaprPubSub,
+    DaprSecretStore,
+    DaprStateStore,
+)
 from application_sdk.infrastructure.bindings import (
     Binding,
     BindingError,
@@ -56,6 +63,11 @@ from application_sdk.infrastructure.state import (
 )
 
 __all__ = [
+    "DaprBinding",
+    "DaprCredentialVault",
+    "DaprPubSub",
+    "DaprSecretStore",
+    "DaprStateStore",
     "Binding",
     "BindingError",
     "BindingRequest",

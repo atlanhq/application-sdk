@@ -204,13 +204,14 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.0.0"
+version = "2.8.7"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "duckdb" },
     { name = "duckdb-engine" },
     { name = "fastapi", extra = ["standard"] },
+    { name = "httpx-retries" },
     { name = "loguru" },
     { name = "obstore" },
     { name = "opentelemetry-exporter-otlp" },
@@ -263,7 +264,6 @@ tests = [
     { name = "pytest-order" },
 ]
 workflows = [
-    { name = "dapr" },
     { name = "orjson" },
     { name = "temporalio" },
 ]
@@ -304,13 +304,13 @@ requires-dist = [
     { name = "azure-storage-file-datalake", marker = "extra == 'azure'", specifier = ">=12.19.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6,<1.43.0" },
     { name = "daft", marker = "extra == 'daft'", specifier = ">=0.7.1,<0.8.0" },
-    { name = "dapr", marker = "extra == 'workflows'", specifier = "==1.16.0" },
     { name = "duckdb", specifier = ">=1.1.3,<1.5.0" },
     { name = "duckdb-engine", specifier = ">=0.17.0,<0.18.0" },
     { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=37.1.0,<39.1.0" },
     { name = "fastapi", extras = ["standard"], specifier = "==0.127.0" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.2.0" },
     { name = "httpx", marker = "extra == 'tests'", specifier = ">=0.27.0,<0.29.0" },
+    { name = "httpx-retries", specifier = ">=0.4.0,<0.5.0" },
     { name = "loguru", specifier = ">=0.7.3,<0.8.0" },
     { name = "numpy", marker = "extra == 'scale-data-generator'", specifier = ">=1.23.5,<2.5.0" },
     { name = "obstore", specifier = ">=0.9.1,<0.10.0" },
@@ -1027,23 +1027,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dapr"
-version = "1.16.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "grpcio" },
-    { name = "grpcio-status" },
-    { name = "protobuf" },
-    { name = "python-dateutil" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a4/b1/d39ba15d453b67b93d53ec56de7eb9324cb8bbf0599afcb2c0ade990b7ae/dapr-1.16.0.tar.gz", hash = "sha256:c7e3d005552a598d07608d0d502b2bc432e86678f94b2beccc13a096b9198684", size = 122467, upload-time = "2025-09-17T10:59:57.138Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c7/3e/de39e18e14d07882fcff028227c2dbe7fa202f09413127d4de32b03e0884/dapr-1.16.0-py3-none-any.whl", hash = "sha256:076dd559a0b450eae24b1c2ae779c9299ed3e06a05c1f72719a6613af8d19ced", size = 166710, upload-time = "2025-09-17T10:59:55.473Z" },
-]
-
-[[package]]
 name = "distlib"
 version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1629,20 +1612,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4a/45/122df922d05655f63930cf42c9e3f72ba20aadb26c100ee105cad4ce4257/grpcio-1.76.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:1c9b93f79f48b03ada57ea24725d83a30284a012ec27eab2cf7e50a550cbbbcc", size = 7592214, upload-time = "2025-10-21T16:22:33.831Z" },
     { url = "https://files.pythonhosted.org/packages/4a/6e/0b899b7f6b66e5af39e377055fb4a6675c9ee28431df5708139df2e93233/grpcio-1.76.0-cp314-cp314-win32.whl", hash = "sha256:747fa73efa9b8b1488a95d0ba1039c8e2dca0f741612d80415b1e1c560febf4e", size = 4062961, upload-time = "2025-10-21T16:22:36.468Z" },
     { url = "https://files.pythonhosted.org/packages/19/41/0b430b01a2eb38ee887f88c1f07644a1df8e289353b78e82b37ef988fb64/grpcio-1.76.0-cp314-cp314-win_amd64.whl", hash = "sha256:922fa70ba549fce362d2e2871ab542082d66e2aaf0c19480ea453905b01f384e", size = 4834462, upload-time = "2025-10-21T16:22:39.772Z" },
-]
-
-[[package]]
-name = "grpcio-status"
-version = "1.76.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "googleapis-common-protos" },
-    { name = "grpcio" },
-    { name = "protobuf" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/46/e9f19d5be65e8423f886813a2a9d0056ba94757b0c5007aa59aed1a961fa/grpcio_status-1.76.0.tar.gz", hash = "sha256:25fcbfec74c15d1a1cb5da3fab8ee9672852dc16a5a9eeb5baf7d7a9952943cd", size = 13679, upload-time = "2025-10-21T16:28:52.545Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8c/cc/27ba60ad5a5f2067963e6a858743500df408eb5855e98be778eaef8c9b02/grpcio_status-1.76.0-py3-none-any.whl", hash = "sha256:380568794055a8efbbd8871162df92012e0228a5f6dffaf57f2a00c534103b18", size = 14425, upload-time = "2025-10-21T16:28:40.853Z" },
 ]
 
 [[package]]

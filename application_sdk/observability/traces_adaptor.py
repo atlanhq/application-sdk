@@ -30,7 +30,6 @@ from application_sdk.observability.utils import (
     get_observability_dir,
 )
 
-# Re-export for backwards compatibility
 __all__ = ["TraceRecord", "AtlanTracesAdapter", "get_traces"]
 
 

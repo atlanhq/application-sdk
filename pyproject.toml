@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.0.0"
+version = "2.8.7"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -26,6 +26,7 @@ dependencies = [
     "psutil>=7.0.0,<7.3.0",
     "fastapi[standard]==0.127.0",
     "pyatlan>=9,<10",
+    "httpx-retries>=0.4.0,<0.5.0",
     "pydantic>=2.10.6,<2.13.0",
     "loguru>=0.7.3,<0.8.0",
     "uvloop>=0.21.0,<0.23.0; sys_platform != 'win32'",
@@ -44,12 +45,11 @@ application-sdk = "application_sdk.main:main"
 [project.urls]
 Repository = "https://github.com/atlanhq/application-sdk"
 Documentation = "https://github.com/atlanhq/application-sdk/README.md"
-"Changelog" = "https://github.com/atlanhq/application-sdk/blob/refactor-v3/CHANGELOG.md"
+"Changelog" = "https://github.com/atlanhq/application-sdk/blob/main/CHANGELOG.md"
 
 # Optional dependencies for specific functionality - Install using: uv sync --extra workflows
 [project.optional-dependencies]
 workflows = [
-    "dapr==1.16.0",
     "temporalio>=1.7.1,<1.24.0",
     "orjson>=3.11.6,<3.12.0",
 ]
