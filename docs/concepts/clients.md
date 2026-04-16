@@ -195,7 +195,7 @@ Provides clients for interacting with the Temporal workflow orchestration servic
 
 ### Prometheus Metrics
 
-`TemporalWorkflowClient` automatically exposes ~40 built-in Temporal SDK metrics via a Prometheus endpoint on every worker. No code changes are required — metrics become available as soon as `load()` is called.
+`create_temporal_client()` automatically exposes ~40 built-in Temporal SDK metrics via a Prometheus endpoint on every worker. No code changes are required — metrics become available as soon as the client is created.
 
 **Endpoint:** `0.0.0.0:9464` by default (OpenTelemetry Prometheus convention).
 
@@ -216,7 +216,7 @@ Provides clients for interacting with the Temporal workflow orchestration servic
 | `temporal_sticky_cache_hit` | Sticky cache hit count |
 | `temporal_sticky_cache_size` | Current sticky cache size |
 
-The Temporal `Runtime` that binds the metrics port is a process-level singleton (`TemporalWorkflowClient._prometheus_runtime`). Creating multiple client instances or calling `load()` more than once within the same process reuses the same `Runtime` and does not attempt to rebind the port.
+The Temporal `Runtime` that binds the metrics port is a process-level singleton (`_prometheus_runtime` in `backend.py`). Creating multiple client instances or calling `create_temporal_client()` more than once within the same process reuses the same `Runtime` and does not attempt to rebind the port.
 
 ### Configuration and Usage
 
