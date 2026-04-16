@@ -18,12 +18,15 @@ identically for single files and directories.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from application_sdk.contracts.types import FileReference, StorageTier
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -270,9 +273,24 @@ async def upload(
             upload_tasks.append(_upload_bounded(file_path, key))
 
         results = await asyncio.gather(*upload_tasks, return_exceptions=True)
-        for r in results:
-            if r is True:
+        errors = []
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                errors.append((str(files[i]), r))
+            elif r is True:
                 transferred_count += 1
+        if errors:
+            from application_sdk.storage.errors import StorageError
+
+            logger.warning(
+                "upload: %d/%d uploads failed under %s",
+                len(errors),
+                len(files),
+                prefix,
+            )
+            raise StorageError(
+                f"{len(errors)} upload(s) failed under prefix '{prefix}'"
+            ) from errors[0][1]
 
         store_prefix = (prefix.rstrip("/") + "/") if prefix else ""
         reason = "uploaded" if transferred_count > 0 else "skipped:hash_match"
@@ -381,6 +399,7 @@ async def download(
                 )
                 return ok
 
+        transferred_count = 0
         download_tasks = []
         for key in data_keys:
             rel = key[len(strip) :] if key.startswith(strip) else key
@@ -388,7 +407,24 @@ async def download(
             download_tasks.append(_download_bounded(key, local_file))
 
         results = await asyncio.gather(*download_tasks, return_exceptions=True)
-        transferred_count = sum(1 for r in results if r is True)
+        errors = []
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                errors.append((data_keys[i], r))
+            elif r is True:
+                transferred_count += 1
+        if errors:
+            from application_sdk.storage.errors import StorageError
+
+            logger.warning(
+                "download: %d/%d downloads failed under %s",
+                len(errors),
+                len(data_keys),
+                prefix,
+            )
+            raise StorageError(
+                f"{len(errors)} download(s) failed under prefix '{prefix}'"
+            ) from errors[0][1]
 
         reason = "downloaded" if transferred_count > 0 else "skipped:hash_match"
         ref = FileReference(
