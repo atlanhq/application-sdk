@@ -94,6 +94,7 @@ jobs:
         !contains(github.event.comment.body, '@sdk-review cancel') &&
         github.event.comment.user.login != 'claude[bot]' &&
         github.event.comment.user.login != 'github-actions[bot]' &&
+        github.event.comment.user.login != 'atlan-ci' &&
         (github.event.comment.author_association == 'OWNER' ||
          github.event.comment.author_association == 'MEMBER' ||
          github.event.comment.author_association == 'COLLABORATOR')
@@ -1331,7 +1332,7 @@ jobs:
                 }
               }
             }' -F owner=atlanhq -F name=application-sdk -F num="$PR" \
-            --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | select(.comments.nodes[0].author.login == "claude[bot]" or .comments.nodes[0].author.login == "github-actions[bot]") | .id' 2>/dev/null || echo "")
+            --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | select(.comments.nodes[0].author.login == "claude[bot]" or .comments.nodes[0].author.login == "github-actions[bot]" or .comments.nodes[0].author.login == "atlan-ci") | .id' 2>/dev/null || echo "")
 
           for thread_id in $THREADS; do
             gh api graphql -f query='
@@ -1563,9 +1564,9 @@ jobs:
           # Dismiss the bot's prior APPROVED review. Removing the label
           # isn't enough — the formal PR review stays green unless
           # explicitly dismissed via the Reviews API. We only dismiss
-          # reviews authored by github-actions[bot] — never a human's.
+          # reviews authored by github-actions[bot] or atlan-ci (ORG_PAT) — never a human's.
           BOT_REVIEW_IDS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
-            --jq '[.[] | select(.user.login == "github-actions[bot]" and .state == "APPROVED")] | .[].id' 2>/dev/null || echo "")
+            --jq '[.[] | select((.user.login == "github-actions[bot]" or .user.login == "atlan-ci") and .state == "APPROVED")] | .[].id' 2>/dev/null || echo "")
           for review_id in $BOT_REVIEW_IDS; do
             gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
               -X PUT \
@@ -1618,6 +1619,7 @@ jobs:
        contains(github.event.comment.body, '@sdk-review cancel')) &&
       github.event.comment.user.login != 'claude[bot]' &&
       github.event.comment.user.login != 'github-actions[bot]' &&
+      github.event.comment.user.login != 'atlan-ci' &&
       (github.event.comment.author_association == 'OWNER' ||
        github.event.comment.author_association == 'MEMBER' ||
        github.event.comment.author_association == 'COLLABORATOR')
