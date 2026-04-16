@@ -154,7 +154,7 @@ jobs:
             # original requester if we can find it (from the last
             # @sdk-review auto-complete comment on the PR); otherwise
             # fall back to the bot itself.
-            COMMENTER=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            COMMENTER=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
               --jq '[.[] | select(.body | test("@sdk-review\\s+auto[- ]?complete|@sdk-review\\s+resolve"; "i"))
                     | select(.user.login != "github-actions[bot]")] | last | .user.login // "github-actions[bot]"')
             COMMENT_BODY=""  # no comment in dispatch path
@@ -268,7 +268,7 @@ jobs:
           # Count prior SDK_REVIEW_V2 comments (none posted yet in this run).
           #   0  → first Review on this PR
           #   >0 → Re-review (there's a prior review in the history)
-          PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+          PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
             --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 0)
           if [ "${PRIOR_REVIEWS:-0}" -gt 0 ]; then
             VERB="Re-review"
@@ -874,7 +874,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" \
+          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
             | jq -r '[.[] | select(.body | contains("SDK_REVIEW_V2"))
               | select(.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
               | select(.body | contains("SDK_REVIEW_V2_RECONCILED") | not)] | last | .body // ""')
@@ -1027,7 +1027,7 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
           # Find the most recent SDK_REVIEW_V2 comment on this PR
-          REVIEW_COMMENT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+          REVIEW_COMMENT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
             --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | last | .body // ""')
 
           if [ -z "$REVIEW_COMMENT" ]; then
@@ -1272,7 +1272,7 @@ jobs:
           if [ "$MODE" = "override" ]; then
             # Find the most recent @sdk-review override:… comment by a
             # human collaborator and extract admin + reason.
-            OVERRIDE_INFO=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+            OVERRIDE_INFO=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
               --jq '[.[] | select(.body | test("@sdk-review\\s+override:"; "i"))] | last // {}')
             OVERRIDE_ADMIN=$(printf '%s' "$OVERRIDE_INFO" | jq -r '.user.login // "unknown"')
             OVERRIDE_REASON=$(printf '%s' "$OVERRIDE_INFO" | jq -r '.body // ""' \
@@ -1287,7 +1287,7 @@ jobs:
           elif [ "$MODE" = "challenge" ]; then
             APPROVE_BODY="SDK Re-review (challenge response): blocking findings withdrawn or softened after re-evaluating author pushback. CI passing. Branch up to date. Approved."
           else
-            PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+            PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
               --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 1)
 
             if [ "${PRIOR_REVIEWS:-1}" -gt 1 ]; then
