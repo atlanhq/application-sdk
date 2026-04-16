@@ -231,30 +231,47 @@ class DaprCredentialVault:
         self, credential_config: dict[str, Any]
     ) -> dict[str, Any]:
         """Fetch secrets in single-key mode — one lookup per string field value."""
+        import asyncio
+
         logger.debug("Single-key mode: fetching secrets per field")
         collected: dict[str, Any] = {}
         failed_lookups: list[str] = []
 
-        async def _try_fetch(label: str, value: str) -> None:
+        async def _try_fetch(
+            label: str, value: str
+        ) -> tuple[str, dict[str, Any] | None, str | None]:
             if not value.strip():
-                return
+                return label, None, None
             try:
                 single_secret = await self._get_secret(value)
-                if single_secret:
-                    for k, v in single_secret.items():
-                        if v is None or v == "":
-                            continue
-                        collected[k] = v
+                return label, single_secret, None
             except Exception as e:
-                failed_lookups.append("  '%s' → '%s': %s" % (label, value, e))
+                return label, None, "  '%s' → '%s': %s" % (label, value, e)
 
+        # Collect all tasks for parallel execution
+        tasks: list = []
         for field, value in credential_config.items():
             if isinstance(value, str):
-                await _try_fetch(field, value)
+                tasks.append(_try_fetch(field, value))
             elif field == "extra" and isinstance(value, dict):
                 for extra_key, extra_value in value.items():
                     if isinstance(extra_value, str):
-                        await _try_fetch(f"extra.{extra_key}", extra_value)
+                        tasks.append(_try_fetch(f"extra.{extra_key}", extra_value))
+
+        # Run all secret fetches in parallel
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in results:
+            if isinstance(result, Exception):
+                continue
+            label, single_secret, error_msg = result
+            if error_msg is not None:
+                failed_lookups.append(error_msg)
+            elif single_secret:
+                for k, v in single_secret.items():
+                    if v is None or v == "":
+                        continue
+                    collected[k] = v
 
         if not collected and failed_lookups:
             logger.error(

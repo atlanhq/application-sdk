@@ -119,13 +119,19 @@ async def delete_prefix(
         StorageError: If the listing or any deletion fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
+    import asyncio
+
     resolved = _resolve_store(store)
     keys = await list_keys(prefix, resolved, normalize=normalize)
-    count = 0
-    for key in keys:
-        if await delete(key, resolved, normalize=False):
-            count += 1
-    return count
+
+    sem = asyncio.Semaphore(20)
+
+    async def _del(k: str) -> bool:
+        async with sem:
+            return await delete(k, resolved, normalize=False)
+
+    results = await asyncio.gather(*[_del(k) for k in keys], return_exceptions=True)
+    return sum(1 for r in results if r is True)
 
 
 async def download_prefix(

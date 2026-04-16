@@ -249,15 +249,29 @@ async def upload(
         else:
             prefix = src.name
 
+        import asyncio
+
         files = [p for p in src.rglob("*") if p.is_file()]
         transferred_count = 0
+
+        sem = asyncio.Semaphore(5)
+
+        async def _upload_bounded(file_path: Path, key: str) -> bool:
+            async with sem:
+                ok, _ = await _upload_one(
+                    resolved, file_path, key, skip_if_exists=skip_if_exists
+                )
+                return ok
+
+        upload_tasks = []
         for file_path in files:
             relative = str(file_path.relative_to(src)).replace(os.sep, "/")
             key = f"{prefix}/{relative}" if prefix else relative
-            ok, _ = await _upload_one(
-                resolved, file_path, key, skip_if_exists=skip_if_exists
-            )
-            if ok:
+            upload_tasks.append(_upload_bounded(file_path, key))
+
+        results = await asyncio.gather(*upload_tasks, return_exceptions=True)
+        for r in results:
+            if r is True:
                 transferred_count += 1
 
         store_prefix = (prefix.rstrip("/") + "/") if prefix else ""
@@ -353,18 +367,28 @@ async def download(
         else:
             dest_dir = Path(tempfile.mkdtemp())
 
+        import asyncio
+
         dest_dir.mkdir(parents=True, exist_ok=True)
         strip = prefix
 
-        transferred_count = 0
+        sem = asyncio.Semaphore(5)
+
+        async def _download_bounded(key: str, local_file: Path) -> bool:
+            async with sem:
+                ok, _ = await _download_one(
+                    resolved, key, local_file, skip_if_exists=skip_if_exists
+                )
+                return ok
+
+        download_tasks = []
         for key in data_keys:
             rel = key[len(strip) :] if key.startswith(strip) else key
             local_file = dest_dir / rel
-            ok, _ = await _download_one(
-                resolved, key, local_file, skip_if_exists=skip_if_exists
-            )
-            if ok:
-                transferred_count += 1
+            download_tasks.append(_download_bounded(key, local_file))
+
+        results = await asyncio.gather(*download_tasks, return_exceptions=True)
+        transferred_count = sum(1 for r in results if r is True)
 
         reason = "downloaded" if transferred_count > 0 else "skipped:hash_match"
         ref = FileReference(
