@@ -113,6 +113,8 @@ ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING: bool = (
 )
 
 # Workflow Client Constants
+# v2-compat: remove ATLAN_WORKFLOW_HOST/PORT/NAMESPACE fallbacks when all deployments
+# use ATLAN_TEMPORAL_HOST and ATLAN_TEMPORAL_NAMESPACE.
 #: Host address for the Temporal server
 #: Prefers ATLAN_TEMPORAL_HOST (v3 combined host:port) then ATLAN_WORKFLOW_HOST (v2).
 _temporal_host_parts = os.getenv("ATLAN_TEMPORAL_HOST", "").split(":")
@@ -326,12 +328,7 @@ TRACES_CLEANUP_ENABLED = (
 )
 TRACES_FILE_NAME = "traces.parquet"
 
-# Deprecated — use ATLAN_ENABLE_OBSERVABILITY_STORE_SINK instead.
-ENABLE_OBSERVABILITY_DAPR_SINK = (
-    os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true").lower() == "true"
-)
-
-# Store Sink Configuration (falls back to legacy env var, defaults to enabled)
+# Store Sink Configuration (defaults to enabled)
 ENABLE_OBSERVABILITY_STORE_SINK: bool = (
     os.getenv(
         "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK",
