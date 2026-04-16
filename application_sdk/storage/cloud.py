@@ -135,7 +135,7 @@ class CloudStore:
         """
         try:
             result = await obs.get_async(self._store, key)
-            return await result.bytes_async()
+            return bytes(await result.bytes_async())
         except Exception as exc:
             if "not found" in str(exc).lower() or "404" in str(exc):
                 raise FileNotFoundError(f"Key not found: {key}") from exc
