@@ -1149,7 +1149,7 @@ class App(ABC):
             TEMPORARY_PATH,
             TRACKED_FILE_REFS_KEY,
         )
-        from application_sdk.execution._temporal.activity_utils import build_output_path
+        from application_sdk.execution import build_output_path
 
         path_results: dict[str, bool] = {}
 
@@ -1233,7 +1233,7 @@ class App(ABC):
             PROTECTED_STORAGE_PREFIXES,
             TRACKED_FILE_REFS_KEY,
         )
-        from application_sdk.execution._temporal.activity_utils import build_output_path
+        from application_sdk.execution import build_output_path
         from application_sdk.storage.ops import _resolve_store, delete
 
         store = self.context.storage if self._context is not None else None

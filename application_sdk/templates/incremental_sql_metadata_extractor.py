@@ -428,9 +428,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             download_s3_prefix_with_structure,
             get_persistent_artifacts_path,
         )
-        from application_sdk.execution._temporal.activity_utils import (
-            get_object_store_prefix,
-        )
+        from application_sdk.execution import get_object_store_prefix
         from application_sdk.storage.batch import download_prefix, upload_prefix
 
         if not input.output_path:
@@ -583,9 +581,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         import json
         import pathlib
 
-        from application_sdk.execution._temporal.activity_utils import (
-            get_object_store_prefix,
-        )
+        from application_sdk.execution import get_object_store_prefix
         from application_sdk.storage.ops import download_file
 
         if not input.output_path:
