@@ -374,3 +374,90 @@ class TestStartActivityWithLock:
         # ttl_seconds = 5 minutes = 300 seconds, should be 3rd positional arg
         acquire_args = captured_args["args"]
         assert acquire_args[2] == 300  # ttl_seconds
+
+
+# ---------------------------------------------------------------------------
+# Regression: lock held until activity completes (BLDX-1025)
+# ---------------------------------------------------------------------------
+
+
+class TestLockHeldUntilActivityCompletes:
+    """Regression: lock must not be released before business activity finishes."""
+
+    @patch(
+        "application_sdk.execution._temporal.interceptors.lock.IS_LOCKING_DISABLED",
+        False,
+    )
+    @patch(
+        "application_sdk.execution._temporal.interceptors.lock.APPLICATION_NAME",
+        "test-app",
+    )
+    async def test_lock_released_after_activity_completion(self):
+        """The lock release must happen AFTER the activity result is awaited."""
+        call_order: list[str] = []
+
+        class MockActivityHandle:
+            def __await__(self_handle):
+                async def _resolve():
+                    call_order.append("activity_completed")
+                    return {"status": "done"}
+
+                return _resolve().__await__()
+
+        mock_next = AsyncMock()
+        mock_next.start_activity = AsyncMock(return_value=MockActivityHandle())
+
+        mock_workflow_info = MagicMock()
+        mock_workflow_info.run_id = "test-run-id"
+        mock_workflow_info.execution_timeout = timedelta(minutes=10)
+
+        lock_result = {"resource_id": "lock:test:0", "owner_id": "test-app:test-run-id"}
+
+        with (
+            patch(
+                "application_sdk.execution._temporal.interceptors.lock.workflow"
+            ) as mock_workflow,
+        ):
+            mock_workflow.info.return_value = mock_workflow_info
+
+            async def mock_execute_activity(*args, **kwargs):
+                activity_name = args[0] if args else kwargs.get("activity", "")
+                if activity_name == "acquire_distributed_lock":
+                    call_order.append("lock_acquired")
+                    return lock_result
+                elif activity_name == "release_distributed_lock":
+                    call_order.append("lock_released")
+                    return None
+
+            mock_workflow.execute_activity = AsyncMock(
+                side_effect=mock_execute_activity
+            )
+            mock_workflow.ActivityHandle = MagicMock
+
+            mock_activity_fn = MagicMock()
+            mock_activity_fn.__lock_metadata__ = {
+                "lock_name": "test-lock",
+                "max_locks": 5,
+            }
+            activities = {"test_activity": mock_activity_fn}
+
+            from application_sdk.execution._temporal.interceptors.lock import (
+                RedisLockOutboundInterceptor,
+            )
+
+            interceptor = RedisLockOutboundInterceptor(mock_next, activities)
+
+            inp = MagicMock()
+            inp.activity = "test_activity"
+            inp.schedule_to_close_timeout = timedelta(minutes=5)
+            await interceptor.start_activity(inp)
+
+        assert "lock_acquired" in call_order
+        assert "activity_completed" in call_order
+        assert "lock_released" in call_order
+        assert call_order.index("lock_acquired") < call_order.index(
+            "activity_completed"
+        ), "Lock must be acquired before activity starts"
+        assert call_order.index("activity_completed") < call_order.index(
+            "lock_released"
+        ), "Activity must complete before lock is released"
