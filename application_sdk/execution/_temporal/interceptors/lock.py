@@ -139,7 +139,7 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
             # the handle rather than returning it immediately.
             handle = await self.next.start_activity(input)
             result = await handle
-            return result  # type: ignore[return-value]
+            return result  # type: ignore[return-value]  # Returns awaited result, not handle — lock must be held until activity completion
 
         finally:
             # Step 3: Release lock (fire-and-forget with short timeout)
