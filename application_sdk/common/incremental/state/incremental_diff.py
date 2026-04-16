@@ -152,9 +152,9 @@ def create_incremental_diff(
     # Step 4: Copy all schemas and databases (small, provide context)
     # ------------------------------------------------------------------
     for entity_type in [EntityType.SCHEMA, EntityType.DATABASE]:
-        entity_dir = transformed_dir.joinpath(entity_type)
+        entity_dir = transformed_dir.joinpath(entity_type.value)
         if entity_dir.exists():
-            dest_dir = incremental_diff_dir.joinpath(entity_type)
+            dest_dir = incremental_diff_dir.joinpath(entity_type.value)
             count = copy_directory_parallel(
                 entity_dir, dest_dir, max_workers=copy_workers
             )
