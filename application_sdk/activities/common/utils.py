@@ -151,9 +151,9 @@ def auto_heartbeater(fn: F) -> F:
     heartbeat timeout. If no timeout is configured, it defaults to 120 seconds
     (resulting in a 40-second heartbeat interval).
 
-    Supports both async and sync activity functions. For async functions, heartbeats
-    are sent via an asyncio task. For sync functions, heartbeats are sent via a
-    background thread, preserving Temporal's thread pool execution model.
+    Supports both async and sync activity functions. Heartbeats are sent via a
+    background thread in both cases, ensuring they continue even when async
+    activities make blocking synchronous calls that would stall the event loop.
 
     Args:
         fn: The activity function to be decorated. Can be sync or async.
@@ -187,17 +187,28 @@ def auto_heartbeater(fn: F) -> F:
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any):
             heartbeat_timeout = _get_heartbeat_timeout()
-            heartbeat_task = asyncio.create_task(
-                send_periodic_heartbeat(heartbeat_timeout.total_seconds() / 3)
+            stop_event = threading.Event()
+            # Copy the current context so the heartbeat thread can access
+            # the Temporal activity context (stored in contextvars)
+            ctx = contextvars.copy_context()
+            heartbeat_thread = threading.Thread(
+                target=ctx.run,
+                args=(
+                    send_periodic_heartbeat_sync,
+                    heartbeat_timeout.total_seconds() / 3,
+                    stop_event,
+                ),
+                daemon=True,
             )
+            heartbeat_thread.start()
             try:
                 return await fn(*args, **kwargs)
             except Exception as e:
                 logger.error("Error in activity: %s", e, exc_info=e)
                 raise
             finally:
-                heartbeat_task.cancel()
-                await asyncio.wait([heartbeat_task])
+                stop_event.set()
+                heartbeat_thread.join(timeout=5)
 
         return cast(F, async_wrapper)
     else:
