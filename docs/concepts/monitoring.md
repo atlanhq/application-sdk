@@ -4,7 +4,7 @@ The Application SDK exposes built-in metrics for monitoring workflow execution h
 
 ## Temporal Prometheus Metrics
 
-Every application that uses `TemporalWorkflowClient` automatically exposes ~40 built-in Temporal SDK metrics. No code changes are required.
+Every application that uses the SDK worker automatically exposes ~40 built-in Temporal SDK metrics. No code changes are required.
 
 ### Endpoint
 
@@ -78,7 +78,7 @@ ports:
 
 ### Singleton Runtime
 
-The Temporal `Runtime` that binds the metrics port is a process-level singleton (`TemporalWorkflowClient._prometheus_runtime`). Multiple client instances or repeated `load()` calls within the same process reuse the same `Runtime` — the port is bound exactly once per process. See [Clients](clients.md#prometheus-metrics) for implementation details.
+The Temporal `Runtime` that binds the metrics port is a process-level singleton (the SDK runtime, initialized once per process by `create_worker()`). The port is bound exactly once per process.
 
 ### Recommended Alerts
 

@@ -171,7 +171,7 @@ class PostgresHandler(Handler):
         client = PostgresClient()
         await client.load(credentials=cred.to_dict())
 
-        rows = await client.execute_query(
+        rows = await client.run_query(
             "SELECT catalog_name AS TABLE_CATALOG, schema_name AS TABLE_SCHEMA "
             "FROM information_schema.schemata "
             "WHERE schema_name NOT LIKE 'pg_%' "
@@ -292,9 +292,9 @@ class PostgresApp(SqlMetadataExtractor):
     async def fetch_databases(self, input: MyFetchInput) -> FetchDatabasesOutput:
         """Fetch the current database name from PostgreSQL."""
         client = PostgresClient()
-        await client.load(credential_ref=input.credential_ref)
+        await client.load(credentials=input.credentials)
 
-        rows = await client.execute_query(
+        rows = await client.run_query(
             "SELECT datname AS database_name FROM pg_database WHERE datname = current_database()"
         )
         databases = [r["database_name"] for r in rows]
@@ -309,10 +309,10 @@ class PostgresApp(SqlMetadataExtractor):
     async def fetch_schemas(self, input: MyFetchInput) -> FetchSchemasOutput:
         """Fetch non-system schemas, applying include/exclude filters."""
         client = PostgresClient()
-        await client.load(credential_ref=input.credential_ref)
+        await client.load(credentials=input.credentials)
         cfg = input.metadata_config
 
-        rows = await client.execute_query(f"""
+        rows = await client.run_query(f"""
             SELECT s.schema_name
             FROM information_schema.schemata s
             WHERE s.schema_name NOT LIKE 'pg_%'
@@ -332,7 +332,7 @@ class PostgresApp(SqlMetadataExtractor):
     async def fetch_tables(self, input: MyFetchInput) -> FetchTablesOutput:
         """Fetch tables matching the configured filters."""
         client = PostgresClient()
-        await client.load(credential_ref=input.credential_ref)
+        await client.load(credentials=input.credentials)
         cfg = input.metadata_config
 
         sql = f"""
@@ -344,7 +344,7 @@ class PostgresApp(SqlMetadataExtractor):
         if cfg.temp_table_regex:
             sql += f" AND t.table_name !~ '{cfg.temp_table_regex}'"
 
-        rows = await client.execute_query(sql)
+        rows = await client.run_query(sql)
         tables = [f"{r['table_schema']}.{r['table_name']}" for r in rows]
 
         return FetchTablesOutput(
@@ -357,7 +357,7 @@ class PostgresApp(SqlMetadataExtractor):
     async def fetch_columns(self, input: MyFetchInput) -> FetchColumnsOutput:
         """Fetch column metadata for all matching tables."""
         client = PostgresClient()
-        await client.load(credential_ref=input.credential_ref)
+        await client.load(credentials=input.credentials)
         cfg = input.metadata_config
 
         sql = f"""
@@ -370,7 +370,7 @@ class PostgresApp(SqlMetadataExtractor):
         if cfg.temp_table_regex:
             sql += f" AND c.table_name !~ '{cfg.temp_table_regex}'"
 
-        rows = await client.execute_query(sql)
+        rows = await client.run_query(sql)
 
         return FetchColumnsOutput(
             chunk_count=1,
@@ -729,7 +729,7 @@ dapr:
 6. **Log with the SDK logger.** Use `application_sdk.observability.logger_adaptor.get_logger` for structured logging that integrates with Temporal.
 7. **Test without sidecars.** Use `MockStateStore` and `MockSecretStore` from `application_sdk.testing.mocks` to test your connector and handler without Dapr or Temporal running.
 8. **Set `ATLAN_APP_MODULE` in the Dockerfile.** This locks the app module to the image and avoids runtime misconfiguration.
-9. **Use `on_complete` for cleanup.** Override `on_complete(success: bool)` for post-run cleanup (see [Migration Guide Step 12](../migration-guide-v3.md#step-12-app-lifecycle-hooks)).
+9. **Use `on_complete` for cleanup.** Override `on_complete()` for post-run cleanup (see [Migration Guide Step 12](../migration-guide-v3.md#step-12-app-lifecycle-hooks)).
 
 ## Next Steps
 

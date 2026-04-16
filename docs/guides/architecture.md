@@ -189,6 +189,8 @@ await upload_file("artifacts/output.json", local_path="/tmp/output.json")
 await download_file("artifacts/output.json", local_path="/tmp/output.json")
 ```
 
+For accessing external customer cloud buckets (S3, GCS, Azure Blob), the SDK provides `CloudStore` which accepts explicit cloud credentials and bucket configuration rather than relying on Dapr bindings.
+
 Higher-level: `App` provides `self.upload()` and `self.download()` framework tasks for directory-level transfer with automatic `FileReference` tracking for cleanup. See [ADR-0005](../adr/0005-infrastructure-abstraction.md).
 
 ---
@@ -256,6 +258,8 @@ application_sdk/
 │   ├── retry.py            # RetryPolicy (framework wrapper)
 │   ├── heartbeat.py        # HeartbeatController, run_in_thread
 │   ├── sandbox.py          # SandboxConfig with framework defaults
+│   ├── decorators.py       # Execution-level decorators
+│   ├── settings.py         # Execution settings and configuration
 │   └── _temporal/          # Internal Temporal integration (never import directly)
 │
 ├── infrastructure/         # Infrastructure protocols and implementations
@@ -272,7 +276,10 @@ application_sdk/
 │   ├── ref.py              # CredentialRef and helper constructors
 │   ├── types.py            # Credential types (BasicCredential, etc.)
 │   ├── resolver.py         # CredentialResolver
-│   └── atlan_client.py     # AtlanClientMixin
+│   ├── atlan_client.py     # AtlanClientMixin
+│   ├── git.py              # Git credential handling
+│   ├── oauth.py            # OAuth credential flows
+│   └── registry.py         # Credential registry
 │
 ├── storage/                # obstore-backed object storage
 │   ├── ops.py              # upload_file, download_file, delete, exists

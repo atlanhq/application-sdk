@@ -160,9 +160,7 @@ Called after `run()` finishes, whether it succeeded or raised an exception:
 class MyConnector(App):
     async def run(self, input: ExtractionInput) -> ExtractionOutput: ...
 
-    async def on_complete(self, success: bool) -> None:
-        if success:
-            await self.notify_downstream()
+    async def on_complete(self) -> None:
         await self.cleanup_files(CleanupInput())     # remove local temp files tracked via FileReference
         await self.cleanup_storage(StorageCleanupInput())   # remove transient object store artifacts
 ```

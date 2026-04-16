@@ -713,9 +713,7 @@ class MyConnector(App):
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
         ...
 
-    async def on_complete(self, success: bool) -> None:
-        if success:
-            await self.notify_downstream()
+    async def on_complete(self) -> None:
         # cleanup is automatic — see below
 ```
 
@@ -724,7 +722,7 @@ class MyConnector(App):
 Two cleanup tasks are built into every `App`. Call them from `run()` or `on_complete()`:
 
 ```python
-async def on_complete(self, success: bool) -> None:
+async def on_complete(self) -> None:
     # Remove local temp files tracked via FileReference
     await self.cleanup_files(CleanupInput())
 
