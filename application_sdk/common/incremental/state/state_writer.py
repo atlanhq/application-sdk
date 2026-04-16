@@ -6,22 +6,23 @@ snapshots during incremental metadata extraction workflows.
 The state writer is responsible for:
 1. Downloading transformed data from S3
 2. Preparing current-state directory structure
-3. Copying entity data (tables, schemas, databases)
-4. Merging ancestral column data for unchanged tables
-5. Creating incremental diffs for changed entities
-6. Uploading the final snapshot to S3
+3. Copying entity data (tables, schemas, databases, columns)
+4. Creating incremental diffs with deletion detection
+5. Uploading the final snapshot to S3
+
+Current-state is lightweight — it contains only what was extracted in the
+current run. Publish-cache is the source of truth for complete state.
 
 Example workflow:
     1. download_transformed_data() - Get current run's transformed output
     2. prepare_previous_state() - Download previous state for comparison
-    3. copy_entity_data() - Copy non-column entities to current state
-    4. Merge columns using ancestral_merge module
-    5. Create incremental diff
-    6. upload_current_state() - Upload to S3
+    3. copy_entity_data() - Copy all entities to current state
+    4. Create incremental diff (with deletion detection)
+    5. upload_current_state() - Upload to S3
 
 High-level orchestration:
     Use create_current_state_snapshot() for complete state creation including
-    merge and diff generation in a single call.
+    diff generation in a single call.
 """
 
 import os
@@ -39,9 +40,6 @@ from application_sdk.common.incremental.helpers import (
     get_persistent_s3_prefix,
 )
 from application_sdk.common.incremental.models import EntityType
-from application_sdk.common.incremental.state.ancestral_merge import (
-    merge_ancestral_columns,
-)
 from application_sdk.common.incremental.state.incremental_diff import (
     create_incremental_diff,
 )
@@ -49,6 +47,7 @@ from application_sdk.common.incremental.state.table_scope import (
     close_scope,
     get_current_table_scope,
     get_scope_length,
+    get_table_qns_from_columns,
 )
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnectionManager,
@@ -133,7 +132,7 @@ async def prepare_previous_state(
     """Download previous state to a temporary location for comparison.
 
     When previous state exists, downloads it to a temporary directory
-    to support ancestral column merging and incremental diff generation.
+    to support incremental diff generation and deletion detection.
 
     Args:
         connection_qualified_name: The connection qualified name.
@@ -229,6 +228,35 @@ def copy_non_column_entities(
     return copy_counts
 
 
+def _copy_columns_from_transformed(
+    transformed_dir: Path,
+    current_state_dir: Path,
+    copy_workers: int = 4,
+) -> int:
+    """Copy column files from transformed to current-state (lightweight).
+
+    Unlike the old ancestral merge, this simply copies columns from the
+    current extraction. NO CHANGE table columns are not carried forward.
+    Publish-cache is the source of truth for complete column state.
+
+    Args:
+        transformed_dir: Path to transformed output directory
+        current_state_dir: Path to current-state directory
+        copy_workers: Number of parallel workers for copy operations
+
+    Returns:
+        Number of column files copied
+    """
+    column_dir = transformed_dir.joinpath(EntityType.COLUMN.value)
+    if not column_dir.exists():
+        return 0
+
+    dest_dir = current_state_dir.joinpath(EntityType.COLUMN.value)
+    count = copy_directory_parallel(column_dir, dest_dir, max_workers=copy_workers)
+    logger.info("Copied column files to current state", count=count)
+    return count
+
+
 async def upload_current_state(
     current_state_dir: Path,
     connection_qualified_name: str,
@@ -315,24 +343,22 @@ async def create_current_state_snapshot(
     run_id: str,
     application_name: str = "",
     copy_workers: int = 4,
-    column_chunk_size: int = 10000,
     get_backfill_tables_fn: Optional[
         Callable[[Path, Optional[Path]], Optional[Set[str]]]
     ] = None,
 ) -> CurrentStateResult:
-    """Create complete current-state snapshot with merge and optional diff.
+    """Create lightweight current-state snapshot with diff and deletion detection.
 
     Orchestrates the entire current-state creation process:
     1. Get table scope from transformed data
     2. Clear and prepare current-state directory
     3. Copy non-column entities (tables, schemas, databases)
-    4. Merge columns (current + ancestral for unchanged tables)
-    5. Create incremental diff (if previous state exists)
+    4. Copy columns from transformed (lightweight — no ancestral merge)
+    5. Create incremental diff with deletion detection (if previous state exists)
     6. Upload current-state and diff to S3
 
-    This function encapsulates the complex orchestration logic that was
-    previously in the write_current_state activity, making it reusable
-    and testable independently.
+    Current-state is lightweight — it contains only what was extracted in the
+    current run. Publish-cache is the source of truth for complete state.
 
     Args:
         connection_qualified_name: The connection qualified name.
@@ -343,7 +369,6 @@ async def create_current_state_snapshot(
         run_id: Workflow run ID for diff naming
         application_name: Optional application name override.
         copy_workers: Number of parallel workers for file operations
-        column_chunk_size: Batch size for column processing
         get_backfill_tables_fn: Optional function to detect backfill tables
 
     Returns:
@@ -396,29 +421,29 @@ async def create_current_state_snapshot(
                 copy_workers=copy_workers,
             )
 
-            # Step 4: Merge columns (current + ancestral for NO CHANGE tables)
-            merge_result, tables_with_columns = merge_ancestral_columns(
-                current_transformed_dir=transformed_dir,
-                previous_state_dir=previous_state_dir,
-                new_state_dir=current_state_dir,
-                table_scope=table_scope,
-                column_chunk_size=column_chunk_size,
-                conn=conn,
+            # Step 4: Copy columns from transformed (lightweight — no ancestral merge)
+            column_count = _copy_columns_from_transformed(
+                transformed_dir=transformed_dir,
+                current_state_dir=current_state_dir,
+                copy_workers=copy_workers,
             )
 
-            # Update table_scope with extracted columns info
+            # Track which tables have extracted columns
+            tables_with_columns = (
+                get_table_qns_from_columns(
+                    current_state_dir.joinpath(EntityType.COLUMN.value), conn=conn
+                )
+                or set()
+            )
             table_scope.tables_with_extracted_columns = tables_with_columns
 
             total_files = count_json_files_recursive(current_state_dir)
 
             logger.info(
-                "Current-state merge complete",
+                "Current-state snapshot complete (lightweight)",
                 tables=get_scope_length(table_scope),
-                columns_total=merge_result.columns_total,
-                columns_from_current=merge_result.columns_from_current,
-                columns_from_ancestral=merge_result.columns_from_ancestral,
-                excluded=merge_result.excluded_already_extracted
-                + merge_result.excluded_table_removed,
+                columns_copied=column_count,
+                tables_with_columns=len(tables_with_columns),
                 total_files=total_files,
             )
 
