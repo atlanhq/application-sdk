@@ -1,11 +1,11 @@
 ---
 name: sdk-evolution
-description: Autonomous SDK Evolution — daily holistic review of the refactor-v3 branch. Dispatches 10 discovery agents, cross-model adversarial gates (Claude discovers + Codex reviews), creates Linear tickets with branches, raises PRs with TDD, runs 4-agent SDK review with inline comments and design-quality analysis, fix loop (max 5 iterations), and self-improves SKILL.md. Invoke with /sdk-evolution.
+description: Autonomous SDK Evolution — holistic review of the refactor-v3 branch. Dispatches 10 discovery agents, cross-model adversarial gates (Claude discovers + Codex reviews), creates Linear tickets with branches, raises PRs with TDD, then hands off to @sdk-review auto-complete for review/fix loop/confirmation. Self-improves SKILL.md. Invoke with /sdk-evolution.
 ---
 
 # Autonomous SDK Evolution
 
-Holistic review of the application-sdk refactor-v3 branch. Finds bugs, architectural issues, test gaps, doc drift, security concerns, performance problems, and v2 remnants. Every finding survives two adversarial challenges before a PR is raised. Claude writes code, Codex reviews — removing single-model bias.
+Holistic review of the application-sdk refactor-v3 branch. Finds bugs, architectural issues, test gaps, doc drift, security concerns, performance problems, and v2 remnants. Every finding survives two adversarial challenges before a PR is raised. After Gate 2 passes, posts `@sdk-review auto-complete` on each PR — the existing GHA workflow handles SDK Review, fix loop, and confirmation autonomously.
 
 **Spec:** `docs/superpowers/specs/2026-04-09-autonomous-sdk-evolution-design.md`
 
@@ -18,7 +18,7 @@ Holistic review of the application-sdk refactor-v3 branch. Finds bugs, architect
 These guardrails are NON-NEGOTIABLE. Violating them caused real failures in production runs.
 
 ### 1. Follow ALL stages sequentially — never skip stages
-The pipeline has 10 stages. Execute every one. Do NOT declare "run complete" after Stage 5 (Linear tickets). Stages 6-9 (Fix & PR, SDK Review, Fix Loop, Confirmation) are part of the pipeline. If you skip them, the user will have to ask you to go back.
+The pipeline has 9 stages. Execute every one. Do NOT declare "run complete" after Stage 5 (Linear tickets). Stages 6-8 (Fix & PR, Gate 2, Handoff to @sdk-review) are part of the pipeline. If you skip them, the user will have to ask you to go back.
 
 ### 2. Update Linear tickets at EVERY state transition
 - When a PR is created → set ticket to "In Review", attach the PR link, leave a comment
@@ -140,31 +140,18 @@ Gate 2 challengers must explicitly check:
 - Performance fix PRs: "Does this PR include a test for the new behavior?" — if not, verdict is `needs-changes`
 - The checklist item "Are tests included?" must be enforced, not advisory
 
-### 12. SDK Review test quality reviewer MUST flag missing tests
-The test quality reviewer in SDK Review must flag as Critical:
-- Bug fixes without regression tests
-- New behavior without any test coverage
-- Changed function signatures without updated tests
+### 12. @sdk-review auto-complete handles SDK Review, fix loop, and confirmation
+After Gate 2 passes, this pipeline posts `@sdk-review auto-complete` on the PR. The GHA workflow handles: 4-agent cross-model review, inline comments, fix loop (max iterations), and final confirmation/approval. This pipeline does NOT run SDK Review internally.
 
-### 13. Cross-model review is mandatory
-Claude writes the fixes. Codex (Architecture + Code Quality) and Claude (Security + Test Quality) review. Codex MUST also evaluate design trade-offs and flag workarounds that need holistic design solutions.
+### 13. Cross-model review is mandatory (in discovery + Gate 1)
+Claude and Sonnet alternate as discoverer/challenger in Stages 2-4. This eliminates single-model bias during finding discovery and Gate 1 challenges.
 
-### 13b. SDK Review MUST check "is this the right fix or just a patch?"
-Every SDK Review agent (especially Architecture and Code Quality) must ask:
-- **Is the PR patching a function that shouldn't exist here?** Check if the file is a utils/helpers dumping ground. If the function belongs in a domain-specific module or has a v3 replacement, flag the PR as `needs-changes` with verdict: "Migrate callers to [v3 API] instead of patching legacy code."
-- **Does v3 already solve this?** Search for the function's purpose in `execution/`, `infrastructure/`, `storage/`, `credentials/`, `app/`. If a v3 equivalent exists, the PR should migrate, not patch.
-- **Is the fix addressing the root cause or a symptom?** A point fix on a function in a 600-line multi-domain utils file is almost certainly a symptom fix. Flag it.
-
-### 14. Inline PR comments must be resolved
-Reviewers post line-level comments via GitHub API. The fix loop must address EACH inline comment and reply with what was done. All comment threads must be resolved before marking ready-to-merge.
-
-### 15. PR labels track state
+### 14. PR labels track state
 Every PR gets these labels as it progresses:
 - `Autonomous SDK Evolution` — always present
-- `needs-review` — after creation, pending SDK review
-- `needs-human-review` — when max iterations reached
+- `needs-review` — after creation, pending Gate 2
 - `needs-design-review` — architecture/design findings that need human input
-- `ready-to-merge` — all gates passed, human just clicks merge
+- After Gate 2 passes and `@sdk-review auto-complete` is posted, label management is handled by the GHA workflow
 
 ### 16. Branch = Linear ticket identifier
 Branch name MUST be the Linear ticket identifier (e.g., `BLDX-123`). This auto-links commits, PRs, and context in Linear. Set the branch on the Linear ticket at creation time.
@@ -180,27 +167,25 @@ Before completing, verify:
 - No tokens or API keys in any generated content
 
 ### 19. NEVER print "run complete" until summary.json shows prs_created > 0
-The 2026-04-09 run stopped at Stage 5 (tickets only, 0 PRs). The 2026-04-14 run did the same — stopped after 3 PRs and printed a completion banner while 6 tickets had no PRs and Stages 7-9 hadn't run. **Before printing ANY completion message:**
+The 2026-04-09 run stopped at Stage 5 (tickets only, 0 PRs). The 2026-04-14 run did the same — stopped after 3 PRs and printed a completion banner while 6 tickets had no PRs. **Before printing ANY completion message:**
 1. Verify `prs_created >= surviving_findings_count` (or document why each was skipped)
 2. Verify Gate 2 ran on every PR (check `gate2/` directory has verdicts)
-3. Verify SDK Review ran on every PR (check `sdk-review/` directory has verdicts)
-4. Verify all review feedback was addressed (check fix loop ran if NEEDS_FIXES)
+3. Verify `@sdk-review auto-complete` was posted on every PR that passed Gate 2
+4. Verify all Linear tickets for Gate 2-passed PRs are set to "In Review"
 5. If ANY of these fail, you are NOT done — keep going
 
 ### 20. Labels are STATE TRANSITIONS, not defaults — never apply labels prematurely
 Labels reflect actual pipeline state. Do NOT batch-apply labels before running the stage that determines them.
 - `needs-review` → apply ONLY after PR creation (Stage 6), before Gate 2
-- `in-sdk-review` → apply ONLY after Gate 2 passes, before SDK Review
-- `ready-to-merge` → apply ONLY after Stage 9 confirmation passes
-- `needs-human-review` → apply ONLY after max fix iterations exhausted (Stage 8b)
-- **NEVER apply `needs-human-review` or `ready-to-merge` as a placeholder.** If you haven't run the review, you don't know the label.
+- After Gate 2 passes → `@sdk-review auto-complete` is posted and the GHA workflow manages subsequent labels
+- **NEVER apply `needs-human-review` or `ready-to-merge` as a placeholder.** Those are managed by the @sdk-review workflow.
 
-### 21. Cross-model review MUST use GPT-5 via LiteLLM — do not silently substitute Sonnet
-The config specifies GPT-5 (secondary model) for Architecture and Code Quality reviews in SDK Review (Stage 8). This is to eliminate single-model bias — Claude writes, GPT-5 reviews.
+### 21. Cross-model discovery uses GPT-5 via LiteLLM — do not silently substitute Sonnet
+The config specifies GPT-5 (secondary model) for discovery agents 2,4,6,9,10. This eliminates single-model bias in finding discovery.
 - **Check LiteLLM proxy availability** at the start of the run: `curl -s https://llmproxy.atlan.dev/health`
-- If available: use the curl pattern from the Configuration section for Architecture + Code Quality review agents
-- If unavailable: **log it explicitly** as `"cross_model_review": "degraded — GPT-5 unavailable, used Sonnet"` in summary.json. Do NOT silently substitute without logging.
-- This was violated in the 2026-04-14 run — all reviews used Sonnet with no acknowledgment that cross-model review was skipped.
+- If available: use the curl pattern from the Configuration section for secondary-model discovery agents
+- If unavailable: **log it explicitly** as `"cross_model_discovery": "degraded — GPT-5 unavailable, used Sonnet"` in summary.json. Do NOT silently substitute without logging.
+- SDK Review cross-model review is now handled by the `@sdk-review` GHA workflow — this pipeline no longer runs SDK Review internally.
 
 ### 22. Retrospective rule updates MUST be committed in the same run
 The 2026-04-09 retrospective found 12 improvements. Zero were committed to rule files. The 2026-04-14 retrospective found the same 12 — still uncommitted. Guardrail #17 says "commit updates directly to SKILL.md and reference rules files" but this was never enforced.
@@ -212,18 +197,19 @@ The 2026-04-09 retrospective found 12 improvements. Zero were committed to rule 
 5. If no retrospective findings need rule updates, log `"rules_updated": []` with reasoning
 
 ### 23. Every stage must log a checkpoint before proceeding
-Print `[Stage N/10 complete] → Proceeding to Stage N+1` after each stage finishes. This makes premature stops visible in the conversation. If a user sees `[Stage 5/10 complete]` as the last checkpoint, they know stages 6-10 didn't run. This was added because the 2026-04-14 run had no visible stage markers — it silently stopped and printed a final banner.
+Print `[Stage N/9 complete] → Proceeding to Stage N+1` after each stage finishes. This makes premature stops visible in the conversation. If a user sees `[Stage 5/9 complete]` as the last checkpoint, they know stages 6-9 didn't run. This was added because the 2026-04-14 run had no visible stage markers — it silently stopped and printed a final banner.
 
-### 24. Check CI status on EVERY PR before approving or labeling ready-to-merge
-After pushing a PR and before any review/approval step, wait for CI and verify it passes:
+### 24. Check CI status on EVERY PR before posting @sdk-review — fix failures yourself, never give up
+After pushing a PR and before posting `@sdk-review auto-complete`, wait for CI and verify it passes:
 ```bash
 gh pr checks {pr_number} --repo atlanhq/application-sdk --watch
 ```
-If any check fails:
+If any check fails — **do NOT stop, ask the user, or cancel the PR. Fix it yourself:**
 1. Read the failure logs: `gh run view {run_id} --repo atlanhq/application-sdk --log-failed`
-2. If the failure is in your changed code → fix it, push, wait for CI again
-3. If the failure is a flaky/infra issue (e.g., segfault during teardown with all tests passing, timeout on a specific OS) → re-run the failed job: `gh run rerun {run_id} --repo atlanhq/application-sdk --failed`
-4. **NEVER label a PR `ready-to-merge` while CI is red.** The 2026-04-14 run labeled PR #1309 as ready-to-merge with a failing `Unit Tests (3.14, macOS-latest)` check that was never investigated.
+2. If the failure is in your changed code → diagnose the root cause, fix the code on the same branch, run pre-commit + unit tests locally to verify, push, wait for CI again. Keep iterating until green.
+3. If the failure is a flaky/infra issue (e.g., segfault during teardown with all tests passing, timeout on a specific OS) → re-run the failed job: `gh run rerun {run_id} --repo atlanhq/application-sdk --failed`. Wait for re-run result.
+4. **NEVER cancel a PR because of CI failures.** CI failures are fixable — that's the whole point of this pipeline. Keep fixing until it's green.
+5. **NEVER post `@sdk-review auto-complete` while CI is red.** The 2026-04-14 run labeled PR #1309 as ready-to-merge with a failing check that was never investigated.
 
 ---
 
@@ -1339,271 +1325,78 @@ gh pr close {pr_number} --repo atlanhq/application-sdk --comment "Closed by Gate
 
 ---
 
-## Stage 8: SDK Review (Cross-Model, Inline Comments)
+## Stage 8: Handoff to @sdk-review auto-complete
 
-Run the full 4-agent SDK review on every PR that passed Gate 2. **Claude wrote the code, so Codex reviews architecture and code quality** (Guardrail #13).
+After Gate 2 passes, hand off each PR to the `@sdk-review auto-complete` GHA workflow. This workflow handles the full 4-agent cross-model SDK review, fix loop (max iterations), and final confirmation/approval autonomously.
 
-### 8.1 For Each Surviving PR
+### 8.1 Wait for CI on Each PR — Fix Failures Yourself (Guardrail #24)
 
-1. Fetch PR context:
-   ```bash
-   gh pr view {pr_number} --repo atlanhq/application-sdk --json number,title,body,baseRefName,headRefName,files,url
-   gh pr diff {pr_number} --repo atlanhq/application-sdk
-   ```
-
-2. Read the 4 SDK review reference files:
-   - `references/v3-architecture-rules.md`
-   - `references/code-quality-rules.md`
-   - `references/security-rules.md`
-   - `references/test-quality-rules.md`
-
-3. Dispatch **4 review agents in parallel** with cross-model assignment:
-
-   **Agent 1: Architecture Review [Codex/secondary]** (`model: "sonnet"`)
-   Review the PR diff against `v3-architecture-rules.md`.
-
-   **CRITICAL ADDITION — Design Quality Analysis:**
-   Beyond rule violations, Codex MUST evaluate:
-   - Is this a point fix / workaround, or does it solve the problem holistically?
-   - Are there trade-offs the fix introduces that should be called out?
-   - Is there a better architectural approach that addresses the root cause?
-   - Should this be solved at a different layer (e.g., framework vs app level)?
-   - If the approach is fundamentally a workaround, flag it as `needs-design-review`
-
-   Output an `#### Alternative Approaches` section if a clearly better design exists (confidence >= 90%).
-   Output a `#### Design Concerns` section if the fix is a workaround that needs holistic solution.
-
-   Rate findings as Critical/Important/Minor. Only report confidence >= 80.
-   **Post inline PR comments** for each finding with specific file and line references.
-
-   **Agent 2: Code Quality Review [Codex/secondary]** (`model: "sonnet"`)
-   Review the PR diff against `code-quality-rules.md`.
-
-   **CRITICAL ADDITION — Design Quality Analysis:**
-   Beyond code quality rules, Codex MUST evaluate:
-   - Does the implementation pattern fit the SDK's design philosophy?
-   - Is this the right abstraction level, or is it over/under-engineering?
-   - Would a different approach be more maintainable long-term?
-   - Are there existing SDK patterns that should be reused instead?
-
-   Output an `#### Alternative Approaches` section if a clearly better pattern exists (confidence >= 90%).
-
-   Rate findings as Critical/Important/Minor. Only report confidence >= 80.
-   **Post inline PR comments** for each finding.
-
-   **Agent 3: Security Review [Claude/primary]** (default model)
-   Review the PR diff against `security-rules.md`.
-   Security issues are always Critical or Important.
-   **Post inline PR comments** for each finding.
-
-   **Agent 4: Test Quality Review [Claude/primary]** (default model)
-   Review the PR diff against `test-quality-rules.md`.
-   Missing tests for bug/security/performance fixes is Critical.
-   **Post inline PR comments** for each finding.
-
-### 8.2 Post Inline Comments via GitHub API
-
-Each review agent returns findings with file, line, and comment text. The orchestrator posts them as a GitHub PR review with inline comments:
+Before posting the review comment, verify CI is green:
 
 ```bash
-# For each reviewer agent's findings, create a review with inline comments
-gh api repos/atlanhq/application-sdk/pulls/{pr_number}/reviews \
-  --method POST \
-  --field event="COMMENT" \
-  --field body="{overall summary from this reviewer}" \
-  --field 'comments=[{"path":"file.py","line":42,"body":"[ARCH] ADR-0005 violation: ..."}]'
+gh pr checks {pr_number} --repo atlanhq/application-sdk --watch
 ```
 
-### 8.3 Consolidate Verdicts
+If CI fails — **fix it yourself, do NOT stop or ask the user:**
+1. Read the failure: `gh run view {run_id} --repo atlanhq/application-sdk --log-failed`
+2. If failure is in changed code → diagnose the root cause, fix it on the same branch, run pre-commit + unit tests locally to verify, push, wait for CI again. Keep iterating until green.
+3. If flaky/infra → re-run: `gh run rerun {run_id} --repo atlanhq/application-sdk --failed`
+4. **NEVER cancel a PR because of CI failures.** CI failures are fixable — keep fixing until it's green.
+5. **Do NOT post `@sdk-review` while CI is red.**
 
-Merge all 4 agents' findings into a single report:
+### 8.2 Post @sdk-review auto-complete Comment
 
-**Verdict rules:**
-- **BLOCKED:** Any Critical security finding
-- **NEEDS FIXES:** Any Critical finding (non-security) OR 3+ Important findings OR any `needs-design-review` flag from Codex design analysis
-- **READY TO MERGE:** No Critical findings AND fewer than 3 Important findings AND no design concerns
+For each PR that passed Gate 2 and has green CI:
 
-Write verdict to `{WORKSPACE}/sdk-review/{pr_number}.json`:
+```bash
+gh pr comment {pr_number} --repo atlanhq/application-sdk --body "@sdk-review auto-complete"
+```
+
+This triggers the `@sdk-review` GHA workflow which will:
+- Run 4-agent cross-model review (Architecture, Code Quality, Security, Test Quality)
+- Post inline PR comments for each finding
+- Automatically fix issues and iterate (up to max iterations)
+- Confirm and approve when all gates pass
+- Label `ready-to-merge` or `needs-human-review` as appropriate
+
+### 8.3 Update Linear Tickets to "In Review"
+
+Immediately after posting `@sdk-review auto-complete` on each PR:
+
+```
+Use mcp__linear__save_issue to update the ticket:
+  status: "In Review"
+
+Use mcp__linear__save_comment:
+  issue_id: {ticket_id}
+  body: |
+    PR #{pr_number} passed Gate 2. Posted `@sdk-review auto-complete` — GHA workflow will handle SDK review, fix loop, and confirmation autonomously.
+```
+
+### 8.4 Track Handoff
+
+Write handoff info to `{WORKSPACE}/sdk-review/{pr_number}.json`:
 ```json
 {
   "pr_number": N,
-  "verdict": "READY TO MERGE|NEEDS FIXES|BLOCKED",
-  "findings_summary": "...",
-  "critical_count": N,
-  "important_count": N,
-  "minor_count": N,
-  "design_concerns": ["list of design concerns if any"],
-  "alternative_approaches": ["list of alternative approaches if any"],
-  "iteration": 1
+  "gate2_verdict": "passed",
+  "sdk_review_triggered": true,
+  "sdk_review_comment": "@sdk-review auto-complete",
+  "linear_status": "In Review",
+  "ci_status": "green",
+  "timestamp": "<ISO-8601>"
 }
 ```
 
-**READY TO MERGE:** → Proceed to Stage 9 (Confirmation).
-
-**NEEDS FIXES:** → Proceed to Stage 8b (Fix Loop).
-
-**BLOCKED:**
-- Close the PR:
-  ```bash
-  gh pr close {pr_number} --repo atlanhq/application-sdk --comment "Blocked by SDK Review: {findings_summary}"
-  gh pr edit {pr_number} --repo atlanhq/application-sdk --remove-label "needs-review" --remove-label "in-sdk-review" --add-label "blocked"
-  ```
-- Update Linear: status → "Canceled", comment: "PR blocked by SDK Review — {reason}"
+**For PRs that failed Gate 2:**
+- Already handled in Stage 7.2 (closed or retried)
+- Do NOT post `@sdk-review` on failed PRs
 
 ---
 
-## Stage 8b: Review Fix Loop (Max 5 Iterations)
+## Stage 9: Summary & Self-Improvement
 
-When SDK Review returns NEEDS FIXES, iterate: fix → push → re-review.
-
-### 8b.1 Read Review Findings
-
-Collect all Critical and Important findings from Stage 8. Also collect all inline PR comments that need addressing.
-
-### 8b.2 Fix Each Finding
-
-On the SAME branch (do NOT create a new branch):
-
-1. Read each inline comment and the corresponding code
-2. Fix the issue — follow the reviewer's suggestion unless you have a clearly better approach
-3. **Reply to each inline PR comment** with what was fixed:
-   ```bash
-   gh api repos/atlanhq/application-sdk/pulls/{pr_number}/comments/{comment_id}/replies \
-     --method POST \
-     --field body="Fixed — {what was changed and why}"
-   ```
-4. If a design concern was flagged by Codex:
-   - If the fix can address the design concern holistically → do it
-   - If it requires broader changes → add label `needs-design-review` and leave a PR comment explaining why this needs human design input
-
-### 8b.3 Validate
-
-ALL of these must pass before pushing:
-```bash
-uv run pre-commit run --files <changed_files>
-uv run pytest tests/unit/ -x -q --timeout=60
-```
-
-If new tests were added during the fix, run them specifically too.
-
-### 8b.4 Push and Update
-
-```bash
-git add <specific_files>
-git commit -m "fix: address SDK review feedback (iteration {N}) [{TICKET_IDENTIFIER}]"
-git push origin {TICKET_IDENTIFIER}
-```
-
-Leave a PR comment summarizing all fixes in this iteration:
-```
-## SDK Review Fix — Iteration {N}
-
-### Fixed
-- [ARCH] `file:line` — {what was fixed}
-- [QUAL] `file:line` — {what was fixed}
-
-### Decisions
-- {any trade-off decisions made and why}
-
-### Validation
-- Pre-commit: PASS
-- Unit tests: PASS (X tests, 0 failures)
-```
-
-Update Linear ticket with a comment:
-```
-Iteration {N}: Fixed {X} review findings. {Y} remaining.
-Decisions: {brief summary of any trade-offs}
-```
-
-### 8b.5 Re-Run SDK Review
-
-Go back to Stage 8 with `iteration += 1`.
-
-### 8b.6 Max Iterations
-
-After **5 iterations** (from config.yaml `pipeline.max_fix_iterations`) still NEEDS FIXES:
-- Leave PR open
-- Update labels: remove `in-sdk-review`, add `needs-human-review`
-- Add PR comment: "Max review iterations (5) reached. Remaining issues: {list}. Needs human attention."
-- Update Linear ticket with comment: "Max iterations reached — remaining: {issues}. Needs human review."
-
----
-
-## Stage 9: Reviewer Confirmation
-
-After SDK Review says READY TO MERGE, do one final confirmation pass to ensure the FINAL diff is clean.
-
-### 9.1 Re-Dispatch All 4 Review Agents
-
-Dispatch the same 4 agents (2 Codex + 2 Claude) on the **final diff** (not a stale earlier version):
-
-```bash
-gh pr diff {pr_number} --repo atlanhq/application-sdk
-```
-
-Each agent must confirm: no Critical findings, fewer than 3 Important findings.
-
-### 9.2 Handle Confirmation
-
-**All 4 confirm READY TO MERGE:**
-
-1. Post PR comment:
-   ```
-   ## All 4 reviewers confirm — ready for human merge
-
-   - [x] Architecture (Codex): APPROVED
-   - [x] Code Quality (Codex): APPROVED
-   - [x] Security (Claude): APPROVED
-   - [x] Test Quality (Claude): APPROVED
-
-   No Critical findings. No design concerns.
-   All inline comments resolved.
-   All tests passing.
-   ```
-
-2. Resolve all inline comment threads (mark as resolved)
-
-3. Update PR body: check all validation checkboxes
-
-4. Update PR labels:
-   ```bash
-   gh pr edit {pr_number} --repo atlanhq/application-sdk \
-     --remove-label "needs-review" --remove-label "in-sdk-review" \
-     --add-label "ready-to-merge"
-   ```
-
-5. Approve the PR via GitHub API:
-   ```bash
-   gh api repos/atlanhq/application-sdk/pulls/{pr_number}/reviews \
-     --method POST \
-     --field event="APPROVE" \
-     --field body="Autonomous SDK Evolution: All 4 review agents confirm this PR is ready to merge. Architecture, code quality, security, and test quality all pass."
-   ```
-
-6. Update Linear ticket:
-   - Status → "Done"
-   - Comment: "All gates passed. PR #{pr_number} approved and ready for human merge."
-
-**Any agent flags Critical → back to Stage 8b** (if iterations remain).
-
-Write confirmation to `{WORKSPACE}/confirmation/{pr_number}.json`:
-```json
-{
-  "pr_number": N,
-  "confirmed": true,
-  "architecture": "APPROVED",
-  "code_quality": "APPROVED",
-  "security": "APPROVED",
-  "test_quality": "APPROVED"
-}
-```
-
----
-
-## Stage 10: Summary & Self-Improvement
-
-### 10.1 Gather Metrics
+### 9.1 Gather Metrics
 
 ```json
 {
@@ -1614,11 +1407,8 @@ Write confirmation to `{WORKSPACE}/confirmation/{pr_number}.json`:
   "findings_needs_design_review": N,
   "prs_created": N,
   "prs_passed_gate2": N,
-  "prs_passed_sdk_review": N,
-  "prs_confirmed_ready": N,
-  "prs_closed": N,
-  "prs_needs_human_review": N,
-  "review_iterations_used": {"pr_N": M, ...},
+  "prs_handed_to_sdk_review": N,
+  "prs_closed_by_gate2": N,
   "by_category": {
     "code-quality": {"discovered": N, "survived": N, "pr_status": "..."},
     ...
@@ -1626,7 +1416,7 @@ Write confirmation to `{WORKSPACE}/confirmation/{pr_number}.json`:
 }
 ```
 
-### 10.2 Update Linear Parent Ticket
+### 9.2 Update Linear Parent Ticket
 
 Update the parent ticket description with the final summary:
 
@@ -1665,7 +1455,7 @@ Use mcp__linear__save_issue to update the parent ticket:
 
 Add a comment to the parent ticket with pipeline health metrics.
 
-### 10.3 Handle Retrospective Findings
+### 9.3 Handle Retrospective Findings
 
 For any retrospective findings that survived Gate 1, create separate Linear sub-tickets under the parent with:
 - Label: `pipeline-improvement`
@@ -1673,7 +1463,7 @@ For any retrospective findings that survived Gate 1, create separate Linear sub-
 - Description includes the suggested improvement
 - Assigned to: {user_id}
 
-### 10.4 Self-Improvement
+### 9.4 Self-Improvement
 
 **This skill does NOT use memory. It updates itself.**
 
@@ -1696,7 +1486,7 @@ git commit -m "chore(sdk-evolution): self-improvement from {RUN_DATE} run"
 git push origin refactor-v3
 ```
 
-### 10.5 Security Audit of Pipeline Output (Guardrail #18)
+### 9.5 Security Audit of Pipeline Output (Guardrail #18)
 
 Before completing, scan all PR descriptions, comments, and Linear ticket content for:
 - Secrets, tokens, API keys
@@ -1706,11 +1496,11 @@ Before completing, scan all PR descriptions, comments, and Linear ticket content
 
 If found, edit the PR/comment to redact immediately.
 
-### 10.6 Write Summary File
+### 9.6 Write Summary File
 
 Write full metrics to `{WORKSPACE}/summary.json`.
 
-### 10.7 Cleanup
+### 9.7 Cleanup
 
 ```bash
 git worktree prune
@@ -1718,7 +1508,7 @@ git worktree prune
 
 Keep `tmp/sdk-evolution/{RUN_DATE}/` intact — it serves as the audit trail.
 
-### 10.8 Terminal Output
+### 9.8 Terminal Output
 
 Print:
 
@@ -1728,21 +1518,21 @@ Print:
 ========================================
 
 Findings:  {total} discovered → {survived} survived Gate 1
-PRs:       {prs_created} created → {ready} ready to merge
+PRs:       {prs_created} created → {gate2_passed} passed Gate 2
+Handoff:   {handed_to_sdk_review} PRs sent to @sdk-review auto-complete
 Design:    {design_review} findings need design review
-Closed:    {closed} PRs closed by quality gates
-Human:     {human_review} PRs need human review
+Closed:    {closed} PRs closed by Gate 2
 
-Ready to Merge (just click merge):
-  - PR #{N}: {title} [{TICKET}] (APPROVED)
+Handed to @sdk-review (review/fix loop/approval handled by GHA):
+  - PR #{N}: {title} [{TICKET}] — @sdk-review auto-complete posted
   ...
 
-Needs Human Review:
-  - PR #{N}: {title} [{TICKET}] ({remaining issues})
+Design Review Needed (human decision required):
+  - {TICKET}: {title} — {why}
   ...
 
 Linear: {parent_ticket_url}
 ========================================
 ```
 
-Print: **"Autonomous SDK Evolution run complete. PRs labeled 'ready-to-merge' are approved — just click merge."**
+Print: **"Autonomous SDK Evolution run complete. All PRs handed to @sdk-review auto-complete — GHA workflow handles review, fixes, and approval. Linear tickets set to In Review."**
