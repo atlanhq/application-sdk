@@ -373,7 +373,7 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("Engine is not initialized. Call load() first.")
 
         loop = asyncio.get_running_loop()
-        logger.info("Running query: %s", query)
+        logger.debug("Running query: %s", query)
 
         # Use context manager for automatic connection cleanup
         with self.engine.connect() as connection:
@@ -644,7 +644,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.engine:
             raise ValueError("Engine is not initialized. Call load() first.")
 
-        logger.info("Running query: %s", query)
+        logger.debug("Running query: %s", query)
         use_server_side_cursor = self.use_server_side_cursor
 
         # Use async context manager for automatic connection cleanup

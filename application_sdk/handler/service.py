@@ -864,7 +864,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Failed to stop workflow: {error_msg}"
+                status_code=500, detail="Failed to stop workflow"
             ) from None
 
     @app.get("/workflows/v1/result/{workflow_id}")
@@ -987,7 +987,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Failed to get workflow result: {error_msg}"
+                status_code=500, detail="Failed to get workflow result"
             ) from None
 
     @app.get("/workflows/v1/status/{workflow_id}/{run_id:path}")
@@ -1038,7 +1038,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Failed to get workflow status: {error_msg}"
+                status_code=500, detail="Failed to get workflow status"
             ) from None
 
     # ------------------------------------------------------------------
