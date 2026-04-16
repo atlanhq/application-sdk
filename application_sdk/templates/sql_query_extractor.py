@@ -1,16 +1,4 @@
-"""SQL query extraction App — v3 implementation.
-
-Replaces the v2 ``SQLQueryExtractionWorkflow`` + ``SQLQueryExtractionActivities``
-split with a single typed ``App`` class.
-
-Migration from v2::
-
-    # v2
-    from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
-    from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
-
-    # v3
-    from application_sdk.templates import SqlQueryExtractor
+"""SQL query extraction App.
 
 Subclass to implement connector-specific logic::
 
@@ -83,6 +71,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
         logger.info("Starting SQL query extraction: %s", workflow_id)
 
         try:
+            # v2-compat: remove credential_guid fallback when all connectors use credential_ref.
             # Prefer credential_ref; fall back to legacy credential_guid
             cred_ref = input.credential_ref
             if cred_ref is None and input.credential_guid:

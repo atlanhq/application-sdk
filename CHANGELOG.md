@@ -8,6 +8,8 @@ Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.2...v3.0
 
 This is a major version bump. All v2 imports remain functional in v3.0.x with `DeprecationWarning` and will be removed in v3.1.0. See the [v3 Migration Guide](docs/migration-guide-v3.md) for upgrade instructions.
 
+**Storage API removals** (`application_sdk.storage`): The backward-compat aliases `delete_file` and `list_files` have been removed. Use `delete` and `list_keys` respectively. See [Migrating ObjectStore calls](docs/migration-guide-v3.md#migrating-objectstore-calls) in the migration guide.
+
 ### Features
 
 - **Schema-driven contracts** (`application_sdk.contracts`): `Input`/`Output` dataclass bases with payload-safety validation at class-definition time. Forbidden: `Any`, `bytes`, unbounded `list`/`dict`. Safe alternatives: `Annotated[list[T], MaxItems(N)]`, `FileReference`.
