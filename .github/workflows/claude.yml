@@ -978,30 +978,9 @@ jobs:
           # Save JSON to disk for the Reconcile step
           printf '%s' "$CODEX_JSON" > /tmp/codex_disagreements.json
 
-          # Post an informational comment so humans see the raw Codex output
-          HUMAN_SUMMARY=$(printf '%s' "$CODEX_JSON" | jq -r '
-            def list(name; arr): if (arr|length) > 0 then
-              "### " + name + "\n" + (arr | map("- [\(.tag // "?")] `\(.file // "?"):\(.line // "?")` — \(.description // "")") | join("\n")) + "\n"
-            else "### " + name + "\nNone\n" end;
-            list("What was missed"; .missed // []) +
-            list("False positives"; .false_positives // []) +
-            (if (.severity_changes // [] | length) > 0 then
-               "### Severity disagreements\n" +
-               ((.severity_changes // []) | map("- `\(.file):\(.line)` — was \(.from), should be \(.to) — \(.reason)") | join("\n"))
-             else "### Severity disagreements\nNone" end)' 2>/dev/null || echo "Codex output malformed.")
-
-          BODY=$(printf '%s\n' \
-            "<!-- SDK_REVIEW_V2_ADVERSARIAL -->" \
-            "## 🤖 Adversarial review (GPT-5.3-codex)" \
-            "" \
-            "> Cross-model second opinion. These disagreements feed into the reconciled Opus review above." \
-            "" \
-            "${HUMAN_SUMMARY}" \
-            "" \
-            "---" \
-            "<sub>Reconciled with Opus's findings automatically — see the updated SDK Review comment.</sub>")
-
-          gh pr comment "$PR_NUMBER" --body "$BODY"
+          # Codex findings saved to /tmp/codex_disagreements.json.
+          # The Reconcile step will fold them into the main Opus review
+          # comment in-place — no separate comment needed.
           echo "ran=true" >> "$GITHUB_OUTPUT"
 
       # Reconcile — fold Codex disagreements into the Opus SDK_REVIEW_V2
@@ -1542,6 +1521,9 @@ jobs:
             -f state=failure -f context=sdk-review \
             -f description="SDK Review: BLOCKED — critical security finding." 2>/dev/null || true
 
+          gh pr comment "$PR" --body \
+            "🔒 **SDK Review complete — BLOCKED.** Critical security finding detected. See the review comment above for details. This PR cannot be merged until the issue is resolved and \`@sdk-review\` is re-run."
+
       # Mark status = failure and add label for NEEDS_FIXES in review-only mode
       # (so the PR visibly blocks on merge until author fixes & re-runs)
       - name: Set status (NEEDS_FIXES, review-only)
@@ -1557,6 +1539,9 @@ jobs:
           gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
             -f state=failure -f context=sdk-review \
             -f description="SDK Review: NEEDS_FIXES — see review comment." 2>/dev/null || true
+
+          gh pr comment "$PR" --body \
+            "📋 **SDK Review complete — NEEDS FIXES.** See the review comment above for findings. Address the issues and comment \`@sdk-review\` to re-review, or \`@sdk-review auto-complete\` to auto-fix."
 
   # ── Reset review status on new commits ──────────────────────
   # When the author pushes new code, reset the sdk-review check
