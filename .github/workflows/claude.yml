@@ -92,6 +92,8 @@ jobs:
         contains(github.event.comment.body, '@sdk-review') &&
         !contains(github.event.comment.body, '@sdk-review stop') &&
         !contains(github.event.comment.body, '@sdk-review cancel') &&
+        github.event.comment.user.login != 'claude[bot]' &&
+        github.event.comment.user.login != 'github-actions[bot]' &&
         (github.event.comment.author_association == 'OWNER' ||
          github.event.comment.author_association == 'MEMBER' ||
          github.event.comment.author_association == 'COLLABORATOR')
@@ -1626,6 +1628,8 @@ jobs:
       github.event.issue.pull_request &&
       (contains(github.event.comment.body, '@sdk-review stop') ||
        contains(github.event.comment.body, '@sdk-review cancel')) &&
+      github.event.comment.user.login != 'claude[bot]' &&
+      github.event.comment.user.login != 'github-actions[bot]' &&
       (github.event.comment.author_association == 'OWNER' ||
        github.event.comment.author_association == 'MEMBER' ||
        github.event.comment.author_association == 'COLLABORATOR')
