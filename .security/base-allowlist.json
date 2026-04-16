@@ -115,6 +115,20 @@
     "expires": "2026-07-15",
     "added_by": "mananjain99"
   },
+  "CVE-2026-27137": {
+    "package": "stdlib (Go)",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Go stdlib in daprd 1.17.4-r0 (Wolfi dapr-daprd-1.17). Fixed in Go 1.26.1; awaiting Wolfi rebuild of dapr-1.17 on newer Go toolchain.",
+    "expires": "2026-07-15",
+    "added_by": "louisnow"
+  },
+  "CVE-2026-33810": {
+    "package": "stdlib (Go)",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Go stdlib in daprd 1.17.4-r0 (Wolfi dapr-daprd-1.17). Fixed in Go 1.26.2; awaiting Wolfi rebuild of dapr-1.17 on newer Go toolchain.",
+    "expires": "2026-07-15",
+    "added_by": "louisnow"
+  },
   "SNYK-GOLANG-GOOPENTELEMETRYIOOTELEXPORTERSOTLPOTLPTRACEOTLPTRACEHTTP-15954196": {
     "package": "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp",
     "severity": "HIGH",
