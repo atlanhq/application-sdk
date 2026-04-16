@@ -42,7 +42,6 @@ permissions:
   pull-requests: write
   statuses: write
   actions: write      # sdk-review-stop needs this to cancel runs
-  workflows: write    # sdk-review needs this to update branches on workflow-touching PRs
 
 env:
   ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
@@ -110,7 +109,6 @@ jobs:
       id-token: write
       statuses: write
       actions: write        # needed to dispatch workflow_dispatch iterations
-      workflows: write      # needed to update branches on PRs that touch .github/workflows/
     timeout-minutes: 30
     concurrency:
       group: sdk-review-${{ github.event.issue.number }}
@@ -1254,11 +1252,25 @@ jobs:
           MODE: ${{ steps.pr.outputs.mode }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          HEAD_BRANCH: ${{ steps.pr.outputs.head_branch }}
+          BASE_BRANCH: ${{ steps.pr.outputs.base_branch }}
         run: |
-          # Update branch (workflows: write permission allows this even
-          # for PRs that touch .github/workflows/).
-          gh api "repos/${REPO}/pulls/$PR/update-branch" \
-            -X PUT -f update_method=merge 2>/dev/null || echo "Branch already up to date"
+          # Update branch. Try the API first (fast, no checkout needed).
+          # If it 403s (e.g. PR touches .github/workflows/ — the API
+          # requires a PAT with 'workflows' OAuth scope for that), fall
+          # back to git merge + push which works with contents: write.
+          if ! gh api "repos/${REPO}/pulls/$PR/update-branch" \
+               -X PUT -f update_method=merge 2>/dev/null; then
+            echo "API update-branch failed (likely workflow-touching PR). Falling back to git merge."
+            git fetch origin "$BASE_BRANCH" "$HEAD_BRANCH"
+            git checkout "$HEAD_BRANCH"
+            if git merge "origin/$BASE_BRANCH" --no-edit; then
+              git push origin "$HEAD_BRANCH"
+            else
+              echo "Merge conflict during branch update — aborting."
+              git merge --abort
+            fi
+          fi
 
           # Wait for CI after branch update
           sleep 15
