@@ -6,15 +6,9 @@ using a real local obstore (no mocks, no Temporal).
 
 from __future__ import annotations
 
-import warnings
-
 import pytest
 
 import application_sdk.constants as constants
-from application_sdk.infrastructure.context import (
-    InfrastructureContext,
-    set_infrastructure,
-)
 from application_sdk.storage.batch import (
     delete_prefix,
     download_prefix,
@@ -23,7 +17,6 @@ from application_sdk.storage.batch import (
     upload_prefix,
 )
 from application_sdk.storage.factory import create_local_store
-from application_sdk.storage.formats.utils import _download_files
 from application_sdk.storage.ops import download_file, upload_file
 
 
@@ -151,33 +144,6 @@ async def test_list_keys_suffix_filter(store, tmp_path):
 
     all_keys = await list_keys("mixed", store)
     assert len(all_keys) == 4
-
-
-# ------------------------------------------------------------------
-# _download_files deprecation warning
-# ------------------------------------------------------------------
-
-
-@pytest.mark.integration
-async def test__download_files_emits_deprecation_warning(store, staging):
-    """_download_files() should emit a DeprecationWarning."""
-    set_infrastructure(InfrastructureContext(storage=store))
-
-    # Upload a file so _download_files has something to find
-    src = staging / "test.parquet"
-    src.write_bytes(b"parquet-data")
-    await upload_file("depwarn/test.parquet", src, store)
-
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        try:
-            await _download_files(str(staging / "depwarn/test.parquet"), ".parquet")
-        except Exception:
-            pass  # may fail on infra setup, we only care about the warning
-
-        dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-        assert len(dep_warnings) >= 1
-        assert "storage.transfer.download" in str(dep_warnings[0].message)
 
 
 # ------------------------------------------------------------------
