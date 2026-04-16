@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.infrastructure._dapr.client import (
+from application_sdk.infrastructure._dapr.credential_vault import (
     DaprCredentialVault,
-    _handle_single_key_secret,
-    _process_secret_data,
     _resolve_credentials,
+)
+from application_sdk.infrastructure._secret_utils import (
+    process_secret_data as _process_secret_data,
 )
 from application_sdk.infrastructure.credential_vault import (
     CredentialVault,
@@ -62,39 +63,6 @@ class TestInMemoryCredentialVault:
     def test_satisfies_protocol(self) -> None:
         vault = InMemoryCredentialVault()
         assert isinstance(vault, CredentialVault)
-
-
-# ---------------------------------------------------------------------------
-# _handle_single_key_secret
-# ---------------------------------------------------------------------------
-
-
-class TestHandleSingleKeySecret:
-    def test_json_dict_value_is_unwrapped(self) -> None:
-        nested = {"username": "u", "password": "p"}
-        result = _handle_single_key_secret("key", json.dumps(nested))
-        assert result == nested
-
-    def test_json_empty_dict_is_returned(self) -> None:
-        result = _handle_single_key_secret("key", "{}")
-        assert result == {}
-
-    def test_json_array_returns_key_value_pair(self) -> None:
-        result = _handle_single_key_secret("key", json.dumps([1, 2]))
-        assert result == {"key": json.dumps([1, 2])}
-
-    def test_plain_string_returns_key_value_pair(self) -> None:
-        result = _handle_single_key_secret("key", "plain")
-        assert result == {"key": "plain"}
-
-    def test_invalid_json_returns_key_value_pair(self) -> None:
-        result = _handle_single_key_secret("key", "not json {")
-        assert result == {"key": "not json {"}
-
-    def test_non_string_value_returns_key_value_pair(self) -> None:
-        assert _handle_single_key_secret("k", 42) == {"k": 42}
-        assert _handle_single_key_secret("k", True) is not None
-        assert _handle_single_key_secret("k", [1, 2]) == {"k": [1, 2]}
 
 
 # ---------------------------------------------------------------------------
@@ -179,20 +147,19 @@ def _make_mock_dapr_client(
     config_bytes: bytes | None,
     secret_data: dict[str, str],
 ) -> MagicMock:
-    """Build a mock DaprClient that returns *config_bytes* on invoke_binding
+    """Build a mock AsyncDaprClient that returns *config_bytes* on invoke_binding
     and *secret_data* on get_secret."""
+    from application_sdk.infrastructure._dapr.http import BindingResult
+
     mock_client = MagicMock()
 
-    # Binding response
-    binding_response = MagicMock()
-    binding_response.data = config_bytes
-    binding_response.binding_metadata = {}
-    mock_client.invoke_binding.return_value = binding_response
+    # Binding response — AsyncDaprClient returns BindingResult (pydantic model)
+    mock_client.invoke_binding = AsyncMock(
+        return_value=BindingResult(data=config_bytes, metadata={})
+    )
 
-    # Secret response
-    secret_response = MagicMock()
-    secret_response.secret = secret_data
-    mock_client.get_secret.return_value = secret_response
+    # Secret response — AsyncDaprClient returns dict directly
+    mock_client.get_secret = AsyncMock(return_value=secret_data)
 
     return mock_client
 
@@ -207,7 +174,6 @@ class TestDaprCredentialVaultGetCredentials:
             secret_store_name="secretstore",
         )
 
-    @pytest.mark.asyncio
     async def test_direct_multi_key_mode(self) -> None:
         """DIRECT source + multi-key bundle → bundle merged into config."""
         config = {"credentialSource": "direct", "host": "db.example.com"}
@@ -222,7 +188,6 @@ class TestDaprCredentialVaultGetCredentials:
         assert result["host"] == "db.example.com"
         assert result["password"] == "secret_pass"
 
-    @pytest.mark.asyncio
     async def test_missing_config_raises_credential_vault_error(self) -> None:
         """No config bytes → _fetch_credential_config raises CredentialVaultError."""
         mock_client = _make_mock_dapr_client(
@@ -234,7 +199,6 @@ class TestDaprCredentialVaultGetCredentials:
             with pytest.raises(CredentialVaultError):
                 await vault.get_credentials("ghost-guid")
 
-    @pytest.mark.asyncio
     async def test_local_env_skips_secret_fetch(self) -> None:
         """In LOCAL_ENVIRONMENT, _get_secret returns {} so no Dapr secret call is made."""
         config = {"credentialSource": "direct", "user": "admin"}
@@ -250,7 +214,6 @@ class TestDaprCredentialVaultGetCredentials:
         mock_client.get_secret.assert_not_called()
         assert result["user"] == "admin"
 
-    @pytest.mark.asyncio
     async def test_guid_passed_as_string_not_dict(self) -> None:
         """Regression: get_credentials must receive the GUID string directly."""
         captured: list[str] = []
@@ -276,17 +239,17 @@ class TestDaprCredentialVaultGetCredentials:
 
         assert captured == ["abc-123"], f"Expected string guid, got: {captured}"
 
-    @pytest.mark.asyncio
     async def test_vault_error_on_binding_failure(self) -> None:
         """Dapr binding error → wrapped in CredentialVaultError."""
         mock_client = MagicMock()
-        mock_client.invoke_binding.side_effect = RuntimeError("Dapr unavailable")
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=RuntimeError("Dapr unavailable")
+        )
 
         vault = self._make_vault(mock_client)
         with pytest.raises(CredentialVaultError):
             await vault.get_credentials("bad-guid")
 
-    @pytest.mark.asyncio
     async def test_agent_multi_key_mode_with_secret_path(self) -> None:
         """AGENT source + secret-path → fetches multi-key bundle via secret-path key."""
         config = {
@@ -310,7 +273,6 @@ class TestDaprCredentialVaultGetCredentials:
             key="apps/myapp/creds/my-secret",
         )
 
-    @pytest.mark.asyncio
     async def test_agent_single_key_mode(self) -> None:
         """AGENT source without secret-path → single-key mode (one lookup per field).
 
@@ -336,7 +298,6 @@ class TestDaprCredentialVaultGetCredentials:
 
         assert result.get("password") == "actual_password"
 
-    @pytest.mark.asyncio
     async def test_guid_validation_rejects_path_traversal(self) -> None:
         """GUIDs with unsafe characters (e.g. '../') raise CredentialVaultError immediately."""
         mock_client = _make_mock_dapr_client(config_bytes=b"", secret_data={})
@@ -345,7 +306,6 @@ class TestDaprCredentialVaultGetCredentials:
         with pytest.raises(CredentialVaultError, match="Invalid credential GUID"):
             await vault.get_credentials("../../etc/passwd")
 
-    @pytest.mark.asyncio
     async def test_guid_validation_rejects_slash(self) -> None:
         """Slashes in GUIDs are rejected before any network call."""
         mock_client = _make_mock_dapr_client(config_bytes=b"", secret_data={})

@@ -16,6 +16,7 @@ from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
+from application_sdk.storage.batch import delete_prefix as _delete_prefix
 from application_sdk.storage.formats import DataframeType, Reader, WriteMode, Writer
 from application_sdk.storage.formats.utils import (
     PARQUET_FILE_EXTENSION,
@@ -23,7 +24,6 @@ from application_sdk.storage.formats.utils import (
     is_empty_dataframe,
     path_gen,
 )
-from application_sdk.storage.ops import delete_prefix as _delete_prefix
 from application_sdk.storage.ops import upload_file as _upload_file
 
 logger = get_logger(__name__)
