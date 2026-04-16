@@ -1641,11 +1641,12 @@ jobs:
           PARENT_ID: ${{ github.event.comment.in_reply_to_id }}
         run: |
           # Fetch the parent comment. The in_reply_to_id might refer to
-          # either a PR review comment (/pulls/N/comments/ID) or an
-          # issue comment (/issues/N/comments/ID). Try both endpoints;
-          # if both 404, fall back to "unknown".
+          # either a PR review comment or an issue comment. GitHub's
+          # API for fetching a SINGLE PR review comment by ID is:
+          #   GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
+          # (NOT /pulls/{pull_number}/comments/{id} — that's a list endpoint).
           PARENT_AUTHOR="unknown"
-          RESULT=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/comments/${PARENT_ID}" 2>/dev/null) || \
+          RESULT=$(gh api "repos/${REPO}/pulls/comments/${PARENT_ID}" 2>/dev/null) || \
           RESULT=$(gh api "repos/${REPO}/issues/comments/${PARENT_ID}" 2>/dev/null) || \
           RESULT=""
 
