@@ -31,18 +31,10 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     """Typed credential reference — preferred over credential_guid for new apps."""
 
     extraction_method: str = ""
-    """Extraction mode: ``"agent"`` for secure-agent runs (credentials
-    resolved from an external secret manager via ``agent_json``),
-    ``"direct"`` for direct runs (credentials via ``credential_guid``).
-    Empty string is treated as ``"direct"`` for backward compatibility."""
+    """``"agent"`` or ``"direct"``. Empty defaults to direct."""
 
     agent_json: str | dict[str, Any] = ""
-    """Inline agent-shape credential payload (JSON string or parsed dict).
-    Non-empty only when ``extraction_method == "agent"``.  Contains the
-    ``secret-path``, ``secret-manager``, and ref-key fields needed by
-    :func:`~application_sdk.credentials.agent.resolve_agent_json`.
-    Use :meth:`~application_sdk.credentials.ref.CredentialRef.from_workflow_args`
-    to build a typed :class:`CredentialRef` from a dict that includes this field."""
+    """Inline agent credential payload. Non-empty when extraction_method is agent."""
 
     output_prefix: str = ""
     """Object store prefix for all output artifacts."""
