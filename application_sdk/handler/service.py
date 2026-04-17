@@ -32,6 +32,7 @@ import dataclasses
 import json
 import mimetypes
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -271,6 +272,11 @@ _storage: ObjectStore | None = None
 
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
+
+# Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
+# Identical to the @entrypoint decorator constraint. Used as a path-traversal guard
+# in get_manifest() before any filesystem path is constructed.
+_ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
 
 async def _get_temporal_client() -> Client:
@@ -1434,11 +1440,15 @@ def create_app_handler_service(
 
     @app.get("/workflows/v1/configmaps")
     async def list_configmaps() -> JSONResponse:
+        seen: set[str] = set()
         configmap_ids: list[str] = []
         if CONTRACT_GENERATED_DIR.exists():
-            for json_file in CONTRACT_GENERATED_DIR.glob("*.json"):
-                if json_file.stem != "manifest":
-                    configmap_ids.append(json_file.stem)
+            for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
+                stem = json_file.stem
+                if stem == "manifest" or stem in seen:
+                    continue
+                seen.add(stem)
+                configmap_ids.append(stem)
         return JSONResponse(
             content=_wrap_response(
                 cast("dict[str, Any]", {"configmaps": configmap_ids}),
@@ -1451,19 +1461,43 @@ def create_app_handler_service(
     # ------------------------------------------------------------------
 
     @app.get("/workflows/v1/manifest")
-    async def get_manifest() -> Response:
+    async def get_manifest(entrypoint: str | None = None) -> Response:
+        deployment = (DEPLOYMENT_NAME or "default").encode()
+
+        if entrypoint:
+            # Guard 1 (400): reject obviously-malformed names before touching disk.
+            if not _ENTRYPOINT_NAME_RE.match(entrypoint):
+                raise HTTPException(status_code=400, detail="Invalid entrypoint name")
+            # Build a registry from the filesystem: {entrypoint_name → manifest_path}.
+            # The Path objects in the dict come from glob(), not from user input, so
+            # the path that reaches read_bytes() is never tainted by the HTTP param.
+            # glob("*/manifest.json") only returns direct children of CONTRACT_GENERATED_DIR,
+            # so no is_relative_to guard is needed.
+            registry: dict[str, Path] = {
+                p.parent.name: p for p in CONTRACT_GENERATED_DIR.glob("*/manifest.json")
+            }
+            ep_manifest = registry.get(entrypoint)
+            if ep_manifest is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No manifest found for entrypoint {entrypoint!r}",
+                )
+            raw = ep_manifest.read_bytes()
+            raw = raw.replace(b"{deployment_name}", deployment)
+            raw = raw.replace(b"{app_name}", (app_name or "").encode())
+            return Response(content=raw, media_type="application/json")
+
+        # No entrypoint param: single-entrypoint path
         if manifest is not None:
-            # Programmatic: Pydantic model → JSON bytes, single hop.
             return Response(
                 content=manifest.model_dump_json(), media_type="application/json"
             )
         manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
         if manifest_path.exists():
-            # Disk: contract-generated file — serve raw bytes with deployment
-            # name substitution. No parse/reserialize: the file is already
-            # valid JSON, validated at build time by the contract tooling.
+            # Disk: contract-generated file — serve raw bytes with placeholder
+            # substitution. No parse/reserialize: the file is already valid JSON,
+            # validated at build time by the contract tooling.
             raw = manifest_path.read_bytes()
-            deployment = (DEPLOYMENT_NAME or "default").encode()
             raw = raw.replace(b"{deployment_name}", deployment)
             raw = raw.replace(b"{app_name}", (app_name or "").encode())
             return Response(content=raw, media_type="application/json")
@@ -1479,7 +1513,7 @@ def create_app_handler_service(
     # ------------------------------------------------------------------
 
     @app.get("/manifest", include_in_schema=False)
-    async def get_manifest_legacy() -> Response:
+    async def get_manifest_legacy(entrypoint: str | None = None) -> Response:
         """Unversioned alias for ``GET /workflows/v1/manifest``.
 
         .. deprecated::
@@ -1489,7 +1523,7 @@ def create_app_handler_service(
             orchestrators have been updated to use ``/workflows/v1/manifest``.
             Do **not** add new callers of this endpoint.
         """
-        return await get_manifest()
+        return await get_manifest(entrypoint=entrypoint)
 
     # ------------------------------------------------------------------
     # Health probes
