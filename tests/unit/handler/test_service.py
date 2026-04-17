@@ -1024,6 +1024,83 @@ class TestManifestEndpoint:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_simple_app_manifest_lives_at_root_not_in_subdir(
+        self, tmp_path: Path
+    ) -> None:
+        """Simple apps (only run(), no @entrypoint) place manifest.json at
+        CONTRACT_GENERATED_DIR/manifest.json — no subdirectory.
+
+        Heracles does not pass ?entrypoint= for these apps.  The endpoint must
+        serve the root file when no param is present, and must NOT search inside
+        any named subdirectory.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+        # Root manifest — correct location for a simple app.
+        (contract_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear", "app_name": "simple-app"})
+        )
+        # A subdir manifest should NOT be found when no ?entrypoint= is provided.
+        subdir = contract_dir / "run"
+        subdir.mkdir()
+        (subdir / "manifest.json").write_text(json.dumps({"app_name": "wrong"}))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            # No ?entrypoint= → root manifest, not the subdir one.
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["app_name"] == "simple-app"
+            assert body["execution_mode"] == "linear"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_simple_app_manifest_convention_vs_multi_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """Documents the path convention side-by-side:
+
+        - Simple app (no @entrypoint):  CONTRACT_GENERATED_DIR/manifest.json
+          Served via GET /manifest (no ?entrypoint= param).
+        - Multi-entrypoint app:         CONTRACT_GENERATED_DIR/{name}/manifest.json
+          Served via GET /manifest?entrypoint={name}.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+
+        # Simple-app root manifest.
+        (contract_dir / "manifest.json").write_text(json.dumps({"app_name": "simple"}))
+        # Multi-entrypoint subdir manifests.
+        for ep_name in ("crawler", "miner"):
+            ep_dir = contract_dir / ep_name
+            ep_dir.mkdir()
+            (ep_dir / "manifest.json").write_text(json.dumps({"app_name": ep_name}))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+
+            # Simple app path: no param → root.
+            resp = client.get("/workflows/v1/manifest")
+            assert resp.status_code == 200
+            assert resp.json()["app_name"] == "simple"
+
+            # Multi-entrypoint paths: ?entrypoint= → subdir.
+            for ep_name in ("crawler", "miner"):
+                resp = client.get(f"/workflows/v1/manifest?entrypoint={ep_name}")
+                assert resp.status_code == 200
+                assert resp.json()["app_name"] == ep_name
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
 
 class TestNormalizeCredentials:
     """Tests for _normalize_credentials v2→v3 compat shim."""
@@ -1424,3 +1501,265 @@ class TestStartCredentialPersistence:
         assert isinstance(result, list)
         assert result[0]["key"] == "host"
         assert result[0]["value"] == "db.example.com"
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint manifest resolution tests (Option B: name == folder name)
+# ---------------------------------------------------------------------------
+
+
+class TestEntrypointManifestResolution:
+    """Tests for GET /workflows/v1/manifest?entrypoint={name}.
+
+    Option B: entrypoint name IS the folder name — no atlan.yaml parsing.
+    GET /manifest?entrypoint=X serves CONTRACT_GENERATED_DIR/X/manifest.json.
+    """
+
+    def test_manifest_with_entrypoint_returns_correct_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """GET /manifest?entrypoint=snowflake resolves to snowflake/manifest.json."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "snowflake"
+        ep_dir.mkdir(parents=True)
+        manifest_data = {"execution_mode": "dag", "app_name": "snowflake-extractor"}
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=snowflake")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["execution_mode"] == "dag"
+            assert body["app_name"] == "snowflake-extractor"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_manifest_substitutes_deployment_name_for_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """Entrypoint manifest replaces {deployment_name} placeholder."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "ep1"
+        ep_dir.mkdir(parents=True)
+        manifest_data = {"task_queue": "{deployment_name}-queue"}
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        original_dep = svc_module.DEPLOYMENT_NAME
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        svc_module.DEPLOYMENT_NAME = "prod-deploy"
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=ep1")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["task_queue"] == "prod-deploy-queue"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+            svc_module.DEPLOYMENT_NAME = original_dep
+
+    def test_valid_but_unknown_entrypoint_returns_404(self, tmp_path: Path) -> None:
+        """Well-formed name with no matching subdir on disk returns 404."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=unknown")
+            assert response.status_code == 404
+            assert "No manifest found" in response.json()["detail"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_entrypoint_with_missing_manifest_file_returns_404(
+        self, tmp_path: Path
+    ) -> None:
+        """Subdir exists but manifest.json is absent — returns 404."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        (contract_dir / "snowflake").mkdir(parents=True)  # dir, but no manifest.json
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=snowflake")
+            assert response.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_invalid_entrypoint_name_returns_400(self, tmp_path: Path) -> None:
+        """Entrypoint names with path-traversal or illegal chars return 400."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            for bad_name in ["../etc", "a/b", "name with spaces", "name@bad"]:
+                resp = client.get(f"/workflows/v1/manifest?entrypoint={bad_name}")
+                assert resp.status_code == 400, f"Expected 400 for {bad_name!r}"
+                assert resp.json()["detail"] == "Invalid entrypoint name"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_valid_name_not_in_registry_returns_404(self, tmp_path: Path) -> None:
+        """A well-formed name with no matching manifest on disk returns 404.
+
+        The glob-based registry only contains entrypoints whose manifest.json
+        exists; a valid-format name with no file returns 404, not 400. Path escape
+        is structurally impossible because glob() only yields paths under
+        CONTRACT_GENERATED_DIR — no is_relative_to guard is needed.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            resp = client.get("/workflows/v1/manifest?entrypoint=valid")
+            assert resp.status_code == 404
+            assert "valid" in resp.json()["detail"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_legacy_manifest_alias_forwards_entrypoint(self, tmp_path: Path) -> None:
+        """GET /manifest?entrypoint=name uses the legacy alias correctly."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "snow"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"app_name": "snow-app"}))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/manifest?entrypoint=snow")
+            assert response.status_code == 200
+            assert response.json()["app_name"] == "snow-app"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_no_entrypoint_param_serves_root_manifest(self, tmp_path: Path) -> None:
+        """Without entrypoint param, serves root manifest unchanged."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+        (contract_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear"})
+        )
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            assert response.json()["execution_mode"] == "linear"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+
+# ---------------------------------------------------------------------------
+# Configmaps deduplication tests
+# ---------------------------------------------------------------------------
+
+
+class TestConfigMapsDeduplication:
+    """Tests for list_configmaps deduplication across subdirectories."""
+
+    def test_configmaps_dedupes_across_subdirs(self, tmp_path: Path) -> None:
+        """Configmaps with same stem in different subdirs appear only once."""
+        from application_sdk.handler import service as svc_module
+
+        # Root-level configs
+        (tmp_path / "config-a.json").write_text("{}")
+        (tmp_path / "config-b.json").write_text("{}")
+
+        # Sub-directory with duplicate stem + new config
+        subdir = tmp_path / "snow-gen"
+        subdir.mkdir()
+        (subdir / "config-a.json").write_text("{}")  # duplicate of root
+        (subdir / "config-c.json").write_text("{}")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmaps")
+            assert response.status_code == 200
+            configmaps = response.json()["data"]["configmaps"]
+            # config-a should appear only once despite being in root and subdir
+            assert configmaps.count("config-a") == 1
+            assert "config-b" in configmaps
+            assert "config-c" in configmaps
+            assert "manifest" not in configmaps
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmaps_rglob_finds_nested_configs(self, tmp_path: Path) -> None:
+        """rglob finds JSON files in nested sub-directories."""
+        from application_sdk.handler import service as svc_module
+
+        # Only sub-directory configs, no root configs
+        subdir = tmp_path / "entrypoint-a"
+        subdir.mkdir()
+        (subdir / "nested-config.json").write_text("{}")
+
+        deep_subdir = tmp_path / "entrypoint-b" / "deep"
+        deep_subdir.mkdir(parents=True)
+        (deep_subdir / "deep-config.json").write_text("{}")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmaps")
+            assert response.status_code == 200
+            configmaps = response.json()["data"]["configmaps"]
+            assert "nested-config" in configmaps
+            assert "deep-config" in configmaps
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmaps_excludes_manifest_in_subdirs(self, tmp_path: Path) -> None:
+        """manifest.json in subdirectories is also excluded."""
+        from application_sdk.handler import service as svc_module
+
+        subdir = tmp_path / "ep-gen"
+        subdir.mkdir()
+        (subdir / "manifest.json").write_text("{}")
+        (subdir / "real-config.json").write_text("{}")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmaps")
+            assert response.status_code == 200
+            configmaps = response.json()["data"]["configmaps"]
+            assert "manifest" not in configmaps
+            assert "real-config" in configmaps
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
