@@ -176,8 +176,34 @@ class TestResolveAgentJsonHappyPath:
             "compiled_url": "postgresql+asyncpg://34.122.182.89:5432/database",
         }
 
+        # _flatten_auth_section promotes basic.* fields to root level.
+        assert resolved["username"] == "real_pg_user"
+        assert resolved["password"] == "real_pg_password"
+
         # No dotted keys remain after expansion.
         assert not any("." in k for k in resolved)
+
+    async def test_flatten_auth_section_deep_merges_extra(self) -> None:
+        """Root-level ``extra.*`` and auth-section ``extra`` must
+        deep-merge into a single ``extra`` dict (GCP-WIF pattern).
+        """
+        agent_json = json.dumps(
+            {
+                "agent-name": "bq-agent",
+                "secret-path": "p",
+                "auth-type": "gcp-wif",
+                "extra.connect_type": "public",
+                "gcp-wif.extra.project_id": "my-project",
+                "gcp-wif.extra.service_account_email": "sa@gcp.iam",
+            }
+        )
+        store = _store_with(**{"p": _bundle()})
+        r = await resolve_agent_json(agent_json, store)
+
+        assert isinstance(r["extra"], dict)
+        assert r["extra"]["connect_type"] == "public"
+        assert r["extra"]["project_id"] == "my-project"
+        assert r["extra"]["service_account_email"] == "sa@gcp.iam"
 
     async def test_literal_keys_never_substituted_even_if_they_match_bundle(
         self,

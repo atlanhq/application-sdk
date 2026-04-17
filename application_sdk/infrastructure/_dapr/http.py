@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from httpx_retries import Retry, RetryTransport
@@ -131,8 +132,6 @@ class AsyncDaprClient:
     # ------------------------------------------------------------------
 
     async def get_secret(self, store_name: str, key: str) -> dict[str, str]:
-        from urllib.parse import quote
-
         resp = await self._client.get(
             SECRET_STORE_PATH.format(store_name=store_name, key=quote(key, safe=""))
         )

@@ -7,6 +7,9 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 class CredentialRef(BaseModel, frozen=True):
@@ -147,6 +150,10 @@ class CredentialRef(BaseModel, frozen=True):
                 try:
                     spec = AgentCredentialSpec.model_validate(raw_agent)
                 except Exception:
+                    logger.debug(
+                        "Failed to parse agent_json, treating as unpopulated",
+                        exc_info=True,
+                    )
                     spec = None
 
         agent_populated = spec is not None and spec.is_populated()
