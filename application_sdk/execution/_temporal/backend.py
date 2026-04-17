@@ -301,7 +301,17 @@ async def create_temporal_client(
                 domain=tls_domain,
             )
         else:
-            tls_config = True
+            from application_sdk.clients.ssl_utils import (  # deferred: only needed when no explicit TLS cert paths are provided
+                get_custom_ca_cert_bytes,
+            )
+
+            ca_cert_bytes = get_custom_ca_cert_bytes()
+            if ca_cert_bytes:
+                from temporalio.service import TLSConfig
+
+                tls_config = TLSConfig(server_root_ca_cert=ca_cert_bytes)
+            else:
+                tls_config = True
         logger.info(
             "Connecting to Temporal with TLS: host=%s namespace=%s mtls=%s",
             host,

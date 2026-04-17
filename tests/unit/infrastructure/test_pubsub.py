@@ -1,14 +1,15 @@
-"""Unit tests for InMemoryPubSub."""
+"""Unit tests for MockPubSub."""
 
-from application_sdk.infrastructure.pubsub import InMemoryPubSub, Message, PubSubError
+from application_sdk.infrastructure.pubsub import Message, PubSubError
+from application_sdk.testing.mocks import MockPubSub
 
 
-class TestInMemoryPubSub:
-    """Tests for InMemoryPubSub."""
+class TestMockPubSub:
+    """Tests for MockPubSub."""
 
     async def test_publish_delivers_to_subscriber(self) -> None:
         """Test that a published message is delivered to a subscriber."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         received: list[Message] = []
 
         async def handler(msg: Message) -> None:
@@ -23,7 +24,7 @@ class TestInMemoryPubSub:
 
     async def test_publish_with_metadata(self) -> None:
         """Test that metadata is included in the delivered message."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         received: list[Message] = []
 
         async def handler(msg: Message) -> None:
@@ -36,7 +37,7 @@ class TestInMemoryPubSub:
 
     async def test_publish_with_no_metadata_defaults_to_empty_dict(self) -> None:
         """Test that metadata defaults to empty dict when not provided."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         received: list[Message] = []
 
         async def handler(msg: Message) -> None:
@@ -49,7 +50,7 @@ class TestInMemoryPubSub:
 
     async def test_publish_delivers_to_multiple_subscribers(self) -> None:
         """Test that publishing delivers to all active subscribers."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         received_a: list[Message] = []
         received_b: list[Message] = []
 
@@ -68,7 +69,7 @@ class TestInMemoryPubSub:
 
     async def test_publish_does_not_deliver_to_other_topics(self) -> None:
         """Test that messages are only delivered to subscribers of the correct topic."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         received: list[Message] = []
 
         async def handler(msg: Message) -> None:
@@ -81,7 +82,7 @@ class TestInMemoryPubSub:
 
     async def test_subscribe_returns_active_subscription(self) -> None:
         """Test that subscribe returns a subscription with is_active=True."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
 
         async def handler(msg: Message) -> None:
             pass
@@ -93,7 +94,7 @@ class TestInMemoryPubSub:
 
     async def test_unsubscribe_deactivates_subscription(self) -> None:
         """Test that unsubscribe deactivates the subscription."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
 
         async def handler(msg: Message) -> None:
             pass
@@ -105,7 +106,7 @@ class TestInMemoryPubSub:
 
     async def test_unsubscribed_handler_does_not_receive_messages(self) -> None:
         """Test that an unsubscribed handler does not receive further messages."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         received: list[Message] = []
 
         async def handler(msg: Message) -> None:
@@ -121,7 +122,7 @@ class TestInMemoryPubSub:
 
     async def test_get_published_returns_all_messages(self) -> None:
         """Test that get_published returns all published messages."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         await pubsub.publish("t1", {"a": 1})
         await pubsub.publish("t2", {"b": 2})
         await pubsub.publish("t1", {"c": 3})
@@ -132,7 +133,7 @@ class TestInMemoryPubSub:
 
     async def test_get_published_filtered_by_topic(self) -> None:
         """Test that get_published filters messages by topic."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         await pubsub.publish("t1", {"a": 1})
         await pubsub.publish("t2", {"b": 2})
         await pubsub.publish("t1", {"c": 3})
@@ -144,7 +145,7 @@ class TestInMemoryPubSub:
 
     async def test_get_published_no_topic_filter_returns_copy(self) -> None:
         """Test that get_published returns a copy of the list (not the internal list)."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         await pubsub.publish("t", {"x": 1})
 
         msgs = pubsub.get_published()
@@ -155,7 +156,7 @@ class TestInMemoryPubSub:
 
     async def test_clear_removes_all_state(self) -> None:
         """Test that clear() removes all subscriptions and published messages."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         received: list[Message] = []
 
         async def handler(msg: Message) -> None:
@@ -178,7 +179,7 @@ class TestInMemoryPubSub:
 
     async def test_published_messages_have_unique_ids(self) -> None:
         """Test that each published message has a unique ID."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         await pubsub.publish("t", {"a": 1})
         await pubsub.publish("t", {"b": 2})
 
@@ -189,7 +190,7 @@ class TestInMemoryPubSub:
 
     async def test_multiple_publishes_accumulate(self) -> None:
         """Test that multiple publishes accumulate in get_published."""
-        pubsub = InMemoryPubSub()
+        pubsub = MockPubSub()
         for i in range(5):
             await pubsub.publish("topic", {"i": i})
 

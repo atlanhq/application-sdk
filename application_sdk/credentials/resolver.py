@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import TYPE_CHECKING, Any
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -186,14 +187,38 @@ class CredentialResolver:
         falls back to DaprCredentialVault for production platform-issued GUIDs.
         """
 
-        # Local store check — handler/service.py stores inline credentials here
-        # under the same UUID that becomes ref.name / ref.credential_guid.
+        # State store check — handler/service.py stores inline credentials here
+        # under the "cred:" prefix + UUID that becomes ref.name / ref.credential_guid.
+        # Guarded to local-dev only (symmetric with the write guard in handler/service.py)
+        # to avoid unnecessary state store round-trips in production.
+
+        from application_sdk.infrastructure.context import get_infrastructure
+
+        is_local_dev = os.environ.get("ATLAN_LOCAL_DEVELOPMENT", "").lower() in (
+            "true",
+            "1",
+        )
+        infra = get_infrastructure()
+        if is_local_dev and infra and infra.state_store:
+            try:
+                data = await infra.state_store.load(f"cred:{ref.name}")
+                if data is not None:
+                    return data
+            except Exception:
+                logger.debug(
+                    "State store lookup failed for GUID %r; trying secret store",
+                    ref.name,
+                    exc_info=True,
+                )
+
+        # Secret store check (backward compat) — handler/service.py previously
+        # stored inline credentials here under the same UUID.
         from application_sdk.infrastructure.secrets import SecretNotFoundError
 
         try:
             raw = await self._secret_store.get(ref.name)
-            data: dict[str, Any] = json.loads(raw)
-            return data
+            data_parsed: dict[str, Any] = json.loads(raw)
+            return data_parsed
         except SecretNotFoundError:
             pass
         except json.JSONDecodeError:

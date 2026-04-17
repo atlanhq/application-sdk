@@ -20,12 +20,12 @@ from application_sdk.credentials.types import (
     BasicCredential,
     RawCredential,
 )
-from application_sdk.infrastructure.secrets import InMemorySecretStore
+from application_sdk.testing.mocks import MockSecretStore
 
 
 @pytest.fixture
 def store():
-    return InMemorySecretStore()
+    return MockSecretStore()
 
 
 @pytest.fixture
