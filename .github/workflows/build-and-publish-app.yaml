@@ -99,17 +99,23 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Resolve SDK ref
+        # github.workflow_sha resolves to the *caller's* SHA (GitHub bug) and
+        # github.action_ref resolves to the checkout action SHA — neither gives
+        # the SDK's own ref. github.workflow_ref is the full refspec of *this*
+        # reusable workflow file (e.g. "atlanhq/application-sdk/...@refs/heads/main"),
+        # so stripping everything up to "@" gives exactly the ref we need.
+        id: sdk-ref
+        run: echo "ref=$(echo '${{ github.workflow_ref }}' | sed 's/.*@//')" >> "$GITHUB_OUTPUT"
+
       - name: Checkout SDK helper scripts
-        # Pull only ``.github/scripts/`` from the SDK at the same SHA this
-        # reusable entrypoint is running (so the parser stays versioned with the
-        # entrypoint, not the caller's repo). Sparse checkout keeps it cheap.
+        # Pull only ``.github/scripts/`` from the SDK at the same ref this
+        # reusable workflow is running (so the parser stays versioned with the
+        # workflow, not the caller's repo). Sparse checkout keeps it cheap.
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           repository: atlanhq/application-sdk
-          # TODO: github.workflow_sha resolves to caller's SHA, not SDK's (GitHub bug).
-          # github.action_ref resolves to checkout action SHA. Neither works.
-          # Hardcoded for now — must update when merging to main.
-          ref: feat/entrypoints-ci-publish
+          ref: ${{ steps.sdk-ref.outputs.ref }}
           path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
