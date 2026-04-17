@@ -148,66 +148,16 @@ class OutputBinding(Protocol):
         ...
 
 
-class InMemoryBinding:
-    """In-memory binding for testing.
+def __getattr__(name: str):
+    if name == "InMemoryBinding":
+        import warnings
 
-    Stores invocations for inspection and returns configurable responses.
-    """
+        warnings.warn(
+            "InMemoryBinding is removed in v3. Use application_sdk.testing.mocks.MockBinding.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from application_sdk.testing.mocks import MockBinding
 
-    def __init__(self, name: str = "in-memory") -> None:
-        self._name = name
-        self._invocations: list[tuple[str, bytes | None, dict[str, str]]] = []
-        self._responses: dict[str, BindingResponse] = {}
-
-    @property
-    def name(self) -> str:
-        """Name of this binding."""
-        return self._name
-
-    def set_response(self, operation: str, response: BindingResponse) -> None:
-        """Configure a response for a specific operation.
-
-        Args:
-            operation: Operation name.
-            response: Response to return when this operation is invoked.
-        """
-        self._responses[operation] = response
-
-    async def invoke(
-        self,
-        operation: str,
-        data: bytes | None = None,
-        metadata: dict[str, str] | None = None,
-    ) -> BindingResponse:
-        """Record the invocation and return configured response.
-
-        Args:
-            operation: Operation name.
-            data: Optional data payload.
-            metadata: Optional metadata.
-
-        Returns:
-            Configured response for this operation, or empty BindingResponse.
-        """
-        self._invocations.append((operation, data, metadata or {}))
-        return self._responses.get(operation, BindingResponse())
-
-    def get_invocations(
-        self, operation: str | None = None
-    ) -> list[tuple[str, bytes | None, dict[str, str]]]:
-        """Get recorded invocations, optionally filtered by operation.
-
-        Args:
-            operation: Optional operation name to filter by.
-
-        Returns:
-            List of (operation, data, metadata) tuples.
-        """
-        if operation is not None:
-            return [(op, d, m) for op, d, m in self._invocations if op == operation]
-        return list(self._invocations)
-
-    def clear(self) -> None:
-        """Clear all recorded invocations and configured responses."""
-        self._invocations.clear()
-        self._responses.clear()
+        return MockBinding
+    raise AttributeError(name)

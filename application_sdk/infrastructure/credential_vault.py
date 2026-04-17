@@ -74,28 +74,14 @@ class CredentialVault(Protocol):
         ...
 
 
-class InMemoryCredentialVault:
-    """In-memory credential vault for testing.
+def __getattr__(name: str):
+    if name == "InMemoryCredentialVault":
+        import warnings
 
-    WARNING: Do not use in production. Credentials are stored in plain text.
-    """
-
-    def __init__(self, credentials: dict[str, dict[str, Any]] | None = None) -> None:
-        self._credentials: dict[str, dict[str, Any]] = credentials or {}
-
-    async def get_credentials(self, credential_guid: str) -> dict[str, Any]:
-        """Get credentials by GUID."""
-        if credential_guid not in self._credentials:
-            raise CredentialVaultError(
-                f"Credential '{credential_guid}' not found",
-                credential_guid=credential_guid,
-            )
-        return dict(self._credentials[credential_guid])
-
-    def set(self, credential_guid: str, credentials: dict[str, Any]) -> None:
-        """Register credentials under *credential_guid* (for test setup)."""
-        self._credentials[credential_guid] = credentials
-
-    def clear(self) -> None:
-        """Remove all registered credentials (for test teardown)."""
-        self._credentials.clear()
+        warnings.warn(
+            "InMemoryCredentialVault is removed in v3. Use DaprCredentialVault or testing mocks.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        raise ImportError(name)
+    raise AttributeError(name)

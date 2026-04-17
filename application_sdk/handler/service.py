@@ -31,6 +31,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import mimetypes
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -721,24 +722,40 @@ def create_app_handler_service(
             # handlers.
             body = _normalize_credentials(body)
             if "credentials" in body and body["credentials"]:
-                if _secret_store is not None and hasattr(_secret_store, "set"):
+                # Credential interception: store inline credentials in state
+                # store and replace with a credential_guid. This path is
+                # guarded to local-dev only — in production, credentials are
+                # pre-provisioned in Dapr secret store by the platform.
+                is_local_dev = os.environ.get(
+                    "ATLAN_LOCAL_DEVELOPMENT", ""
+                ).lower() in (
+                    "true",
+                    "1",
+                )
+                if is_local_dev and _state_store is not None:
                     credential_guid = str(uuid4())
-                    # Convert v3 list [{key, value}] to flat dict so
-                    # get_secret() returns the same format as production
-                    # (Dapr/Vault). extra.* keys nested under "extra".
                     flat_creds = _pairs_to_flat(body["credentials"])
-                    _secret_store.set(credential_guid, json.dumps(flat_creds))
+                    await _state_store.save(f"cred:{credential_guid}", flat_creds)
                     body["credential_guid"] = credential_guid
                     del body["credentials"]
                     logger.debug(
-                        "Saved inline credentials to secret store: guid=%s",
+                        "Saved inline credentials to state store: guid=%s",
                         credential_guid,
                     )
                 else:
-                    logger.warning(
-                        "Secret store not writable; inline credentials will be "
-                        "passed through on the workflow input."
-                    )
+                    # Always strip raw credentials — never pass through to
+                    # Temporal history, regardless of mode or store availability.
+                    del body["credentials"]
+                    if not is_local_dev:
+                        logger.warning(
+                            "Inline credentials stripped in non-local mode; "
+                            "use credential_guid for production workflows."
+                        )
+                    else:
+                        logger.warning(
+                            "State store not available; inline credentials stripped "
+                            "to prevent exposure in Temporal history."
+                        )
 
             input_data = input_type(**body)
 
