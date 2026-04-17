@@ -1018,7 +1018,7 @@ jobs:
         if: steps.verdict.outputs.verdict == 'READY_TO_MERGE'
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_GRAPHQL_TOKEN: ${{ github.token }}
           PR: ${{ steps.pr.outputs.number }}
           MODE: ${{ steps.pr.outputs.mode }}
           REPO: ${{ github.repository }}
@@ -1160,7 +1160,7 @@ jobs:
           # Export it as GH_TOKEN temporarily for the GraphQL calls only,
           # then restore the original.
           ORIG_GH_TOKEN="$GH_TOKEN"
-          export GH_TOKEN="$GITHUB_TOKEN"
+          export GH_TOKEN="$GH_GRAPHQL_TOKEN"
 
           THREADS=$(gh api graphql -f query='
             query($owner:String!,$name:String!,$num:Int!) {
