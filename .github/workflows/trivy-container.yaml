@@ -1,7 +1,8 @@
 # Trivy container scan. This can be reused across all the applications.
 #
-# Runs Trivy, checks findings against .security/allowlist.json in the caller
-# repo, posts a summary comment on PRs, and fails on new/expired entries.
+# Runs Trivy, checks findings against the centralized base-allowlist in the SDK
+# repo (.security/base-allowlist.json), posts a summary comment on PRs, and
+# fails on new/expired entries.
 # Snyk is handled separately via verify-snyk-status.yml (central org workflow).
 
 name: Atlan Application Trivy container scan
@@ -40,6 +41,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6.0.2
 
+      - name: Checkout base allowlist from SDK
+        uses: actions/checkout@v4
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          sparse-checkout: .security
+          path: _sdk
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
       # Composite handles build, Trivy JSON+SARIF scan, SARIF upload.
       # fail-on-vulns is disabled here — the allowlist gate below takes over.
       - id: trivy-scan
@@ -60,13 +70,21 @@ jobs:
           import json, sys, os
           from datetime import datetime
 
-          allowlist_path = ".security/allowlist.json"
-          if os.path.exists(allowlist_path):
-              with open(allowlist_path) as f:
-                  allowlist = json.load(f)
-          else:
-              print("No .security/allowlist.json found — findings reported but gate disabled.")
+          # Load base allowlist (from SDK) — single source of truth for all apps.
+          # Per-repo allowlists are not supported; all CVE exceptions must go
+          # through the centralized base-allowlist in atlanhq/application-sdk.
+          base_path = "_sdk/.security/base-allowlist.json"
+          try:
+              with open(base_path) as f:
+                  base_raw = json.load(f)
+              allowlist = {k: v for k, v in base_raw.items() if not k.startswith("_")}
+              print(f"Base allowlist: {len(allowlist)} entries")
+          except FileNotFoundError:
+              print(f"Warning: {base_path} not found — findings reported but gate disabled.")
               allowlist = None
+          except json.JSONDecodeError as e:
+              print(f"Error: base allowlist has invalid JSON: {e}")
+              sys.exit(1)
 
           today = datetime.now().strftime("%Y-%m-%d")
           all_vulns = {}
@@ -93,7 +111,7 @@ jobs:
           unique = list(all_vulns.values())
 
           if allowlist is None:
-              summary = f"### \U0001f6e1\ufe0f Security Gate\n\nNo `.security/allowlist.json` — {len(unique)} CRITICAL/HIGH findings reported (gate disabled).\n"
+              summary = f"### \U0001f6e1\ufe0f Security Gate\n\nBase allowlist unavailable — {len(unique)} CRITICAL/HIGH findings reported (gate disabled).\n"
               for v in sorted(unique, key=lambda x: {"CRITICAL": 0, "HIGH": 1}.get(x["severity"], 9)):
                   print(f"  {v['severity']:8s} {v['id']} {v['package']}@{v['installed']}")
               with open("/tmp/scan_comment.md", "w") as f:
@@ -134,7 +152,7 @@ jobs:
               for v in blockers:
                   fix = v["fixed"] if v["fixed"] else "No fix"
                   summary += f"| {v['severity']} | `{v['id']}` | `{v['package']}@{v['installed']}` | {fix} |\n"
-              summary += "\n**To resolve:** fix the vulnerability or add it to `.security/allowlist.json` with owner approval.\n"
+              summary += "\n**To resolve:** fix the vulnerability or open a PR against `atlanhq/application-sdk` to add it to `.security/base-allowlist.json` (SDK security owner approval required).\n"
               with open(os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null"), "a") as f:
                   f.write(summary)
               with open("/tmp/scan_comment.md", "w") as f:
