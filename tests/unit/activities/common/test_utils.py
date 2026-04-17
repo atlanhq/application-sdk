@@ -98,6 +98,38 @@ class TestGetObjectStorePrefix:
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
     @patch("os.path.abspath")
     @patch("os.path.commonpath")
+    @patch("os.path.normpath")
+    def test_user_provided_object_store_keys(
+        self, mock_normpath, mock_commonpath, mock_abspath
+    ):
+        """Test user-provided object store keys are returned as-is."""
+        mock_abspath.side_effect = lambda p: p
+        mock_commonpath.return_value = "/different/root"
+        mock_normpath.side_effect = lambda p: p
+
+        test_cases = [
+            "data/file1.parquet",
+            "datasets/sales/2024_q1.json",
+            "models/model.pkl",
+            "/data/file1.parquet",
+            "//datasets//sales//file.json",
+        ]
+        expected_results = [
+            "data/file1.parquet",
+            "datasets/sales/2024_q1.json",
+            "models/model.pkl",
+            "data/file1.parquet",
+            "datasets//sales//file.json",
+        ]
+        for key, expected in zip(test_cases, expected_results):
+            result = get_object_store_prefix(key)
+            assert (
+                result == expected
+            ), f"Failed for '{key}': got '{result}', expected '{expected}'"
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
+    @patch("os.path.abspath")
+    @patch("os.path.commonpath")
     def test_security_path_normalization(self, mock_commonpath, mock_abspath):
         mock_abspath.side_effect = lambda p: p
         mock_commonpath.return_value = "/"
