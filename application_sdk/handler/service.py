@@ -32,6 +32,7 @@ import dataclasses
 import json
 import mimetypes
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -271,6 +272,11 @@ _storage: ObjectStore | None = None
 
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
+
+# Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
+# Identical to the @entrypoint decorator constraint. Used as a path-traversal guard
+# in get_manifest() before any filesystem path is constructed.
+_ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
 
 async def _get_temporal_client() -> Client:
@@ -1459,10 +1465,11 @@ def create_app_handler_service(
         deployment = (DEPLOYMENT_NAME or "default").encode()
 
         if entrypoint:
-            # Guard 1 (400 — malformed input): name must be an identifier-safe
-            # kebab segment (letters, digits, hyphens, underscores only). Mirrors
-            # the @entrypoint decorator so any SDK-produced name passes here.
-            if not entrypoint.replace("-", "_").isidentifier():
+            # Guard 1 (400 — malformed input): allowlist the name before touching
+            # the filesystem. Accepts letter-start kebab identifiers only — same
+            # constraint as the @entrypoint decorator. Explicit regex so static
+            # analysis tools can verify no path-traversal chars reach the join.
+            if not _ENTRYPOINT_NAME_RE.match(entrypoint):
                 raise HTTPException(status_code=400, detail="Invalid entrypoint name")
             ep_manifest = (
                 CONTRACT_GENERATED_DIR / entrypoint / "manifest.json"
