@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import TYPE_CHECKING, Any
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -141,7 +142,6 @@ class CredentialResolver:
         # under the "cred:" prefix + UUID that becomes ref.name / ref.credential_guid.
         # Guarded to local-dev only (symmetric with the write guard in handler/service.py)
         # to avoid unnecessary state store round-trips in production.
-        import os
 
         from application_sdk.infrastructure.context import get_infrastructure
 
