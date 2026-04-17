@@ -721,22 +721,22 @@ def create_app_handler_service(
             # handlers.
             body = _normalize_credentials(body)
             if "credentials" in body and body["credentials"]:
-                if _secret_store is not None and hasattr(_secret_store, "set"):
+                if _state_store is not None:
                     credential_guid = str(uuid4())
                     # Convert v3 list [{key, value}] to flat dict so
                     # get_secret() returns the same format as production
                     # (Dapr/Vault). extra.* keys nested under "extra".
                     flat_creds = _pairs_to_flat(body["credentials"])
-                    _secret_store.set(credential_guid, json.dumps(flat_creds))
+                    await _state_store.save(f"cred:{credential_guid}", flat_creds)
                     body["credential_guid"] = credential_guid
                     del body["credentials"]
                     logger.debug(
-                        "Saved inline credentials to secret store: guid=%s",
+                        "Saved inline credentials to state store: guid=%s",
                         credential_guid,
                     )
                 else:
                     logger.warning(
-                        "Secret store not writable; inline credentials will be "
+                        "State store not available; inline credentials will be "
                         "passed through on the workflow input."
                     )
 

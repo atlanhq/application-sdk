@@ -533,11 +533,11 @@ async def credential_wf_client(temporal_client, task_queue, reregister_app):
     """Handler service configured with CredentialAwareApp and a live InMemorySecretStore."""
     from application_sdk.handler import service as svc
     from application_sdk.handler.service import create_app_handler_service
-    from application_sdk.infrastructure.secrets import InMemorySecretStore
+    from application_sdk.testing.mocks import MockSecretStore
 
     reregister_app(CredentialAwareApp)
 
-    secret_store = InMemorySecretStore()
+    secret_store = MockSecretStore()
     handler = DefaultHandler()
     app = create_app_handler_service(
         handler,

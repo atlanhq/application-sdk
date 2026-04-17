@@ -1,16 +1,17 @@
-"""Unit tests for InMemoryStateStore."""
+"""Unit tests for MockStateStore (state store implementation)."""
 
 import pytest
 
-from application_sdk.infrastructure.state import InMemoryStateStore, StateStoreError
+from application_sdk.infrastructure.state import StateStoreError
+from application_sdk.testing.mocks import MockStateStore
 
 
-class TestInMemoryStateStore:
-    """Tests for InMemoryStateStore."""
+class TestMockStateStore:
+    """Tests for MockStateStore."""
 
     async def test_save_and_load(self) -> None:
         """Test saving and loading state by key."""
-        store = InMemoryStateStore()
+        store = MockStateStore()
         value = {"status": "running", "count": 42}
 
         await store.save("key1", value)
@@ -20,7 +21,7 @@ class TestInMemoryStateStore:
 
     async def test_load_missing_key_returns_none(self) -> None:
         """Test that loading a missing key returns None."""
-        store = InMemoryStateStore()
+        store = MockStateStore()
 
         result = await store.load("nonexistent")
 
@@ -28,7 +29,7 @@ class TestInMemoryStateStore:
 
     async def test_save_overwrites_existing_value(self) -> None:
         """Test that saving to an existing key overwrites the value."""
-        store = InMemoryStateStore()
+        store = MockStateStore()
         await store.save("key1", {"v": 1})
         await store.save("key1", {"v": 2})
 
@@ -38,7 +39,7 @@ class TestInMemoryStateStore:
 
     async def test_delete_existing_key_returns_true(self) -> None:
         """Test that deleting an existing key returns True."""
-        store = InMemoryStateStore()
+        store = MockStateStore()
         await store.save("key1", {"x": 1})
 
         deleted = await store.delete("key1")
@@ -48,7 +49,7 @@ class TestInMemoryStateStore:
 
     async def test_delete_missing_key_returns_false(self) -> None:
         """Test that deleting a missing key returns False."""
-        store = InMemoryStateStore()
+        store = MockStateStore()
 
         deleted = await store.delete("nonexistent")
 
@@ -56,7 +57,7 @@ class TestInMemoryStateStore:
 
     async def test_list_keys_no_prefix(self) -> None:
         """Test listing all keys when no prefix is given."""
-        store = InMemoryStateStore()
+        store = MockStateStore()
         await store.save("alpha", {"a": 1})
         await store.save("beta", {"b": 2})
         await store.save("gamma", {"c": 3})
@@ -67,7 +68,7 @@ class TestInMemoryStateStore:
 
     async def test_list_keys_with_prefix(self) -> None:
         """Test listing keys filtered by prefix."""
-        store = InMemoryStateStore()
+        store = MockStateStore()
         await store.save("app:workflow:1", {"a": 1})
         await store.save("app:workflow:2", {"b": 2})
         await store.save("app:creds:1", {"c": 3})
@@ -79,7 +80,7 @@ class TestInMemoryStateStore:
 
     async def test_list_keys_empty_prefix_returns_all(self) -> None:
         """Test that empty prefix returns all keys."""
-        store = InMemoryStateStore()
+        store = MockStateStore()
         await store.save("a", {})
         await store.save("b", {})
 
@@ -89,7 +90,7 @@ class TestInMemoryStateStore:
 
     async def test_list_keys_no_matches_returns_empty(self) -> None:
         """Test that a non-matching prefix returns an empty list."""
-        store = InMemoryStateStore()
+        store = MockStateStore()
         await store.save("alpha", {})
 
         keys = await store.list_keys(prefix="beta:")
@@ -98,7 +99,7 @@ class TestInMemoryStateStore:
 
     async def test_clear_removes_all_data(self) -> None:
         """Test that clear() removes all stored data."""
-        store = InMemoryStateStore()
+        store = MockStateStore()
         await store.save("key1", {"a": 1})
         await store.save("key2", {"b": 2})
 
@@ -109,7 +110,7 @@ class TestInMemoryStateStore:
 
     async def test_clear_then_save_works(self) -> None:
         """Test that saving after clear works correctly."""
-        store = InMemoryStateStore()
+        store = MockStateStore()
         await store.save("key1", {"a": 1})
         store.clear()
         await store.save("key2", {"b": 2})

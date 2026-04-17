@@ -1,6 +1,7 @@
 """Mock wrappers with call-tracking for unit tests."""
 
 import json
+import uuid
 from typing import Any
 
 from application_sdk.credentials.ref import (
@@ -16,17 +17,16 @@ from application_sdk.credentials.ref import (
     oauth_client_ref,
 )
 from application_sdk.execution.heartbeat import NoopHeartbeatController
-from application_sdk.infrastructure.bindings import BindingResponse, InMemoryBinding
-from application_sdk.infrastructure.pubsub import InMemoryPubSub, Message
-from application_sdk.infrastructure.secrets import InMemorySecretStore
-from application_sdk.infrastructure.state import InMemoryStateStore
+from application_sdk.infrastructure.bindings import BindingResponse
+from application_sdk.infrastructure.pubsub import Message
+from application_sdk.infrastructure.secrets import SecretNotFoundError
 
 
-class MockStateStore(InMemoryStateStore):
-    """InMemoryStateStore with call-tracking."""
+class MockStateStore:
+    """In-memory state store with call-tracking for unit tests."""
 
     def __init__(self) -> None:
-        super().__init__()
+        self._data: dict[str, dict[str, Any]] = {}
         self._save_calls: list[tuple[str, dict[str, Any]]] = []
         self._load_calls: list[str] = []
         self._delete_calls: list[str] = []
@@ -34,19 +34,24 @@ class MockStateStore(InMemoryStateStore):
 
     async def save(self, key: str, value: dict[str, Any]) -> None:
         self._save_calls.append((key, value))
-        await super().save(key, value)
+        self._data[key] = value
 
     async def load(self, key: str) -> dict[str, Any] | None:
         self._load_calls.append(key)
-        return await super().load(key)
+        return self._data.get(key)
 
     async def delete(self, key: str) -> bool:
         self._delete_calls.append(key)
-        return await super().delete(key)
+        if key in self._data:
+            del self._data[key]
+            return True
+        return False
 
     async def list_keys(self, prefix: str = "") -> list[str]:
         self._list_keys_calls.append(prefix)
-        return await super().list_keys(prefix)
+        if not prefix:
+            return list(self._data.keys())
+        return [k for k in self._data if k.startswith(prefix)]
 
     def get_save_calls(self) -> list[tuple[str, dict[str, Any]]]:
         """Return all recorded save calls as (key, value) tuples."""
@@ -74,24 +79,42 @@ class MockStateStore(InMemoryStateStore):
     def reset(self) -> None:
         """Clear call logs and all stored data."""
         self.reset_calls()
-        self.clear()
+        self._data.clear()
+
+    def clear(self) -> None:
+        """Clear all stored data."""
+        self._data.clear()
 
 
-class MockSecretStore(InMemorySecretStore):
-    """InMemorySecretStore with call-tracking."""
+class MockSecretStore:
+    """In-memory secret store with call-tracking for unit tests."""
 
     def __init__(self, secrets: dict[str, str] | None = None) -> None:
-        super().__init__(secrets)
+        self._secrets: dict[str, str] = secrets or {}
         self._get_calls: list[str] = []
         self._get_optional_calls: list[str] = []
 
     async def get(self, name: str) -> str:
         self._get_calls.append(name)
-        return await super().get(name)
+        if name not in self._secrets:
+            raise SecretNotFoundError(name)
+        return self._secrets[name]
 
     async def get_optional(self, name: str) -> str | None:
         self._get_optional_calls.append(name)
-        return await super().get_optional(name)
+        return self._secrets.get(name)
+
+    async def get_bulk(self, names: list[str]) -> dict[str, str]:
+        """Get multiple secrets."""
+        return {n: self._secrets[n] for n in names if n in self._secrets}
+
+    async def list_names(self) -> list[str]:
+        """List available secret names."""
+        return list(self._secrets.keys())
+
+    def set(self, name: str, value: str) -> None:
+        """Set a secret (for test setup)."""
+        self._secrets[name] = value
 
     def get_get_calls(self) -> list[str]:
         """Return all recorded get calls (secret names)."""
@@ -109,14 +132,46 @@ class MockSecretStore(InMemorySecretStore):
     def reset(self) -> None:
         """Clear call logs and all stored secrets."""
         self.reset_calls()
-        self.clear()
+        self._secrets.clear()
+
+    def clear(self) -> None:
+        """Clear all secrets."""
+        self._secrets.clear()
 
 
-class MockPubSub(InMemoryPubSub):
-    """InMemoryPubSub with call-tracking."""
+class _MockSubscription:
+    """In-memory subscription for MockPubSub."""
+
+    def __init__(self, topic: str, pubsub: "MockPubSub") -> None:
+        self._topic = topic
+        self._pubsub = pubsub
+        self._active = True
+
+    @property
+    def topic(self) -> str:
+        return self._topic
+
+    @property
+    def is_active(self) -> bool:
+        return self._active
+
+    async def unsubscribe(self) -> None:
+        """Unsubscribe from the topic."""
+        self._active = False
+        self._pubsub._remove_subscription(self._topic, self)
+
+
+class MockPubSub:
+    """In-memory pub/sub with call-tracking for unit tests."""
 
     def __init__(self) -> None:
-        super().__init__()
+        from collections.abc import Awaitable
+        from typing import Callable
+
+        self._subscriptions: dict[
+            str, list[tuple[Callable[[Message], Awaitable[None]], _MockSubscription]]
+        ] = {}
+        self._published: list[Message] = []
         self._publish_calls: list[tuple[str, dict[str, Any], dict[str, str]]] = []
 
     async def publish(
@@ -127,7 +182,56 @@ class MockPubSub(InMemoryPubSub):
         metadata: dict[str, str] | None = None,
     ) -> None:
         self._publish_calls.append((topic, data, metadata or {}))
-        await super().publish(topic, data, metadata=metadata)
+        message = Message(
+            data=data,
+            metadata=metadata or {},
+            id=str(uuid.uuid4()),
+            topic=topic,
+        )
+        self._published.append(message)
+
+        # Deliver to subscribers
+        if topic in self._subscriptions:
+            for handler, subscription in self._subscriptions[topic]:
+                if subscription.is_active:
+                    await handler(message)
+
+    async def subscribe(
+        self,
+        topic: str,
+        handler: Any,
+    ) -> _MockSubscription:
+        """Subscribe to a topic."""
+        if topic not in self._subscriptions:
+            self._subscriptions[topic] = []
+
+        subscription = _MockSubscription(topic, self)
+        self._subscriptions[topic].append((handler, subscription))
+        return subscription
+
+    def _remove_subscription(
+        self,
+        topic: str,
+        subscription: _MockSubscription,
+    ) -> None:
+        """Remove a subscription (called by _MockSubscription)."""
+        if topic in self._subscriptions:
+            self._subscriptions[topic] = [
+                (h, s) for h, s in self._subscriptions[topic] if s != subscription
+            ]
+
+    def get_published(self, topic: str | None = None) -> list[Message]:
+        """Get published messages (for testing).
+
+        Args:
+            topic: Optional topic filter.
+
+        Returns:
+            List of published messages.
+        """
+        if topic:
+            return [m for m in self._published if m.topic == topic]
+        return list(self._published)
 
     def get_publish_calls(
         self, topic: str | None = None
@@ -155,15 +259,32 @@ class MockPubSub(InMemoryPubSub):
     def reset(self) -> None:
         """Clear call logs, subscriptions, and published messages."""
         self.reset_calls()
-        self.clear()
+        self._subscriptions.clear()
+        self._published.clear()
+
+    def clear(self) -> None:
+        """Clear all subscriptions and published messages."""
+        self._subscriptions.clear()
+        self._published.clear()
 
 
-class MockBinding(InMemoryBinding):
-    """InMemoryBinding with call-tracking."""
+class MockBinding:
+    """In-memory binding with call-tracking for unit tests."""
 
     def __init__(self, name: str = "mock") -> None:
-        super().__init__(name)
+        self._name = name
+        self._invocations: list[tuple[str, bytes | None, dict[str, str]]] = []
+        self._responses: dict[str, BindingResponse] = {}
         self._invoke_calls: list[tuple[str, bytes | None, dict[str, str]]] = []
+
+    @property
+    def name(self) -> str:
+        """Name of this binding."""
+        return self._name
+
+    def set_response(self, operation: str, response: BindingResponse) -> None:
+        """Configure a response for a specific operation."""
+        self._responses[operation] = response
 
     async def invoke(
         self,
@@ -171,8 +292,17 @@ class MockBinding(InMemoryBinding):
         data: bytes | None = None,
         metadata: dict[str, str] | None = None,
     ) -> BindingResponse:
+        self._invocations.append((operation, data, metadata or {}))
         self._invoke_calls.append((operation, data, metadata or {}))
-        return await super().invoke(operation, data, metadata)
+        return self._responses.get(operation, BindingResponse())
+
+    def get_invocations(
+        self, operation: str | None = None
+    ) -> list[tuple[str, bytes | None, dict[str, str]]]:
+        """Get recorded invocations, optionally filtered by operation."""
+        if operation is not None:
+            return [(op, d, m) for op, d, m in self._invocations if op == operation]
+        return list(self._invocations)
 
     def get_invoke_calls(
         self, operation: str | None = None
@@ -191,12 +321,19 @@ class MockBinding(InMemoryBinding):
 
     def reset_calls(self) -> None:
         """Clear call logs only (configured responses preserved)."""
+        self._invocations.clear()
         self._invoke_calls.clear()
 
     def reset(self) -> None:
         """Clear call logs and configured responses."""
         self.reset_calls()
-        self.clear()
+        self._responses.clear()
+
+    def clear(self) -> None:
+        """Clear all recorded invocations and configured responses."""
+        self._invocations.clear()
+        self._invoke_calls.clear()
+        self._responses.clear()
 
 
 class MockHeartbeatController(NoopHeartbeatController):
@@ -215,7 +352,7 @@ class MockHeartbeatController(NoopHeartbeatController):
 class MockCredentialStore:
     """In-memory credential store for unit tests.
 
-    Serializes credential data as JSON and stores it via ``InMemorySecretStore``.
+    Serializes credential data as JSON and stores it via ``MockSecretStore``.
     Each ``add_*`` method returns a ``CredentialRef`` that can be passed to a
     ``CredentialResolver`` or ``AppContext.resolve_credential()``.
 
@@ -231,12 +368,12 @@ class MockCredentialStore:
     """
 
     def __init__(self) -> None:
-        self._store = InMemorySecretStore()
+        self._store = MockSecretStore()
         self._refs: dict[str, CredentialRef] = {}
 
     @property
-    def secret_store(self) -> InMemorySecretStore:
-        """Return the backing InMemorySecretStore for injection into resolvers."""
+    def secret_store(self) -> MockSecretStore:
+        """Return the backing MockSecretStore for injection into resolvers."""
         return self._store
 
     def add_api_key(

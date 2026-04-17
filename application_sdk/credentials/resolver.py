@@ -137,14 +137,31 @@ class CredentialResolver:
         falls back to DaprCredentialVault for production platform-issued GUIDs.
         """
 
-        # Local store check — handler/service.py stores inline credentials here
-        # under the same UUID that becomes ref.name / ref.credential_guid.
+        # State store check — handler/service.py stores inline credentials here
+        # under the "cred:" prefix + UUID that becomes ref.name / ref.credential_guid.
+        from application_sdk.infrastructure.context import get_infrastructure
+
+        infra = get_infrastructure()
+        if infra and infra.state_store:
+            try:
+                data = await infra.state_store.load(f"cred:{ref.name}")
+                if data is not None:
+                    return data
+            except Exception:
+                logger.debug(
+                    "State store lookup failed for GUID %r; trying secret store",
+                    ref.name,
+                    exc_info=True,
+                )
+
+        # Secret store check (backward compat) — handler/service.py previously
+        # stored inline credentials here under the same UUID.
         from application_sdk.infrastructure.secrets import SecretNotFoundError
 
         try:
             raw = await self._secret_store.get(ref.name)
-            data: dict[str, Any] = json.loads(raw)
-            return data
+            data_parsed: dict[str, Any] = json.loads(raw)
+            return data_parsed
         except SecretNotFoundError:
             pass
         except json.JSONDecodeError:
