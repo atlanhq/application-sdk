@@ -90,7 +90,7 @@ jobs:
 
           repo_name = os.environ.get("GITHUB_REPOSITORY", "unknown")
 
-          # Merge base + repo allowlists
+          # Load base allowlist — single source of truth for all apps
           allowlist = {}
           try:
               with open("_sdk/.security/base-allowlist.json") as f:
