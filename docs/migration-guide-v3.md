@@ -350,7 +350,7 @@ class LineageActivities(ActivitiesInterface):
 # app/connector.py
 from application_sdk.app import App, entrypoint, task
 from application_sdk.contracts.base import Input, Output
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class ExtractionInput(Input, allow_unbounded_fields=True):
