@@ -729,7 +729,7 @@ dapr:
 6. **Log with the SDK logger.** Use `application_sdk.observability.logger_adaptor.get_logger` for structured logging that integrates with Temporal.
 7. **Test without sidecars.** Use `MockStateStore` and `MockSecretStore` from `application_sdk.testing.mocks` to test your connector and handler without Dapr or Temporal running.
 8. **Set `ATLAN_APP_MODULE` in the Dockerfile.** This locks the app module to the image and avoids runtime misconfiguration.
-9. **Use `on_complete` for cleanup.** Override `on_complete(success: bool)` for post-run cleanup (see [Upgrade Guide Step 12](../upgrade-guide-v3.md#step-12-app-lifecycle-hooks)).
+9. **Use `on_complete` for cleanup.** Override `on_complete()` for post-run cleanup (see [Upgrade Guide Step 12](../upgrade-guide-v3.md#step-12-app-lifecycle-hooks)).
 
 ## Next Steps
 

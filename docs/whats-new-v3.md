@@ -624,7 +624,7 @@ activities or tacked on as a final workflow step.
 
 #### on_complete
 
-`on_complete(success: bool)` is called after `run()` finishes, whether it succeeded or raised
+`on_complete()` is called after `run()` finishes, whether it succeeded or raised
 an exception. v2 had no equivalent — cleanup was either a final activity or omitted entirely.
 
 ```python
