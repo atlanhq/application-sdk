@@ -31,11 +31,11 @@ Alternatively, set the `ATLAN_APP_MODULE` environment variable. This is mandator
 
 ## Dockerfile Configuration
 
-The base image (`registry.atlan.com/public/app-runtime-base:refactor-v3-latest`) includes the `application-sdk` CLI, Dapr, and the entrypoint. You do not need a custom `ENTRYPOINT`, `CMD`, or `entrypoint.sh`. The base image handles mode selection at runtime.
+The base image (`registry.atlan.com/public/app-runtime-base:main-latest`) includes the `application-sdk` CLI, Dapr, and the entrypoint. You do not need a custom `ENTRYPOINT`, `CMD`, or `entrypoint.sh`. The base image handles mode selection at runtime.
 
 ```dockerfile
 # Application-sdk v3 base image (Chainguard-based)
-FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
+FROM registry.atlan.com/public/app-runtime-base:main-latest
 
 WORKDIR /app
 

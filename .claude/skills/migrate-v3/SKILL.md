@@ -27,7 +27,7 @@ Performs a complete v2 → v3 migration of an application-sdk connector.
 4. **Check the connector's SDK dependency.** Read the connector's `pyproject.toml` and look for `atlan-application-sdk` in the dependencies. Until v3 is released on PyPI the connector must use the git source:
    ```toml
    [tool.uv.sources]
-   atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "refactor-v3" }
+   atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "main" }
    ```
    If it still points to a v2 PyPI release (e.g. `atlan-application-sdk>=2.x`), add the `[tool.uv.sources]` block above and run `uv sync` in the connector repo before continuing. If it already has this source override or references a v3+ PyPI release, proceed.
 
@@ -41,7 +41,7 @@ Performs a complete v2 → v3 migration of an application-sdk connector.
    ```
 
 5. Read `tools/migrate_v3/MIGRATION_PROMPT.md` in full. This is the authoritative reference for all structural changes you will make. Do not proceed to Phase 3 without having read it.
-5b. Read the **migration guide** at `docs/migration-guide-v3.md` in the application-sdk repo (also available at https://github.com/atlanhq/application-sdk/blob/refactor-v3/docs/migration-guide-v3.md). This is the user-facing guide with v2 → v3 code examples for every migration step (imports, templates, handler, entry point, infrastructure, credentials, tests). Use it as a reference when making structural changes — it has the canonical before/after code snippets.
+5b. Read the **migration guide** at `docs/migration-guide-v3.md` in the application-sdk repo (also available at https://github.com/atlanhq/application-sdk/blob/main/docs/migration-guide-v3.md). This is the user-facing guide with v2 → v3 code examples for every migration step (imports, templates, handler, entry point, infrastructure, credentials, tests). Use it as a reference when making structural changes — it has the canonical before/after code snippets.
 6. Run an initial checker pass to establish the baseline — **do not fix anything yet**:
 
 ```bash
@@ -624,7 +624,7 @@ Only print this after parity is achieved or the user accepts the result:
 
 **This is a HARD, NON-NEGOTIABLE constraint. Read every word.**
 
-During migration, if you encounter a bug, crash, incorrect behavior, or missing feature **in the application-sdk itself** (i.e., code under `application_sdk/` on the `refactor-v3` branch — NOT in the connector being migrated), you MUST follow this protocol. There are NO exceptions.
+During migration, if you encounter a bug, crash, incorrect behavior, or missing feature **in the application-sdk itself** (i.e., code under `application_sdk/` on the `main` branch — NOT in the connector being migrated), you MUST follow this protocol. There are NO exceptions.
 
 ### How to identify an SDK bug vs a connector bug
 
@@ -640,8 +640,8 @@ If in doubt, it's an SDK bug. Treat it as one.
 2. **Create a fix branch in the SDK repo.** From the application-sdk repo root:
    ```bash
    cd <application-sdk-repo-root>
-   git fetch origin refactor-v3
-   git checkout -b fix/sdk-<short-description> origin/refactor-v3
+   git fetch origin main
+   git checkout -b fix/sdk-<short-description> origin/main
    ```
 
 3. **Write the fix.** Fix the actual SDK code. Write it properly — this is going into the SDK, not a throwaway patch. Include a test if the area has existing test coverage.
@@ -659,10 +659,10 @@ If in doubt, it's an SDK bug. Treat it as one.
    git push -u origin fix/sdk-<short-description>
    ```
 
-6. **Create a PR against `refactor-v3`:**
+6. **Create a PR against `main`:**
    ```bash
    gh pr create \
-     --base refactor-v3 \
+     --base main \
      --title "fix(<area>): <short description>" \
      --body "$(cat <<'EOF'
    ## Bug found during v3 migration of <connector-name>
@@ -751,7 +751,7 @@ No workarounds. No exceptions. No "just this once." 🪨
 - Every workaround in a connector becomes invisible tech debt
 - The SDK team cannot fix bugs they don't know about
 - If 15 connectors each work around the same bug differently, that's 15 cleanup PRs later
-- The `refactor-v3` branch is still in active development — bugs SHOULD be found and fixed now, not papered over
+- The `main` branch is the active development branch — bugs SHOULD be found and fixed now, not papered over
 
 ### Resuming after the fix is merged
 
@@ -886,7 +886,7 @@ The Dockerfile MUST follow this exact pattern. Do NOT deviate from the base imag
 
 ```dockerfile
 # syntax=docker/dockerfile:1
-FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
+FROM registry.atlan.com/public/app-runtime-base:main-latest
 
 # git is required for uv to fetch git-sourced dependencies (atlan-application-sdk)
 USER root
@@ -913,7 +913,7 @@ ENV APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR=false
 ```
 
 Key rules:
-- Base image: `registry.atlan.com/public/app-runtime-base:refactor-v3-latest` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
+- Base image: `registry.atlan.com/public/app-runtime-base:main-latest` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
 - `COPY app/ app/` — only app code, NOT the entire repo
 - `ATLAN_APP_MODULE` — hardcoded, comma-separated for multi-app
 - No `CMD` — the base image handles mode via `APPLICATION_MODE` env var set by Helm

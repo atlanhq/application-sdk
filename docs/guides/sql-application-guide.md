@@ -575,7 +575,7 @@ The base image handles the entrypoint, Dapr, and the `application-sdk` CLI. You 
 
 ```dockerfile
 # Application-sdk v3 base image (Chainguard-based)
-FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
+FROM registry.atlan.com/public/app-runtime-base:main-latest
 
 WORKDIR /app
 
@@ -596,7 +596,7 @@ ENV ATLAN_CONTRACT_GENERATED_DIR=app/generated
 
 Key points:
 
-- **Base image**: `registry.atlan.com/public/app-runtime-base:refactor-v3-latest` --- includes Dapr, the `application-sdk` CLI, and the entrypoint.
+- **Base image**: `registry.atlan.com/public/app-runtime-base:main-latest` --- includes Dapr, the `application-sdk` CLI, and the entrypoint.
 - **No `CMD` needed**: The base image handles mode selection at runtime.
 - **`COPY . .`**: Copies the entire project (including `app/`, `main.py`, SQL files, etc.). The `.dockerignore` should exclude `.git`, `tests/`, etc.
 - **`--no-install-project`**: Installs only dependencies, not the project itself (the app code is copied separately).
@@ -691,7 +691,7 @@ if __name__ == "__main__":
 
 ```dockerfile
 # Dockerfile
-FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
+FROM registry.atlan.com/public/app-runtime-base:main-latest
 
 WORKDIR /app
 

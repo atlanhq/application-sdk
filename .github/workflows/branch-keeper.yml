@@ -12,7 +12,7 @@ name: Keep auto-maintained PRs up-to-date
 
 on:
   push:
-    branches: [refactor-v3]  # Change to [main] after refactor-v3 merges
+    branches: [main]
 
 jobs:
   update-auto-maintained-prs:

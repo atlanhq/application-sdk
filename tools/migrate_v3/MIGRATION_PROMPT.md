@@ -4,13 +4,13 @@
 > parts of the v2 → v3 migration (Categories B and C).
 >
 > **Pre-condition — SDK dependency**: Until v3 is published to PyPI, the
-> connector must depend on `atlan-application-sdk` from the `refactor-v3`
+> connector must depend on `atlan-application-sdk` from the `main`
 > branch.  If the connector's `pyproject.toml` still references a v2 PyPI
 > release, update it before doing anything else:
 >
 > ```toml
 > [tool.uv.sources]
-> atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "refactor-v3" }
+> atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "main" }
 > ```
 >
 > **Pre-condition — import rewriter**: Run the import rewriter first.  All

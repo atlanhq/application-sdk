@@ -40,19 +40,19 @@ uv sync --all-extras --all-groups
 ### Connector dependency on application-sdk
 
 Until v3 is published to PyPI, the connector repo must install `atlan-application-sdk`
-directly from the `refactor-v3` branch.  Add the following to the connector's
+directly from the `main` branch.  Add the following to the connector's
 `pyproject.toml`:
 
 ```toml
 [tool.uv.sources]
-atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "refactor-v3" }
+atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "main" }
 ```
 
 Or run:
 
 ```bash
 # inside the connector repo
-uv add atlan-application-sdk --git https://github.com/atlanhq/application-sdk --branch refactor-v3
+uv add atlan-application-sdk --git https://github.com/atlanhq/application-sdk --branch main
 ```
 
 Once `atlan-application-sdk` v3 is released on PyPI, remove the `[tool.uv.sources]`
