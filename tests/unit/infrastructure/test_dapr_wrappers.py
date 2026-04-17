@@ -110,8 +110,16 @@ class TestDaprSecretStore:
             store_name="mysecrets", key="db_pass"
         )
 
-    async def test_get_raises_not_found(self):
-        self.client.get_secret.return_value = {"other_key": "val"}
+    async def test_get_multi_key_returns_serialized_json(self):
+        """Multi-key response (name not in dict) is serialized as JSON."""
+        self.client.get_secret.return_value = {"user": "u", "pass": "p"}
+        import orjson
+
+        result = await self.store.get("some-secret")
+        assert orjson.loads(result) == {"user": "u", "pass": "p"}
+
+    async def test_get_raises_not_found_on_empty(self):
+        self.client.get_secret.return_value = {}
         with pytest.raises(SecretNotFoundError):
             await self.store.get("missing")
 
