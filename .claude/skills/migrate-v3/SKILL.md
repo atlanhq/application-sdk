@@ -106,8 +106,12 @@ Examine the source files in the target path (exclude test files from this analys
 - Look for classes inheriting from `SQLQueryExtractionWorkflow` / `SQLQueryExtractionActivities` → SQL query extractor (§2b)
 - Look for classes inheriting from `IncrementalSQLMetadataExtractionWorkflow` → Incremental SQL extractor (§2c)
 - Look for HTTP/REST client usage (`httpx`, `aiohttp`, `requests`, or custom `BaseClient` subclasses) with no SQL queries → REST/HTTP metadata extractor (§2d)
+- Look for `boto3` / AWS SDK usage (e.g. `import boto3`, `glue`, `s3`, `sts`) → AWS/API metadata extractor (§2d — treat same as REST/HTTP)
+- Look for `BaseApplication` + `MetadataExtractionWorkflow` + `BaseMetadataExtractionActivities` without SQL class attributes → Custom API extractor (§2d or §3)
 - Look for any other `WorkflowInterface` / `ActivitiesInterface` subclasses that don't fit above → Custom App (§3)
 - In all cases: identify the handler class (§4) and the entry point (§5)
+
+> **Warning — fingerprinter misclassification:** The F3 fingerprinter may misclassify API-based connectors (boto3, REST) as `"custom"` (0.5 confidence) or even `"sql_metadata"` after import rewrites. Always verify the detected type manually for non-SQL connectors.
 
 > **Tip — auto-detect the connector type:**
 > ```bash
@@ -868,14 +872,26 @@ async def _build_client(credentials: list[HandlerCredential]) -> MyClient:
 
 ### Payload safety and `allow_unbounded_fields`
 
-v3 enforces strict types on `Input`/`Output` contracts. `dict[str, Any]` fields will raise `PayloadSafetyError` at import time. For top-level input models that receive arbitrary config from AE/Heracles (connection dicts, metadata dicts), use:
+v3 enforces strict types on `Input`/`Output` contracts. `dict[str, Any]` fields raise `PayloadSafetyError` at import time. Using `dict[str, Any]` directly as a `@task` parameter raises `TaskContractError` at decoration time. Every task MUST use `Input`/`Output` subclasses.
 
+For top-level input models that receive arbitrary config from AE/Heracles (connection dicts, metadata dicts), use `allow_unbounded_fields=True` as an escape hatch — replace with bounded typed fields once the dict's contents are known:
 ```python
 class MyExtractionInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
     credentials: dict[str, Any] = {}
     connection: dict[str, Any] = {}
     metadata: dict[str, Any] = {}
+```
+
+For connectors migrating from v2 where helper functions expect dicts, create thin wrappers:
+```python
+class WorkflowArgsInput(Input, allow_unbounded_fields=True):
+    # Escape hatch — replace with bounded typed fields once contents are known.
+    args: dict[str, Any] = {}
+
+class StatsOutput(Output):
+    total_record_count: int = 0
+    chunk_count: int = 0
 ```
 
 For inter-task contracts, prefer typed fields with `MaxItems` or `FileReference`.
@@ -1036,7 +1052,7 @@ output_path = str(Path(tempfile.gettempdir()) / "my-app" / self.run_id)
 
 ### Write to local disk, not ParquetFileWriter/JsonFileWriter
 
-`ParquetFileWriter` and `JsonFileWriter` internally call `ObjectStore` → `DaprClient()` → Dapr health check (60s timeout). This fails locally and adds unnecessary coupling. Write directly to local disk:
+`ParquetFileWriter` and `JsonFileWriter` upload via `ObjectStore` → `DaprClient()`. Without a Dapr sidecar, `ObjectStore.upload_file()` raises an exception and the workflow fails. Write directly to local disk instead:
 ```python
 # Parquet
 pandas_df.to_parquet(str(output_file))
@@ -1045,6 +1061,28 @@ pandas_df.to_parquet(str(output_file))
 with output_file.open("wb") as f:
     f.write(json.dumps(entity).encode() + b"\n")
 ```
+
+For cases where callers expect a writer-style interface, use a thin local wrapper (note: plain `def` — the methods are synchronous and must not block the event loop as `async def`):
+```python
+class LocalParquetWriter:
+    def __init__(self, path: str, typename: str = "") -> None:
+        os.makedirs(path, exist_ok=True)
+        self.path = path
+        self._chunk = 0
+        self._rows = 0
+
+    def write_batches(self, batches: list[Any]) -> None:
+        for df in batches:
+            if df is not None and len(df) > 0:
+                df.to_parquet(os.path.join(self.path, f"part-{self._chunk}.parquet"), index=False)
+                self._rows += len(df)
+                self._chunk += 1
+
+    def close(self) -> dict[str, int]:
+        return {"total_record_count": self._rows, "chunk_count": self._chunk}
+```
+
+Use `ParquetFileReader` for reads (reads local files first, only falls back to objectstore if not found locally).
 
 ### workflows extra is required
 
@@ -1067,21 +1105,34 @@ await run_dev_combined(MyApp, credential_stores=credential_stores)
 
 ### Credential resolution only via credential_guid
 
-No `credentials` dict fallback. Always resolve from secret store inside `@task` methods:
+No `credentials` dict fallback. Always resolve credentials inside `@task` methods using `context.resolve_credential_raw()` with `legacy_credential_ref()` — this checks the local secret store first (dev) then falls back to `DaprCredentialVault` for platform-issued GUIDs. `context.get_secret()` alone only does a raw store lookup and will miss platform credentials:
 ```python
-creds_json = await self.context.get_secret(credential_guid)
-creds = json.loads(creds_json) if isinstance(creds_json, str) else creds_json
+from application_sdk.credentials.ref import legacy_credential_ref
+
+async def _get_client(self, workflow_args: dict[str, Any]):
+    credential_guid = workflow_args.get("credential_guid")
+    if credential_guid:
+        creds = await self.context.resolve_credential_raw(
+            legacy_credential_ref(credential_guid)
+        )
+        # creds is a dict[str, Any] — access fields directly:
+        host = creds.get("host")
+        password = creds.get("password")
 ```
+
+Note: `application_sdk.services.secretstore.SecretStore` (v2) does not exist in v3 — importing it raises `ModuleNotFoundError`.
 
 ### QueryBasedTransformer needs workflow_id and workflow_run_id
 
-`transform_metadata()` requires `workflow_id` and `workflow_run_id` as kwargs. Use `self.context.run_id` for both:
+`transform_metadata()` requires `workflow_id` and `workflow_run_id` as explicit keyword args — they are easy to accidentally omit when building a kwargs dict. Pass them explicitly to make the requirement visible:
 ```python
-transform_kwargs = {
-    "workflow_id": self.context.run_id,
-    "workflow_run_id": self.context.run_id,
-    ...
-}
+transformer.transform_metadata(
+    typename=typename,
+    dataframe=dataframe,
+    workflow_id=self.context.run_id,
+    workflow_run_id=self.context.run_id,
+    **remaining_kwargs,
+)
 ```
 
 ### Transformer output format
@@ -1134,3 +1185,97 @@ class MyApp(App):
         # Use _MY_CONFIG here, not os.environ.get()
         ...
 ```
+
+### Workflow type name must match v2 class name
+
+The platform/Argo triggers workflows by the v2 class name (e.g. `GlueMetadataExtractionWorkflow`). v3 derives the workflow type from `App.name`. If you set `name = "glue"`, the worker registers type `"glue"` and platform triggers fail with `NotFoundError: Workflow class GlueMetadataExtractionWorkflow is not registered`.
+
+**Fix:** Set `name` to the exact v2 workflow class name:
+```python
+class GlueApp(App):
+    name = "GlueMetadataExtractionWorkflow"  # Must match v2 class name
+```
+
+Every migrated connector will hit this. The skill MUST check the v2 `@workflow.defn` class name and carry it over.
+
+### get_workflow_args must replicate v2 StateStore fallback
+
+The v2 `ActivitiesInterface.get_workflow_args()` does:
+1. `StateStore.get_state(workflow_id, StateType.WORKFLOWS)` — gets full config from state store
+2. Falls back to `workflow_config` dict if state store is empty (AE invocation path)
+3. Normalizes connection object (handles 3 shapes: AE nested, flat, SDK)
+4. Builds output paths via `build_output_path()`
+5. Sets `workflow_id` and `workflow_run_id` from Temporal activity context
+
+The skill must replicate ALL of these steps. Missing the StateStore lookup means `credential_guid` won't be found in production (platform stores it in state store, not in the workflow start input).
+
+**Skeleton v3 equivalent** (adapt to your connector's input contract):
+```python
+@task
+async def get_workflow_args(self, input: MyWorkflowInput) -> MyWorkflowArgsOutput:
+    workflow_id = self.context.run_id
+
+    # Step 1+2: load full config from state store; fall back to inline input
+    from application_sdk.services.statestore import StateStore, StateType
+    config = await StateStore.get_state(workflow_id, StateType.WORKFLOWS) or {}
+    if not config:
+        config = dict(input.workflow_config)  # AE / direct-invoke path
+
+    # Step 3: normalize connection (handle nested, flat, and SDK shapes)
+    connection = config.get("connection", config)
+
+    # Step 4: build output path
+    output_path = str(Path(tempfile.gettempdir()) / "my-app" / workflow_id)
+
+    # Step 5: credential resolution (see "Credential resolution" gotcha above)
+    credential_guid = config.get("credential_guid", "")
+
+    return MyWorkflowArgsOutput(
+        workflow_id=workflow_id,
+        credential_guid=credential_guid,
+        connection=connection,
+        output_path=output_path,
+    )
+```
+
+### Empty nested column dirs cause 60s Dapr timeouts
+
+Applies to connectors that write hierarchical column data across relation-level subdirectories (e.g. Glue-style connectors). When `process_column_data` creates empty relation level directories (levels 3-15 with no data), the `ParquetFileReader` in `transform_data` tries to read from them, finds no local parquet files, falls back to Dapr objectstore (60s health check timeout each). See also: "Write to local disk" and "auto_heartbeat_seconds" gotchas for other Dapr timeout sources.
+
+**Fix:** Check for local parquet files before creating a reader:
+```python
+local_parquets = [f for f in os.listdir(level_path) if f.endswith(".parquet")]
+if not local_parquets:
+    continue  # Skip empty level dirs
+```
+
+### run_dev.py must read Temporal host from env vars
+
+`run_dev_combined()` defaults to `localhost:7233`. In production (v3 base image), the Temporal host comes from environment variables set by Helm. Hardcoding localhost causes `ConnectionRefused` in deployed pods.
+
+**Fix:** `ATLAN_TEMPORAL_HOST` is `host:port` in production (set by Helm). Some environments (e.g. scale-tests) set it as host-only with a separate `ATLAN_TEMPORAL_PORT`. Guard for both, then fall back to v2 split vars:
+```python
+_th = os.environ.get("ATLAN_TEMPORAL_HOST", "")
+if _th and ":" not in _th:
+    # host-only — append port
+    _th = f"{_th}:{os.environ.get('ATLAN_TEMPORAL_PORT', '7233')}"
+temporal_host = (
+    _th
+    or f"{os.environ.get('ATLAN_WORKFLOW_HOST', 'localhost')}:{os.environ.get('ATLAN_WORKFLOW_PORT', '7233')}"
+)
+await run_dev_combined(MyApp, temporal_host=temporal_host)
+```
+
+### run_dev_combined() does not accept handler_class
+
+Handler is auto-discovered by type inspection — importing the handler class in the App module is sufficient. Do NOT pass `handler_class=` to `run_dev_combined()`.
+
+### pyproject.toml — local path fails in Docker
+
+`path = "./application-sdk"` works locally but fails in CI Docker builds (`Distribution not found at: file:///app/application-sdk`). Use git source for CI:
+```toml
+[tool.uv.sources]
+atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "refactor-v3" }
+```
+
+Switch to `main` or a pinned release tag once v3 is merged to main.
