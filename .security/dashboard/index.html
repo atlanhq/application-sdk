@@ -241,6 +241,12 @@
     let sortCol = 'severity';
     let sortDir = 'asc';
 
+    function esc(s) {
+        const d = document.createElement('div');
+        d.textContent = String(s == null ? '' : s);
+        return d.innerHTML;
+    }
+
     async function loadData() {
         try {
             // Load per-repo files from repos/ directory
@@ -401,7 +407,7 @@
         const max = Math.max(...items.map(i => i.value), 1);
         document.getElementById(id).innerHTML = items.map(i => `
             <div class="chart-bar-row">
-                <div class="chart-bar-label" title="${i.label}">${i.label}</div>
+                <div class="chart-bar-label" title="${esc(i.label)}">${esc(i.label)}</div>
                 <div class="chart-bar-track">
                     <div class="chart-bar-fill" style="width:${pct(i.value, max)}%;background:${i.color || '#58a6ff40'}">
                         <span>${i.value}</span>
@@ -420,7 +426,7 @@
         const max = Math.max(...items.map(i => i.value), 1);
         document.getElementById(id).innerHTML = items.map(i => `
             <div class="chart-bar-row">
-                <div class="chart-bar-label" title="${i.label}">${i.label}</div>
+                <div class="chart-bar-label" title="${esc(i.label)}">${esc(i.label)}</div>
                 <div class="chart-bar-track">
                     <div class="chart-bar-fill" style="width:${pct(i.crit, max)}%;background:rgba(248,81,73,0.6)"></div>
                     <div class="chart-bar-fill" style="width:${pct(i.high - i.crit, max)}%;background:rgba(219,109,40,0.5);position:absolute;left:${pct(i.crit, max)}%"></div>
@@ -439,9 +445,9 @@
             const critW = pct(d.critical, total);
             const highW = pct(d.high, total);
             return `
-                <div class="repo-card" onclick="selectRepo('${r}')">
+                <div class="repo-card" data-repo="${esc(r)}" onclick="selectRepo(event, this.dataset.repo)">
                     <div class="repo-card-header">
-                        <div class="repo-card-name">${r.split('/').pop()}</div>
+                        <div class="repo-card-name">${esc(r.split('/').pop())}</div>
                         <div class="repo-card-time">${formatDate(d.scanned_at)}</div>
                     </div>
                     <div class="repo-card-stats">
@@ -461,9 +467,9 @@
         }).join('');
     }
 
-    function selectRepo(repo) {
+    function selectRepo(e, repo) {
         document.querySelectorAll('.repo-card').forEach(c => c.classList.remove('selected'));
-        event.currentTarget.classList.add('selected');
+        e.currentTarget.classList.add('selected');
         document.getElementById('repoFilter').value = repo;
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
@@ -539,14 +545,14 @@
             const row = document.createElement('tr');
             row.onclick = () => toggleDetail(i);
             row.innerHTML = `
-                <td><span class="badge badge-${v.severity.toLowerCase()}">${v.severity}</span></td>
-                <td><code>${v.id.length > 35 ? v.id.slice(0,35)+'...' : v.id}</code></td>
-                <td><code>${v.package}</code></td>
-                <td><span class="badge badge-${v.scanner}">${v.scanner}</span></td>
+                <td><span class="badge badge-${v.severity.toLowerCase()}">${esc(v.severity)}</span></td>
+                <td><code>${esc(v.id.length > 35 ? v.id.slice(0,35)+'...' : v.id)}</code></td>
+                <td><code>${esc(v.package)}</code></td>
+                <td><span class="badge badge-${esc(v.scanner)}">${esc(v.scanner)}</span></td>
                 <td><span class="badge badge-${v.source_type === 'base_image' ? 'base' : 'app'}">${v.source_type === 'base_image' ? 'Base' : 'App'}</span></td>
-                <td><span class="badge badge-${status}">${status}</span></td>
-                <td>${v.repos.map(r => '<span class="repo-tag">' + r.split('/').pop() + '</span>').join(' ')}</td>
-                <td>${v.fixed || '<span style="color:#484f58">No fix</span>'}</td>
+                <td><span class="badge badge-${esc(status)}">${esc(status)}</span></td>
+                <td>${v.repos.map(r => '<span class="repo-tag">' + esc(r.split('/').pop()) + '</span>').join(' ')}</td>
+                <td>${esc(v.fixed) || '<span style="color:#484f58">No fix</span>'}</td>
             `;
             tbody.appendChild(row);
 
@@ -555,12 +561,12 @@
             detailRow.id = `detail-${i}`;
             detailRow.innerHTML = `<td colspan="8">
                 <div class="detail-content">
-                    <div class="detail-field"><div class="field-label">Full ID</div><div class="field-value"><code>${v.id}</code></div></div>
-                    <div class="detail-field"><div class="field-label">Installed Version</div><div class="field-value">${v.installed}</div></div>
-                    <div class="detail-field"><div class="field-label">Fix Available</div><div class="field-value">${v.fixed || 'No fix available'}</div></div>
-                    <div class="detail-field"><div class="field-label">Scanner</div><div class="field-value">${v.scanner}</div></div>
+                    <div class="detail-field"><div class="field-label">Full ID</div><div class="field-value"><code>${esc(v.id)}</code></div></div>
+                    <div class="detail-field"><div class="field-label">Installed Version</div><div class="field-value">${esc(v.installed)}</div></div>
+                    <div class="detail-field"><div class="field-label">Fix Available</div><div class="field-value">${esc(v.fixed) || 'No fix available'}</div></div>
+                    <div class="detail-field"><div class="field-label">Scanner</div><div class="field-value">${esc(v.scanner)}</div></div>
                     <div class="detail-field"><div class="field-label">Source</div><div class="field-value">${v.source_type === 'base_image' ? 'SDK Base Image' : 'App Dependency'}</div></div>
-                    <div class="detail-field"><div class="field-label">Affected Repos</div><div class="field-value">${v.repos.join(', ')}</div></div>
+                    <div class="detail-field"><div class="field-label">Affected Repos</div><div class="field-value">${v.repos.map(r => esc(r)).join(', ')}</div></div>
                 </div>
             </td>`;
             tbody.appendChild(detailRow);

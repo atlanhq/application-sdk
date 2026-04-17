@@ -50,7 +50,6 @@ jobs:
           path: _sdk
           token: ${{ secrets.ORG_PAT_GITHUB }}
 
-
       # Composite handles build, Trivy JSON+SARIF scan, SARIF upload.
       # fail-on-vulns is disabled here — the allowlist gate below takes over.
       - id: trivy-scan

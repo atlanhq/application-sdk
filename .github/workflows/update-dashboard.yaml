@@ -101,18 +101,6 @@ jobs:
           except json.JSONDecodeError as e:
               print(f"Warning: base allowlist invalid JSON: {e}")
 
-          try:
-              if os.path.exists(".security/allowlist.json"):
-                  with open(".security/allowlist.json") as f:
-                      repo_al = json.load(f)
-                  repo_entries = {k: v for k, v in repo_al.items() if not k.startswith("_")}
-                  # Base wins on conflict
-                  for k in list(repo_entries.keys()):
-                      if k not in allowlist:
-                          allowlist[k] = repo_entries[k]
-          except json.JSONDecodeError as e:
-              print(f"Warning: repo allowlist invalid JSON: {e}")
-
           today = datetime.now().strftime("%Y-%m-%d")
           all_vulns = []
 
