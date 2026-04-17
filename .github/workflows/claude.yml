@@ -1179,7 +1179,7 @@ jobs:
             --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | select(.comments.nodes[0].author.login == "claude[bot]" or .comments.nodes[0].author.login == "github-actions[bot]" or .comments.nodes[0].author.login == "atlan-ci") | .id' 2>/dev/null || echo "")
 
           for thread_id in $THREADS; do
-            GH_TOKEN="${GITHUB_TOKEN}" gh api graphql -f query='
+            gh api graphql -f query='
               mutation($id:ID!) {
                 resolveReviewThread(input:{threadId:$id}) {
                   thread { id isResolved }
