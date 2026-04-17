@@ -261,6 +261,38 @@ def test_send_to_otel_histogram():
             mock_histogram.record.assert_called_once_with(42.0, {"test": "label"})
 
 
+def test_send_to_otel_filters_non_scalar_labels():
+    """Test that _send_to_otel() filters out non-scalar label values before passing to OTel."""
+    with create_metrics_adapter() as metrics_adapter:
+        with mock.patch.object(metrics_adapter.meter, "create_counter") as mock_create:
+            mock_counter = mock.MagicMock()
+            mock_create.return_value = mock_counter
+
+            record = MetricRecord(
+                timestamp=datetime.now().timestamp(),
+                name="test_counter",
+                value=1.0,
+                type=MetricType.COUNTER,
+                labels={
+                    "key": "val",
+                    "count": 42,
+                    "ratio": 0.5,
+                    "flag": True,
+                    "nested": [1, 2, 3],
+                    "mapping": {"a": "b"},
+                    "nothing": None,
+                },
+                description="Test label filtering",
+                unit="count",
+            )
+            metrics_adapter._send_to_otel(record)
+
+            mock_counter.add.assert_called_once_with(
+                1.0,
+                {"key": "val", "count": 42, "ratio": 0.5, "flag": True},
+            )
+
+
 def test_log_to_console():
     """Test _log_to_console() method."""
     with create_metrics_adapter() as metrics_adapter:

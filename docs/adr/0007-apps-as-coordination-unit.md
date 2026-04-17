@@ -1,7 +1,11 @@
 # ADR-0007: Apps as the Unit of Inter-App Coordination
 
+> **⚠️ Status: Under Review — [BLDX-878](https://linear.app/atlan-epd/issue/BLDX-878/clarify-inter-app-calls-in-sdk-v3)**
+>
+> Inter-app `call()` / `call_by_name()` is **deactivated** in the SDK pending resolution of the duplication with Automation-Engine DAG orchestration. The content below captures the original decision and may be revised.
+
 ## Status
-**Accepted**
+**Under Review** — see BLDX-878
 
 ## Context
 
