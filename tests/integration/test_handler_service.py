@@ -592,9 +592,9 @@ async def test_start_intercepts_inline_credentials(
 
     # State store must have exactly one cred: entry — the intercepted credential
     save_calls = state_store.get_save_calls()
-    cred_saves = [c for c in save_calls if c["key"].startswith("cred:")]
+    cred_saves = [(k, v) for k, v in save_calls if k.startswith("cred:")]
     assert len(cred_saves) == 1
-    cred_key = cred_saves[0]["key"]
+    cred_key, _ = cred_saves[0]
     credential_guid = cred_key.removeprefix("cred:")
 
     # The key must be a valid UUID
