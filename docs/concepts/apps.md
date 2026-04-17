@@ -31,6 +31,25 @@ class MyConnector(App):
 - Calling `await self.fetch_data(input)` inside `run()` routes through Temporal activities automatically -- no `execute_activity_method` needed.
 - `App.__init_subclass__` applies Temporal decorators under the hood. You never import from `temporalio`.
 
+### Multiple Entry Points
+
+If your connector needs more than one independently-triggerable workflow (e.g. metadata extraction *and* query mining), decorate each entry method with `@entrypoint` instead of overriding `run()`:
+
+```python
+from application_sdk.app import App, entrypoint, task
+
+class SnowflakeApp(App):
+    @entrypoint
+    async def extract_metadata(self, input: ExtractionInput) -> ExtractionOutput:
+        return await self.fetch_tables(input)
+
+    @entrypoint
+    async def mine_queries(self, input: MiningInput) -> MiningOutput:
+        ...
+```
+
+Each `@entrypoint` method becomes its own Temporal workflow (`{app-name}:{entry-point-name}`). All entry points share the same `@task` methods, handler, and `AppContext`. Trigger a specific entry point via `POST /workflows/v1/start?entrypoint=<name>`. See [Entry Points](entry-points.md) for full detail.
+
 ## Orchestration in run()
 
 The `run()` method is where you compose tasks. It supports sequential, parallel, and conditional patterns:

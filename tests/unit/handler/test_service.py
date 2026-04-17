@@ -467,8 +467,8 @@ class TestStartWorkflowRouting:
         finally:
             patcher.stop()
 
-    def test_multi_ep_valid_workflow_type_routes_correctly(self) -> None:
-        """Multi-entry-point app with a valid workflow_type returns 200."""
+    def test_multi_ep_entrypoint_query_param_routes_correctly(self) -> None:
+        """Multi-entry-point app with ?entrypoint= query param returns 200."""
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
@@ -484,6 +484,30 @@ class TestStartWorkflowRouting:
         client, patcher = self._make_routed_client(_MultiEpApp)
         try:
             response = client.post(
+                "/workflows/v1/start?entrypoint=extract",
+                json={"name": "x"},
+            )
+            assert response.status_code == 200
+        finally:
+            patcher.stop()
+
+    def test_multi_ep_body_workflow_type_fallback_routes_correctly(self) -> None:
+        """Multi-entry-point app falls back to body 'workflow_type' when ?entrypoint= absent."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpFallbackApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher = self._make_routed_client(_MultiEpFallbackApp)
+        try:
+            response = client.post(
                 "/workflows/v1/start",
                 json={"workflow_type": "extract", "name": "x"},
             )
@@ -491,8 +515,57 @@ class TestStartWorkflowRouting:
         finally:
             patcher.stop()
 
-    def test_unknown_workflow_type_returns_400(self) -> None:
-        """Providing an unrecognised workflow_type returns 400 without leaking entry point names."""
+    def test_query_param_takes_precedence_over_body_workflow_type(self) -> None:
+        """?entrypoint= wins over body 'workflow_type' when both are provided."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _PrecedenceApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        handler = _TestHandler()
+        svc = create_app_handler_service(
+            handler,
+            app_name="precedence-test",
+            app_class=_PrecedenceApp,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-prec"
+        mock_handle.result_run_id = "run-prec"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        tc = TestClient(svc, raise_server_exceptions=False)
+        try:
+            # ?entrypoint=extract wins over body workflow_type=load
+            response = tc.post(
+                "/workflows/v1/start?entrypoint=extract",
+                json={"workflow_type": "load", "name": "x"},
+            )
+            assert response.status_code == 200
+            # The started workflow name must end in ':extract', not ':load'
+            started_name = mock_client.start_workflow.call_args[0][0]
+            assert started_name.endswith(
+                ":extract"
+            ), f"Expected :extract, got {started_name!r}"
+        finally:
+            patcher.stop()
+
+    def test_unknown_entrypoint_query_param_returns_400(self) -> None:
+        """Providing an unrecognised ?entrypoint= returns 400 without leaking names."""
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
@@ -508,19 +581,18 @@ class TestStartWorkflowRouting:
         client, patcher = self._make_routed_client(_TwoEpApp)
         try:
             response = client.post(
-                "/workflows/v1/start",
-                json={"workflow_type": "does-not-exist", "name": "x"},
+                "/workflows/v1/start?entrypoint=does-not-exist",
+                json={"name": "x"},
             )
             assert response.status_code == 400
             detail = response.json().get("detail", "")
-            # Entry point names must NOT be exposed to clients
             assert "extract" not in detail
             assert "load" not in detail
         finally:
             patcher.stop()
 
-    def test_multi_ep_missing_workflow_type_returns_400(self) -> None:
-        """Multi-entry-point app without workflow_type returns 400."""
+    def test_multi_ep_missing_entrypoint_returns_400(self) -> None:
+        """Multi-entry-point app with no ?entrypoint= and no body selector returns 400."""
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 

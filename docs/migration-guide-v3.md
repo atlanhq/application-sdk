@@ -312,6 +312,104 @@ Three modes are available:
 
 ---
 
+## Step 5b: Multiple Workflows Per App
+
+> Skip this step if your v2 connector had only one workflow.
+
+In v2 there was no first-class pattern for a connector that needed multiple workflows (e.g. metadata extraction + lineage + query mining). Teams worked around this with multiple `WorkflowInterface`/`ActivitiesInterface` pairs, separate entrypoint scripts, or other ad-hoc conventions.
+
+In v3, one `App` subclass can expose multiple independently-triggerable workflows by decorating methods with `@entrypoint`. All entry points share `@task` methods, the HTTP handler, and `AppContext` — no code duplication.
+
+### v2 — two separate workflow/activities pairs
+
+```python
+# app/workflows/metadata_extraction.py
+class MetadataExtractionWorkflow(WorkflowInterface):
+    async def run(self, input):
+        await execute_activity_method(self.activities.extract_tables, ...)
+        await execute_activity_method(self.activities.transform, ...)
+
+# app/activities/metadata_extraction.py
+class MetadataExtractionActivities(ActivitiesInterface):
+    async def extract_tables(self, input): ...
+    async def transform(self, input): ...
+
+# app/workflows/lineage.py
+class LineageWorkflow(WorkflowInterface):
+    async def run(self, input):
+        await execute_activity_method(self.activities.fetch_lineage, ...)
+
+# app/activities/lineage.py
+class LineageActivities(ActivitiesInterface):
+    async def fetch_lineage(self, input): ...
+```
+
+### v3 — one App, multiple @entrypoint methods
+
+```python
+# app/connector.py
+from application_sdk.app import App, entrypoint, task
+from application_sdk.contracts.base import Input, Output
+from dataclasses import dataclass
+
+@dataclass
+class ExtractionInput(Input, allow_unbounded_fields=True):
+    credential_guid: str = ""
+    connection: dict = field(default_factory=dict)
+
+@dataclass
+class ExtractionOutput(Output):
+    transformed_data_prefix: str = ""
+
+@dataclass
+class LineageInput(Input, allow_unbounded_fields=True):
+    credential_guid: str = ""
+    connection: dict = field(default_factory=dict)
+
+@dataclass
+class LineageOutput(Output):
+    transformed_data_prefix: str = ""
+
+class SnowflakeApp(App):
+    # Shared task — callable from both entry points
+    @task(timeout_seconds=3600)
+    async def extract_tables(self, input: ExtractionInput) -> ExtractionOutput:
+        ...
+
+    @task(timeout_seconds=3600)
+    async def fetch_lineage(self, input: LineageInput) -> LineageOutput:
+        ...
+
+    @entrypoint
+    async def extract_metadata(self, input: ExtractionInput) -> ExtractionOutput:
+        return await self.extract_tables(input)
+
+    @entrypoint
+    async def extract_lineage(self, input: LineageInput) -> LineageOutput:
+        return await self.fetch_lineage(input)
+```
+
+### Workflow naming and HTTP dispatch
+
+| Entry point method | Temporal workflow name | HTTP trigger |
+|---|---|---|
+| `extract_metadata` | `{app-name}:extract-metadata` | `POST /workflows/v1/start?entrypoint=extract-metadata` |
+| `extract_lineage` | `{app-name}:extract-lineage` | `POST /workflows/v1/start?entrypoint=extract-lineage` |
+
+For multi-entry-point apps the `?entrypoint=` query parameter is **required** — omitting it returns 400.
+
+### Dockerfile
+
+One App = one `ATLAN_APP_MODULE` entry. No comma-separated list:
+
+```dockerfile
+ENV ATLAN_APP_MODULE=app.connector:SnowflakeApp
+```
+
+See [`docs/concepts/entry-points.md`](concepts/entry-points.md) for the full `@entrypoint` reference.
+
+---
+
 ## Step 6: Migrate Worker Setup
 
 In v2, connecting to Temporal and registering workflow/activity classes was done explicitly.
@@ -895,6 +993,7 @@ All of the following emit `DeprecationWarning` on import in v3.0.x and will be *
 |---|---|
 | `application_sdk.application.BaseApplication` | `application_sdk.app.App` + `application_sdk.main.run_dev_combined` |
 | `application_sdk.application.metadata_extraction.sql.BaseSQLMetadataExtractionApplication` | `application_sdk.templates.SqlMetadataExtractor` |
+| Multiple `WorkflowInterface` pairs (comma-separated `ATLAN_APP_MODULE`) | Single `App` with multiple `@entrypoint` methods (see Step 5b) |
 
 ### Worker
 

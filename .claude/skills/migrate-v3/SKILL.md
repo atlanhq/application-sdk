@@ -108,6 +108,7 @@ Examine the source files in the target path (exclude test files from this analys
 - Look for HTTP/REST client usage (`httpx`, `aiohttp`, `requests`, or custom `BaseClient` subclasses) with no SQL queries → REST/HTTP metadata extractor (§2d)
 - Look for any other `WorkflowInterface` / `ActivitiesInterface` subclasses that don't fit above → Custom App (§3)
 - In all cases: identify the handler class (§4) and the entry point (§5)
+- **Count the total number of distinct `WorkflowInterface` subclasses** (exclude base classes from the SDK). If there is more than one, this is a **multi-workflow connector** — flag it and handle it in Phase 2a′ below before proceeding.
 
 > **Tip — auto-detect the connector type:**
 > ```bash
@@ -125,6 +126,12 @@ After identifying the connector type, determine the transformation strategy:
   1. **Keep existing transformer** — preserve `QueryBasedTransformer`/`AtlasTransformer` usage inside `transform_data()`. Less migration effort, leverages existing YAML query files.
   2. **Asset-mapper approach** — replace the transformer with pure Python mapper functions that take typed records and return pyatlan Asset instances directly. More upfront work but eliminates Daft DataFrame and YAML query file dependencies.
 - If the user has no preference, keep the existing transformer to minimize migration risk.
+
+**Multi-workflow connectors** (more than one `WorkflowInterface` subclass detected):
+- Consolidate into a **single `App` subclass** with one `@entrypoint`-decorated method per v2 workflow. All entry points share `@task` methods, the handler, and `AppContext`.
+- `ATLAN_APP_MODULE` stays a single `module:ClassName` — no comma-separated list.
+- See §5b of MIGRATION_PROMPT.md for the full pattern and `tests/integration/test_multi_entrypoint.py` for a canonical example.
+- Inform the user: _"This connector has N workflows. In v3 they become N `@entrypoint` methods on one App class, sharing task helpers and the handler. I'll consolidate them into a single App."_
 
 **REST/API connectors** (BaseMetadataExtractor, Custom App):
 - **Default to the asset-mapper approach.** This is the v3-native pattern (see `atlan-openapi-app` as the reference implementation). Inform the user:
@@ -174,7 +181,7 @@ Follow the exact checklists in `tools/migrate_v3/MIGRATION_PROMPT.md` for the co
 
 Apply changes in this order:
 
-1. **App class** — merge Workflow + Activities into the appropriate template subclass with `@task` methods. Preserve all SQL query strings and business logic verbatim.
+1. **App class** — merge Workflow + Activities into the appropriate template subclass with `@task` methods. Preserve all SQL query strings and business logic verbatim. For multi-workflow connectors, give each v2 workflow its own `@entrypoint` method on the single shared App class (see §5b of MIGRATION_PROMPT.md); hoist duplicated activity helpers into shared `@task` methods.
 
    > After completing this step, run:
    > ```bash
@@ -216,9 +223,9 @@ Work through one section at a time. After completing each section, check your ch
 
 ### 2c — Directory consolidation
 
-After completing the structural migration in 2b, consolidate the v2 directory layout. v2 connectors split logic across `app/activities/` and `app/workflows/`; v3 uses a single flat file.
+After completing the structural migration in 2b, consolidate the v2 directory layout. v2 connectors split logic across `app/activities/` and `app/workflows/`; v3 uses a single flat file. For multi-workflow connectors this means all `@entrypoint` methods live in one file — do **not** split back into multiple files.
 
-1. Identify the main App class file (typically `app/activities/<name>.py`).
+1. Identify the main App class file (typically `app/activities/<name>.py`, or whichever file holds the merged multi-workflow App).
 2. Move it to `app/<app_name>.py` (derive the filename from the App class or connector name, snake_cased).
 3. If `app/workflows/<name>.py` exists and only re-exports from activities (e.g. `from app.activities.<name> import MyConnector`), delete it.
 4. Delete the now-empty `app/activities/` and `app/workflows/` directories.
@@ -515,6 +522,7 @@ Ask the user:
 
 If confirmed:
 ```bash
+# Single-entry-point app — no entrypoint selector needed
 curl -s -X POST http://localhost:8000/workflows/v1/start \
   -H "Content-Type: application/json" \
   -d '{
@@ -522,7 +530,18 @@ curl -s -X POST http://localhost:8000/workflows/v1/start \
     "metadata": { <connector-specific metadata> },
     "connection": {"connection": "dev"}
   }'
+
+# Multi-entry-point app — ?entrypoint=<name> is required
+curl -s -X POST 'http://localhost:8000/workflows/v1/start?entrypoint=<entry-point-name>' \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credentials": { ... },
+    "metadata": { <connector-specific metadata> },
+    "connection": {"connection": "dev"}
+  }'
 ```
+
+The entry-point name is the kebab-case method name (e.g. `extract_metadata` → `extract-metadata`). Omitting `?entrypoint=` on a multi-entry-point app returns 400.
 
 Capture `workflow_id` and `run_id` from the response. Monitor status:
 ```bash
@@ -906,7 +925,6 @@ RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
 # Copy application code only
 COPY --chown=appuser:appuser app/ app/
 
-# Comma-separated: first is primary (HTTP handler), rest register on worker
 ENV ATLAN_APP_MODULE=app.my_app:MyApp
 ENV ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
 ENV APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR=false
@@ -915,7 +933,7 @@ ENV APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR=false
 Key rules:
 - Base image: `registry.atlan.com/public/app-runtime-base:main-latest` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
 - `COPY app/ app/` — only app code, NOT the entire repo
-- `ATLAN_APP_MODULE` — hardcoded, comma-separated for multi-app
+- `ATLAN_APP_MODULE` — always a single `module:ClassName` entry; use `@entrypoint` methods to expose multiple workflows (comma-separated multi-app is not supported)
 - No `CMD` — the base image handles mode via `APPLICATION_MODE` env var set by Helm
 - No `entrypoint.sh`, `supervisord.conf`, `otel-config.yaml` — v3 base image handles all of these
 
@@ -964,60 +982,48 @@ class MyExtractionOutput(Output):
 
 If these fields are empty or named differently, AE won't find the output and the publish step fails silently.
 
-### Multi-app connectors (multiple v2 workflows → multiple v3 Apps)
+### Multi-workflow connectors (multiple v2 workflows → one v3 App with @entrypoint methods)
 
-When the v2 connector has multiple workflows (e.g. metadata extraction + lineage extraction), each becomes a separate `App` subclass in v3. All apps share the same Temporal worker and task queue.
+When the v2 connector has multiple workflows (e.g. metadata extraction + lineage), consolidate them into **one `App` subclass** with one `@entrypoint`-decorated method per v2 workflow. All entry points share `@task` methods, the handler, and `AppContext`.
 
-**Rules:**
-- ONE primary app — serves the HTTP handler (`/auth`, `/check`, `/start`, `/metadata`)
-- N secondary apps — registered on the worker, triggered only via Temporal by workflow name
-- ONE handler total — imported in the primary app module. Secondary apps have no handler.
-
-**Dockerfile pattern:**
-```dockerfile
-# Comma-separated: first is primary (HTTP), rest register on worker
-ENV ATLAN_APP_MODULE=app.primary_app:PrimaryApp,app.secondary_app:SecondaryApp
-```
-
-**Handler registration** — import in the primary app module (recommended approach):
+**Pattern:**
 ```python
-# app/primary_app.py
-from app.handlers import MyHandler  # noqa: F401 — registers handler
+from application_sdk.app import App, entrypoint, task
+
+class SnowflakeApp(App):
+    # Shared task — callable from both entry points
+    @task(timeout_seconds=3600)
+    async def fetch_tables(self, input: ExtractionInput) -> ExtractionOutput: ...
+
+    @entrypoint
+    async def extract_metadata(self, input: ExtractionInput) -> ExtractionOutput:
+        return await self.fetch_tables(input)
+
+    @entrypoint
+    async def extract_lineage(self, input: LineageInput) -> LineageOutput: ...
 ```
 
-The SDK parses `ATLAN_APP_MODULE`:
-1. First entry → loaded as primary app, serves HTTP via handler
-2. Remaining entries → loaded and registered on the worker (workflows + tasks)
-3. Only explicitly declared apps' tasks are registered — template base classes imported transitively are excluded
+**Workflow naming:** `{app-name}:{entrypoint-name}` (kebab-case). The `extract_metadata` method becomes workflow `my-connector:extract-metadata`.
+
+**Dockerfile:** always a single entry — no comma-separated list:
+```dockerfile
+ENV ATLAN_APP_MODULE=app.connector:SnowflakeApp
+```
+
+**HTTP dispatch:** `POST /workflows/v1/start?entrypoint=<name>`. Required when the App has more than one entry point (400 otherwise). Argo/marketplace templates that previously passed `workflow-type` in the body still work as a transitional fallback.
 
 **File structure:**
 ```
 app/
-  primary_app.py         — PrimaryApp(App) with @task methods
-  secondary_app.py       — SecondaryApp(App) with @task methods
-  handlers/__init__.py   — MyHandler(Handler) — shared by primary app's HTTP endpoints
-  contracts.py           — Input/Output for all apps
-  clients/__init__.py    — Shared API client
+  connector.py    — SnowflakeApp(App) with all @entrypoint and @task methods
+  handlers/       — MyHandler(Handler) — one handler for all entry points
+  contracts.py    — Input/Output dataclasses for all entry points
+  clients/        — Shared API client
 ```
 
-**Do NOT:**
-- Import secondary apps inside the primary app module — use `ATLAN_APP_MODULE` comma syntax instead
-- Define handlers on secondary apps — only the primary app serves HTTP
-- Give each app its own handler — one handler per connector
+**on_complete():** fires after every entry point, on success and failure.
 
-**Marketplace template:**
-Each app has a distinct `workflow-type` (kebab-case of the App class name). The Argo template triggers them by name:
-```yaml
-# Primary app
-- name: workflow-type
-  value: "primary-app"
-
-# Secondary app
-- name: workflow-type
-  value: "secondary-app"
-```
-
-Both run on the same task queue (derived from `ATLAN_APPLICATION_NAME` + `ATLAN_DEPLOYMENT_NAME`).
+See §5b of `tools/migrate_v3/MIGRATION_PROMPT.md` and `tests/integration/test_multi_entrypoint.py` for canonical examples.
 
 ### self.context vs self.task_context
 
@@ -1116,11 +1122,9 @@ async def my_long_task(self, input: MyInput) -> MyOutput:
     ...
 ```
 
-### Template base classes auto-register and can shadow task overrides
+### Template base classes auto-register but do not leak workflows
 
-When you `from application_sdk.templates import SqlMetadataExtractor`, Python imports all templates from `__init__.py`. Each has a concrete `run()`, so `__init_subclass__` registers them all in `AppRegistry`. If the worker uses `app_names=None`, base class tasks like `fetch_databases` register first and shadow your connector's overrides.
-
-The SDK handles this by only registering tasks for apps explicitly declared in `ATLAN_APP_MODULE`. Template base classes register in `AppRegistry` (harmless) but their tasks are excluded from the worker. You don't need to do anything — just make sure all your apps are listed in `ATLAN_APP_MODULE`.
+When you `from application_sdk.templates import SqlMetadataExtractor`, Python imports all templates from `__init__.py`. Each template has a concrete `run()`, so `__init_subclass__` registers them in `AppRegistry`. This is harmless: template base classes are abstract (or not concrete subclasses of your connector), so the worker generates Temporal workflow classes only for non-abstract `App` subclasses that have `@entrypoint` methods or an overridden `run()`. You don't need to do anything — just make sure your connector's App class is the one listed in `ATLAN_APP_MODULE`.
 
 ### os.environ is blocked inside Temporal workflow sandbox
 

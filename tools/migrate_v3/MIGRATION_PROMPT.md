@@ -480,12 +480,124 @@ CMD ["application-sdk", "--mode", "combined", "--app", "app.app:MyExtractor"]
 
 - [ ] Replace the `BaseXxxApplication(...)` instantiation with `run_dev_combined(...)`.
 - [ ] Add `ENV ATLAN_APP_MODULE=<module.path:ClassName>` to the app's `Dockerfile`.
-      **This is required** — the process will not start without it.
+      **This is required** — the process will not start without it. Always a single
+      `module:ClassName` — comma-separated lists are not supported; use `@entrypoint`
+      methods instead (see §5b).
 - [ ] Set `CMD ["application-sdk", "--mode", "combined"]` (or `worker`/`handler`) in
       the `Dockerfile`.
 - [ ] If the connector used `app.setup_workflow(...)` / `app.start_workflow(...)` for
       integration tests, replace with direct `await connector.run(input)` calls
       (the framework handles Temporal wiring automatically).
+- [ ] **If this connector had more than one v2 workflow**, see §5b below before writing
+      the Dockerfile.
+
+---
+
+## 5b. Multi-Entry-Point Apps
+
+> Skip this section if the connector has only one workflow.
+
+When a v2 connector had multiple `WorkflowInterface`/`ActivitiesInterface` pairs, consolidate
+them into a single `App` subclass with one `@entrypoint`-decorated method per v2 workflow.
+All entry points share `@task` methods, the handler, and `AppContext`.
+
+### Import
+
+```python
+from application_sdk.app import App, entrypoint, task
+from application_sdk.contracts.base import Input, Output
+```
+
+### Contract requirements (enforced by the decorator)
+
+- Exactly one parameter extending `Input` — no `*args`/`**kwargs`
+- Return type extending `Output`
+- Input/Output dataclasses must be defined at **module level** — not inside functions
+  or under `from __future__ import annotations`
+
+### Before (v2) — two separate pairs
+
+```python
+class MetadataExtractionWorkflow(WorkflowInterface):
+    async def run(self, input):
+        await execute_activity_method(self.activities.extract_tables, ...)
+
+class MetadataExtractionActivities(ActivitiesInterface):
+    async def extract_tables(self, input): ...
+
+class LineageWorkflow(WorkflowInterface):
+    async def run(self, input):
+        await execute_activity_method(self.activities.fetch_lineage, ...)
+
+class LineageActivities(ActivitiesInterface):
+    async def fetch_lineage(self, input): ...
+```
+
+### After (v3) — one App, two @entrypoint methods
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass
+class ExtractionInput(Input, allow_unbounded_fields=True):
+    credential_guid: str = ""
+    connection: dict = field(default_factory=dict)
+
+@dataclass
+class ExtractionOutput(Output):
+    transformed_data_prefix: str = ""
+
+@dataclass
+class LineageInput(Input, allow_unbounded_fields=True):
+    credential_guid: str = ""
+    connection: dict = field(default_factory=dict)
+
+@dataclass
+class LineageOutput(Output):
+    transformed_data_prefix: str = ""
+
+class MyConnectorApp(App):
+    @task(timeout_seconds=3600)
+    async def extract_tables(self, input: ExtractionInput) -> ExtractionOutput:
+        ...
+
+    @task(timeout_seconds=3600)
+    async def fetch_lineage(self, input: LineageInput) -> LineageOutput:
+        ...
+
+    @entrypoint
+    async def extract_metadata(self, input: ExtractionInput) -> ExtractionOutput:
+        return await self.extract_tables(input)
+
+    @entrypoint
+    async def extract_lineage(self, input: LineageInput) -> LineageOutput:
+        return await self.fetch_lineage(input)
+```
+
+### Workflow naming and HTTP dispatch
+
+Method names are auto-converted to kebab-case. For an App registered as `my-connector`:
+
+| Entry point | Temporal workflow name | HTTP trigger |
+|---|---|---|
+| `extract_metadata` | `my-connector:extract-metadata` | `POST /workflows/v1/start?entrypoint=extract-metadata` |
+| `extract_lineage` | `my-connector:extract-lineage` | `POST /workflows/v1/start?entrypoint=extract-lineage` |
+
+The `?entrypoint=` query parameter is **required** for multi-entry-point apps (400 otherwise).
+Argo/marketplace templates that previously passed `workflow-type` in the request body still
+work as a transitional fallback — but migrate to `?entrypoint=` when regenerating templates.
+
+### on_complete()
+
+`on_complete()` fires after every entry point, on success and failure.
+
+### Checklist
+
+- [ ] Merge each v2 `{Workflow, Activities}` pair into one `@entrypoint` method on the shared App
+- [ ] Hoist duplicated activity helpers into shared `@task` methods
+- [ ] `ATLAN_APP_MODULE` is a single entry — one App class, multiple workflows via `@entrypoint`
+- [ ] One handler total — the App serves `/auth`, `/check`, `/metadata` for all entry points
+- [ ] Marketplace templates: trigger via `POST /workflows/v1/start?entrypoint=<name>`
 
 ---
 

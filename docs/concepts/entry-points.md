@@ -116,3 +116,95 @@ await worker.run()
 | `ATLAN_CONTRACT_GENERATED_DIR` | Recommended | Path to generated contract JSON files |
 | `TEMPORAL_HOST` | Yes | Temporal server host |
 | `TEMPORAL_NAMESPACE` | Yes | Temporal namespace |
+
+---
+
+## Multiple Entry Points Per App
+
+A single `App` can expose multiple independently-triggerable workflows by decorating methods with `@entrypoint` instead of overriding `run()`.
+
+```python
+from application_sdk.app import App, entrypoint, task
+from application_sdk.contracts.base import Input, Output
+from dataclasses import dataclass
+
+@dataclass
+class ExtractionInput(Input):
+    connection_qualified_name: str = ""
+
+@dataclass
+class ExtractionOutput(Output):
+    count: int = 0
+
+@dataclass
+class MiningInput(Input):
+    connection_qualified_name: str = ""
+
+@dataclass
+class MiningOutput(Output):
+    count: int = 0
+
+class SnowflakeApp(App):
+    @task(timeout_seconds=3600)
+    async def fetch_tables(self, input: ExtractionInput) -> ExtractionOutput:
+        ...
+
+    @entrypoint
+    async def extract_metadata(self, input: ExtractionInput) -> ExtractionOutput:
+        return await self.fetch_tables(input)
+
+    @entrypoint
+    async def mine_queries(self, input: MiningInput) -> MiningOutput:
+        ...
+```
+
+**Contract requirements** enforced by the decorator:
+- Exactly one parameter extending `Input` (no `*args`/`**kwargs`)
+- Return type extending `Output`
+- Input/Output dataclasses must be defined at module level — not inside functions or under `from __future__ import annotations`
+
+### Workflow naming
+
+| App shape | Temporal workflow name |
+|-----------|----------------------|
+| Single `run()` override | `{app-name}` (backward-compat, no colon) |
+| `@entrypoint extract_metadata` | `{app-name}:extract-metadata` |
+| `@entrypoint mine_queries` | `{app-name}:mine-queries` |
+
+Method names are converted to kebab-case automatically. Override with `@entrypoint(name="custom-name")`.
+
+### HTTP dispatch
+
+Trigger a specific entry point via the `?entrypoint=` query parameter on `POST /workflows/v1/start`:
+
+```bash
+# Trigger extract-metadata
+curl -X POST 'http://localhost:8000/workflows/v1/start?entrypoint=extract-metadata' \
+  -H "Content-Type: application/json" \
+  -d '{"credentials": {...}, "connection": {...}, "metadata": {...}}'
+
+# Trigger mine-queries
+curl -X POST 'http://localhost:8000/workflows/v1/start?entrypoint=mine-queries' \
+  -H "Content-Type: application/json" \
+  -d '{"credentials": {...}, "connection": {...}, "metadata": {...}}'
+```
+
+For single-entry-point apps, `?entrypoint=` is optional — the sole entry point is selected automatically. For multi-entry-point apps it is **required** (returns 400 otherwise).
+
+> **Transitional fallback:** The body field `workflow_type` is accepted for backward compatibility with existing Argo templates and Heracles callers. Query param takes precedence if both are provided. The body field will be removed in a future release.
+
+### Shared infrastructure
+
+All entry points on the same App share:
+- `@task` methods (registered as Temporal activities once)
+- The HTTP handler (`/auth`, `/check`, `/metadata`)
+- `AppContext` (secrets, state, storage)
+- `on_complete()` lifecycle hook — fires after every entry point, on success or failure
+
+### Dockerfile
+
+One App = one `ATLAN_APP_MODULE` entry (no comma-separated list):
+
+```dockerfile
+ENV ATLAN_APP_MODULE=app.connector:SnowflakeApp
+```

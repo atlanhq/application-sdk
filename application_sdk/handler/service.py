@@ -657,43 +657,53 @@ def create_app_handler_service(
 
         body: dict[str, Any] = await request.json()
         explicit_workflow_id: str | None = body.pop("workflow_id", None)
-        workflow_type: str | None = body.pop("workflow_type", None)
+        # ?entrypoint= query param is the canonical selector; fall back to the
+        # legacy body field 'workflow_type' for backward compatibility.
+        entrypoint_param: str | None = request.query_params.get("entrypoint")
+        legacy_workflow_type: str | None = body.pop("workflow_type", None)
+        selected_entrypoint: str | None = entrypoint_param or legacy_workflow_type
         workflow_id = explicit_workflow_id or "(unknown)"
+
+        if legacy_workflow_type is not None and entrypoint_param is None:
+            logger.warning(
+                "App %s: 'workflow_type' body field is deprecated; use ?entrypoint=<name> query param instead.",
+                app_name,
+            )
 
         try:
             client = await _get_temporal_client()
 
-            # Resolve entry point and workflow name from workflow_type.
+            # Resolve entry point and workflow name from the selected entrypoint.
             # Deferred to avoid a circular import at module load time.
             from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
 
             app_meta = AppRegistry.get_instance().get(app_cls._app_name)  # type: ignore[attr-defined]
             entry_points = app_meta.entry_points
 
-            if workflow_type:
-                if workflow_type not in entry_points:
+            if selected_entrypoint:
+                if selected_entrypoint not in entry_points:
                     logger.warning(
-                        "Unknown workflow_type '%s' for app %s; available: %s",
-                        workflow_type,
+                        "Unknown entrypoint '%s' for app %s; available: %s",
+                        selected_entrypoint,
                         app_name,
                         sorted(entry_points.keys()),
                     )
                     raise HTTPException(
                         status_code=400,
-                        detail="Invalid workflow_type.",
+                        detail="Invalid entrypoint.",
                     )
-                ep = entry_points[workflow_type]
+                ep = entry_points[selected_entrypoint]
             elif len(entry_points) == 1:
                 ep = next(iter(entry_points.values()))
             elif len(entry_points) > 1:
                 logger.warning(
-                    "workflow_type required but not provided for multi-entry-point app %s; available: %s",
+                    "entrypoint required but not provided for multi-entry-point app %s; available: %s",
                     app_name,
                     sorted(entry_points.keys()),
                 )
                 raise HTTPException(
                     status_code=400,
-                    detail="workflow_type is required for this app.",
+                    detail="entrypoint is required for this app.",
                 )
             else:
                 # Fallback: no entry_points (shouldn't happen for a registered app)
