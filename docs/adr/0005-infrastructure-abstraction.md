@@ -67,7 +67,7 @@ Behind the scenes:
        async def load(self, key: str) -> dict | None: ...
        async def delete(self, key: str) -> bool: ...
    ```
-   Production uses `DaprStateStore`; tests use `InMemoryStateStore`. App code sees only the Protocol.
+   Production uses `DaprStateStore`; tests use `MockStateStore` (from `application_sdk.testing.mocks`). App code sees only the Protocol.
 
 4. **Safe determinism helpers**: Framework provides replay-safe alternatives:
    ```python
@@ -82,7 +82,7 @@ Behind the scenes:
 - **Portable**: Apps don't depend on specific infrastructure — could swap Temporal for another engine
 - **Consistent experience**: Same patterns work everywhere
 - **Execution mode parity**: Same code runs in tests and production; no conditional paths
-- **Testability transformation**: In-memory implementations (`InMemoryStateStore`, `MockSecretStore`, etc.) mean unit tests need no Dapr/Temporal sidecar
+- **Testability transformation**: Mock implementations (`MockStateStore`, `MockSecretStore`, etc. from `application_sdk.testing.mocks`) mean unit tests need no Dapr/Temporal sidecar
 
 **Cons:**
 - **Power user friction**: Experts who know Temporal may find abstractions limiting

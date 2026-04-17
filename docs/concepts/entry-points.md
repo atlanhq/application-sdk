@@ -76,18 +76,17 @@ This starts both the Temporal worker and the HTTP handler service in a single pr
 
 ### Custom Secrets for Local Dev
 
-Pass in-memory infrastructure for local development without Dapr:
+Pass mock infrastructure for local development without a Dapr sidecar:
 
 ```python
-from application_sdk.infrastructure.secrets import InMemorySecretStore
-from application_sdk.infrastructure.state import InMemoryStateStore
+from application_sdk.testing.mocks import MockSecretStore, MockStateStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyExtractor,
     handler_class=MyHandler,
-    secret_store=InMemorySecretStore({"my-api-key": "dev-secret"}),
-    state_store=InMemoryStateStore(),
+    secret_store=MockSecretStore({"my-api-key": "dev-secret"}),
+    state_store=MockStateStore(),
 ))
 ```
 

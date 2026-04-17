@@ -72,16 +72,3 @@ class CredentialVault(Protocol):
             CredentialVaultError: If resolution fails.
         """
         ...
-
-
-def __getattr__(name: str):
-    if name == "InMemoryCredentialVault":
-        import warnings
-
-        warnings.warn(
-            "InMemoryCredentialVault is removed in v3. Use DaprCredentialVault or testing mocks.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        raise ImportError(name)
-    raise AttributeError(name)

@@ -509,13 +509,15 @@ await self.upload(UploadInput(local_path="output/"))
 
 ### Local development with custom secrets
 
+Provide a seeded secret store for local dev by passing `MockSecretStore` from `application_sdk.testing.mocks`. For production-equivalent local testing, run the Dapr sidecar (`uv run poe start-deps`) and let the app pick it up automatically via `DAPR_HTTP_PORT`.
+
 ```python
-from application_sdk.infrastructure.secrets import InMemorySecretStore
+from application_sdk.testing.mocks import MockSecretStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyApp,
-    secret_store=InMemorySecretStore({"my-api-key": "test-value"}),
+    secret_store=MockSecretStore({"my-api-key": "test-value"}),
 ))
 ```
 
@@ -865,18 +867,19 @@ controller = MockHeartbeatController()
 # controller.recorded_heartbeats contains all calls made
 ```
 
-### Running locally without Dapr
+### Running locally with mock infrastructure
+
+For quick local runs without a Dapr sidecar, pass mock infrastructure from `application_sdk.testing.mocks`:
 
 ```python
-from application_sdk.infrastructure.secrets import InMemorySecretStore
-from application_sdk.infrastructure.state import InMemoryStateStore
+from application_sdk.testing.mocks import MockSecretStore, MockStateStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
     handler_class=MyHandler,
-    secret_store=InMemorySecretStore({"my-api-key": "test-value"}),
-    state_store=InMemoryStateStore(),
+    secret_store=MockSecretStore({"my-api-key": "test-value"}),
+    state_store=MockStateStore(),
 ))
 ```
 

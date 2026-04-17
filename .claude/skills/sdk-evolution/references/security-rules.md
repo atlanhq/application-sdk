@@ -38,11 +38,12 @@ logger.error("Connection to %s:%d failed", host, port)
 
 ### Credential Handling
 
-v3 uses typed `CredentialRef` -> `Credential` pattern. Flag:
+v3 uses typed `CredentialRef` -> `Credential` pattern. At runtime, `SecretStore` and `StateStore` protocols are implemented exclusively by Dapr-backed stores (`DaprSecretStore`, `DaprStateStore` in `application_sdk/infrastructure/_dapr/`). There are no InMemory fallbacks at runtime. Flag:
 - Raw dict credential access (must use `CredentialRef` + `CredentialResolver`)
 - Credentials stored in `app_state` (use `SecretStore` protocol)
 - Credential values passed through Temporal payloads (use `CredentialRef` reference, not the value)
 - Missing credential validation before use
+- Any runtime code that conditionally falls back to a non-Dapr store or tries to inject a mock at runtime
 
 ---
 

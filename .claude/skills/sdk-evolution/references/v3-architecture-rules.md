@@ -35,7 +35,7 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 - Missing `correlation_id` propagation across app boundaries
 - Log statements without structured context (app_name, run_id, correlation_id should come from `self.logger`)
 - Custom logger instantiation instead of using `self.logger` (which auto-includes correlation context)
-- Hardcoded service names instead of using framework-provided `ATLAN_SERVICE_NAME`
+- Hardcoded service names instead of reading from the `OTEL_SERVICE_NAME` environment variable (see `application_sdk/constants.py`)
 
 ---
 

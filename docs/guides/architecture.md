@@ -106,15 +106,15 @@ All infrastructure is accessed through Protocol-based interfaces, not concrete i
 
 | Protocol | Methods | Production impl | Test impl |
 |----------|---------|-----------------|-----------|
-| `StateStore` | `save`, `load`, `delete`, `list_keys` | `DaprStateStore` | `InMemoryStateStore` |
-| `SecretStore` | `get`, `get_optional`, `get_bulk` | `DaprSecretStore` | `InMemorySecretStore`, `EnvironmentSecretStore` |
-| `PubSub` | `publish`, `subscribe` | `DaprBinding` | `InMemoryPubSub` |
-| `Binding` | `invoke` | `DaprBinding` | `InMemoryBinding` |
+| `StateStore` | `save`, `load`, `delete`, `list_keys` | `DaprStateStore` | `MockStateStore` |
+| `SecretStore` | `get`, `get_optional`, `get_bulk` | `DaprSecretStore` | `MockSecretStore`, `EnvironmentSecretStore` |
+| `PubSub` | `publish`, `subscribe` | `DaprPubSub` | `MockPubSub` |
+| `Binding` | `invoke` | `DaprBinding` | `MockBinding` |
 | `CapacityPool` | `acquire`, `release`, `renew` | Redis-backed | `LocalCapacityPool` |
 
 An `InfrastructureContext` (frozen dataclass) holds all of these, stored in a `ContextVar`. Set once at startup via `application_sdk.main`; accessed anywhere via `get_infrastructure()`.
 
-This means **unit tests never need a Dapr sidecar or Temporal server** — swap in the in-memory implementations and run pure Python. See [ADR-0005](../adr/0005-infrastructure-abstraction.md).
+This means **unit tests never need a Dapr sidecar or Temporal server** — inject `MockStateStore`, `MockSecretStore`, etc. from `application_sdk.testing.mocks` and run pure Python. See [ADR-0005](../adr/0005-infrastructure-abstraction.md).
 
 ---
 

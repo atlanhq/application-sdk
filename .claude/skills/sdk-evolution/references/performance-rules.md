@@ -56,7 +56,7 @@ async def read_extraction_output(self, path: str) -> list[dict]:
 
 **Good Pattern:**
 ```python
-from application_sdk.common.utils import run_in_thread
+from application_sdk.execution.heartbeat import run_in_thread
 import orjson
 
 async def read_extraction_output(self, path: str) -> list[dict]:
@@ -537,7 +537,7 @@ async def download_and_process(self, key: str) -> int:
 
 **Good Pattern:**
 ```python
-from application_sdk.common.utils import run_in_thread
+from application_sdk.execution.heartbeat import run_in_thread
 
 async def download_and_process(self, key: str) -> int:
     local_path = "/tmp/download.parquet"
@@ -605,7 +605,7 @@ async def preflight_checks(self, config: ConnectionConfig) -> list[CheckResult]:
 
 **Bad Pattern:**
 ```python
-from application_sdk.common.utils import run_in_thread
+from application_sdk.execution.heartbeat import run_in_thread
 
 async def extract_all_tables(self, tables: list[str]) -> list[dict]:
     tasks = []
@@ -618,7 +618,7 @@ async def extract_all_tables(self, tables: list[str]) -> list[dict]:
 **Good Pattern:**
 ```python
 import asyncio
-from application_sdk.common.utils import run_in_thread
+from application_sdk.execution.heartbeat import run_in_thread
 
 async def extract_all_tables(self, tables: list[str], concurrency: int = 20) -> list[dict]:
     semaphore = asyncio.Semaphore(concurrency)

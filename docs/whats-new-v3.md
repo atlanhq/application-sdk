@@ -314,8 +314,7 @@ class MyConnector(App):
 
 **The key improvements:**
 
-- **No Dapr sidecar in tests.** Inject `InMemoryStateStore` / `InMemorySecretStore` and run
-  your task methods in pure Python — no sidecar, no gRPC, no environment variables.
+- **No Dapr sidecar in tests.** Inject `MockStateStore` / `MockSecretStore` from `application_sdk.testing.mocks` and run your task methods in pure Python — no sidecar, no gRPC, no environment variables.
 - **No gRPC size limits.** Object storage is now backed by `obstore`, which talks directly to
   S3/GCS/Azure or the local filesystem. The Dapr gRPC binding had a ~4 MB message limit that
   bit connectors with large files; that limit is gone.
@@ -336,13 +335,13 @@ await delete("output/old.parquet")
 **Local dev with custom secrets:**
 
 ```python
-from application_sdk.infrastructure import InMemorySecretStore
+from application_sdk.testing.mocks import MockSecretStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
     handler_class=MyHandler,
-    secret_store=InMemorySecretStore({"my-api-key": "dev-secret"}),
+    secret_store=MockSecretStore({"my-api-key": "dev-secret"}),
 ))
 ```
 

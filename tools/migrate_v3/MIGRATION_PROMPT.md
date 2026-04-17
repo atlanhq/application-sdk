@@ -322,7 +322,7 @@ class ModeExtractor(BaseMetadataExtractor):
   is empty (local dev), build it:
   ```python
   from application_sdk.constants import TEMPORARY_PATH
-  from application_sdk.common.utils import build_output_path
+  from application_sdk.execution import build_output_path
   output_path = os.path.join(TEMPORARY_PATH, build_output_path())
   ```
 - **`output_prefix` must default to `TEMPORARY_PATH`.** This is needed for

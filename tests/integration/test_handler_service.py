@@ -63,7 +63,7 @@ def _reset_service_globals():
 
 @pytest.fixture
 def mock_infra():
-    """Set up InMemory infrastructure with seeded secret store."""
+    """Set up mock infrastructure with seeded secret store."""
     from application_sdk.infrastructure.context import (
         InfrastructureContext,
         set_infrastructure,

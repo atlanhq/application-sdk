@@ -228,10 +228,10 @@ Print a short summary of what was done:
 ### Pre-commit: passed
 ### Tests: N passed (or: skipped — no application code changed)
 
-Changes are unstaged. Review with `git diff`, then use `/merge-and-push` to commit and push.
+Changes are unstaged. Review with `git diff`, then use `/commit` to commit and push.
 ```
 
-**Do NOT commit** — leave staging and committing to the user via `/merge-and-push`.
+**Do NOT commit** — leave staging and committing to the user via `/commit`.
 
 ---
 

@@ -925,7 +925,7 @@ v3 does not auto-compute `output_path` like v2 did. If `input.output_path` is em
 
 ```python
 from application_sdk.constants import TEMPORARY_PATH
-from application_sdk.common.utils import build_output_path
+from application_sdk.execution import build_output_path
 
 if not input.output_path:
     output_path = os.path.join(TEMPORARY_PATH, build_output_path())
@@ -948,9 +948,9 @@ The contract toolkit generates `_input.py` and other files in `app/generated/`. 
 
 ### Local dev — verify Dapr is actually being used
 
-The v3 SDK checks `DAPR_HTTP_PORT` (not `ATLAN_DAPR_HTTP_PORT`) to detect the Dapr sidecar. If running via `atlan app run`, the CLI sets this automatically. If running manually (`uv run python main.py`), Dapr will be skipped and the SDK falls back to InMemory + LocalStore silently. This means misconfigured Dapr components won't be caught until production.
+The v3 SDK checks `DAPR_HTTP_PORT` (not `ATLAN_DAPR_HTTP_PORT`) to detect the Dapr sidecar. If running via `atlan app run`, the CLI sets this automatically. If running manually (`uv run python main.py`), you must export `DAPR_HTTP_PORT=3500` first — without it, any SecretStore or StateStore access will raise at runtime.
 
-**Fix:** When running manually, export `DAPR_HTTP_PORT=3500` before starting the app, or use `atlan app run` which handles this.
+**Fix:** When running manually, export `DAPR_HTTP_PORT=3500` before starting the app, or use `atlan app run` which handles this. For quick local iteration without a sidecar (e.g. unit tests), inject `MockSecretStore`/`MockStateStore` from `application_sdk.testing.mocks` instead.
 
 ### run() return type must match AE JSONPath queries
 
@@ -1053,14 +1053,14 @@ with output_file.open("wb") as f:
 "atlan-application-sdk[daft,iam-auth,pandas,workflows]"
 ```
 
-### InMemorySecretStore for local dev
+### Seeding credentials for local dev
 
-For local testing with credentials, use `run_dev_combined()` with `InMemorySecretStore`:
+For local testing with credentials, use `run_dev_combined()` with `MockSecretStore`:
 ```python
-from application_sdk.infrastructure.secrets import InMemorySecretStore
+from application_sdk.testing.mocks import MockSecretStore
 
 secrets = {"my-cred": json.dumps({"host": "...", "password": "..."})}
-credential_stores = {"default": InMemorySecretStore(secrets)}
+credential_stores = {"default": MockSecretStore(secrets)}
 
 await run_dev_combined(MyApp, credential_stores=credential_stores)
 ```

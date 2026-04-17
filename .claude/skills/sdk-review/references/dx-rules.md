@@ -108,14 +108,15 @@ Any removed or relocated v2 API must have a deprecation shim at the old import p
 3. When it will be removed (target: v3.1.0)
 
 ```python
+# application_sdk/test_utils/integration/__init__.py — real example in the SDK
 import warnings
 warnings.warn(
-    "application_sdk.services.objectstore is deprecated. "
-    "Use application_sdk.storage instead. "
-    "Will be removed in v3.1.0.",
+    "application_sdk.test_utils.integration is deprecated and will be removed "
+    "in v3.1.0. Use application_sdk.testing.integration instead.",
     DeprecationWarning,
     stacklevel=2,
 )
+from application_sdk.testing.integration import *  # noqa: E402,F401,F403
 ```
 
 Flag:
@@ -158,7 +159,7 @@ Key import entry points for connector developers:
 from application_sdk.app import App, task, entrypoint, Input, Output
 from application_sdk.testing import MockStateStore, MockSecretStore, MockPubSub
 from application_sdk.handler import Handler
-from application_sdk.storage import Storage
+from application_sdk.storage import CloudStore, create_local_store
 ```
 
 Flag:
