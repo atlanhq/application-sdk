@@ -125,7 +125,8 @@ async def resolve_agent_json(
 
     bundle = await _fetch_bundle(secret_store, secret_path)
     resolved_flat = _substitute(spec, bundle)
-    return _expand_dotted(resolved_flat)
+    expanded = _expand_dotted(resolved_flat)
+    return _flatten_auth_section(expanded)
 
 
 def _parse_agent_json(agent_json: str) -> dict[str, Any]:
@@ -264,3 +265,28 @@ def _expand_dotted(flat: dict[str, Any]) -> dict[str, Any]:
             cursor[parts[-1]] = value
 
     return out
+
+
+def _flatten_auth_section(creds: dict[str, Any]) -> dict[str, Any]:
+    """Promote the auth-type section to root level for client compatibility.
+
+    The agent JSON uses dotted keys like ``basic.username`` which
+    ``_expand_dotted`` nests as ``{"basic": {"username": "u"}}``.
+    SQL/REST/NoSQL clients expect ``username`` and ``password`` at the
+    root level.  This function reads ``auth-type`` (e.g. ``"basic"``),
+    finds the matching nested dict, and merges its contents to root.
+
+    Example::
+
+        {"auth-type": "basic", "basic": {"username": "u", "password": "p"}, "host": "h"}
+        →
+        {"auth-type": "basic", "basic": {"username": "u", "password": "p"},
+         "host": "h", "username": "u", "password": "p"}
+    """
+    auth_type = creds.get("auth-type", "")
+    if not auth_type:
+        return creds
+    auth_section = creds.get(auth_type)
+    if isinstance(auth_section, dict):
+        creds.update(auth_section)
+    return creds
