@@ -284,18 +284,32 @@ jobs:
           echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Job 4: Trivy scan — non-blocking, runs after manifest is available ──────
+  # ── Job 4: Trivy scan + allowlist gate — blocks release on new CVEs ──────────
+  # Runs after manifest is published. Fails if CRITICAL/HIGH CVEs are found that
+  # are not in .security/base-allowlist.json (centralized SDK repo).
+  # app-deployment-dispatcher waits on this job — no vulnerable image reaches GM.
   trivy:
     name: Trivy Container Scan
     needs: [prepare, merge]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: true  # never block a release on a security scan
     permissions:
-      security-events: write  # upload SARIF
-      actions: read           # codeql-action telemetry (GET /actions/workflow-runs)
+      contents: read           # sparse-checkout of SDK base-allowlist
+      security-events: write   # upload SARIF
+      actions: read            # codeql-action telemetry (GET /actions/workflow-runs)
 
     steps:
+      - name: Checkout base allowlist from SDK
+        uses: actions/checkout@v4
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          sparse-checkout: |
+            .security
+            .github/scripts
+          path: _sdk
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -317,18 +331,29 @@ jobs:
           tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
           sudo mv /tmp/trivy /usr/local/bin/trivy
 
-      - name: Run Trivy container scan
+      - name: Run Trivy container scan (JSON)
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
         run: |
           trivy image \
-            --format sarif \
-            --output trivy-results.sarif \
+            --format json \
+            --output trivy-results.json \
             --severity CRITICAL,HIGH \
             --scanners vuln \
             --ignore-unfixed \
             ${{ needs.prepare.outputs.ghcr_image }}
+
+      - name: Convert JSON to SARIF
+        if: always() && hashFiles('trivy-results.json') != ''
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        run: |
+          trivy convert \
+            --format sarif \
+            --output trivy-results.sarif \
+            trivy-results.json
 
       - name: Upload Trivy SARIF to GitHub Security
         if: always() && hashFiles('trivy-results.sarif') != ''
@@ -338,10 +363,13 @@ jobs:
           sarif_file: trivy-results.sarif
           category: trivy-container
 
+      - name: Check against allowlist
+        run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results trivy-results.json
+
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
   app-deployment-dispatcher:
     name: Dispatch App Deployment
-    needs: [prepare, merge]
+    needs: [prepare, merge, trivy]
     if: github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true'
     runs-on: ubuntu-latest
     strategy:
