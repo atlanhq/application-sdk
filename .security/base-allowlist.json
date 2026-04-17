@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-04-17",
+  "_updated": "2026-04-18",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 60 days. HIGH: 90 days. Review before expiry.",
   "SNYK-GOLANG-GOOGLEGOLANGORGGRPC-15691172": {
     "package": "google.golang.org/grpc",
@@ -163,5 +163,12 @@
     "reason": "Base image — Chainguard Wolfi system Python package",
     "expires": "2026-07-16",
     "added_by": "anuj-atlan"
+  },
+  "SNYK-JS-NEXT-15954202": {
+    "package": "next",
+    "severity": "HIGH",
+    "reason": "Next.js pinned to ~16.1.6 due to router.replace static export regression in 16.2.x. Upgrade blocked until Next.js fixes the regression.",
+    "expires": "2026-07-18",
+    "added_by": "bichitra.sahoo"
   }
 }
