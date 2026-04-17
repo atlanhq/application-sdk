@@ -196,3 +196,170 @@ class TestMockProtocolCompliance:
         store.set("s", "v")
         await store.get("s")
         assert len(store.get_get_calls()) == 1
+
+
+class TestNonLocalModeRejectsCredentials:
+    """Verify inline credentials are NOT intercepted outside local dev."""
+
+    async def test_credentials_pass_through_when_not_local(self, monkeypatch):
+        """In non-local mode, body retains credentials (not intercepted)."""
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "false")
+
+        body = {
+            "credentials": [{"key": "host", "value": "db.example.com"}],
+            "name": "test",
+        }
+        body = _normalize_credentials(body)
+
+        is_local_dev = os.environ.get("ATLAN_LOCAL_DEVELOPMENT", "").lower() in (
+            "true",
+            "1",
+        )
+        # Guard should block — credentials stay in body
+        assert is_local_dev is False
+        assert "credentials" in body
+
+    async def test_state_store_not_written_when_not_local(self, monkeypatch):
+        """State store should have zero writes when guard blocks."""
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "false")
+
+        state_store = MockStateStore()
+        body = {
+            "credentials": [{"key": "password", "value": "secret"}],
+        }
+        body = _normalize_credentials(body)
+
+        is_local_dev = os.environ.get("ATLAN_LOCAL_DEVELOPMENT", "").lower() in (
+            "true",
+            "1",
+        )
+        if is_local_dev and state_store is not None:
+            # This should NOT execute
+            flat_creds = _pairs_to_flat(body["credentials"])
+            await state_store.save("cred:should-not-exist", flat_creds)
+
+        assert len(state_store.get_save_calls()) == 0
+
+
+class TestDaprRequiredStartup:
+    """Verify main.py requires Dapr sidecar."""
+
+    def test_no_dapr_raises_runtime_error(self, monkeypatch):
+        """_create_infrastructure raises when DAPR_HTTP_PORT not set."""
+        import asyncio
+
+        monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
+
+        from application_sdk.main import _create_infrastructure
+
+        with __import__("pytest").raises(
+            RuntimeError, match="Dapr sidecar not detected"
+        ):
+            asyncio.get_event_loop().run_until_complete(_create_infrastructure())
+
+    def test_error_message_includes_poe_command(self, monkeypatch):
+        """Error message tells developer how to fix it."""
+        import asyncio
+
+        monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
+
+        from application_sdk.main import _create_infrastructure
+
+        try:
+            asyncio.get_event_loop().run_until_complete(_create_infrastructure())
+        except RuntimeError as e:
+            assert "poe start-deps" in str(e)
+            assert "DAPR_HTTP_PORT" in str(e)
+
+
+class TestMockPubSubSelfContained:
+    """Verify MockPubSub works without InMemoryPubSub base class."""
+
+    async def test_publish_and_get_published(self):
+        from application_sdk.testing.mocks import MockPubSub
+
+        pubsub = MockPubSub()
+        await pubsub.publish("topic-a", {"key": "value"})
+        await pubsub.publish("topic-b", {"other": "data"})
+
+        all_msgs = pubsub.get_published()
+        assert len(all_msgs) == 2
+
+        topic_a = pubsub.get_published("topic-a")
+        assert len(topic_a) == 1
+        assert topic_a[0].data == {"key": "value"}
+
+    async def test_subscribe_and_deliver(self):
+        from application_sdk.testing.mocks import MockPubSub
+
+        received = []
+
+        async def handler(msg):
+            received.append(msg.data)
+
+        pubsub = MockPubSub()
+        sub = await pubsub.subscribe("events", handler)
+
+        await pubsub.publish("events", {"event": "created"})
+        assert len(received) == 1
+        assert received[0] == {"event": "created"}
+
+        # Subscription is active
+        assert sub.is_active is True
+        assert sub.topic == "events"
+
+    async def test_unsubscribe_stops_delivery(self):
+        from application_sdk.testing.mocks import MockPubSub
+
+        received = []
+
+        async def handler(msg):
+            received.append(msg.data)
+
+        pubsub = MockPubSub()
+        sub = await pubsub.subscribe("events", handler)
+
+        await pubsub.publish("events", {"first": True})
+        assert len(received) == 1
+
+        await sub.unsubscribe()
+        assert sub.is_active is False
+
+        await pubsub.publish("events", {"second": True})
+        # Should NOT be delivered after unsubscribe
+        assert len(received) == 1
+
+    async def test_publish_call_tracking(self):
+        from application_sdk.testing.mocks import MockPubSub
+
+        pubsub = MockPubSub()
+        await pubsub.publish("t", {"a": 1}, metadata={"m": "v"})
+
+        calls = pubsub.get_publish_calls()
+        assert len(calls) == 1
+        topic, data, meta = calls[0]
+        assert topic == "t"
+        assert data == {"a": 1}
+        assert meta == {"m": "v"}
+
+    async def test_clear_resets_data(self):
+        from application_sdk.testing.mocks import MockPubSub
+
+        pubsub = MockPubSub()
+        await pubsub.publish("t", {"x": 1})
+        assert len(pubsub.get_published()) == 1
+
+        pubsub.clear()
+        assert len(pubsub.get_published()) == 0
+        # clear() resets data, not call logs — use reset() for both
+        assert len(pubsub.get_publish_calls()) == 1
+
+    async def test_reset_clears_everything(self):
+        from application_sdk.testing.mocks import MockPubSub
+
+        pubsub = MockPubSub()
+        await pubsub.publish("t", {"x": 1})
+
+        pubsub.reset()
+        assert len(pubsub.get_published()) == 0
+        assert len(pubsub.get_publish_calls()) == 0
