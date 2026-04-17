@@ -2,7 +2,7 @@
 
 This guide walks through building a SQL metadata extraction connector using the v3 Application SDK. By the end, you will have a working connector that extracts databases, schemas, tables, and columns, transforms them using an asset mapper, and publishes the results.
 
-v3 replaces the v2 `BaseSQLMetadataExtractionWorkflow` + `BaseSQLMetadataExtractionActivities` split with a single `SqlMetadataExtractor` class. If you are migrating an existing v2 connector, see the [Migration Guide](../migration-guide-v3.md) for a step-by-step checklist.
+v3 replaces the v2 `BaseSQLMetadataExtractionWorkflow` + `BaseSQLMetadataExtractionActivities` split with a single `SqlMetadataExtractor` class. If you are upgrading an existing v2 connector, see the [Upgrade Guide](../upgrade-guide-v3.md) for a step-by-step checklist.
 
 ## Overview
 
@@ -729,11 +729,11 @@ dapr:
 6. **Log with the SDK logger.** Use `application_sdk.observability.logger_adaptor.get_logger` for structured logging that integrates with Temporal.
 7. **Test without sidecars.** Use `MockStateStore` and `MockSecretStore` from `application_sdk.testing.mocks` to test your connector and handler without Dapr or Temporal running.
 8. **Set `ATLAN_APP_MODULE` in the Dockerfile.** This locks the app module to the image and avoids runtime misconfiguration.
-9. **Use `on_complete` for cleanup.** Override `on_complete(success: bool)` for post-run cleanup (see [Migration Guide Step 12](../migration-guide-v3.md#step-12-app-lifecycle-hooks)).
+9. **Use `on_complete` for cleanup.** Override `on_complete(success: bool)` for post-run cleanup (see [Upgrade Guide Step 12](../upgrade-guide-v3.md#step-12-app-lifecycle-hooks)).
 
 ## Next Steps
 
 - [What's New in v3](../whats-new-v3.md) --- detailed comparison of v2 and v3 patterns
-- [Migration Guide](../migration-guide-v3.md) --- step-by-step migration from v2 to v3
+- [Upgrade Guide](../upgrade-guide-v3.md) --- step-by-step upgrade from v2 to v3
 - [Getting Started](getting-started.md) --- development environment setup
 - [Architecture](architecture.md) --- SDK architecture and component overview

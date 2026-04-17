@@ -1,7 +1,7 @@
-# v3 Migration Prompt — AI Agent Instructions
+# v3 Upgrade Prompt — AI Agent Instructions
 
 > **Scope**: This document guides an AI coding agent through the *structural*
-> parts of the v2 → v3 migration (Categories B and C).
+> parts of the v2 → v3 upgrade (Categories B and C).
 >
 > **Pre-condition — SDK dependency**: Until v3 is published to PyPI, the
 > connector must depend on `atlan-application-sdk` from the `main`
@@ -14,7 +14,7 @@
 > ```
 >
 > **Pre-condition — import rewriter**: Run the import rewriter first.  All
-> `# TODO(v3-migration)` comments in the codebase mark exactly where
+> `# TODO(upgrade-v3)` comments in the codebase mark exactly where
 > structural work is needed.
 >
 > **Post-condition**: Run `check_migration` and confirm zero FAIL items.
@@ -30,7 +30,7 @@
 
 Do **not** guess at business logic.  If a method body does something
 non-obvious, preserve it verbatim inside the new `@task` method — the goal
-is structural migration, not refactoring.
+is structural upgrade work, not refactoring.
 
 ---
 
@@ -377,7 +377,7 @@ class MyConnector(App):
 ### Checklist
 
 - [ ] For each `@activity.defn` method in the old activities class:
-  - Define a typed `Input` / `Output` model pair (see §8 of the migration guide).
+  - Define a typed `Input` / `Output` model pair (see §8 of the upgrade guide).
   - Move the method body into a `@task` method on the new `App` subclass.
   - Rename `workflow_args: Dict[str, Any]` → `input: MyInput`.
 - [ ] For the old `@workflow.run` method, implement `run()` on the `App` subclass.
@@ -732,7 +732,7 @@ production deployment.
 
 ---
 
-## 10. E2E test migration reference
+## 10. E2E test upgrade reference
 
 If the connector has e2e tests that use a `BaseTest` / `TestInterface` pattern from
 v2, replace them with the v3 `application_sdk.testing.e2e` API.
@@ -753,7 +753,7 @@ class TestMyConnector(BaseTest):
 ### After (v3)
 
 ```python
-# TODO(v3-migration): human must validate this test is equivalent to the original
+# TODO(upgrade-v3): human must validate this test is equivalent to the original
 import pytest
 from application_sdk.testing.e2e import AppConfig, AppDeployer, run_workflow, wait_for_workflow
 
@@ -811,7 +811,7 @@ async def test_metadata_extraction(deployed_app: AppDeployer) -> None:
 
 1. **Count before you generate.** Count every test method in the original. The new file must have at least that many test functions.
 2. **Copy real payload values.** If `default_payload()` returns `{"connection_id": "abc-123", "tenant_id": "xyz"}`, use those exact values — not `"test-connection"`.
-3. **Map assertions, not just structure.** For each `assert` in the original, write an equivalent `assert` in the new test. If the response shape changed, keep the assert but add `# TODO(v3-migration): response format changed — update field names`.
+3. **Map assertions, not just structure.** For each `assert` in the original, write an equivalent `assert` in the new test. If the response shape changed, keep the assert but add `# TODO(upgrade-v3): response format changed — update field names`.
 4. **One fixture, many tests.** All test functions share the `deployed_app` session-scoped fixture. Do not deploy/undeploy per-test.
 5. **Preserve test names.** Derive the new function name directly from the original method name (strip the `test_` prefix rule of the class if needed, but keep the semantic name).
 
@@ -848,7 +848,7 @@ app/
    (e.g. `from app.activities.my_connector import MyConnector`), delete it.
 4. Delete the now-empty `app/activities/` and `app/workflows/` directories.
 5. Update all production-code imports that referenced the old paths.
-6. In test files, add a `# TODO(v3-migration): update import to app.<app_name>`
+6. In test files, add a `# TODO(upgrade-v3): update import to app.<app_name>`
    comment but leave the import line unchanged (test files are out of bounds for
    structural changes).
 7. Re-run `check_migration` to confirm `no-v2-directory-structure` warning is gone.

@@ -1,4 +1,4 @@
-# Migration Guide: v2 → v3
+# Upgrade Guide: v2 → v3
 
 Application SDK v3.0 introduces three major improvements:
 
@@ -76,7 +76,7 @@ ENV ATLAN_APP_MODULE=app.app:MyIncrementalConnector
 
 ---
 
-## Step 1: Migrate SQL Metadata Extraction
+## Step 1: Upgrade SQL Metadata Extraction
 
 ### v2
 
@@ -119,7 +119,7 @@ Key changes:
 
 ---
 
-## Step 2: Migrate SQL Query Extraction
+## Step 2: Upgrade SQL Query Extraction
 
 ### v2
 
@@ -154,7 +154,7 @@ class MyQueryExtractor(SqlQueryExtractor):
 
 ---
 
-## Step 3: Migrate Incremental SQL Extraction
+## Step 3: Upgrade Incremental SQL Extraction
 
 ### v2
 
@@ -201,7 +201,7 @@ Override `run()` if you need to customise this sequence. The incremental state f
 
 ---
 
-## Step 4: Migrate the Handler
+## Step 4: Upgrade the Handler
 
 ### v2
 
@@ -243,7 +243,7 @@ The `load()` method is removed — handler context (secrets, state) is injected 
 
 ---
 
-## Step 5: Migrate the Application Entry Point
+## Step 5: Upgrade the Application Entry Point
 
 ### v2
 
@@ -410,7 +410,7 @@ See [`docs/concepts/entry-points.md`](concepts/entry-points.md) for the full `@e
 
 ---
 
-## Step 6: Migrate Worker Setup
+## Step 6: Upgrade Worker Setup
 
 In v2, connecting to Temporal and registering workflow/activity classes was done explicitly.
 In v3, `create_worker()` auto-discovers all `App` subclasses and their `@task` methods — you
@@ -543,7 +543,7 @@ async def process(self, input: ProcessInput) -> ProcessOutput:
 
 ---
 
-## Step 8: Migrate Infrastructure Access
+## Step 8: Upgrade Infrastructure Access
 
 In v3, infrastructure services are created automatically at startup (by `main.py`) and
 injected into `@task` methods and handlers via `self.context`.
@@ -568,7 +568,7 @@ You do not need to create `DaprClient` instances in your code.
 | `/workflows/v1/config/{id}` (503 error) | Works automatically (state store wired) |
 | `/workflows/v1/file` (503 error) | Works automatically (storage binding wired) |
 
-### Migrating ObjectStore calls
+### Upgrading ObjectStore calls
 
 ```python
 # v2 — all calls went through the Dapr binding
@@ -621,7 +621,7 @@ asyncio.run(run_dev_combined(
 
 ---
 
-## Step 9: Migrate to Typed Credentials
+## Step 9: Upgrade to Typed Credentials
 
 v3 introduces a typed credential system that replaces bare `credential_guid: str` +
 `Dict[str, Any]` with a `CredentialRef` → typed `Credential` pipeline.
@@ -714,7 +714,7 @@ register_credential_type("my_service", MyCredential, _parse_my)
 
 ---
 
-## Step 10: Migrate Atlan Client Access
+## Step 10: Upgrade Atlan Client Access
 
 ### v2
 
@@ -772,7 +772,7 @@ headers = await service.get_authenticated_headers()
 
 ---
 
-## Step 11: Migrate Heartbeating
+## Step 11: Upgrade Heartbeating
 
 In v2, you applied `@auto_heartbeater` to activity methods to prevent Temporal from
 timing them out. In v3, heartbeating is built into `@task` — no decorator needed.
@@ -882,7 +882,7 @@ if you need to trigger cleanup mid-run (e.g., after a particularly large interme
 
 ---
 
-## Step 13: Migrate Test Utilities
+## Step 13: Upgrade Test Utilities
 
 ### Import paths
 

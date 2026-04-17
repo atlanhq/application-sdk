@@ -4,7 +4,7 @@ Application SDK v3 is a ground-up rethink of how you build apps on the Atlan pla
 If you know v2 well, this guide will orient you quickly — it explains *what* changed, *why*,
 and shows each change side-by-side.
 
-> For a step-by-step migration checklist, see [`migration-guide-v3.md`](migration-guide-v3.md).
+> For a step-by-step upgrade checklist, see [`upgrade-guide-v3.md`](upgrade-guide-v3.md).
 > For automated tooling, see [`tools/migrate_v3/`](../tools/migrate_v3/README.md).
 
 ---
@@ -524,7 +524,7 @@ headers = cred.to_headers()  # {"X-API-Key": "secret"}
 | `AtlanOAuthClient` | `atlan_oauth_client_ref(name)` | `to_headers()`, `validate()` |
 
 **Backward compatibility** — `credential_guid` still works. When only a GUID is present in
-the input, the SDK auto-wraps it via `legacy_credential_ref()`, so you can migrate gradually:
+the input, the SDK auto-wraps it via `legacy_credential_ref()`, so you can upgrade gradually:
 
 ```python
 ExtractionInput(credential_guid="abc-123")          # legacy — still works
@@ -723,8 +723,8 @@ controller = MockHeartbeatController()
 
 ## Further Reading
 
-- **Step-by-step migration:** [`docs/migration-guide-v3.md`](migration-guide-v3.md)
-- **Automated migration tooling:** [`tools/migrate_v3/README.md`](../tools/migrate_v3/README.md)
+- **Step-by-step upgrade:** [`docs/upgrade-guide-v3.md`](upgrade-guide-v3.md)
+- **Automated upgrade tooling:** [`tools/migrate_v3/README.md`](../tools/migrate_v3/README.md)
 - **Design rationale (ADRs):**
   - [ADR-0005: Infrastructure Abstraction](adr/0005-infrastructure-abstraction.md)
   - [ADR-0006: Schema-Driven Contracts](adr/0006-schema-driven-contracts.md)

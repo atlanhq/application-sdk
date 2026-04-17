@@ -76,7 +76,7 @@ python -m tools.migrate_v3.rewrite_imports --dry-run src/my_connector/
 
 The rewriter:
 - Rewrites all deprecated `from application_sdk.<v2> import …` paths.
-- Adds `# TODO(v3-migration): …` comments above imports that also require
+- Adds `# TODO(upgrade-v3): …` comments above imports that also require
   structural refactoring (class merges, API changes, removed symbols).
 - Preserves all formatting, comments, and non-import code exactly.
 
