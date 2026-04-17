@@ -8,10 +8,11 @@ import asyncio
 import contextvars
 import inspect
 import os
+import signal
 import threading
 from datetime import timedelta
 from functools import wraps
-from typing import Any, Callable, TypeVar, cast
+from typing import Any, Callable, Optional, TypeVar, cast
 
 from temporalio import activity
 
@@ -140,128 +141,191 @@ def _get_heartbeat_timeout() -> timedelta:
         return default_heartbeat_timeout
 
 
-def _start_heartbeat_thread(
+def _build_direct_heartbeat_fn(
+    ctx: contextvars.Context,
+) -> Optional[Callable[[], None]]:
+    """Try to build a heartbeat function that bypasses the asyncio event loop.
+
+    Why this exists
+    ---------------
+    ``activity.heartbeat()`` for async activities routes through
+    ``asyncio.Queue.put_nowait()`` + ``asyncio.create_task()`` — both of which
+    require the event loop to be running and unblocked.  This is a problem when
+    an async activity calls blocking sync code (e.g. a synchronous DB driver or
+    ``time.sleep``): the event loop thread is occupied, so heartbeats queued
+    via ``call_soon_threadsafe`` cannot fire until the block ends — potentially
+    after Temporal's heartbeat timeout.
+
+    The actual network call is ``bridge_worker.record_activity_heartbeat(proto)``
+    which is a *synchronous Rust call* that hands proto bytes off to the Rust
+    tokio runtime independently of Python asyncio.  For no-details heartbeats
+    (the only kind ``auto_heartbeater`` sends), the ``await data_converter.encode``
+    step is skipped entirely (``if details:`` evaluates to False), so the
+    asyncio scaffolding is pure overhead.
+
+    Extraction path
+    ---------------
+    ``ctx.heartbeat`` → ``_ActivityOutboundImpl.heartbeat`` (bound method)
+    ``ctx.heartbeat.__self__`` → ``_ActivityOutboundImpl`` instance
+    ``ctx.heartbeat.__self__._worker`` → ``_ActivityWorker`` instance
+    ``ctx.heartbeat.__self__._worker._bridge_worker()`` → ``bridge.Worker``
+
+    Returns ``None`` when not in an activity context (tests, local runs, or if
+    SDK internals change).  ``_heartbeat_thread_target`` falls back to
+    ``loop.call_soon_threadsafe`` in that case.
+    """
+    try:
+        task_token: bytes = ctx.run(activity.info).task_token
+
+        heartbeat_callable = ctx.run(lambda: activity._Context.current().heartbeat)
+        if heartbeat_callable is None:
+            return None
+
+        outbound = getattr(heartbeat_callable, "__self__", None)
+        if outbound is None:
+            return None
+
+        activity_worker = getattr(outbound, "_worker", None)
+        if activity_worker is None:
+            return None
+
+        bridge_worker_fn = getattr(activity_worker, "_bridge_worker", None)
+        if bridge_worker_fn is None:
+            return None
+
+        from temporalio.bridge.proto import ActivityHeartbeat as _ActivityHeartbeat
+
+        proto = _ActivityHeartbeat(task_token=task_token)
+
+        def direct_heartbeat() -> None:
+            # Pure sync Rust call — no event loop required. Works even while
+            # the event loop thread is blocked by synchronous code.
+            bridge_worker_fn().record_activity_heartbeat(proto)
+
+        logger.debug(
+            "_build_direct_heartbeat_fn: direct bridge heartbeat available "
+            "(task_token=%s…)",
+            task_token[:8].hex(),
+        )
+        return direct_heartbeat
+
+    except Exception:
+        logger.debug(
+            "_build_direct_heartbeat_fn: not in activity context, "
+            "falling back to call_soon_threadsafe",
+            exc_info=True,
+        )
+        return None
+
+
+def _heartbeat_thread_target(
+    delay: float,
     stop_event: threading.Event,
-    thread_failed: threading.Event,
-) -> threading.Thread:
-    """Start a daemon thread that sends heartbeats at regular intervals.
-
-    Uses a background thread instead of an asyncio task so that heartbeats
-    are never blocked by event loop starvation (e.g. sync code running
-    inside an async activity).
-
-    If the heartbeat thread exits unexpectedly (e.g. due to a BaseException
-    that escapes the retry logic), it sets ``thread_failed`` so that the
-    calling activity can detect the failure and stop early.
-
-    Args:
-        stop_event: Threading event used to signal the thread to stop.
-        thread_failed: Threading event set by the thread on unexpected exit.
-
-    Returns:
-        The started heartbeat thread.
-    """
-    heartbeat_timeout = _get_heartbeat_timeout()
-    delay = heartbeat_timeout.total_seconds() / 3
-    ctx = contextvars.copy_context()
-
-    def _run_heartbeat():
-        try:
-            ctx.run(send_periodic_heartbeat_sync, delay, stop_event)
-        except BaseException as e:
-            logger.error("Heartbeat thread crashed unexpectedly: %s", e, exc_info=e)
-            thread_failed.set()
-
-    heartbeat_thread = threading.Thread(target=_run_heartbeat, daemon=True)
-    heartbeat_thread.start()
-    return heartbeat_thread
-
-
-async def _wait_for_thread_failure(
-    thread_failed: threading.Event, check_interval: float = 1.0
+    loop: Optional[asyncio.AbstractEventLoop],
+    ctx: contextvars.Context,
+    direct_heartbeat_fn: Optional[Callable[[], None]] = None,
 ) -> None:
-    """Poll until the heartbeat thread signals an unexpected exit.
+    """Background thread that sends Temporal heartbeats at regular intervals.
 
-    Used as a concurrent task inside the async activity wrapper so that
-    ``asyncio.wait`` can race the activity against heartbeat-thread health.
+    Async activities (``loop`` is not None):
+        **Primary path** — ``direct_heartbeat_fn`` is set: calls
+        ``bridge_worker.record_activity_heartbeat(proto)`` directly from the
+        background thread.  This is a synchronous Rust call that does not
+        require the Python event loop to be running or unblocked, so heartbeats
+        fire even while the event loop thread is executing blocking sync code.
 
-    Args:
-        thread_failed: Event that the heartbeat thread sets on crash.
-        check_interval: Seconds between polls.
+        **Fallback path** — ``direct_heartbeat_fn`` is None (e.g. in tests or
+        non-Temporal environments): uses ``loop.call_soon_threadsafe``.
+        Callbacks are queued and fire as soon as the loop is free.
+
+    Sync activities (``loop`` is None):
+        Calls ``ctx.run(activity.heartbeat)`` directly.  The Temporal SDK wraps
+        ``ctx.heartbeat`` with ``asyncio.run_coroutine_threadsafe`` for the
+        thread-pool case, so this is thread-safe from any OS thread.
+
+    Transient heartbeat exceptions are caught and logged — the thread
+    continues so one failure does not permanently stop heartbeating.
+
+    If the thread exits unexpectedly, SIGTERM is sent to trigger a container
+    restart so Temporal reschedules the activity cleanly.
     """
-    while not thread_failed.is_set():
-        await asyncio.sleep(check_interval)
+    try:
+        while not stop_event.wait(timeout=delay):
+            try:
+                if loop is not None:
+                    if direct_heartbeat_fn is not None:
+                        direct_heartbeat_fn()
+                    else:
+                        loop.call_soon_threadsafe(ctx.run, activity.heartbeat)
+                else:
+                    ctx.run(activity.heartbeat)
+                logger.debug("_heartbeat_thread_target: heartbeat sent")
+            except Exception:
+                logger.warning(
+                    "_heartbeat_thread_target: heartbeat failed, will retry",
+                    exc_info=True,
+                )
+    except Exception:
+        logger.error(
+            "_heartbeat_thread_target: heartbeat thread crashed unexpectedly, "
+            "sending SIGTERM to restart the worker",
+            exc_info=True,
+        )
+        os.kill(os.getpid(), signal.SIGTERM)
 
 
 def auto_heartbeater(fn: F) -> F:
     """Decorator that automatically sends heartbeats during activity execution.
 
-    Heartbeats are periodic signals sent from an activity to the Temporal server
-    to indicate that the activity is still making progress. This decorator
-    automatically sends these heartbeats at regular intervals.
+    Uses a background thread at 1/3 of the configured heartbeat timeout
+    (default 40 s for the 120 s default timeout).
 
-    The heartbeat interval is calculated as 1/3 of the activity's configured
-    heartbeat timeout. If no timeout is configured, it defaults to 120 seconds
-    (resulting in a 40-second heartbeat interval).
+    Async activities:
+        At startup, extracts the Rust bridge worker and task token from the
+        Temporal activity context via ``_build_direct_heartbeat_fn``.  The
+        background thread calls ``bridge_worker.record_activity_heartbeat()``
+        — a synchronous Rust call that does not require the Python asyncio
+        event loop — so **heartbeats fire even when the event loop is blocked
+        by synchronous code** (blocking DB drivers, ``time.sleep``, etc.).
 
-    Heartbeats are always sent from a background thread, regardless of whether
-    the activity is async or sync. This ensures heartbeats are never starved
-    by event loop blocking (e.g. sync calls inside async activities).
+        Falls back to ``loop.call_soon_threadsafe`` when bridge extraction
+        fails (e.g. in tests or non-Temporal environments).
 
-    Args:
-        fn: The activity function to be decorated. Can be sync or async.
+    Sync activities:
+        Calls ``activity.heartbeat()`` via the copied context.  The Temporal
+        SDK already wraps the heartbeat callable with
+        ``asyncio.run_coroutine_threadsafe`` for the thread-pool case.
 
-    Returns:
-        The decorated activity function that includes automatic heartbeating.
-
-    Note:
-        This decorator is particularly useful for long-running activities where
-        early failure detection is important. Without heartbeats, Temporal would
-        have to wait for the entire activity timeout before detecting a failure.
-
-        For more information, see:
-        - https://temporal.io/blog/activity-timeouts
-        - https://github.com/temporalio/samples-python/blob/main/custom_decorator/activity_utils.py
+    If the heartbeat thread crashes unexpectedly, SIGTERM is sent so the
+    container restarts and Temporal reschedules the activity.
 
     Example:
         >>> @activity.defn
         >>> @auto_heartbeater
-        >>> async def my_async_activity():
-        ...     await long_running_operation()
-
-        >>> @activity.defn
-        >>> @auto_heartbeater
-        >>> def my_sync_activity():
-        ...     cpu_intensive_work()
+        >>> async def my_activity():
+        ...     # Blocking calls work fine — heartbeats fire from a background thread
+        ...     result = blocking_db_call()
     """
-
     if inspect.iscoroutinefunction(fn):
 
         @wraps(fn)
-        async def async_wrapper(*args: Any, **kwargs: Any):
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            heartbeat_timeout = _get_heartbeat_timeout()
+            delay = heartbeat_timeout.total_seconds() / 3
+
             stop_event = threading.Event()
-            thread_failed = threading.Event()
-            heartbeat_thread = _start_heartbeat_thread(stop_event, thread_failed)
+            loop = asyncio.get_running_loop()
+            ctx = contextvars.copy_context()
+            direct_heartbeat_fn = _build_direct_heartbeat_fn(ctx)
+
+            heartbeat_thread = threading.Thread(
+                target=_heartbeat_thread_target,
+                args=(delay, stop_event, loop, ctx, direct_heartbeat_fn),
+                daemon=True,
+            )
+            heartbeat_thread.start()
             try:
-                activity_task = asyncio.ensure_future(fn(*args, **kwargs))
-                monitor_task = asyncio.ensure_future(
-                    _wait_for_thread_failure(thread_failed)
-                )
-                done, pending = await asyncio.wait(
-                    {activity_task, monitor_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for p in pending:
-                    p.cancel()
-                    try:
-                        await p
-                    except (asyncio.CancelledError, Exception):
-                        pass
-
-                if activity_task in done:
-                    return activity_task.result()
-
-                raise RuntimeError("Heartbeat thread stopped unexpectedly")
+                return await fn(*args, **kwargs)
             except Exception as e:
                 logger.error("Error in activity: %s", e, exc_info=e)
                 raise
@@ -270,71 +334,30 @@ def auto_heartbeater(fn: F) -> F:
                 heartbeat_thread.join(timeout=5)
 
         return cast(F, async_wrapper)
+
     else:
 
         @wraps(fn)
-        def sync_wrapper(*args: Any, **kwargs: Any):
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            heartbeat_timeout = _get_heartbeat_timeout()
+            delay = heartbeat_timeout.total_seconds() / 3
+
             stop_event = threading.Event()
-            thread_failed = threading.Event()
-            heartbeat_thread = _start_heartbeat_thread(stop_event, thread_failed)
+            ctx = contextvars.copy_context()
+
+            heartbeat_thread = threading.Thread(
+                target=_heartbeat_thread_target,
+                args=(delay, stop_event, None, ctx),
+                daemon=True,
+            )
+            heartbeat_thread.start()
             try:
-                result = fn(*args, **kwargs)
+                return fn(*args, **kwargs)
             except Exception as e:
                 logger.error("Error in activity: %s", e, exc_info=e)
                 raise
             finally:
                 stop_event.set()
                 heartbeat_thread.join(timeout=5)
-            if thread_failed.is_set():
-                raise RuntimeError("Heartbeat thread stopped unexpectedly")
-            return result
 
         return cast(F, sync_wrapper)
-
-
-def send_periodic_heartbeat_sync(
-    delay: float, stop_event: threading.Event, *details: Any
-) -> None:
-    """Sends heartbeat signals at regular intervals from a background thread.
-
-    This function runs in a loop, waiting on the stop_event for the specified delay.
-    When the event is set, the loop exits cleanly.
-
-    On transient failures, applies exponential backoff (capped at 5x the base delay)
-    to avoid hammering an unhealthy Temporal server. Resets to normal interval after
-    a successful heartbeat.
-
-    Args:
-        delay: The delay between heartbeats in seconds.
-        stop_event: Threading event used to signal the thread to stop.
-        *details: Optional details to include in the heartbeat signal.
-
-    Note:
-        This function is used internally by the @auto_heartbeater decorator for
-        sync activity functions and should not need to be called directly.
-    """
-    consecutive_failures = 0
-    # Cap backoff at the heartbeat timeout (delay * 3) so we never wait
-    # longer than Temporal's patience window before retrying.
-    max_delay = delay * 3
-    current_delay = delay
-
-    while not stop_event.wait(timeout=current_delay):
-        try:
-            activity.heartbeat(*details)
-            if consecutive_failures > 0:
-                logger.info(
-                    "Heartbeat recovered after %d consecutive failures",
-                    consecutive_failures,
-                )
-            consecutive_failures = 0
-            current_delay = delay
-        except Exception as e:
-            consecutive_failures += 1
-            current_delay = min(delay * 2**consecutive_failures, max_delay)
-            logger.warning(
-                "Heartbeat failed (attempt %d), retrying in %.1fs: %s",
-                consecutive_failures,
-                current_delay,
-                e,
-            )
