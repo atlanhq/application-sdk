@@ -48,9 +48,6 @@ from .validation import format_validation_report, validate_with_pandera
 
 logger = get_logger(__name__)
 
-# Sentinel value to distinguish "not provided" from None
-_NOT_PROVIDED = object()
-
 
 def _auto_discover_credentials(scenario_name: str = "") -> Dict[str, Any]:
     """Auto-discover credentials from E2E_* environment variables.
