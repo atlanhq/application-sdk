@@ -1471,9 +1471,11 @@ def create_app_handler_service(
             # analysis tools can verify no path-traversal chars reach the join.
             if not _ENTRYPOINT_NAME_RE.match(entrypoint):
                 raise HTTPException(status_code=400, detail="Invalid entrypoint name")
-            ep_manifest = (
-                CONTRACT_GENERATED_DIR / entrypoint / "manifest.json"
-            ).resolve()
+            # os.path.basename closes CodeQL's taint flow (it models basename as
+            # a path-traversal sanitizer). For inputs passing the regex above it
+            # is always a no-op — the regex already disallows '/'.
+            ep_name = os.path.basename(entrypoint)
+            ep_manifest = (CONTRACT_GENERATED_DIR / ep_name / "manifest.json").resolve()
             # Guard 2 (400 — defense-in-depth): resolved path must stay inside
             # CONTRACT_GENERATED_DIR. Distinct message so operators can tell
             # this guard fired vs. the name validator above.
