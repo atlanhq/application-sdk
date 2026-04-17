@@ -94,6 +94,16 @@ uv run pre-commit run --files <changed_files>
 ```
 Re-run after auto-formatting. Check 0 errors in pyright (warnings OK).
 
+**Step A.5: Validate the fix is worthwhile — ask "is this even a real problem?"**
+Before writing any fix, re-examine the finding with fresh eyes:
+- **Call frequency:** Is the flagged code in a hot loop (thousands of calls) or called a few times per workflow? A per-call allocation that runs 3 times is fine; one that runs 10,000 times is not.
+- **Proposed fix side effects:** Does the fix introduce new coupling (e.g., importing from an unrelated module)? Could it pollute a shared resource (e.g., reusing an executor meant for a different purpose)?
+- **Would a senior engineer on this team care?** If you showed them the finding and the proposed fix, would they approve the PR or say "this is fine as-is"?
+
+If the answer is "the current code is acceptable," **cancel the ticket** with a clear explanation rather than shipping a questionable fix. A canceled finding with good reasoning is better than a merged PR that a human reviewer has to revert.
+
+*Lesson from 2026-04-16 run: PR #1407 was closed after human review found the ThreadPoolExecutor-per-query pattern was acceptable (low call frequency). The fix would have polluted the heartbeat executor. Gate 1 should have killed this finding.*
+
 **Step B: Run existing unit tests**
 ```bash
 uv run pytest tests/unit/ -x -q --timeout=60
@@ -122,6 +132,25 @@ uv run pytest tests/unit/ -x -q --timeout=60
 
 **Step E: Validate all CI checks pass**
 All pre-commit hooks, unit tests, and type checks must be green before pushing. Do NOT push if anything is red.
+
+**Step F: Verify the diff contains ONLY intended changes — no formatter noise**
+Before committing, run `git diff --stat` and verify:
+1. Only the files you intentionally changed are listed
+2. No unrelated files were reformatted by pre-commit (ruff-format, isort)
+3. The total line count is proportional to the fix — a 7-line permissions change should NOT produce a 400-line diff
+
+If pre-commit reformatted unrelated files (because the working tree had dirty files from other branches), `git checkout -- <unrelated_files>` to discard them before committing. Only `git add` the specific files you changed.
+
+*Lesson from 2026-04-16 run: PR #1405 was closed because it contained ~400 lines of auto-formatter rewrites across 15+ unrelated files. The actual permissions fix was 7 lines buried in noise. This happened because pre-commit ran on a dirty working tree.*
+
+**Step G: For CI/infrastructure changes, validate downstream impact**
+If the fix modifies GitHub Actions permissions, workflow triggers, Helm values, or Dapr configs:
+1. Identify every job/step that uses the changed permission or config
+2. Verify each one still works — don't assume `contents: read` is sufficient without checking
+3. For permission downgrades: search the workflow for actions that may need the old permission (e.g., `add-pr-comment` may need `contents: write` or `pull-requests: write`)
+4. For CI-only PRs: run the workflow on a test branch before merging to refactor-v3
+
+*Lesson from 2026-04-16 run: PR #1405 downgraded `contents: write` to `contents: read` without verifying the docs preview job (which uses add-pr-comment + S3 sync) still works.*
 
 If ANY step fails, fix the issue before committing. Do NOT push a PR that hasn't passed all steps.
 
@@ -174,7 +203,19 @@ The 2026-04-09 run stopped at Stage 5 (tickets only, 0 PRs). The 2026-04-14 run 
 4. Verify all Linear tickets for Gate 2-passed PRs are set to "In Review"
 5. If ANY of these fail, you are NOT done — keep going
 
-### 20. Labels are STATE TRANSITIONS, not defaults — never apply labels prematurely
+### 20. Gate 2 agents MUST read PR diffs from GitHub, NEVER local working tree
+The 2026-04-16 run had Gate 2 agents reading local files (which were on different branches) instead of the actual PR diff. This caused false "needs-changes" verdicts for PRs whose changes were correct on GitHub but invisible locally.
+
+**Gate 2 agent prompts MUST include this instruction:**
+```
+IMPORTANT: Do NOT read local files to verify PR changes. The working directory may be
+on a different branch. Instead, use Bash to run:
+  gh pr diff {pr_number} --repo atlanhq/application-sdk
+This gives you the actual diff that will be merged. Only use Read on files for
+understanding context (existing code around the change), not to verify the change itself.
+```
+
+### 21. Labels are STATE TRANSITIONS, not defaults — never apply labels prematurely
 Labels reflect actual pipeline state. Do NOT batch-apply labels before running the stage that determines them.
 - `needs-review` → apply ONLY after PR creation (Stage 6), before Gate 2
 - After Gate 2 passes → `@sdk-review auto-complete` is posted and the GHA workflow manages subsequent labels
@@ -509,7 +550,7 @@ Agent tool call:
     - ADR-0004: Build-Time Type Safety (Pydantic, pyright, no Dict[str, Any])
     - ADR-0005: Infrastructure Abstraction (no direct temporalio/dapr imports)
     - ADR-0006: Schema-Driven Contracts (single Input/Output, additive evolution)
-    - ADR-0007: Apps as Coordination Unit (call_by_name, tasks internal)
+    - ADR-0007: Apps as Coordination Unit (tasks internal; call_by_name deactivated — BLDX-878)
     - ADR-0008: Payload-Safe Bounded Types (no Any/bytes/unbounded collections)
     - ADR-0009: Separate Handler/Worker (ATLAN_ prefix, mode flags)
     - ADR-0010: Async-First (run_in_thread, internal timeouts)

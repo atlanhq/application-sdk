@@ -281,7 +281,7 @@ class TestCleanupStorage:
                     "application_sdk.storage.ops.delete", side_effect=_mock_delete
                 ):
                     with mock.patch(
-                        "application_sdk.execution._temporal.activity_utils.build_output_path",
+                        "application_sdk.execution.build_output_path",
                         return_value="artifacts/apps/test/workflows/wf1/run1",
                     ):
                         with mock.patch(

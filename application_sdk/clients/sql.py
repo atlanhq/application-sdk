@@ -21,8 +21,6 @@ from typing import (
 )
 from urllib.parse import quote_plus
 
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
-
 from application_sdk.clients import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.common.aws_utils import (
@@ -31,8 +29,8 @@ from application_sdk.common.aws_utils import (
 )
 from application_sdk.common.error_codes import ClientError, CommonError
 from application_sdk.common.exc_utils import rewrap
-from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
+from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -40,6 +38,7 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     import daft
     import pandas as pd
+    from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
     from sqlalchemy.orm import Session
 
 
@@ -373,7 +372,7 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("Engine is not initialized. Call load() first.")
 
         loop = asyncio.get_running_loop()
-        logger.info("Running query: %s", query)
+        logger.debug("Running query: %s", query)
 
         # Use context manager for automatic connection cleanup
         with self.engine.connect() as connection:
@@ -644,7 +643,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.engine:
             raise ValueError("Engine is not initialized. Call load() first.")
 
-        logger.info("Running query: %s", query)
+        logger.debug("Running query: %s", query)
         use_server_side_cursor = self.use_server_side_cursor
 
         # Use async context manager for automatic connection cleanup

@@ -31,6 +31,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import mimetypes
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -721,24 +722,40 @@ def create_app_handler_service(
             # handlers.
             body = _normalize_credentials(body)
             if "credentials" in body and body["credentials"]:
-                if _secret_store is not None and hasattr(_secret_store, "set"):
+                # Credential interception: store inline credentials in state
+                # store and replace with a credential_guid. This path is
+                # guarded to local-dev only — in production, credentials are
+                # pre-provisioned in Dapr secret store by the platform.
+                is_local_dev = os.environ.get(
+                    "ATLAN_LOCAL_DEVELOPMENT", ""
+                ).lower() in (
+                    "true",
+                    "1",
+                )
+                if is_local_dev and _state_store is not None:
                     credential_guid = str(uuid4())
-                    # Convert v3 list [{key, value}] to flat dict so
-                    # get_secret() returns the same format as production
-                    # (Dapr/Vault). extra.* keys nested under "extra".
                     flat_creds = _pairs_to_flat(body["credentials"])
-                    _secret_store.set(credential_guid, json.dumps(flat_creds))
+                    await _state_store.save(f"cred:{credential_guid}", flat_creds)
                     body["credential_guid"] = credential_guid
                     del body["credentials"]
                     logger.debug(
-                        "Saved inline credentials to secret store: guid=%s",
+                        "Saved inline credentials to state store: guid=%s",
                         credential_guid,
                     )
                 else:
-                    logger.warning(
-                        "Secret store not writable; inline credentials will be "
-                        "passed through on the workflow input."
-                    )
+                    # Always strip raw credentials — never pass through to
+                    # Temporal history, regardless of mode or store availability.
+                    del body["credentials"]
+                    if not is_local_dev:
+                        logger.warning(
+                            "Inline credentials stripped in non-local mode; "
+                            "use credential_guid for production workflows."
+                        )
+                    else:
+                        logger.warning(
+                            "State store not available; inline credentials stripped "
+                            "to prevent exposure in Temporal history."
+                        )
 
             input_data = input_type(**body)
 
@@ -865,7 +882,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Failed to stop workflow: {error_msg}"
+                status_code=500, detail="Failed to stop workflow"
             ) from None
 
     @app.get("/workflows/v1/result/{workflow_id}")
@@ -988,7 +1005,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Failed to get workflow result: {error_msg}"
+                status_code=500, detail="Failed to get workflow result"
             ) from None
 
     @app.get("/workflows/v1/status/{workflow_id}/{run_id:path}")
@@ -1039,7 +1056,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Failed to get workflow status: {error_msg}"
+                status_code=500, detail="Failed to get workflow status"
             ) from None
 
     # ------------------------------------------------------------------
@@ -1464,7 +1481,9 @@ def create_app_handler_service(
                     status_code=404,
                     detail=f"No manifest found for entrypoint {entrypoint!r}",
                 )
-            raw = ep_manifest.read_bytes().replace(b"{deployment_name}", deployment)
+            raw = ep_manifest.read_bytes()
+            raw = raw.replace(b"{deployment_name}", deployment)
+            raw = raw.replace(b"{app_name}", (app_name or "").encode())
             return Response(content=raw, media_type="application/json")
 
         # No entrypoint param: single-entrypoint path
@@ -1474,7 +1493,12 @@ def create_app_handler_service(
             )
         manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
         if manifest_path.exists():
-            raw = manifest_path.read_bytes().replace(b"{deployment_name}", deployment)
+            # Disk: contract-generated file — serve raw bytes with placeholder
+            # substitution. No parse/reserialize: the file is already valid JSON,
+            # validated at build time by the contract tooling.
+            raw = manifest_path.read_bytes()
+            raw = raw.replace(b"{deployment_name}", deployment)
+            raw = raw.replace(b"{app_name}", (app_name or "").encode())
             return Response(content=raw, media_type="application/json")
         raise HTTPException(status_code=404, detail="No manifest available")
 

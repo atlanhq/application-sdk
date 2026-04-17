@@ -10,9 +10,10 @@ from typing import Annotated
 
 from pydantic import Field
 
-from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.base import Input, Output, PublishInputMixin
 from application_sdk.contracts.types import ConnectionRef, MaxItems
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.credentials.spec import AgentCredentialSpec
 
 
 class ExtractionInput(Input, allow_unbounded_fields=True):
@@ -29,6 +30,16 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
 
     credential_ref: CredentialRef | None = None
     """Typed credential reference — preferred over credential_guid for new apps."""
+
+    extraction_method: str = ""
+    """``"agent"`` or ``"direct"``. Empty defaults to direct."""
+
+    agent_json: AgentCredentialSpec | None = None
+    """Typed agent credential spec. Non-None when extraction_method is agent.
+
+    Accepts a JSON string, dict, or :class:`AgentCredentialSpec` on input —
+    the spec's model validator normalises all three forms.
+    """
 
     output_prefix: str = ""
     """Object store prefix for all output artifacts."""
@@ -49,7 +60,7 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     """Tag prefix for source-level metadata."""
 
 
-class ExtractionOutput(Output):
+class ExtractionOutput(Output, PublishInputMixin):
     """Top-level output from a SQL metadata extraction run."""
 
     workflow_id: str = ""
