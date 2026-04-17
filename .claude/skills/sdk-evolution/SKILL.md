@@ -550,7 +550,7 @@ Agent tool call:
     - ADR-0004: Build-Time Type Safety (Pydantic, pyright, no Dict[str, Any])
     - ADR-0005: Infrastructure Abstraction (no direct temporalio/dapr imports)
     - ADR-0006: Schema-Driven Contracts (single Input/Output, additive evolution)
-    - ADR-0007: Apps as Coordination Unit (call_by_name, tasks internal)
+    - ADR-0007: Apps as Coordination Unit (tasks internal; call_by_name deactivated — BLDX-878)
     - ADR-0008: Payload-Safe Bounded Types (no Any/bytes/unbounded collections)
     - ADR-0009: Separate Handler/Worker (ATLAN_ prefix, mode flags)
     - ADR-0010: Async-First (run_in_thread, internal timeouts)
