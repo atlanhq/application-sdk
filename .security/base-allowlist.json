@@ -163,5 +163,33 @@
     "reason": "Base image — Chainguard Wolfi system Python package",
     "expires": "2026-07-16",
     "added_by": "anuj-atlan"
+  },
+  "SNYK-CHAINGUARDLATEST-DAPR117-16095272": {
+    "package": "dapr-1.17",
+    "severity": "HIGH",
+    "reason": "Base image — dapr-1.17@1.17.3-r1 in app-runtime-base. Fix available in 1.17.5-r0; awaiting base image update.",
+    "expires": "2026-07-17",
+    "added_by": "AngadSethi"
+  },
+  "SNYK-CHAINGUARDLATEST-DAPR117-16095309": {
+    "package": "dapr-1.17",
+    "severity": "HIGH",
+    "reason": "Base image — dapr-1.17@1.17.3-r1 in app-runtime-base. Fix available in 1.17.5-r0; awaiting base image update.",
+    "expires": "2026-07-17",
+    "added_by": "AngadSethi"
+  },
+  "SNYK-CHAINGUARDLATEST-DAPR117-16095311": {
+    "package": "dapr-1.17",
+    "severity": "HIGH",
+    "reason": "Base image — dapr-1.17@1.17.3-r1 in app-runtime-base. Fix available in 1.17.5-r0; awaiting base image update.",
+    "expires": "2026-07-17",
+    "added_by": "AngadSethi"
+  },
+  "SNYK-CHAINGUARDLATEST-DAPR117-16095340": {
+    "package": "dapr-1.17",
+    "severity": "HIGH",
+    "reason": "Base image — dapr-1.17@1.17.3-r1 in app-runtime-base. Fix available in 1.17.5-r0; awaiting base image update.",
+    "expires": "2026-07-17",
+    "added_by": "AngadSethi"
   }
 }
