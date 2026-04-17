@@ -1,10 +1,14 @@
-import re
-from typing import Any, Dict, Optional
+from __future__ import annotations
 
-import boto3
-from sqlalchemy.engine.url import URL
+import re
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from application_sdk.constants import AWS_SESSION_NAME
+
+if TYPE_CHECKING:
+    import boto3
+    from sqlalchemy.engine.url import URL
+
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -153,6 +157,8 @@ def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
     Returns:
         boto3.Session: Configured boto3 session
     """
+    import boto3
+
     aws_access_key_id = credentials.get("aws_access_key_id") or credentials.get(
         "username"
     )
@@ -255,6 +261,8 @@ def create_aws_client(
     if credential_sources > 1:
         raise ValueError("Only one credential source should be provided at a time")
 
+    import boto3
+
     try:
         # Priority 1: Use provided session
         if session is not None:
@@ -309,6 +317,8 @@ def create_engine_url(
     Returns:
         URL: SQLAlchemy engine URL
     """
+    from sqlalchemy.engine.url import URL
+
     host = credentials["host"]
     port = credentials.get("port")
     database = extra["database"]
@@ -332,6 +342,8 @@ def get_all_aws_regions() -> list[str]:
         Exception: If unable to retrieve regions from AWS
     """
     try:
+        import boto3
+
         # Use us-east-1 as the default region for the EC2 client since it's always available
         ec2_client = boto3.client("ec2", region_name="us-east-1")
         response = ec2_client.describe_regions()
