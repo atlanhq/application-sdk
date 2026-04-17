@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from application_sdk.clients.workflow import WorkflowClient
+from application_sdk.constants import ApplicationMode
 from application_sdk.worker import Worker
 
 
@@ -82,6 +83,24 @@ async def test_worker_start_with_daemon_true(mock_workflow_client: WorkflowClien
     # On some platforms, the daemon thread might not have started yet
     # So we check if it was called at least once (allowing for timing differences)
     assert mock_workflow_client.create_worker.call_count >= 0  # type: ignore
+
+
+@patch("application_sdk.worker.APPLICATION_MODE", ApplicationMode.WORKER)
+async def test_worker_mode_forces_non_daemon_start(
+    mock_workflow_client: WorkflowClient,
+):
+    """APPLICATION_MODE=WORKER should keep the worker on the main thread."""
+    worker = Worker(
+        workflow_client=mock_workflow_client,
+        workflow_activities=[AsyncMock()],
+        workflow_classes=[AsyncMock()],
+    )
+
+    with patch("application_sdk.worker.threading.Thread") as mock_thread:
+        await worker.start(daemon=True)
+
+    mock_thread.assert_not_called()
+    assert mock_workflow_client.create_worker.call_count == 1  # type: ignore
 
 
 async def test_worker_start_with_daemon_false(mock_workflow_client: WorkflowClient):

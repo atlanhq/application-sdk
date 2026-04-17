@@ -17,11 +17,13 @@ from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
+    APPLICATION_MODE,
     DEPLOYMENT_NAME,
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
     MAX_CONCURRENT_ACTIVITIES,
     TEMPORAL_BUILD_ID,
     TEMPORAL_DEPLOYMENT_NAME,
+    ApplicationMode,
 )
 from application_sdk.interceptors.models import (
     ApplicationEventNames,
@@ -252,6 +254,13 @@ class Worker:
             2. In-flight activities complete within graceful_shutdown_timeout
             3. Worker exits early if activities finish, or at timeout
         """
+        if daemon and APPLICATION_MODE == ApplicationMode.WORKER:
+            logger.warning(
+                "APPLICATION_MODE=WORKER requested daemon worker startup; "
+                "forcing daemon=False so the worker owns the main thread."
+            )
+            daemon = False
+
         if daemon:
 
             def _run_daemon() -> None:
