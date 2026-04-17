@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from application_sdk.lakehouse.catalog_client import PolarisCatalogClient
@@ -32,7 +31,6 @@ class LakehouseConsumer:
         table_name: str,
         max_retries: int = 5,
         batch_limit: int = 1000,
-        lookback_days: int = 2,
     ) -> None:
         self._processor = processor
         self._catalog = catalog
@@ -40,7 +38,6 @@ class LakehouseConsumer:
         self._table_name = table_name
         self._max_retries = max_retries
         self._batch_limit = batch_limit
-        self._lookback_days = lookback_days
 
     async def run(
         self,
@@ -69,10 +66,6 @@ class LakehouseConsumer:
                     table = catalog_client.load_table()
                     outcome_writer = OutcomeWriter(table)
 
-                    # Scan all rows — partition pruning handles efficiency.
-                    # PyIceberg's string expression parser doesn't support
-                    # timestamp literals, so we skip the row_filter and let
-                    # DuckDB's work query handle the recency filter.
                     scan = table.scan()
                     arrow_table = scan.to_arrow()
 
@@ -89,26 +82,37 @@ class LakehouseConsumer:
 
                     logger.info("Processing %d events", len(events))
 
-                    for event in events:
-                        if (time.monotonic() - start_time) >= max_duration_seconds:
-                            logger.info(
-                                "Max duration reached mid-batch, flushing and exiting"
-                            )
-                            break
-
-                        try:
-                            result = await self._processor.process_event(event)
-                        except Exception:
-                            logger.error(
-                                "Unhandled error processing event %s",
-                                event.get("event_id"),
-                                exc_info=True,
-                            )
-                            result = ProcessingResult(
+                    try:
+                        results = await self._processor.process_batch(events)
+                    except Exception:
+                        logger.error(
+                            "Unhandled error in process_batch, marking all %d events as RETRY",
+                            len(events),
+                            exc_info=True,
+                        )
+                        results = [
+                            ProcessingResult(
                                 status="RETRY",
-                                error_message=str(event.get("event_id", ""))[:500],
+                                error_message="batch processing failed",
                             )
+                            for _ in events
+                        ]
 
+                    if len(results) != len(events):
+                        logger.error(
+                            "process_batch returned %d results for %d events, marking all as RETRY",
+                            len(results),
+                            len(events),
+                        )
+                        results = [
+                            ProcessingResult(
+                                status="RETRY",
+                                error_message="result count mismatch",
+                            )
+                            for _ in events
+                        ]
+
+                    for event, result in zip(events, results):
                         outcome_writer.add_outcome(
                             event,
                             result,
