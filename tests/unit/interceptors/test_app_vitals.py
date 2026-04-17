@@ -175,9 +175,7 @@ class TestAppVitalsActivityInterceptor:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_activity_mod.info.return_value = activity_info
 
@@ -202,7 +200,6 @@ class TestAppVitalsActivityInterceptor:
             assert log_attrs["workflow_id"] == "wf-abc-123"
             assert log_attrs["duration_ms"] >= 0
 
-
     @pytest.mark.asyncio
     async def test_failed_activity_emits_error_type(
         self, mock_next_activity, activity_info
@@ -226,9 +223,7 @@ class TestAppVitalsActivityInterceptor:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_activity_mod.info.return_value = activity_info
 
@@ -261,9 +256,7 @@ class TestAppVitalsActivityInterceptor:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_activity_mod.info.return_value = activity_info
 
@@ -271,7 +264,8 @@ class TestAppVitalsActivityInterceptor:
 
             # Verify the act.completed event captured the retry attempt
             completed_call = next(
-                c for c in mock_log.call_args_list
+                c
+                for c in mock_log.call_args_list
                 if c[0][0] == "app_vitals.act.completed"
             )
             attrs = completed_call[0][1]
@@ -311,9 +305,7 @@ class TestAppVitalsWorkflowInterceptor:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_wf_mod.info.return_value = workflow_info
             mock_wf_mod.unsafe.is_replaying.return_value = False
@@ -338,7 +330,6 @@ class TestAppVitalsWorkflowInterceptor:
             assert log_attrs["workflow_id"] == "wf-abc-123"
             assert log_attrs["workflow_type"] == "metadata_crawl"
 
-
     @pytest.mark.asyncio
     async def test_failed_workflow_emits_error(self, mock_next_workflow, workflow_info):
         from application_sdk.observability.app_vitals import (
@@ -360,9 +351,7 @@ class TestAppVitalsWorkflowInterceptor:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_wf_mod.info.return_value = workflow_info
             mock_wf_mod.unsafe.is_replaying.return_value = False
@@ -489,9 +478,7 @@ class TestAppVitalsEfficiencyMetrics:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_activity_mod.info.return_value = activity_info
 
@@ -539,9 +526,7 @@ class TestAppVitalsTraceIdAttachment:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
             mock.patch(
                 "application_sdk.observability.app_vitals.get_trace_context",
                 return_value=("0123456789abcdef0123456789abcdef", "fedcba9876543210"),
@@ -575,9 +560,7 @@ class TestAppVitalsTraceIdAttachment:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
             mock.patch(
                 "application_sdk.observability.app_vitals.get_trace_context",
                 return_value=("", ""),
@@ -698,9 +681,7 @@ class TestAppVitalsRichErrorFields:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_activity_mod.info.return_value = activity_info
 
@@ -743,9 +724,7 @@ class TestAppVitalsRichErrorFields:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_activity_mod.info.return_value = activity_info
 
@@ -780,9 +759,7 @@ class TestAppVitalsRichErrorFields:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_activity_mod.info.return_value = activity_info  # 5-min timeout
 
@@ -831,9 +808,7 @@ class TestLifecycleStartEvents:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_activity_mod.info.return_value = info
 
@@ -930,9 +905,7 @@ class TestAssetsProcessed:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_activity_mod.info.return_value = MockActivityInfo()
 
@@ -944,7 +917,6 @@ class TestAssetsProcessed:
                 if c[0][0] == "app_vitals.act.completed"
             )
             assert completed_call[0][1]["assets_processed"] == 12345
-
 
 
 # ---------------------------------------------------------------------------
@@ -979,9 +951,7 @@ class TestWorkflowSummary:
             mock.patch(
                 "application_sdk.observability.app_vitals.APPLICATION_NAME", "snowflake"
             ),
-            mock.patch(
-                "application_sdk.constants.APP_TENANT_ID", "tenant_123"
-            ),
+            mock.patch("application_sdk.constants.APP_TENANT_ID", "tenant_123"),
         ):
             mock_wf_mod.info.return_value = MockWorkflowInfo()
             mock_wf_mod.unsafe.is_replaying.return_value = False
@@ -1153,8 +1123,5 @@ class TestLoggerAdaptorExtraKeysAllowlist:
             assert k in out, f"{k} was dropped by _build_extra_dict"
 
 
-
 # TestDurationMetricsUseHistogram removed — Path 2 (OTel metrics) was removed;
 # all analytics are now computed from Path 1 (log events → MV).
-
-
