@@ -15,6 +15,7 @@ from application_sdk.infrastructure._dapr import (
     DaprSecretStore,
     DaprStateStore,
 )
+from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import (
     Binding,
     BindingError,
@@ -55,6 +56,7 @@ from application_sdk.infrastructure.secrets import (
 from application_sdk.infrastructure.state import StateStore, StateStoreError
 
 __all__ = [
+    "AsyncDaprClient",
     "DaprBinding",
     "DaprCredentialVault",
     "DaprPubSub",

@@ -137,8 +137,10 @@ class AzureClient(ClientInterface):
 
             # Handle credential resolution
             if "credential_guid" in self.credentials:
-                from application_sdk.infrastructure import DaprCredentialVault
-                from application_sdk.infrastructure._dapr.http import AsyncDaprClient
+                from application_sdk.infrastructure import (
+                    AsyncDaprClient,
+                    DaprCredentialVault,
+                )
 
                 dapr_client = AsyncDaprClient()
                 try:
