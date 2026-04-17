@@ -42,15 +42,17 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6.0.2
       with:
         ref: ${{ inputs.ref }}
         fetch-depth: 0
 
     - name: Restore ref after submodule setup
       shell: bash
+      env:
+        PARITY_REF: ${{ inputs.ref }}
       run: |
-        git checkout ${{ inputs.ref }}
+        git checkout "$PARITY_REF"
         echo "Checked out: $(git log --oneline -1)"
 
     - name: Start app and extract
@@ -59,6 +61,12 @@ runs:
         ATLAN_LOCAL_DEVELOPMENT: "true"
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
         ATLAN_MAX_CONCURRENT_ACTIVITIES: "1"
+        PARITY_STARTUP_WAIT: ${{ inputs.app-startup-wait }}
+        PARITY_CREDENTIALS: ${{ inputs.credentials-json }}
+        PARITY_CONNECTION: ${{ inputs.connection-json }}
+        PARITY_METADATA: ${{ inputs.metadata-json }}
+        PARITY_POLL_TIMEOUT: ${{ inputs.poll-timeout }}
+        PARITY_POLL_INTERVAL: ${{ inputs.poll-interval }}
       run: |
         set -euo pipefail
         APP_URL="http://localhost:8000"
@@ -67,7 +75,7 @@ runs:
         echo ">> Starting application..."
         uv run python main.py &
         APP_PID=$!
-        sleep ${{ inputs.app-startup-wait }}
+        sleep "$PARITY_STARTUP_WAIT"
 
         # Health check
         if ! curl -sf "${APP_URL}/server/health" > /dev/null 2>&1; then
@@ -82,9 +90,9 @@ runs:
         RESPONSE=$(curl -sf -X POST \
           -H "Content-Type: application/json" \
           -d "{
-            \"credentials\": ${{ inputs.credentials-json }},
-            \"connection\": ${{ inputs.connection-json }},
-            \"metadata\": ${{ inputs.metadata-json }}
+            \"credentials\": ${PARITY_CREDENTIALS},
+            \"connection\": ${PARITY_CONNECTION},
+            \"metadata\": ${PARITY_METADATA}
           }" \
           "${APP_URL}/workflows/v1/start")
 
@@ -100,8 +108,8 @@ runs:
 
         # Poll for completion
         ELAPSED=0
-        TIMEOUT=${{ inputs.poll-timeout }}
-        INTERVAL=${{ inputs.poll-interval }}
+        TIMEOUT="$PARITY_POLL_TIMEOUT"
+        INTERVAL="$PARITY_POLL_INTERVAL"
         STATUS="RUNNING"
 
         while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
@@ -126,7 +134,7 @@ runs:
         echo ">> Workflow completed."
 
         # Copy transformed output
-        ARTIFACTS_BASE="./local/dapr/objectstore/artifacts/apps/${{ inputs.app-name }}/workflows"
+        ARTIFACTS_BASE="./local/dapr/objectstore/artifacts/apps/${ATLAN_APPLICATION_NAME}/workflows"
         TRANSFORMED_SRC="${ARTIFACTS_BASE}/${WORKFLOW_ID}/${RUN_ID}/transformed"
 
         if [ ! -d "$TRANSFORMED_SRC" ]; then

@@ -1,7 +1,7 @@
 """Data models for parity comparison results."""
 
 from dataclasses import dataclass, field
-from typing import Any, List
+from typing import Any, List, Literal
 
 
 @dataclass
@@ -19,7 +19,7 @@ class AssetDiff:
 
     qualified_name: str
     type_name: str
-    diff_type: str  # ADDED, REMOVED, MODIFIED
+    diff_type: Literal["ADDED", "REMOVED", "MODIFIED"]
     field_diffs: List[FieldDiff] = field(default_factory=list)
 
 

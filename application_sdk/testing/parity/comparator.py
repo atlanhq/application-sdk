@@ -9,11 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
-from application_sdk.testing.parity.models import (
-    AssetDiff,
-    CategoryResult,
-    FieldDiff,
-)
+from application_sdk.testing.parity.models import AssetDiff, CategoryResult, FieldDiff
 
 # Fields that change every run and must be ignored in comparison.
 VOLATILE_FIELDS: Set[str] = {
@@ -31,19 +27,31 @@ def load_ndjson(directory: Path) -> List[Dict[str, Any]]:
     for json_file in sorted(directory.glob("*.json")):
         if "statistics" in json_file.name:
             continue
-        with open(json_file) as f:
-            for line in f:
+        with open(json_file, encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
                 line = line.strip()
-                if line:
+                if not line:
+                    continue
+                try:
                     assets.append(json.loads(line))
+                except json.JSONDecodeError:
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "Skipping malformed JSON at %s:%d", json_file.name, line_num
+                    )
     return assets
 
 
 def strip_volatile(obj: Any) -> Any:
-    """Recursively remove volatile fields from a dict."""
-    if not isinstance(obj, dict):
-        return obj
-    return {k: strip_volatile(v) for k, v in obj.items() if k not in VOLATILE_FIELDS}
+    """Recursively remove volatile fields from dicts and lists."""
+    if isinstance(obj, dict):
+        return {
+            k: strip_volatile(v) for k, v in obj.items() if k not in VOLATILE_FIELDS
+        }
+    if isinstance(obj, list):
+        return [strip_volatile(item) for item in obj]
+    return obj
 
 
 def get_qualified_name(asset: Dict[str, Any]) -> str:
