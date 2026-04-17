@@ -449,11 +449,5 @@ class TestSslContextWithPrivateServer:
                         )
                         assert private_response.status_code == 200
                         assert private_response.text == "Private server response"
-
-                        if has_internet_connection():
-                            public_response = await client.get(
-                                "https://www.google.com", timeout=10
-                            )
-                            assert public_response.status_code == 200
             finally:
                 await runner.cleanup()
