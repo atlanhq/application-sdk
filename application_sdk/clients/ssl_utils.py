@@ -1,5 +1,6 @@
 """SSL utilities for HTTP clients."""
 
+import functools
 import os
 import ssl
 
@@ -84,6 +85,7 @@ def create_ssl_context_with_custom_certs(cert_dir: str) -> ssl.SSLContext:
     return ssl_context
 
 
+@functools.lru_cache(maxsize=1)
 def get_ssl_context() -> bool | ssl.SSLContext:
     """
     Get the SSL verification context for HTTP clients (httpx, aiohttp, etc.).

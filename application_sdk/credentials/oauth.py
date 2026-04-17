@@ -136,7 +136,7 @@ class OAuthTokenService:
         Raises:
             OAuthTokenError: On HTTP error or missing ``access_token``.
         """
-        import httpx
+        import httpx  # deferred: matches existing lazy-import pattern for optional heavy deps
 
         from application_sdk.clients.ssl_utils import get_ssl_context
 

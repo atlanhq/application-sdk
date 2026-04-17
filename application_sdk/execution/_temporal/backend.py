@@ -301,7 +301,9 @@ async def create_temporal_client(
                 domain=tls_domain,
             )
         else:
-            from application_sdk.clients.ssl_utils import get_custom_ca_cert_bytes
+            from application_sdk.clients.ssl_utils import (  # deferred: only needed when no explicit TLS cert paths are provided
+                get_custom_ca_cert_bytes,
+            )
 
             ca_cert_bytes = get_custom_ca_cert_bytes()
             if ca_cert_bytes:

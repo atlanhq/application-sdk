@@ -18,6 +18,14 @@ from application_sdk.clients.ssl_utils import (
 )
 
 
+@pytest.fixture(autouse=True)
+def clear_ssl_context_cache():
+    """Clear the get_ssl_context lru_cache before and after each test."""
+    get_ssl_context.cache_clear()
+    yield
+    get_ssl_context.cache_clear()
+
+
 def has_internet_connection() -> bool:
     """Check if there is an active internet connection."""
     try:
@@ -105,6 +113,7 @@ class TestGetSslContext:
                 assert isinstance(result, ssl.SSLContext)
 
 
+@pytest.mark.integration
 class TestSslContextPublicCertificates:
     """Test that SSL context works with public certificates (default CAs).
 

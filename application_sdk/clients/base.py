@@ -221,6 +221,7 @@ class BaseClient(ClientInterface):
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[AuthTypes] = None,
         follow_redirects: bool = True,
+        verify: bool = True,
         timeout: int = 30,
     ) -> Optional[httpx.Response]:
         """
@@ -241,6 +242,7 @@ class BaseClient(ClientInterface):
             cookies (Optional[Dict[str, str]]): Cookies to include in the request
             auth (Optional[AuthTypes]): Authentication to use for the request. Supports BasicAuth, DigestAuth, custom auth classes, or tuples for basic auth.
             follow_redirects (bool): Whether to follow HTTP redirects. Defaults to True.
+            verify (bool): Deprecated. SSL verification is always enforced via get_ssl_context().
             timeout (int): Request timeout in seconds. Defaults to 30.
 
         Returns:
@@ -265,6 +267,16 @@ class BaseClient(ClientInterface):
             ...         auth=("username", "password")
             ... )
         """
+        if verify is not True:
+            import warnings
+
+            warnings.warn(
+                "The 'verify' parameter is deprecated and ignored — "
+                "SSL verification is always enforced. "
+                "Use SSL_CERT_DIR to supply custom CA certificates.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         async with httpx.AsyncClient(
             timeout=timeout,
             transport=self.http_retry_transport,
