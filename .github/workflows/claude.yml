@@ -1157,7 +1157,12 @@ jobs:
           # Files Changed tab.
           # Use GITHUB_TOKEN for GraphQL — ORG_PAT_GITHUB lacks read:org
           # scope needed for author.login fields in the GraphQL schema.
-          THREADS=$(GH_TOKEN="${GITHUB_TOKEN}" gh api graphql -f query='
+          # Export it as GH_TOKEN temporarily for the GraphQL calls only,
+          # then restore the original.
+          ORIG_GH_TOKEN="$GH_TOKEN"
+          export GH_TOKEN="$GITHUB_TOKEN"
+
+          THREADS=$(gh api graphql -f query='
             query($owner:String!,$name:String!,$num:Int!) {
               repository(owner:$owner, name:$name) {
                 pullRequest(number:$num) {
@@ -1174,13 +1179,16 @@ jobs:
             --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | select(.comments.nodes[0].author.login == "claude[bot]" or .comments.nodes[0].author.login == "github-actions[bot]" or .comments.nodes[0].author.login == "atlan-ci") | .id' 2>/dev/null || echo "")
 
           for thread_id in $THREADS; do
-            GH_TOKEN="${GITHUB_TOKEN}" gh api graphql -f query='
+            gh api graphql -f query='
               mutation($id:ID!) {
                 resolveReviewThread(input:{threadId:$id}) {
                   thread { id isResolved }
                 }
               }' -F id="$thread_id" 2>/dev/null || true
           done
+
+          # Restore ORG_PAT for remaining operations (status update)
+          export GH_TOKEN="$ORIG_GH_TOKEN"
 
           # Final status on the (possibly updated) HEAD SHA
           NEW_SHA=$(gh pr view "$PR" --json headRefOid -q .headRefOid)
