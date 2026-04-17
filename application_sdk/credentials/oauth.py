@@ -138,6 +138,8 @@ class OAuthTokenService:
         """
         import httpx
 
+        from application_sdk.clients.ssl_utils import get_ssl_context
+
         data: dict[str, str] = {
             "grant_type": "client_credentials",
             "client_id": self._base.client_id,
@@ -153,7 +155,9 @@ class OAuthTokenService:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as http:
+            async with httpx.AsyncClient(
+                timeout=30.0, verify=get_ssl_context()
+            ) as http:
                 response = await http.post(self._base.token_url, data=data)
                 response.raise_for_status()
                 body: dict = response.json()
