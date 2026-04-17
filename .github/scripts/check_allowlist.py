@@ -63,8 +63,14 @@ def main() -> None:
                         "fixed": vuln.get("FixedVersion", ""),
                     }
                     trivy_count += 1
-    except Exception as e:
-        print(f"Warning: Trivy results unavailable: {e}")
+    except FileNotFoundError:
+        print(
+            f"Error: Trivy results not found at {args.trivy_results} — scan may have failed"
+        )
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"Error: Trivy results have invalid JSON: {e}")
+        sys.exit(1)
 
     unique = list(all_vulns.values())
 
