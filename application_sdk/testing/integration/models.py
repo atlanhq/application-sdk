@@ -7,7 +7,7 @@ in a declarative, data-driven manner.
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 
 class APIType(Enum):
@@ -44,8 +44,8 @@ class APIType(Enum):
             )
 
 
-# Type alias for assertion predicates (higher-order functions)
-Predicate = Callable[[Any], bool]
+# Import from assertions to avoid duplicate definition
+from application_sdk.testing.integration.assertions import Predicate  # noqa: E402
 
 # Type alias for lazy evaluation wrapper (forward reference)
 LazyValue = Any  # Will be Lazy type from lazy.py

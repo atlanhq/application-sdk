@@ -10,7 +10,7 @@ It wraps the existing APIServerClient and provides:
 """
 
 import json
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urljoin
 
 import requests
@@ -441,33 +441,3 @@ class IntegrationTestClient:
             result["_http_status"] = response.status_code
 
         return result
-
-
-# =============================================================================
-# API Method Mapping (Higher-Order Function Pattern)
-# =============================================================================
-
-# Type alias for API method functions
-APIMethod = Callable[[IntegrationTestClient, Dict[str, Any]], Dict[str, Any]]
-
-
-def create_api_method_map() -> Dict[str, APIMethod]:
-    """Create a mapping of API types to client methods.
-
-    This uses higher-order functions to create a flexible mapping
-    that can be extended or customized.
-
-    Returns:
-        Dict[str, APIMethod]: Mapping of API type strings to callable methods.
-    """
-    return {
-        "auth": lambda client, args: client._call_auth(args),
-        "metadata": lambda client, args: client._call_metadata(args),
-        "preflight": lambda client, args: client._call_preflight(args),
-        "workflow": lambda client, args: client._call_workflow(args),
-        "config": lambda client, args: client._call_config(args),
-    }
-
-
-# Default API method map
-API_METHODS = create_api_method_map()

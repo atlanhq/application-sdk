@@ -251,7 +251,7 @@ def validate_with_pandera(
             logger.warning(f"Skipping {entity} validation: {e}")  # noqa: G004
         except Exception as e:
             result["error"] = str(e)
-            logger.error(f"Validation failed for {entity}: {e}")  # noqa: G004
+            logger.error("Validation failed for %s: %s", entity, e, exc_info=True)
 
         results.append(result)
 

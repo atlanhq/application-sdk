@@ -175,10 +175,9 @@ def _check_server_health(server_url: str, timeout: int = 5) -> bool:
         return response.status_code == 200
     except http_requests.ConnectionError:
         return False
-    except Exception:
-        # Server is reachable but health endpoint might not exist
-        # That's OK - at least the server is running
-        return True
+    except http_requests.RequestException:
+        # Network error (timeout, too many redirects, etc.) — not healthy
+        return False
 
 
 class BaseIntegrationTest:
@@ -334,7 +333,7 @@ class BaseIntegrationTest:
             try:
                 cls._write_summary()
             except Exception as e:
-                logger.warning(f"Failed to write test summary: {e}")  # noqa: G004
+                logger.warning("Failed to write test summary: %s", e, exc_info=True)
 
     @classmethod
     def _write_summary(cls) -> Optional[str]:
