@@ -10,16 +10,7 @@ import threading
 from abc import ABC
 from collections.abc import Callable
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Never,
-    TypeVar,
-    cast,
-    get_type_hints,
-    overload,
-)
+from typing import TYPE_CHECKING, Any, ClassVar, Never, TypeVar, cast, get_type_hints
 from uuid import UUID
 
 from temporalio import workflow
@@ -58,16 +49,17 @@ except importlib.metadata.PackageNotFoundError:
     _FRAMEWORK_VERSION = "unknown"
 
 if TYPE_CHECKING:
-    from application_sdk.app.client import WorkflowAppClient
+    # BLDX-878: inter-app calls deactivated pending review.
+    # from application_sdk.app.client import WorkflowAppClient
     from application_sdk.app.entrypoint import EntryPointMetadata
 
 # Type variable for require() method
 T = TypeVar("T")
 HT = TypeVar("HT", bound=HeartbeatDetails)
 
-# Type variables for child app calls
-TChildInput = TypeVar("TChildInput", bound=Input)
-TChildOutput = TypeVar("TChildOutput", bound=Output)
+# BLDX-878: inter-app calls deactivated pending review.
+# TChildInput = TypeVar("TChildInput", bound=Input)
+# TChildOutput = TypeVar("TChildOutput", bound=Output)
 
 
 def _pascal_to_kebab(name: str) -> str:
@@ -412,7 +404,6 @@ class App(ABC):
     Each App:
     - Has a single typed input (dataclass)
     - Has a single typed output (dataclass)
-    - Can call other Apps
     - Is durable and resumable
 
     The run() method must be deterministic - use @task methods for side effects.
@@ -427,7 +418,7 @@ class App(ABC):
                 return FetchOutput(data=await http_client.get(input.url).json())
 
             async def run(self, input: MyInput) -> MyOutput:
-                # run() is deterministic - only call tasks and other apps
+                # run() is deterministic - only call tasks
                 result = await self.fetch_data(FetchInput(url=input.url))
                 return MyOutput(data=result.data)
 
@@ -468,7 +459,8 @@ class App(ABC):
 
     # Set by the execution layer before run() is called
     _context: AppContext | None = None
-    _client: "WorkflowAppClient | None" = None
+    # BLDX-878: inter-app calls deactivated pending review.
+    # _client: "WorkflowAppClient | None" = None
     _task_context: "TaskExecutionContext | None" = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -876,98 +868,16 @@ class App(ABC):
             f"{type(self).__name__} must implement run() or define @entrypoint methods."
         )
 
-    async def call(
-        self,
-        app_cls: "type[App]",
-        input: Input,
-        *,
-        version: str | None = None,
-        task_queue: str | None = None,
-    ) -> Output:
-        """Call another App from within this App.
-
-        Args:
-            app_cls: The App class to call.
-            input: The input dataclass for the target App (must extend Input).
-            version: Specific version to call, or None for latest.
-            task_queue: Task queue where the child app's worker is listening.
-
-        Returns:
-            The output from the called App (extends Output).
-
-        Raises:
-            AppError: If the call fails.
-            RuntimeError: If called outside of run() execution.
-        """
-        if self._client is None:
-            raise AppContextError(
-                "App client is only available during run() execution. "
-                "Do not call other Apps in __init__ or outside of run()."
-            )
-
-        return await self._client.call(
-            app_cls,
-            input,
-            version=version,
-            parent_context=self.context,
-            task_queue=task_queue,
+    async def call(self, *args, **kwargs):
+        raise NotImplementedError(
+            "Inter-app call() is deactivated pending BLDX-878. "
+            "Use Automation Engine DAG orchestration for multi-app coordination."
         )
 
-    @overload
-    async def call_by_name(
-        self,
-        app_name: str,
-        input: Input,
-        *,
-        version: str | None = None,
-        output_type: type[TChildOutput],
-        task_queue: str | None = None,
-    ) -> TChildOutput: ...
-
-    @overload
-    async def call_by_name(
-        self,
-        app_name: str,
-        input: Input,
-        *,
-        version: str | None = None,
-        output_type: None = None,
-        task_queue: str | None = None,
-    ) -> dict[str, Any]: ...
-
-    async def call_by_name(
-        self,
-        app_name: str,
-        input: Input,
-        *,
-        version: str | None = None,
-        output_type: type[Output] | None = None,
-        task_queue: str | None = None,
-    ) -> "Output | dict[str, Any]":
-        """Call another App by name.
-
-        Args:
-            app_name: The registered name of the App.
-            input: The input dataclass for the target App (must extend Input).
-            version: Specific version to call, or None for latest.
-            output_type: Optional Output subclass for deserializing the result.
-            task_queue: Task queue where the child app's worker is listening.
-
-        Returns:
-            The output from the called App.
-        """
-        if self._client is None:
-            raise AppContextError(
-                "App client is only available during run() execution."
-            )
-
-        return await self._client.call_by_name(
-            app_name,
-            input,
-            version=version,
-            parent_context=self.context,
-            output_type=output_type,
-            task_queue=task_queue,
+    async def call_by_name(self, *args, **kwargs):
+        raise NotImplementedError(
+            "Inter-app call_by_name() is deactivated pending BLDX-878. "
+            "Use Automation Engine DAG orchestration for multi-app coordination."
         )
 
     def continue_with(self, input: Input) -> Never:
@@ -1525,7 +1435,8 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
     async def _run(self, input_data: Input) -> Output:
         # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
-        from application_sdk.app.client import WorkflowAppClient
+        # BLDX-878: inter-app calls deactivated pending review.
+        # from application_sdk.app.client import WorkflowAppClient
         from application_sdk.app.context import AppContext
 
         start_time = _safe_now()
@@ -1558,7 +1469,8 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         app_instance._context = context
 
         context_data = {"run_id": run_id, "correlation_id": context.correlation_id}
-        app_instance._client = WorkflowAppClient(context_data)
+        # BLDX-878: inter-app calls deactivated pending review.
+        # app_instance._client = WorkflowAppClient(context_data)
         _wrap_instance_tasks(app_instance, context_data)
 
         _safe_log(
@@ -1649,7 +1561,8 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                 _app_state.pop(workflow_id, None)
 
             app_instance._context = None
-            app_instance._client = None
+            # BLDX-878: inter-app calls deactivated pending review.
+            # app_instance._client = None
 
     safe_name = workflow_name.replace("-", "_").replace(":", "_")
     cls_name = f"_Workflow_{safe_name}"
