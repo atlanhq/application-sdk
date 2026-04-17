@@ -201,6 +201,33 @@ All entry points on the same App share:
 - `AppContext` (secrets, state, storage)
 - `on_complete()` lifecycle hook — fires after every entry point, on success or failure
 
+### Manifest per entry point
+
+For multi-entry-point apps, each entry point has its own `manifest.json` in a subfolder named after the entry point (kebab-case, matching `ep.name`):
+
+```
+ATLAN_CONTRACT_GENERATED_DIR/
+  extract-metadata/
+    manifest.json
+  mine-queries/
+    manifest.json
+```
+
+Retrieve a specific manifest with:
+
+```bash
+GET /workflows/v1/manifest?entrypoint=<entry-point-name>
+```
+
+Behaviour:
+- Returns 400 if `<entry-point-name>` fails validation (`^[a-zA-Z][a-zA-Z0-9_-]*$`).
+- Returns 404 if the subfolder or `manifest.json` is missing.
+- The `?entrypoint=` token is the same kebab-case identifier used on `POST /workflows/v1/start` — one naming convention, two endpoints.
+
+For single-entry-point apps, `GET /workflows/v1/manifest` (no query param) is unchanged.
+
+> **Configmap discovery** also benefits from the subfolder layout: the handler uses `rglob("*.json")` so configmap files can live inside per-entry subfolders alongside the manifests.
+
 ### Dockerfile
 
 One App = one `ATLAN_APP_MODULE` entry (no comma-separated list):

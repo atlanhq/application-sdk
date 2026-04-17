@@ -632,11 +632,9 @@ class MyConnector(App):
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
         ...
 
-    async def on_complete(self, success: bool) -> None:
-        if success:
-            await self.notify_downstream()
-        await self.cleanup_files()    # remove local temp files tracked via FileReference
-        await self.cleanup_storage()  # remove object store artifacts from this run
+    async def on_complete(self) -> None:
+        await self.notify_downstream()
+        await super().on_complete()  # preserves built-in file/storage cleanup
 ```
 
 #### Built-in cleanup tasks

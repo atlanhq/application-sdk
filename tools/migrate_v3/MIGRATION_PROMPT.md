@@ -584,7 +584,7 @@ Method names are auto-converted to kebab-case. For an App registered as `my-conn
 | `extract_lineage` | `my-connector:extract-lineage` | `POST /workflows/v1/start?entrypoint=extract-lineage` |
 
 The `?entrypoint=` query parameter is **required** for multi-entry-point apps (400 otherwise).
-Argo/marketplace templates that previously passed `workflow-type` in the request body still
+Argo/marketplace templates that previously passed `workflow_type` in the request body still
 work as a transitional fallback — but migrate to `?entrypoint=` when regenerating templates.
 
 ### on_complete()
@@ -598,6 +598,7 @@ work as a transitional fallback — but migrate to `?entrypoint=` when regenerat
 - [ ] `ATLAN_APP_MODULE` is a single entry — one App class, multiple workflows via `@entrypoint`
 - [ ] One handler total — the App serves `/auth`, `/check`, `/metadata` for all entry points
 - [ ] Marketplace templates: trigger via `POST /workflows/v1/start?entrypoint=<name>`
+- [ ] `ATLAN_CONTRACT_GENERATED_DIR` restructured into per-entrypoint subfolders (kebab-case) each with their own `manifest.json` — see `docs/concepts/entry-points.md` for the layout and `GET /workflows/v1/manifest?entrypoint=<name>` endpoint details
 
 ---
 

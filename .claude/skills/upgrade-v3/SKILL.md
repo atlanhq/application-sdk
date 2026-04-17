@@ -41,7 +41,7 @@ Performs a complete v2 → v3 upgrade of an application-sdk connector.
    ```
 
 5. Read `tools/migrate_v3/MIGRATION_PROMPT.md` in full. This is the authoritative reference for all structural changes you will make. Do not proceed to Phase 3 without having read it.
-5b. Read the **migration guide** at `docs/migration-guide-v3.md` in the application-sdk repo (also available at https://github.com/atlanhq/application-sdk/blob/main/docs/migration-guide-v3.md). This is the user-facing guide with v2 → v3 code examples for every migration step (imports, templates, handler, entry point, infrastructure, credentials, tests). Use it as a reference when making structural changes — it has the canonical before/after code snippets.
+5b. Read the **upgrade guide** at `docs/upgrade-guide-v3.md` in the application-sdk repo (also available at https://github.com/atlanhq/application-sdk/blob/main/docs/upgrade-guide-v3.md). This is the user-facing guide with v2 → v3 code examples for every upgrade step (imports, templates, handler, entry point, infrastructure, credentials, tests). Use it as a reference when making structural changes — it has the canonical before/after code snippets.
 6. Run an initial checker pass to establish the baseline — **do not fix anything yet**:
 
 ```bash
@@ -506,8 +506,12 @@ curl -s http://localhost:8000/workflows/v1/configmaps
 # Get specific configmap
 curl -s http://localhost:8000/workflows/v1/configmap/<id>
 
-# Get manifest
+# Get manifest (single-entry-point app)
 curl -s http://localhost:8000/workflows/v1/manifest
+
+# Get manifest for a specific entry point (multi-entry-point app)
+curl -s 'http://localhost:8000/workflows/v1/manifest?entrypoint=extract-metadata'
+curl -s 'http://localhost:8000/workflows/v1/manifest?entrypoint=mine-queries'
 ```
 
 If any endpoint returns 500, check the app terminal for the traceback. Common issues:
@@ -1010,7 +1014,7 @@ class SnowflakeApp(App):
 ENV ATLAN_APP_MODULE=app.connector:SnowflakeApp
 ```
 
-**HTTP dispatch:** `POST /workflows/v1/start?entrypoint=<name>`. Required when the App has more than one entry point (400 otherwise). Argo/marketplace templates that previously passed `workflow-type` in the body still work as a transitional fallback.
+**HTTP dispatch:** `POST /workflows/v1/start?entrypoint=<name>`. Required when the App has more than one entry point (400 otherwise). Argo/marketplace templates that previously passed `workflow_type` in the body still work as a transitional fallback.
 
 **File structure:**
 ```
@@ -1022,6 +1026,14 @@ app/
 ```
 
 **on_complete():** fires after every entry point, on success and failure.
+
+**Manifest layout:** for multi-entry-point apps, `ATLAN_CONTRACT_GENERATED_DIR` must be split into one subfolder per entry point (kebab-case name), each containing its own `manifest.json`. Single-entry-point apps are unaffected.
+```
+app/generated/
+  extract-metadata/manifest.json
+  mine-queries/manifest.json
+```
+See [`docs/concepts/entry-points.md`](../../../docs/concepts/entry-points.md) for the full manifest-per-entrypoint reference.
 
 See §5b of `tools/migrate_v3/MIGRATION_PROMPT.md` and `tests/integration/test_multi_entrypoint.py` for canonical examples.
 

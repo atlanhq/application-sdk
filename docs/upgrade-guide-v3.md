@@ -406,7 +406,21 @@ One App = one `ATLAN_APP_MODULE` entry. No comma-separated list:
 ENV ATLAN_APP_MODULE=app.connector:SnowflakeApp
 ```
 
-See [`docs/concepts/entry-points.md`](concepts/entry-points.md) for the full `@entrypoint` reference.
+### Manifest layout for multi-entry-point apps
+
+For apps with multiple entry points, restructure `ATLAN_CONTRACT_GENERATED_DIR` into one subfolder per entry point (kebab-case):
+
+```
+app/generated/
+  extract-metadata/
+    manifest.json
+  extract-lineage/
+    manifest.json
+```
+
+Each manifest is served via `GET /workflows/v1/manifest?entrypoint=<name>` (returns 400 for invalid names, 404 if the folder is missing). Single-entry-point apps are unaffected — `GET /workflows/v1/manifest` (no query param) still works.
+
+See [`docs/concepts/entry-points.md`](concepts/entry-points.md) for the full `@entrypoint` and manifest reference.
 
 ---
 
@@ -858,10 +872,9 @@ class MyConnector(App):
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
         ...
 
-    async def on_complete(self, success: bool) -> None:
-        if success:
-            await self.notify_downstream()
-        # cleanup is automatic — see below
+    async def on_complete(self) -> None:
+        await self.notify_downstream()
+        await super().on_complete()  # preserves built-in file/storage cleanup
 ```
 
 ### Built-in cleanup tasks
@@ -869,12 +882,8 @@ class MyConnector(App):
 Two cleanup tasks are built into every `App`. Call them from `run()` or `on_complete()`:
 
 ```python
-async def on_complete(self, success: bool) -> None:
-    # Remove local temp files tracked via FileReference
-    await self.cleanup_files(CleanupInput())
-
-    # Remove object store artifacts uploaded during this run
-    await self.cleanup_storage(StorageCleanupInput())
+async def on_complete(self) -> None:
+    await super().on_complete()  # runs built-in file/storage cleanup
 ```
 
 `cleanup_files()` and `cleanup_storage()` are also available as individual workflow steps
