@@ -101,6 +101,136 @@ All of the following v2 modules emit `DeprecationWarning` on import and will be 
 - `application_sdk.execution._temporal.interceptors.CleanupInterceptor` → `App.on_complete()` lifecycle hook
 
 
+
+## v2.8.7 (April 16, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.6...v2.8.7
+
+### Features
+
+- enable @sdk-review on main (#1327) (by @vaibhavatlan in [a71b4d4](https://github.com/atlanhq/application-sdk/commit/a71b4d4))
+- add @sdk-review challenge mode + retrospective learning (#1345) (by @vaibhavatlan in [4b59bba](https://github.com/atlanhq/application-sdk/commit/4b59bba))
+- centralize base allowlist and dashboard template (#1325) (by @mananjain99 in [767936b](https://github.com/atlanhq/application-sdk/commit/767936b))
+- remove inline-QA job (deferred), keep auto-resolve (#1365) (by @vaibhavatlan in [2fd5e08](https://github.com/atlanhq/application-sdk/commit/2fd5e08))
+- gate publish and SDR dispatch on security scan — enforcement enabled (#1332) (by @adityachoudhury-cloud in [0ead801](https://github.com/atlanhq/application-sdk/commit/0ead801))
+
+### Bug Fixes
+
+- resolve auth failure + add instant UX feedback (#1330) (by @vaibhavatlan in [bc52434](https://github.com/atlanhq/application-sdk/commit/bc52434))
+- hotfix — workflow rejected on main due to empty ${{ }} in comments (#1334) (by @vaibhavatlan in [f3a02d7](https://github.com/atlanhq/application-sdk/commit/f3a02d7))
+- parse verdict from PR comment + restore status check (#1337) (by @vaibhavatlan in [6826126](https://github.com/atlanhq/application-sdk/commit/6826126))
+- context-aware approve message (drop 'v2', distinguish review vs re-review) (#1341) (by @vaibhavatlan in [6a0c0c1](https://github.com/atlanhq/application-sdk/commit/6a0c0c1))
+- Re-review verb flows through Claude comment + ack + status (#1343) (by @vaibhavatlan in [5a107b9](https://github.com/atlanhq/application-sdk/commit/5a107b9))
+- demo-prep — inline Q&A, tighter verdict, auto-resolve, clearer CI msg (#1351) (by @vaibhavatlan in [8efaa8b](https://github.com/atlanhq/application-sdk/commit/8efaa8b))
+- hotfix adversarial jq + inline-QA 404 (#1359) (by @vaibhavatlan in [ca8ac91](https://github.com/atlanhq/application-sdk/commit/ca8ac91))
+- correct inline-QA API endpoint (1-line fix) (#1361) (by @vaibhavatlan in [70707e0](https://github.com/atlanhq/application-sdk/commit/70707e0))
+- inline-QA OIDC + ack-before-VPN + ~10min estimate (#1363) (by @vaibhavatlan in [11f3351](https://github.com/atlanhq/application-sdk/commit/11f3351))
+- CI-fix loop (Session C) + branch-keeping (#1367) (by @vaibhavatlan in [0152866](https://github.com/atlanhq/application-sdk/commit/0152866))
+- add missing top-level permissions (actions, workflows) (#1369) (by @vaibhavatlan in [f07e7cf](https://github.com/atlanhq/application-sdk/commit/f07e7cf))
+- remove invalid 'workflows' permission, use git merge fallback (#1371) (by @vaibhavatlan in [28802b6](https://github.com/atlanhq/application-sdk/commit/28802b6))
+- fix branch-update fallback (auth + 422 handling) (#1373) (by @vaibhavatlan in [0d76208](https://github.com/atlanhq/application-sdk/commit/0d76208))
+- remove per-repo allowlist — base-allowlist is single source of truth (#1375) (by @adityachoudhury-cloud in [5151867](https://github.com/atlanhq/application-sdk/commit/5151867))
+
+### Reverts
+
+- revert "fix: resilient thread-based heartbeater for all activities" (#1376) (by @SanilK2108 in [f17993e](https://github.com/atlanhq/application-sdk/commit/f17993e))
+
+
+## v2.8.6 (April 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.5...v2.8.6
+
+### Features
+
+- post scan results as PR comment (#1263) (by @mananjain99 in [f28c6ee](https://github.com/atlanhq/application-sdk/commit/f28c6ee))
+- read app vitals release metadata from env vars (#1320) (by @anuj-atlan in [1c51805](https://github.com/atlanhq/application-sdk/commit/1c51805))
+
+### Bug Fixes
+
+- add missing pull-requests permission to build-and-publish-app (#1266) (by @stevemann-atlan in [5c027cb](https://github.com/atlanhq/application-sdk/commit/5c027cb))
+- lowercase app_name in build-and-publish dispatch payload (#1278) (by @adityachoudhury-cloud in [22c51d8](https://github.com/atlanhq/application-sdk/commit/22c51d8))
+- add missing await on execution_options() in AsyncBaseSQLClient.run_query() (#1207) (by @tanishkhot in [8e7236d](https://github.com/atlanhq/application-sdk/commit/8e7236d))
+- resilient thread-based heartbeater for all activities (#1215) (by @anuj-atlan in [64780fc](https://github.com/atlanhq/application-sdk/commit/64780fc))
+
+
+## v2.8.5 (April 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.4...v2.8.5
+
+### Features
+
+- add unified build-scan-publish workflow with security gate (#1235) (by @mananjain99 in [b164364](https://github.com/atlanhq/application-sdk/commit/b164364))
+- add custom SSL certificate support for HTTP and Temporal clients (#1253) (by @louisnow in [4bed9d2](https://github.com/atlanhq/application-sdk/commit/4bed9d2))
+
+### Bug Fixes
+
+- remove continue-on-error from reusable workflow job (#1243) (by @hamza-atlan in [9a61307](https://github.com/atlanhq/application-sdk/commit/9a61307))
+- add fail_on_findings input to control security gate behavior (#1244) (by @adityachoudhury-cloud in [af115c3](https://github.com/atlanhq/application-sdk/commit/af115c3))
+- bump Dapr CLI, runtime, and Python SDK to latest versions (#1259) (by @praveenkmr in [3a7ed51](https://github.com/atlanhq/application-sdk/commit/3a7ed51))
+
+
+## v2.8.4 (April 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.3...v2.8.4
+
+### Bug Fixes
+
+- make Snyk scan non-blocking (continue-on-error) (#1222) (by @adityachoudhury-cloud in [3601fd5](https://github.com/atlanhq/application-sdk/commit/3601fd5))
+- stop pushing to app-runtime-base image from main (#1218) (by @fyzanshaik-atlan in [a5adf69](https://github.com/atlanhq/application-sdk/commit/a5adf69))
+- allow complex types in MetricRecord labels (#1231) (by @nishantmunjal7 in [00abc95](https://github.com/atlanhq/application-sdk/commit/00abc95))
+- apply ruff-format to fix pre-commit check failure (#1232) (by @OnkarVO7 in [09132d5](https://github.com/atlanhq/application-sdk/commit/09132d5))
+
+
+## v2.8.3 (April 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.2...v2.8.3
+
+### Features
+
+- add Snyk container scan to unified build-and-publish pipeline (#1192) (by @adityachoudhury-cloud in [0501861](https://github.com/atlanhq/application-sdk/commit/0501861))
+
+### Bug Fixes
+
+- improve sdk version extraction to handle all pyproject.toml formats (#1189) (by @adityachoudhury-cloud in [d12b8b6](https://github.com/atlanhq/application-sdk/commit/d12b8b6))
+- resolve SHA from checked-out HEAD instead of github.sha (#1195) (by @adityachoudhury-cloud in [249d147](https://github.com/atlanhq/application-sdk/commit/249d147))
+- remove time.time_ns calls to prevent Temporal determinism violation (#1203) (by @mothership-ai[bot] in [d0d44b7](https://github.com/atlanhq/application-sdk/commit/d0d44b7))
+
+
+## v2.8.2 (March 31, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.1...v2.8.2
+
+### Features
+
+- expose app_name in workflow DAG manifest (#1188) (by @OnkarVO7 in [aa61a40](https://github.com/atlanhq/application-sdk/commit/aa61a40))
+
+### Bug Fixes
+
+- atlan cli config command correction (#1163) (by @adityachoudhury-cloud in [c3f07ef](https://github.com/atlanhq/application-sdk/commit/c3f07ef))
+- correct health check endpoint in BaseTest (#1170) (by @fyzanshaik-atlan in [6c329af](https://github.com/atlanhq/application-sdk/commit/6c329af))
+- Convert app_name to lowercase in workflow (#1185) (by @adityachoudhury-cloud in [afa7977](https://github.com/atlanhq/application-sdk/commit/afa7977))
+
+
+## v2.8.1 (March 24, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.0...v2.8.1
+
+### Features
+
+- add reusable publish-app workflow using atlan CLI (#1122) (by @adityachoudhury-cloud in [8e37fc0](https://github.com/atlanhq/application-sdk/commit/8e37fc0))
+- rename base image to app-runtime-base (#1139) (by @AtMrun in [bf84604](https://github.com/atlanhq/application-sdk/commit/bf84604))
+- add merge-and-push slash command for safe git workflows (#1141) (by @AtMrun in [fb53289](https://github.com/atlanhq/application-sdk/commit/fb53289))
+- add reusable publish-app workflow using atlan CLI (#1137) (by @adityachoudhury-cloud in [53f22e3](https://github.com/atlanhq/application-sdk/commit/53f22e3))
+
+### Bug Fixes
+
+- bump up atlan CLI version for publish-action (#1136) (by @adityachoudhury-cloud in [4bd8481](https://github.com/atlanhq/application-sdk/commit/4bd8481))
+- update trivy-action to 0.35.0 to address updated versions (#1142) (by @akshanshjaiswal-atlan in [f458c84](https://github.com/atlanhq/application-sdk/commit/f458c84))
+- use atlan --version flag instead of subcommand (#1146) (by @adityachoudhury-cloud in [7330e6c](https://github.com/atlanhq/application-sdk/commit/7330e6c))
+- suppress single-key secret store log pollution (#1149) (by @Garavitey in [3a5e72b](https://github.com/atlanhq/application-sdk/commit/3a5e72b))
+
+
+
 ## v2.8.0 (March 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.7.4...v2.8.0
