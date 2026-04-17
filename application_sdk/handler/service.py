@@ -1465,27 +1465,19 @@ def create_app_handler_service(
         deployment = (DEPLOYMENT_NAME or "default").encode()
 
         if entrypoint:
-            # Guard 1 (400 — malformed input): allowlist the name before touching
-            # the filesystem. Accepts letter-start kebab identifiers only — same
-            # constraint as the @entrypoint decorator. Explicit regex so static
-            # analysis tools can verify no path-traversal chars reach the join.
+            # Guard 1 (400): reject obviously-malformed names before touching disk.
             if not _ENTRYPOINT_NAME_RE.match(entrypoint):
                 raise HTTPException(status_code=400, detail="Invalid entrypoint name")
-            # os.path.basename closes CodeQL's taint flow (it models basename as
-            # a path-traversal sanitizer). For inputs passing the regex above it
-            # is always a no-op — the regex already disallows '/'.
-            ep_name = os.path.basename(entrypoint)
-            ep_manifest = (CONTRACT_GENERATED_DIR / ep_name / "manifest.json").resolve()
-            # Guard 2 (400 — defense-in-depth): resolved path must stay inside
-            # CONTRACT_GENERATED_DIR. Distinct message so operators can tell
-            # this guard fired vs. the name validator above.
-            if not ep_manifest.is_relative_to(CONTRACT_GENERATED_DIR.resolve()):
-                raise HTTPException(
-                    status_code=400, detail="Invalid entrypoint location"
-                )
-            # Guard 3 (404 — well-formed but not found): name is valid but this
-            # image has no manifest for it.
-            if not ep_manifest.exists():
+            # Build a registry from the filesystem: {entrypoint_name → manifest_path}.
+            # The Path objects in the dict come from glob(), not from user input, so
+            # the path that reaches read_bytes() is never tainted by the HTTP param.
+            # glob("*/manifest.json") only returns direct children of CONTRACT_GENERATED_DIR,
+            # so no is_relative_to guard is needed.
+            registry: dict[str, Path] = {
+                p.parent.name: p for p in CONTRACT_GENERATED_DIR.glob("*/manifest.json")
+            }
+            ep_manifest = registry.get(entrypoint)
+            if ep_manifest is None:
                 raise HTTPException(
                     status_code=404,
                     detail=f"No manifest found for entrypoint {entrypoint!r}",

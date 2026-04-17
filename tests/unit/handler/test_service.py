@@ -1546,10 +1546,14 @@ class TestEntrypointManifestResolution:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
 
-    def test_invalid_entrypoint_location_returns_400(self, tmp_path: Path) -> None:
-        """Resolved path outside CONTRACT_GENERATED_DIR returns 400 with 'location' detail."""
-        from unittest.mock import patch
+    def test_valid_name_not_in_registry_returns_404(self, tmp_path: Path) -> None:
+        """A well-formed name with no matching manifest on disk returns 404.
 
+        The glob-based registry only contains entrypoints whose manifest.json
+        exists; a valid-format name with no file returns 404, not 400. Path escape
+        is structurally impossible because glob() only yields paths under
+        CONTRACT_GENERATED_DIR — no is_relative_to guard is needed.
+        """
         from application_sdk.handler import service as svc_module
 
         contract_dir = tmp_path / "generated"
@@ -1559,17 +1563,9 @@ class TestEntrypointManifestResolution:
         svc_module.CONTRACT_GENERATED_DIR = contract_dir
         try:
             client = _make_client()
-            # Monkeypatch is_relative_to to simulate the path escaping (belt-and-braces
-            # guard 2; unreachable from HTTP because guard 1 pre-filters the name).
-            with patch.object(
-                type(contract_dir / "valid" / "manifest.json"),
-                "is_relative_to",
-                return_value=False,
-            ):
-                # Use a valid name so guard 1 passes; guard 2 then rejects.
-                resp = client.get("/workflows/v1/manifest?entrypoint=valid")
-                assert resp.status_code == 400
-                assert resp.json()["detail"] == "Invalid entrypoint location"
+            resp = client.get("/workflows/v1/manifest?entrypoint=valid")
+            assert resp.status_code == 404
+            assert "valid" in resp.json()["detail"]
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
 
