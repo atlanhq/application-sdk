@@ -3,7 +3,6 @@ import logging
 import sys
 import threading
 import traceback as tb_module
-from time import time_ns
 from typing import Any, ClassVar, Dict, Tuple
 
 from loguru import logger
@@ -568,7 +567,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         return LogRecord(
             timestamp=int(record["timestamp"] * 1e9),
-            observed_timestamp=time_ns(),
+            observed_timestamp=int(record["timestamp"] * 1e9),
             trace_id=0,
             span_id=0,
             trace_flags=TraceFlags(0),
