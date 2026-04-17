@@ -1263,7 +1263,7 @@ class TestStartCredentialPersistence:
     """Tests for inline credential save in /start handler.
 
     The /start endpoint needs Temporal, so we test the normalization +
-    InMemorySecretStore interaction directly to verify the contract.
+    MockStateStore interaction directly to verify the contract.
     """
 
     async def test_normalize_then_store_v2_dict_credentials(self) -> None:

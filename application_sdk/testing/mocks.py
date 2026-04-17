@@ -2,7 +2,8 @@
 
 import json
 import uuid
-from typing import Any
+from collections.abc import Awaitable
+from typing import Any, Callable
 
 from application_sdk.credentials.ref import (
     CredentialRef,
@@ -165,9 +166,6 @@ class MockPubSub:
     """In-memory pub/sub with call-tracking for unit tests."""
 
     def __init__(self) -> None:
-        from collections.abc import Awaitable
-        from typing import Callable
-
         self._subscriptions: dict[
             str, list[tuple[Callable[[Message], Awaitable[None]], _MockSubscription]]
         ] = {}
@@ -275,7 +273,6 @@ class MockBinding:
         self._name = name
         self._invocations: list[tuple[str, bytes | None, dict[str, str]]] = []
         self._responses: dict[str, BindingResponse] = {}
-        self._invoke_calls: list[tuple[str, bytes | None, dict[str, str]]] = []
 
     @property
     def name(self) -> str:
@@ -293,7 +290,6 @@ class MockBinding:
         metadata: dict[str, str] | None = None,
     ) -> BindingResponse:
         self._invocations.append((operation, data, metadata or {}))
-        self._invoke_calls.append((operation, data, metadata or {}))
         return self._responses.get(operation, BindingResponse())
 
     def get_invocations(
@@ -304,25 +300,12 @@ class MockBinding:
             return [(op, d, m) for op, d, m in self._invocations if op == operation]
         return list(self._invocations)
 
-    def get_invoke_calls(
-        self, operation: str | None = None
-    ) -> list[tuple[str, bytes | None, dict[str, str]]]:
-        """Return recorded invoke calls, optionally filtered by operation.
-
-        Args:
-            operation: Optional operation name to filter by.
-
-        Returns:
-            List of (operation, data, metadata) tuples.
-        """
-        if operation is not None:
-            return [(op, d, m) for op, d, m in self._invoke_calls if op == operation]
-        return list(self._invoke_calls)
+    # Alias for backward compatibility
+    get_invoke_calls = get_invocations
 
     def reset_calls(self) -> None:
         """Clear call logs only (configured responses preserved)."""
         self._invocations.clear()
-        self._invoke_calls.clear()
 
     def reset(self) -> None:
         """Clear call logs and configured responses."""
@@ -332,7 +315,6 @@ class MockBinding:
     def clear(self) -> None:
         """Clear all recorded invocations and configured responses."""
         self._invocations.clear()
-        self._invoke_calls.clear()
         self._responses.clear()
 
 
