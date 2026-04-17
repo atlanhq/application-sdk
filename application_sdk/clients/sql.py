@@ -21,8 +21,6 @@ from typing import (
 )
 from urllib.parse import quote_plus
 
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
-
 from application_sdk.clients import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.common.aws_utils import (
@@ -40,6 +38,7 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     import daft
     import pandas as pd
+    from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
     from sqlalchemy.orm import Session
 
 
