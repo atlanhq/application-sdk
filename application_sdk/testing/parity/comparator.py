@@ -6,22 +6,25 @@ MODIFIED, or UNCHANGED.
 """
 
 import json
+import logging
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any
 
 from application_sdk.testing.parity.models import AssetDiff, CategoryResult, FieldDiff
 
+logger = logging.getLogger(__name__)
+
 # Fields that change every run and must be ignored in comparison.
-VOLATILE_FIELDS: Set[str] = {
+VOLATILE_FIELDS: set[str] = {
     "lastSyncWorkflowName",
     "lastSyncRun",
     "lastSyncRunAt",
 }
 
 
-def load_ndjson(directory: Path) -> List[Dict[str, Any]]:
+def load_ndjson(directory: Path) -> list[dict[str, Any]]:
     """Load all NDJSON files from a directory, skipping statistics files."""
-    assets: List[Dict[str, Any]] = []
+    assets: list[dict[str, Any]] = []
     if not directory.exists():
         return assets
     for json_file in sorted(directory.glob("*.json")):
@@ -35,9 +38,7 @@ def load_ndjson(directory: Path) -> List[Dict[str, Any]]:
                 try:
                     assets.append(json.loads(line))
                 except json.JSONDecodeError:
-                    import logging
-
-                    logging.getLogger(__name__).warning(
+                    logger.warning(
                         "Skipping malformed JSON at %s:%d", json_file.name, line_num
                     )
     return assets
@@ -54,18 +55,18 @@ def strip_volatile(obj: Any) -> Any:
     return obj
 
 
-def get_qualified_name(asset: Dict[str, Any]) -> str:
+def get_qualified_name(asset: dict[str, Any]) -> str:
     """Extract qualifiedName from an asset."""
     return asset.get("attributes", {}).get("qualifiedName", "")
 
 
 def diff_dicts(
-    baseline: Dict[str, Any],
-    candidate: Dict[str, Any],
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
     prefix: str = "",
-) -> List[FieldDiff]:
+) -> list[FieldDiff]:
     """Deep diff two dicts, returning a list of field differences."""
-    diffs: List[FieldDiff] = []
+    diffs: list[FieldDiff] = []
     all_keys = set(baseline.keys()) | set(candidate.keys())
 
     for key in sorted(all_keys):
@@ -99,13 +100,13 @@ def compare_category(
     baseline_assets = load_ndjson(baseline_dir)
     candidate_assets = load_ndjson(candidate_dir)
 
-    baseline_map: Dict[str, Dict[str, Any]] = {}
+    baseline_map: dict[str, dict[str, Any]] = {}
     for asset in baseline_assets:
         qn = get_qualified_name(asset)
         if qn:
             baseline_map[qn] = strip_volatile(asset)
 
-    candidate_map: Dict[str, Dict[str, Any]] = {}
+    candidate_map: dict[str, dict[str, Any]] = {}
     for asset in candidate_assets:
         qn = get_qualified_name(asset)
         if qn:
@@ -155,9 +156,9 @@ def compare_category(
     return result
 
 
-def discover_categories(baseline_dir: Path, candidate_dir: Path) -> List[str]:
+def discover_categories(baseline_dir: Path, candidate_dir: Path) -> list[str]:
     """Find all category subdirectories across both dirs."""
-    categories: Set[str] = set()
+    categories: set[str] = set()
     for d in [baseline_dir, candidate_dir]:
         if d.exists():
             for subdir in d.iterdir():
@@ -169,7 +170,7 @@ def discover_categories(baseline_dir: Path, candidate_dir: Path) -> List[str]:
 def run_comparison(
     baseline_dir: Path,
     candidate_dir: Path,
-) -> List[CategoryResult]:
+) -> list[CategoryResult]:
     """Run full parity comparison across all categories."""
     categories = discover_categories(baseline_dir, candidate_dir)
     return [

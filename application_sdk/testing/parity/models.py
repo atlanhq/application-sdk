@@ -1,7 +1,7 @@
 """Data models for parity comparison results."""
 
 from dataclasses import dataclass, field
-from typing import Any, List, Literal
+from typing import Any, Literal
 
 
 @dataclass
@@ -20,7 +20,7 @@ class AssetDiff:
     qualified_name: str
     type_name: str
     diff_type: Literal["ADDED", "REMOVED", "MODIFIED"]
-    field_diffs: List[FieldDiff] = field(default_factory=list)
+    field_diffs: list[FieldDiff] = field(default_factory=list)
 
 
 @dataclass
@@ -30,9 +30,9 @@ class CategoryResult:
     category: str
     baseline_count: int
     candidate_count: int
-    added: List[AssetDiff] = field(default_factory=list)
-    removed: List[AssetDiff] = field(default_factory=list)
-    modified: List[AssetDiff] = field(default_factory=list)
+    added: list[AssetDiff] = field(default_factory=list)
+    removed: list[AssetDiff] = field(default_factory=list)
+    modified: list[AssetDiff] = field(default_factory=list)
 
     @property
     def has_diffs(self) -> bool:

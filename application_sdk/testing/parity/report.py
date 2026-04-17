@@ -1,6 +1,6 @@
 """Report generation for parity comparison results."""
 
-from typing import Any, Dict, List
+from typing import Any
 
 from application_sdk.testing.parity.models import CategoryResult
 
@@ -14,7 +14,7 @@ def _format_value(val: Any) -> str:
 
 
 def generate_markdown(
-    results: List[CategoryResult],
+    results: list[CategoryResult],
     baseline_ref: str = "main",
     candidate_ref: str = "PR",
 ) -> str:
@@ -24,7 +24,7 @@ def generate_markdown(
     total_removed = sum(len(r.removed) for r in results)
     total_modified = sum(len(r.modified) for r in results)
 
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append("## Parity Test Results\n")
 
     if has_any_diffs:
@@ -104,10 +104,10 @@ def generate_markdown(
 
 
 def generate_json_report(
-    results: List[CategoryResult],
+    results: list[CategoryResult],
     baseline_ref: str = "main",
     candidate_ref: str = "PR",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Generate a JSON report from comparison results."""
     has_any_diffs = any(r.has_diffs for r in results)
     return {

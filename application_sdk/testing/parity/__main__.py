@@ -64,12 +64,12 @@ def main() -> None:
     print(md_report)  # noqa: T201
 
     if args.output_md:
-        Path(args.output_md).write_text(md_report)
+        Path(args.output_md).write_text(md_report, encoding="utf-8")
         print(f"Markdown report written to {args.output_md}", file=sys.stderr)  # noqa: T201
 
     if args.output_json:
         Path(args.output_json).write_text(
-            json.dumps(json_report, indent=2, default=str)
+            json.dumps(json_report, indent=2, default=str), encoding="utf-8"
         )
         print(f"JSON report written to {args.output_json}", file=sys.stderr)  # noqa: T201
 
