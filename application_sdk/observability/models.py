@@ -27,7 +27,7 @@ class MetricRecord:
         name (str): Name of the metric
         value (float): Numeric value of the metric
         type (str): Type of metric (counter, gauge, or histogram)
-        labels (Dict[str, str]): Key-value pairs for metric dimensions
+        labels (Dict[str, Any]): Key-value pairs for metric dimensions
         description (Optional[str]): Optional description of the metric
         unit (Optional[str]): Optional unit of measurement
     """
