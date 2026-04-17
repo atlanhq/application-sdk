@@ -71,7 +71,6 @@ def _store_with(**bundles: str) -> InMemorySecretStore:
 
 
 class TestResolveAgentJsonHappyPath:
-    @pytest.mark.asyncio
     async def test_resolves_cloudsql_postgres_payload_to_nested_extra(self) -> None:
         """The exact dbbi-331 payload resolves to a dict that drops
         straight into the v3 SQL client's ``load(credentials)``.
@@ -108,7 +107,6 @@ class TestResolveAgentJsonHappyPath:
         # No dotted keys remain after expansion.
         assert not any("." in k for k in resolved)
 
-    @pytest.mark.asyncio
     async def test_literal_keys_never_substituted_even_if_they_match_bundle(
         self,
     ) -> None:
@@ -144,7 +142,6 @@ class TestResolveAgentJsonHappyPath:
         assert resolved["aws-region"] == "ap-south-1"
         assert resolved["basic"] == {"username": "real_user"}
 
-    @pytest.mark.asyncio
     async def test_missing_ref_key_stays_as_ref(self) -> None:
         """v2 parity: if the bundle doesn't have a ref-key, leave the
         placeholder in place rather than raising. Downstream SQL connect
@@ -166,7 +163,6 @@ class TestResolveAgentJsonHappyPath:
         # Ref-key preserved verbatim when no bundle entry matches.
         assert resolved["basic"]["password"] == "password"
 
-    @pytest.mark.asyncio
     async def test_v2_style_nested_extra_also_resolved(self) -> None:
         """Backward compat: if the upstream emits v2-style nested
         ``extra: {k: ref}``, those refs are also substituted.
@@ -200,7 +196,6 @@ class TestResolveAgentJsonHappyPath:
         # Literal inside nested extra is preserved.
         assert resolved["extra"]["compiled_url"] == "postgresql+asyncpg://..."
 
-    @pytest.mark.asyncio
     async def test_bundle_returned_as_dict_directly(self) -> None:
         """Some SecretStore backends may return a pre-parsed dict rather
         than a JSON string. Accept both.
@@ -221,40 +216,34 @@ class TestResolveAgentJsonHappyPath:
 
 
 class TestResolveAgentJsonErrorPaths:
-    @pytest.mark.asyncio
     async def test_invalid_agent_json_raises_parse_error(self) -> None:
         store = _store_with()
         with pytest.raises(CredentialParseError, match="not valid JSON"):
             await resolve_agent_json("{not-json", store)
 
-    @pytest.mark.asyncio
     async def test_agent_json_not_a_dict_raises_parse_error(self) -> None:
         store = _store_with()
         with pytest.raises(CredentialParseError, match="must be a JSON object"):
             await resolve_agent_json(json.dumps(["a", "b"]), store)
 
-    @pytest.mark.asyncio
     async def test_missing_secret_path_raises_parse_error(self) -> None:
         store = _store_with()
         agent_json = json.dumps({"host": "h", "basic.username": "u"})
         with pytest.raises(CredentialParseError, match="secret-path"):
             await resolve_agent_json(agent_json, store)
 
-    @pytest.mark.asyncio
     async def test_empty_secret_path_raises_parse_error(self) -> None:
         store = _store_with()
         agent_json = json.dumps({"secret-path": "", "basic.username": "u"})
         with pytest.raises(CredentialParseError, match="secret-path"):
             await resolve_agent_json(agent_json, store)
 
-    @pytest.mark.asyncio
     async def test_secret_not_found_raises_credential_not_found(self) -> None:
         store = _store_with()  # empty — no bundle at the path
         agent_json = json.dumps({"secret-path": "missing/path", "basic.username": "u"})
         with pytest.raises(CredentialNotFoundError):
             await resolve_agent_json(agent_json, store)
 
-    @pytest.mark.asyncio
     async def test_generic_store_failure_wrapped_in_credential_error(self) -> None:
         class FlakyStore:
             async def get(self, name: str) -> str:
@@ -264,14 +253,12 @@ class TestResolveAgentJsonErrorPaths:
         with pytest.raises(CredentialError, match="dapr outage"):
             await resolve_agent_json(agent_json, FlakyStore())  # type: ignore[arg-type]
 
-    @pytest.mark.asyncio
     async def test_bundle_not_valid_json_raises_parse_error(self) -> None:
         store = _store_with(**{"bundle": "not-json-at-all"})
         agent_json = json.dumps({"secret-path": "bundle", "basic.username": "u"})
         with pytest.raises(CredentialParseError, match="not valid JSON"):
             await resolve_agent_json(agent_json, store)
 
-    @pytest.mark.asyncio
     async def test_bundle_not_a_dict_raises_parse_error(self) -> None:
         store = _store_with(**{"bundle": json.dumps(["a", "b"])})
         agent_json = json.dumps({"secret-path": "bundle", "basic.username": "u"})
@@ -521,7 +508,6 @@ class TestCredentialResolverAgentBranch:
     refs from the caller's perspective.
     """
 
-    @pytest.mark.asyncio
     async def test_resolve_raw_agent_ref_returns_flat_dict_with_nested_extra(
         self,
     ) -> None:
@@ -555,7 +541,6 @@ class TestCredentialResolverAgentBranch:
         }
         assert resolved["extra"]["database"] == "real_pg_db"
 
-    @pytest.mark.asyncio
     async def test_resolve_raw_legacy_guid_ref_still_works(self) -> None:
         """Legacy GUID refs continue to resolve via the local secret
         store path — agent branch is additive, not a replacement.
@@ -572,7 +557,6 @@ class TestCredentialResolverAgentBranch:
         resolved = await resolver.resolve_raw(ref)
         assert resolved == {"username": "real_user", "host": "h"}
 
-    @pytest.mark.asyncio
     async def test_resolve_typed_agent_ref_uses_auth_type_for_parser(self) -> None:
         """When ``credential_type`` is empty on an agent ref (which is
         what ``from_workflow_args`` produces), the resolver reads

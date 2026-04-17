@@ -3,6 +3,8 @@
 import json
 from typing import Any
 
+import orjson
+
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import BindingError, BindingResponse
 from application_sdk.infrastructure.pubsub import MessageHandler, PubSubError
@@ -140,8 +142,6 @@ class DaprSecretStore:
         This mirrors v2's ``SecretStore._process_secret_data`` which
         handled both formats transparently.
         """
-        import orjson
-
         try:
             result = await self._client.get_secret(
                 store_name=self._store_name,

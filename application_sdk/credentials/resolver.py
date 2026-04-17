@@ -112,18 +112,8 @@ class CredentialResolver:
         ``CredentialRef.from_workflow_args`` does not populate
         ``credential_type`` for agent refs).
         """
-        import json as _json
-
         data = await self._resolve_agent_raw(ref)
-        type_name = ref.credential_type
-        if not type_name:
-            # Peek at auth-type on the (string) agent_json so we don't
-            # silently drop to 'unknown' when the payload knows better.
-            try:
-                spec = _json.loads(ref.agent_json)
-                type_name = spec.get("auth-type") or "unknown"
-            except Exception:
-                type_name = "unknown"
+        type_name = ref.credential_type or data.get("auth-type") or "unknown"
         if type_name == "unknown":
             from application_sdk.credentials.types import RawCredential
 
