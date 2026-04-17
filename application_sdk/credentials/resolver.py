@@ -139,10 +139,18 @@ class CredentialResolver:
 
         # State store check — handler/service.py stores inline credentials here
         # under the "cred:" prefix + UUID that becomes ref.name / ref.credential_guid.
+        # Guarded to local-dev only (symmetric with the write guard in handler/service.py)
+        # to avoid unnecessary state store round-trips in production.
+        import os
+
         from application_sdk.infrastructure.context import get_infrastructure
 
+        is_local_dev = os.environ.get("ATLAN_LOCAL_DEVELOPMENT", "").lower() in (
+            "true",
+            "1",
+        )
         infra = get_infrastructure()
-        if infra and infra.state_store:
+        if is_local_dev and infra and infra.state_store:
             try:
                 data = await infra.state_store.load(f"cred:{ref.name}")
                 if data is not None:

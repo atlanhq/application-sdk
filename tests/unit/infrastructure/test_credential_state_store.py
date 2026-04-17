@@ -31,7 +31,7 @@ def _clean_infrastructure():
 class TestCredentialStateStoreRoundtrip:
     """Credential interception: save via state store, resolve via resolver."""
 
-    async def test_save_and_resolve_via_state_store(self):
+    async def test_save_and_resolve_via_state_store(self, monkeypatch):
         """Full roundtrip: store creds in state store, resolver reads them back."""
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver
@@ -40,10 +40,11 @@ class TestCredentialStateStoreRoundtrip:
             set_infrastructure,
         )
 
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "true")
+
         state_store = MockStateStore()
         secret_store = MockSecretStore()
 
-        # Simulate handler: store creds in state store under cred: prefix
         guid = "test-guid-abc123"
         flat_creds = {"host": "db.example.com", "port": "5432"}
         await state_store.save(f"cred:{guid}", flat_creds)
@@ -58,7 +59,7 @@ class TestCredentialStateStoreRoundtrip:
         assert result["host"] == "db.example.com"
         assert result["port"] == "5432"
 
-    async def test_state_store_takes_precedence_over_secret_store(self):
+    async def test_state_store_takes_precedence_over_secret_store(self, monkeypatch):
         """State store (from /start handler) takes precedence over secret store."""
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver
@@ -66,6 +67,8 @@ class TestCredentialStateStoreRoundtrip:
             InfrastructureContext,
             set_infrastructure,
         )
+
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "true")
 
         state_store = MockStateStore()
         secret_store = MockSecretStore()
@@ -106,6 +109,36 @@ class TestCredentialStateStoreRoundtrip:
         result = await resolver.resolve_raw(ref)
 
         assert result["host"] == "from-secret"
+
+    async def test_resolver_skips_state_store_in_prod(self, monkeypatch):
+        """In non-local mode, resolver skips state store even if cred: key exists."""
+        from application_sdk.credentials.ref import CredentialRef
+        from application_sdk.credentials.resolver import CredentialResolver
+        from application_sdk.infrastructure.context import (
+            InfrastructureContext,
+            set_infrastructure,
+        )
+
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "false")
+
+        state_store = MockStateStore()
+        secret_store = MockSecretStore()
+
+        guid = "prod-guid"
+        # Cred exists in state store but should NOT be read in prod
+        await state_store.save(f"cred:{guid}", {"source": "state_store"})
+        # Secret store has the "real" credential
+        secret_store.set(guid, json.dumps({"source": "secret_store"}))
+
+        ctx = InfrastructureContext(state_store=state_store, secret_store=secret_store)
+        set_infrastructure(ctx)
+
+        resolver = CredentialResolver(secret_store=secret_store)
+        ref = CredentialRef(name=guid, credential_type="unknown", credential_guid=guid)
+        result = await resolver.resolve_raw(ref)
+
+        # Secret store should win in prod — state store skipped
+        assert result["source"] == "secret_store"
 
 
 class TestLocalDevGuard:
