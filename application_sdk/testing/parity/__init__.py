@@ -19,11 +19,7 @@ from application_sdk.testing.parity.comparator import (
     discover_categories,
     run_comparison,
 )
-from application_sdk.testing.parity.models import (
-    AssetDiff,
-    CategoryResult,
-    FieldDiff,
-)
+from application_sdk.testing.parity.models import AssetDiff, CategoryResult, FieldDiff
 from application_sdk.testing.parity.report import (
     generate_json_report,
     generate_markdown,

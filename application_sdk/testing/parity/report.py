@@ -35,9 +35,7 @@ def generate_markdown(
     else:
         lines.append("**Verdict: PARITY** — no differences found\n")
 
-    lines.append(
-        f"**Baseline**: `{baseline_ref}` | **Candidate**: `{candidate_ref}`\n"
-    )
+    lines.append(f"**Baseline**: `{baseline_ref}` | **Candidate**: `{candidate_ref}`\n")
 
     # Summary table
     lines.append("### Summary\n")
@@ -92,9 +90,7 @@ def generate_markdown(
                     c_str = _format_value(fd.candidate_value)
                     lines.append(f"  - `{fd.field_path}`: {b_str} → {c_str}")
                 if len(a.field_diffs) > 10:
-                    lines.append(
-                        f"  - ... and {len(a.field_diffs) - 10} more fields"
-                    )
+                    lines.append(f"  - ... and {len(a.field_diffs) - 10} more fields")
             if len(r.modified) > 30:
                 lines.append(f"- ... and {len(r.modified) - 30} more")
             lines.append("")
@@ -102,9 +98,7 @@ def generate_markdown(
         lines.append("</details>\n")
 
     if has_any_diffs:
-        lines.append(
-            "> Add label `parity-accepted` to acknowledge these changes.\n"
-        )
+        lines.append("> Add label `parity-accepted` to acknowledge these changes.\n")
 
     return "\n".join(lines)
 
