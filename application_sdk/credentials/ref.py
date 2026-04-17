@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-if TYPE_CHECKING:
-    from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.credentials.spec import AgentCredentialSpec
 
 
 class CredentialRef(BaseModel, frozen=True):
