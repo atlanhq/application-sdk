@@ -1461,6 +1461,7 @@ def create_app_handler_service(
             raw = manifest_path.read_bytes()
             deployment = (DEPLOYMENT_NAME or "default").encode()
             raw = raw.replace(b"{deployment_name}", deployment)
+            raw = raw.replace(b"{app_name}", (app_name or "").encode())
             return Response(content=raw, media_type="application/json")
         raise HTTPException(status_code=404, detail="No manifest available")
 

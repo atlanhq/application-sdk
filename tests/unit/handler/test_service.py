@@ -869,6 +869,40 @@ class TestManifestEndpoint:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
             svc_module.DEPLOYMENT_NAME = original_dep
 
+    def test_manifest_disk_substitutes_app_name(self, tmp_path: Path) -> None:
+        from application_sdk.handler import service as svc_module
+
+        manifest_data = {
+            "execution_mode": "dag",
+            "dag": {
+                "extract": {
+                    "activity_name": "execute_workflow",
+                    "activity_display_name": "Extract",
+                    "app_name": "{app_name}",
+                    "inputs": {
+                        "workflow_type": "extraction",
+                        "task_queue": "{deployment_name}-queue",
+                    },
+                }
+            },
+        }
+        (tmp_path / "manifest.json").write_text(__import__("json").dumps(manifest_data))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        original_dep = svc_module.DEPLOYMENT_NAME
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        svc_module.DEPLOYMENT_NAME = "prod-deploy"
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["dag"]["extract"]["app_name"] == "test-app"
+            assert body["dag"]["extract"]["inputs"]["task_queue"] == "prod-deploy-queue"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+            svc_module.DEPLOYMENT_NAME = original_dep
+
     def test_manifest_programmatic_takes_priority(self, tmp_path: Path) -> None:
         """When both programmatic and disk manifest exist, programmatic wins."""
         from application_sdk.handler import service as svc_module
