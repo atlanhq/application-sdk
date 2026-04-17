@@ -121,6 +121,51 @@ class Test_TaskFailureLoggingActivityInboundInterceptor:
                 assert kwargs["tenant.id"] == "tenant-abc"
 
     @pytest.mark.asyncio
+    async def test_failure_log_includes_app_vitals_context(
+        self, interceptor, mock_next_activity, mock_activity_info
+    ):
+        """Phase 2: structured failure log includes App Vitals identity + error classification."""
+        input_data = MockExecuteActivityInput()
+        test_error = TimeoutError("connection timed out")
+        mock_next_activity.execute_activity.side_effect = test_error
+
+        correlation_context.set({"atlan-tenant-id": "tenant-av"})
+
+        with (
+            mock.patch("temporalio.activity.info", return_value=mock_activity_info),
+            mock.patch(
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.APPLICATION_NAME",
+                "snowflake",
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.APP_BUILD_ID",
+                "2.4.2",
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
+            ) as mock_logger,
+        ):
+            with pytest.raises(TimeoutError):
+                await interceptor.execute_activity(input_data)
+
+            kwargs = mock_logger.error.call_args[1]
+
+            # App Vitals identity
+            assert kwargs["app_name"] == "snowflake"
+            assert kwargs["app_version"] == "2.4.2"
+            assert kwargs["tenant_id"] == "tenant-av"
+            assert kwargs["status"] == "failed"
+
+            # Error classification
+            assert kwargs["error_type"] == "timeout"
+            assert kwargs["error_class"] == "TimeoutError"
+
+            # App Vitals classification metadata
+            assert kwargs["dimension"] == "reliability"
+            assert kwargs["source"] == "temporal"
+            assert kwargs["metric_name"] == "app_vitals.reliability.activity_completed"
+
+    @pytest.mark.asyncio
     async def test_failure_reraises_original_exception(
         self, interceptor, mock_next_activity, mock_activity_info
     ):

@@ -40,6 +40,10 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 _HEADER_CORRELATION_ID = "x-correlation-id"
+# The AE's older CorrelationContextInterceptor injects the header under this
+# plain key (no x- prefix).  We check it as a fallback so that workflows
+# dispatched by the AE inherit their correlation_id without any AE-side changes.
+_HEADER_CORRELATION_ID_LEGACY = "correlation_id"
 
 
 class _LazyCorrelationOutboundInterceptor(WorkflowOutboundInterceptor):
@@ -103,15 +107,23 @@ class _CorrelationWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             )
             ctx = None
 
-        # Priority 2: inherit from parent via headers (child workflow call path)
+        # Priority 2: inherit from parent via headers (child workflow call path).
+        # Check both the current header key ("x-correlation-id") and the legacy
+        # key ("correlation_id") used by the AE's older interceptor so that
+        # AE-dispatched workflows inherit the same correlation_id without
+        # requiring any changes on the AE side.
         if ctx is None:
             try:
-                payload = input.headers.get(_HEADER_CORRELATION_ID)
-                if payload is not None:
-                    converter = default_converter().payload_converter
-                    correlation_id: str = converter.from_payload(payload, type_hint=str)
-                    if correlation_id:
-                        ctx = CorrelationContext(correlation_id=correlation_id)
+                for _hdr_key in (_HEADER_CORRELATION_ID, _HEADER_CORRELATION_ID_LEGACY):
+                    payload = input.headers.get(_hdr_key)
+                    if payload is not None:
+                        converter = default_converter().payload_converter
+                        correlation_id: str = converter.from_payload(
+                            payload, type_hint=str
+                        )
+                        if correlation_id:
+                            ctx = CorrelationContext(correlation_id=correlation_id)
+                            break
             except Exception:
                 logger.warning(
                     "Failed to read correlation header in workflow", exc_info=True
@@ -137,14 +149,16 @@ class _CorrelationActivityInboundInterceptor(ActivityInboundInterceptor):
         )
 
         try:
-            payload = input.headers.get(_HEADER_CORRELATION_ID)
-            if payload is not None:
-                converter = default_converter().payload_converter
-                correlation_id: str = converter.from_payload(payload, type_hint=str)
-                if correlation_id:
-                    set_correlation_context(
-                        CorrelationContext(correlation_id=correlation_id)
-                    )
+            for _hdr_key in (_HEADER_CORRELATION_ID, _HEADER_CORRELATION_ID_LEGACY):
+                payload = input.headers.get(_hdr_key)
+                if payload is not None:
+                    converter = default_converter().payload_converter
+                    correlation_id: str = converter.from_payload(payload, type_hint=str)
+                    if correlation_id:
+                        set_correlation_context(
+                            CorrelationContext(correlation_id=correlation_id)
+                        )
+                        break
         except Exception:
             logger.warning(
                 "Failed to read correlation header in activity", exc_info=True
