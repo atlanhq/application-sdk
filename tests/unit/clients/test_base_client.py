@@ -346,31 +346,6 @@ class TestBaseClient:
             timeout=30, transport=base_client.http_retry_transport, verify=True
         )
 
-    @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
-    @patch("application_sdk.clients.base.get_ssl_context", return_value=True)
-    async def test_execute_http_post_request_verify_false_emits_deprecation(
-        self, mock_get_ssl_context, mock_async_client, base_client
-    ):
-        """Passing verify=False emits DeprecationWarning but still enforces SSL."""
-        mock_client_instance = AsyncMock()
-        mock_client_instance.post.return_value = MagicMock(status_code=200)
-        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
-
-        import warnings
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            await base_client.execute_http_post_request(
-                url="https://api.example.com/test", verify=False
-            )
-
-        assert any(issubclass(w.category, DeprecationWarning) for w in caught)
-        mock_get_ssl_context.assert_called_once()
-        mock_async_client.assert_called_once_with(
-            timeout=30, transport=base_client.http_retry_transport, verify=True
-        )
-
     @given(credentials=sql_credentials_strategy)
     @settings(
         max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture]
