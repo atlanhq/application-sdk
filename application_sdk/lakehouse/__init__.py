@@ -7,10 +7,12 @@ to a source-app-provided BatchProcessor, and writes OUTCOME rows back.
 Install with: pip install atlan-application-sdk[lakehouse]
 """
 
+from application_sdk.lakehouse.consumer import LakehouseConsumer
 from application_sdk.lakehouse.models import ProcessingResult
 from application_sdk.lakehouse.protocols import BatchProcessor
 
 __all__ = [
     "BatchProcessor",
+    "LakehouseConsumer",
     "ProcessingResult",
 ]
