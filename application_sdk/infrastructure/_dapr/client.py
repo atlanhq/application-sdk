@@ -127,15 +127,36 @@ class DaprSecretStore:
         self._store_name = store_name
 
     async def get(self, name: str) -> str:
-        """Get a secret via Dapr."""
+        """Get a secret via Dapr.
+
+        Handles both Dapr response formats:
+
+        * **Single-key** (default): ``{"secret-name": "{\"user\":\"u\",...}"}``
+          — returns the JSON string value directly.
+        * **Multi-key** (``multiValued: true`` in Dapr component config):
+          ``{"user": "u", "pass": "p"}`` — serialises the dict as a JSON
+          string so callers can ``json.loads`` it uniformly.
+
+        This mirrors v2's ``SecretStore._process_secret_data`` which
+        handled both formats transparently.
+        """
+        import orjson
+
         try:
             result = await self._client.get_secret(
                 store_name=self._store_name,
                 key=name,
             )
+            if not result:
+                raise SecretNotFoundError(name)
+            # Single-key: the secret name is a key in the response dict.
+            # The value is the raw secret string (often a JSON blob).
             if name in result:
                 return result[name]
-            raise SecretNotFoundError(name)
+            # Multi-key: Dapr returned individual key-value pairs
+            # (e.g. {"username": "real", "password": "pw"}).
+            # Serialise as JSON so the caller can parse uniformly.
+            return orjson.dumps(result).decode()
         except SecretNotFoundError:
             raise
         except Exception as e:
