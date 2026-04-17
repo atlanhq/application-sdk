@@ -53,12 +53,6 @@ distlib==0.4.0
     # via virtualenv
 dnspython==2.8.0
     # via email-validator
-duckdb==1.4.3
-    # via
-    #   atlan-application-sdk
-    #   duckdb-engine
-duckdb-engine==0.17.0
-    # via atlan-application-sdk
 email-validator==2.3.0
     # via
     #   fastapi
@@ -81,8 +75,6 @@ googleapis-common-protos==1.72.0
     # via
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
-greenlet==3.3.0 ; platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64'
-    # via sqlalchemy
 grpcio==1.76.0
     # via opentelemetry-exporter-otlp-proto-grpc
 h11==0.16.0
@@ -142,10 +134,10 @@ multidict==6.7.0
     #   yarl
 nanoid==2.0.0
     # via pyatlan
+nexus-rpc==1.3.0
+    # via temporalio
 nodeenv==1.10.0
     # via pre-commit
-numpy==2.4.1
-    # via pandas
 obstore==0.9.2
     # via atlan-application-sdk
 opentelemetry-api==1.39.1
@@ -179,13 +171,12 @@ opentelemetry-sdk==1.39.1
     #   opentelemetry-exporter-prometheus
 opentelemetry-semantic-conventions==0.60b1
     # via opentelemetry-sdk
+orjson==3.11.7
+    # via atlan-application-sdk
 packaging==25.0
     # via
-    #   duckdb-engine
     #   lazy-loader
     #   pytest
-pandas==2.3.3
-    # via atlan-application-sdk
 pastel==0.2.1
     # via poethepoet
 platformdirs==4.5.1
@@ -194,7 +185,7 @@ pluggy==1.6.0
     # via pytest
 poethepoet==0.39.0
 pre-commit==4.5.1
-prometheus-client==0.25.0
+prometheus-client==0.23.1
     # via opentelemetry-exporter-prometheus
 propcache==0.4.1
     # via
@@ -204,11 +195,10 @@ protobuf==6.33.5
     # via
     #   googleapis-common-protos
     #   opentelemetry-proto
+    #   temporalio
 psutil==7.2.1
     # via atlan-application-sdk
-pyarrow==22.0.0
-    # via atlan-application-sdk
-pyatlan==9.4.0
+pyatlan==9.3.1
     # via atlan-application-sdk
 pycparser==2.23 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
@@ -237,9 +227,7 @@ pytest==9.0.2
 pytest-asyncio==1.3.0
 pytest-timeout==2.4.0
 python-dateutil==2.9.0.post0
-    # via
-    #   pandas
-    #   pyatlan
+    # via pyatlan
 python-dotenv==1.2.1
     # via
     #   atlan-application-sdk
@@ -248,9 +236,7 @@ python-dotenv==1.2.1
 python-multipart==0.0.22
     # via fastapi
 pytz==2026.1.post1
-    # via
-    #   pandas
-    #   pyatlan
+    # via pyatlan
 pyyaml==6.0.3
     # via
     #   atlan-application-sdk
@@ -279,10 +265,10 @@ six==1.17.0
     # via python-dateutil
 sortedcontainers==2.4.0
     # via hypothesis
-sqlalchemy==2.0.45
-    # via duckdb-engine
 starlette==0.50.0
     # via fastapi
+temporalio==1.21.1
+    # via atlan-application-sdk
 tenacity==9.1.2
     # via pyatlan
 typer==0.21.1
@@ -291,6 +277,8 @@ typer==0.21.1
     #   fastapi-cloud-cli
 types-awscrt==0.31.0
     # via botocore-stubs
+types-protobuf==6.32.1.20251210
+    # via temporalio
 types-s3transfer==0.16.0
     # via boto3-stubs
 typing-extensions==4.15.0
@@ -300,6 +288,7 @@ typing-extensions==4.15.0
     #   boto3-stubs
     #   fastapi
     #   grpcio
+    #   nexus-rpc
     #   obstore
     #   opentelemetry-api
     #   opentelemetry-exporter-otlp-proto-grpc
@@ -311,16 +300,14 @@ typing-extensions==4.15.0
     #   pydantic-extra-types
     #   pytest-asyncio
     #   rich-toolkit
-    #   sqlalchemy
     #   starlette
+    #   temporalio
     #   typer
     #   typing-inspection
 typing-inspection==0.4.2
     # via
     #   pydantic
     #   pydantic-settings
-tzdata==2025.3
-    # via pandas
 urllib3==2.6.3
     # via
     #   requests
