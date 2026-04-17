@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import sys
 from typing import Any
 
@@ -205,11 +206,14 @@ def parse(
 def _write_outputs(outputs: dict[str, str]) -> None:
     """Write outputs to ``$GITHUB_OUTPUT``. ``deploy_config`` is multiline → heredoc."""
     gh_output = os.environ.get("GITHUB_OUTPUT")
+    # Randomised delimiter prevents a crafted deploy: block from injecting
+    # arbitrary $GITHUB_OUTPUT values by containing the literal delimiter.
+    delim = f"DEPLOY_EOF_{secrets.token_hex(8)}"
     if not gh_output:
         # Local dry-run: just dump key=value lines to stdout.
         for k, v in outputs.items():
             if "\n" in v:
-                print(f"{k}<<DEPLOY_EOF\n{v}\nDEPLOY_EOF")
+                print(f"{k}<<{delim}\n{v}\n{delim}")
             else:
                 print(f"{k}={v}")
         return
@@ -217,7 +221,7 @@ def _write_outputs(outputs: dict[str, str]) -> None:
     with open(gh_output, "a") as out:
         for k, v in outputs.items():
             if k == "deploy_config":
-                out.write(f"deploy_config<<DEPLOY_EOF\n{v}\nDEPLOY_EOF\n")
+                out.write(f"deploy_config<<{delim}\n{v}\n{delim}\n")
             else:
                 out.write(f"{k}={v}\n")
 
