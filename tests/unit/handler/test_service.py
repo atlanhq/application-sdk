@@ -869,6 +869,40 @@ class TestManifestEndpoint:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
             svc_module.DEPLOYMENT_NAME = original_dep
 
+    def test_manifest_disk_substitutes_app_name(self, tmp_path: Path) -> None:
+        from application_sdk.handler import service as svc_module
+
+        manifest_data = {
+            "execution_mode": "dag",
+            "dag": {
+                "extract": {
+                    "activity_name": "execute_workflow",
+                    "activity_display_name": "Extract",
+                    "app_name": "{app_name}",
+                    "inputs": {
+                        "workflow_type": "extraction",
+                        "task_queue": "{deployment_name}-queue",
+                    },
+                }
+            },
+        }
+        (tmp_path / "manifest.json").write_text(__import__("json").dumps(manifest_data))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        original_dep = svc_module.DEPLOYMENT_NAME
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        svc_module.DEPLOYMENT_NAME = "prod-deploy"
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["dag"]["extract"]["app_name"] == "test-app"
+            assert body["dag"]["extract"]["inputs"]["task_queue"] == "prod-deploy-queue"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+            svc_module.DEPLOYMENT_NAME = original_dep
+
     def test_manifest_programmatic_takes_priority(self, tmp_path: Path) -> None:
         """When both programmatic and disk manifest exist, programmatic wins."""
         from application_sdk.handler import service as svc_module
@@ -1229,12 +1263,12 @@ class TestStartCredentialPersistence:
     """Tests for inline credential save in /start handler.
 
     The /start endpoint needs Temporal, so we test the normalization +
-    InMemorySecretStore interaction directly to verify the contract.
+    MockStateStore interaction directly to verify the contract.
     """
 
-    def test_normalize_then_store_v2_dict_credentials(self) -> None:
+    async def test_normalize_then_store_v2_dict_credentials(self) -> None:
         """V2 dict credentials are normalized to v3 list before storage."""
-        from application_sdk.infrastructure.secrets import InMemorySecretStore
+        from application_sdk.testing.mocks import MockStateStore
 
         body = {
             "credentials": {
@@ -1246,33 +1280,29 @@ class TestStartCredentialPersistence:
             "other_field": "kept",
         }
 
-        # Normalize (same as /start handler does)
         body = _normalize_credentials(body)
 
-        # Verify normalization produced v3 list format
         assert isinstance(body["credentials"], list)
         keys = {item["key"] for item in body["credentials"]}
         assert "host" in keys
         assert "port" in keys
 
-        # Store in InMemorySecretStore (same as /start handler does)
-        store = InMemorySecretStore()
+        store = MockStateStore()
         guid = "test-guid-123"
-        store.set(guid, json.dumps(body["credentials"]))
+        flat_creds = _pairs_to_flat(body["credentials"])
+        await store.save(f"cred:{guid}", flat_creds)
 
-        # Verify round-trip: read back and parse
-        raw = json.loads(store._secrets[guid])
-        assert isinstance(raw, list)
-        host_entry = next(item for item in raw if item["key"] == "host")
-        assert host_entry["value"] == "db.example.com"
+        result = await store.load(f"cred:{guid}")
+        assert result is not None
+        assert result["host"] == "db.example.com"
 
         # Verify other fields preserved
         assert body["other_field"] == "kept"
         assert "credentials" in body
 
-    def test_normalize_then_store_v3_list_credentials(self) -> None:
+    async def test_normalize_then_store_v3_list_credentials(self) -> None:
         """V3 list credentials pass through normalization unchanged."""
-        from application_sdk.infrastructure.secrets import InMemorySecretStore
+        from application_sdk.testing.mocks import MockStateStore
 
         body = {
             "credentials": [
@@ -1283,17 +1313,17 @@ class TestStartCredentialPersistence:
 
         body = _normalize_credentials(body)
 
-        # Already v3 format — unchanged
         assert isinstance(body["credentials"], list)
         assert len(body["credentials"]) == 2
 
-        store = InMemorySecretStore()
+        store = MockStateStore()
         guid = "test-guid-456"
-        store.set(guid, json.dumps(body["credentials"]))
+        flat_creds = _pairs_to_flat(body["credentials"])
+        await store.save(f"cred:{guid}", flat_creds)
 
-        raw = json.loads(store._secrets[guid])
-        assert raw[0]["key"] == "host"
-        assert raw[0]["value"] == "db.example.com"
+        result = await store.load(f"cred:{guid}")
+        assert result is not None
+        assert result["host"] == "db.example.com"
 
     def test_no_credentials_skips_store(self) -> None:
         """Body without credentials is not stored."""
@@ -1301,13 +1331,13 @@ class TestStartCredentialPersistence:
         body = _normalize_credentials(body)
         assert "credentials" not in body or not body.get("credentials")
 
-    async def test_credential_resolver_v3_path_reads_from_inmemory_store(self) -> None:
-        """CredentialResolver new path reads from InMemorySecretStore."""
+    async def test_credential_resolver_reads_from_secret_store(self) -> None:
+        """CredentialResolver reads credentials from secret store."""
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver
-        from application_sdk.infrastructure.secrets import InMemorySecretStore
+        from application_sdk.testing.mocks import MockSecretStore
 
-        store = InMemorySecretStore()
+        store = MockSecretStore()
         creds = [
             {"key": "host", "value": "db.example.com"},
             {"key": "port", "value": "5432"},
@@ -1317,7 +1347,6 @@ class TestStartCredentialPersistence:
         resolver = CredentialResolver(secret_store=store)
         ref = CredentialRef(name="my-guid", credential_type="basic")
 
-        # No credential_guid → takes v3 new path → secret_store.get("my-guid")
         result = await resolver.resolve_raw(ref)
 
         assert isinstance(result, list)

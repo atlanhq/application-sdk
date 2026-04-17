@@ -1,11 +1,10 @@
 """Infrastructure abstraction layer.
 
 Protocol-based interfaces for all infrastructure services.
-Dapr implementations in _dapr/, InMemory for testing.
+Dapr implementations in _dapr/, Mock classes in testing/mocks.py.
 
 Usage:
     from application_sdk.infrastructure import StateStore, SecretStore, PubSub
-    from application_sdk.infrastructure.state import InMemoryStateStore
     from application_sdk.infrastructure.secrets import EnvironmentSecretStore
 """
 
@@ -39,10 +38,8 @@ from application_sdk.infrastructure.context import (
 from application_sdk.infrastructure.credential_vault import (
     CredentialVault,
     CredentialVaultError,
-    InMemoryCredentialVault,
 )
 from application_sdk.infrastructure.pubsub import (
-    InMemoryPubSub,
     Message,
     MessageHandler,
     PubSub,
@@ -51,17 +48,12 @@ from application_sdk.infrastructure.pubsub import (
 )
 from application_sdk.infrastructure.secrets import (
     EnvironmentSecretStore,
-    InMemorySecretStore,
     SecretNotFoundError,
     SecretStore,
     SecretStoreError,
     get_deployment_secret,
 )
-from application_sdk.infrastructure.state import (
-    InMemoryStateStore,
-    StateStore,
-    StateStoreError,
-)
+from application_sdk.infrastructure.state import StateStore, StateStoreError
 
 __all__ = [
     "AsyncDaprClient",
@@ -82,20 +74,16 @@ __all__ = [
     "get_capacity_pool",
     "CredentialVault",
     "CredentialVaultError",
-    "InMemoryCredentialVault",
-    "InMemoryPubSub",
     "Message",
     "MessageHandler",
     "PubSub",
     "PubSubError",
     "Subscription",
     "EnvironmentSecretStore",
-    "InMemorySecretStore",
     "SecretNotFoundError",
     "SecretStore",
     "SecretStoreError",
     "get_deployment_secret",
-    "InMemoryStateStore",
     "StateStore",
     "StateStoreError",
     "InfrastructureContext",

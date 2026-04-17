@@ -383,20 +383,20 @@ async def _create_infrastructure(
     """Create infrastructure services based on environment.
 
     If ``DAPR_HTTP_PORT`` is set (Dapr sidecar present), creates Dapr-backed
-    implementations. Otherwise creates InMemory implementations suitable for
-    local development and testing.
+    implementations. Otherwise raises ``RuntimeError`` — the Dapr sidecar is
+    required for all runtime modes.
 
     Args:
-        credential_stores: Optional mapping of store name → SecretStore. When
-            provided (e.g., from ``run_dev_combined``), the first value is used
-            as the secret store instead of a blank ``InMemorySecretStore``.
+        credential_stores: Optional mapping of store name → SecretStore.
+            Reserved for future use; currently unused.
 
     Returns:
         Configured InfrastructureContext.
+
+    Raises:
+        RuntimeError: If DAPR_HTTP_PORT is not set (no Dapr sidecar).
     """
     from application_sdk.infrastructure.context import InfrastructureContext
-    from application_sdk.infrastructure.secrets import InMemorySecretStore
-    from application_sdk.infrastructure.state import InMemoryStateStore
 
     if os.environ.get("DAPR_HTTP_PORT"):
         from pathlib import Path
@@ -434,25 +434,11 @@ async def _create_infrastructure(
             _dapr_client=dapr_client,
         )
     else:
-        # No Dapr — use InMemory implementations
-        secret_store: SecretStore
-        if credential_stores:
-            secret_store = next(iter(credential_stores.values()))
-        else:
-            secret_store = InMemorySecretStore()
-
-        storage_root = os.environ.get("APP_STORAGE_ROOT", "./local/dapr/objectstore")
-        from application_sdk.storage import create_local_store
-
-        logger.info(
-            "No Dapr sidecar — using InMemory + LocalStore infrastructure",
-            storage_root=storage_root,
-        )
-        return InfrastructureContext(
-            state_store=InMemoryStateStore(),
-            secret_store=secret_store,
-            storage=create_local_store(storage_root),
-            event_binding=None,
+        # No Dapr sidecar — require it for all modes
+        raise RuntimeError(
+            "Dapr sidecar not detected (DAPR_HTTP_PORT not set). "
+            "Run 'poe start-deps' to start local Dapr + Temporal, "
+            "or set DAPR_HTTP_PORT if running daprd manually."
         )
 
 

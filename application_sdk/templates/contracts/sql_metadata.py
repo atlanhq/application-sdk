@@ -10,7 +10,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.base import Input, Output, PublishInputMixin
 from application_sdk.contracts.types import ConnectionRef, MaxItems
 from application_sdk.credentials.ref import CredentialRef
 
@@ -49,7 +49,7 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     """Tag prefix for source-level metadata."""
 
 
-class ExtractionOutput(Output):
+class ExtractionOutput(Output, PublishInputMixin):
     """Top-level output from a SQL metadata extraction run."""
 
     workflow_id: str = ""

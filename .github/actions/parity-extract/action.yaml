@@ -1,0 +1,160 @@
+name: Parity Extract
+description: |
+  Starts a connector app, triggers a metadata extraction workflow,
+  polls until complete, and uploads the transformed output as an artifact.
+  Used by the parity test framework to extract from both baseline and candidate branches.
+
+inputs:
+  ref:
+    description: "Git ref (SHA or branch) to checkout and extract from"
+    required: true
+  artifact-name:
+    description: "Name for the uploaded artifact"
+    required: true
+    default: "parity-output"
+  app-name:
+    description: "Application name (e.g., postgres, tableau)"
+    required: true
+  credentials-json:
+    description: "JSON string with credentials for /workflows/v1/start"
+    required: true
+  metadata-json:
+    description: "JSON string with metadata filters for /workflows/v1/start"
+    required: false
+    default: '{"exclude-filter":"{}","include-filter":"{}","temp-table-regex":"","extraction-method":"direct"}'
+  connection-json:
+    description: "JSON string with connection config for /workflows/v1/start"
+    required: false
+    default: '{"connection_name":"parity-test","connection_qualified_name":"default/parity/0"}'
+  poll-interval:
+    description: "Seconds between status polls"
+    required: false
+    default: "10"
+  poll-timeout:
+    description: "Max seconds to wait for workflow completion"
+    required: false
+    default: "300"
+  app-startup-wait:
+    description: "Seconds to wait for app to start"
+    required: false
+    default: "25"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        ref: ${{ inputs.ref }}
+        fetch-depth: 0
+
+    - name: Restore ref after submodule setup
+      shell: bash
+      env:
+        PARITY_REF: ${{ inputs.ref }}
+      run: |
+        git checkout "$PARITY_REF"
+        echo "Checked out: $(git log --oneline -1)"
+
+    - name: Start app and extract
+      shell: bash
+      env:
+        ATLAN_LOCAL_DEVELOPMENT: "true"
+        ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
+        ATLAN_MAX_CONCURRENT_ACTIVITIES: "1"
+        PARITY_STARTUP_WAIT: ${{ inputs.app-startup-wait }}
+        PARITY_CREDENTIALS: ${{ inputs.credentials-json }}
+        PARITY_CONNECTION: ${{ inputs.connection-json }}
+        PARITY_METADATA: ${{ inputs.metadata-json }}
+        PARITY_POLL_TIMEOUT: ${{ inputs.poll-timeout }}
+        PARITY_POLL_INTERVAL: ${{ inputs.poll-interval }}
+      run: |
+        set -euo pipefail
+        APP_URL="http://localhost:8000"
+
+        # Start the application
+        echo ">> Starting application..."
+        uv run python main.py &
+        APP_PID=$!
+        sleep "$PARITY_STARTUP_WAIT"
+
+        # Health check
+        if ! curl -sf "${APP_URL}/server/health" > /dev/null 2>&1; then
+          echo "ERROR: App failed health check"
+          kill "$APP_PID" 2>/dev/null || true
+          exit 1
+        fi
+        echo ">> App is healthy."
+
+        # Trigger extraction
+        echo ">> Triggering extraction..."
+        RESPONSE=$(curl -sf -X POST \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"credentials\": ${PARITY_CREDENTIALS},
+            \"connection\": ${PARITY_CONNECTION},
+            \"metadata\": ${PARITY_METADATA}
+          }" \
+          "${APP_URL}/workflows/v1/start")
+
+        WORKFLOW_ID=$(echo "$RESPONSE" | jq -r '.data.workflow_id')
+        RUN_ID=$(echo "$RESPONSE" | jq -r '.data.run_id')
+
+        if [ -z "$WORKFLOW_ID" ] || [ "$WORKFLOW_ID" = "null" ]; then
+          echo "ERROR: Failed to start workflow. Response: $RESPONSE"
+          kill "$APP_PID" 2>/dev/null || true
+          exit 1
+        fi
+        echo ">> Workflow started: $WORKFLOW_ID / $RUN_ID"
+
+        # Poll for completion
+        ELAPSED=0
+        TIMEOUT="$PARITY_POLL_TIMEOUT"
+        INTERVAL="$PARITY_POLL_INTERVAL"
+        STATUS="RUNNING"
+
+        while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+          STATUS_RESPONSE=$(curl -sf "${APP_URL}/workflows/v1/status/${WORKFLOW_ID}/${RUN_ID}" || echo '{}')
+          STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.data.status // "UNKNOWN"')
+          LAST_RUN_ID=$(echo "$STATUS_RESPONSE" | jq -r '.data.last_executed_run_id // empty')
+          [ -n "$LAST_RUN_ID" ] && RUN_ID="$LAST_RUN_ID"
+
+          if [ "$STATUS" != "RUNNING" ]; then
+            break
+          fi
+          echo "   Still running... (${ELAPSED}s)"
+          sleep "$INTERVAL"
+          ELAPSED=$((ELAPSED + INTERVAL))
+        done
+
+        if [ "$STATUS" != "COMPLETED" ]; then
+          echo "ERROR: Workflow ended with status: $STATUS"
+          kill "$APP_PID" 2>/dev/null || true
+          exit 1
+        fi
+        echo ">> Workflow completed."
+
+        # Copy transformed output
+        ARTIFACTS_BASE="./local/dapr/objectstore/artifacts/apps/${ATLAN_APPLICATION_NAME}/workflows"
+        TRANSFORMED_SRC="${ARTIFACTS_BASE}/${WORKFLOW_ID}/${RUN_ID}/transformed"
+
+        if [ ! -d "$TRANSFORMED_SRC" ]; then
+          echo "ERROR: Output not found at $TRANSFORMED_SRC"
+          find "$ARTIFACTS_BASE" -type d -name "transformed" 2>/dev/null || true
+          kill "$APP_PID" 2>/dev/null || true
+          exit 1
+        fi
+
+        mkdir -p ./parity-output
+        cp -r "$TRANSFORMED_SRC"/* ./parity-output/
+        echo ">> Output:"
+        find ./parity-output -type f | head -20
+
+        # Cleanup
+        kill "$APP_PID" 2>/dev/null || true
+        wait "$APP_PID" 2>/dev/null || true
+
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ./parity-output/
+        retention-days: 7
