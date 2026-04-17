@@ -208,21 +208,19 @@ version = "2.8.7"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
-    { name = "duckdb" },
-    { name = "duckdb-engine" },
     { name = "fastapi", extra = ["standard"] },
     { name = "httpx-retries" },
     { name = "loguru" },
     { name = "obstore" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-exporter-prometheus" },
-    { name = "pandas" },
+    { name = "orjson" },
     { name = "psutil" },
-    { name = "pyarrow" },
     { name = "pyatlan" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "temporalio" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
 
@@ -242,7 +240,13 @@ iam-auth = [
     { name = "boto3" },
 ]
 incremental = [
+    { name = "daft" },
+    { name = "duckdb" },
+    { name = "duckdb-engine" },
+    { name = "pandas" },
+    { name = "pyarrow" },
     { name = "rocksdict" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 mcp = [
     { name = "fastmcp" },
@@ -254,6 +258,13 @@ pandas = [
 scale-data-generator = [
     { name = "faker" },
     { name = "numpy" },
+]
+sql = [
+    { name = "duckdb" },
+    { name = "duckdb-engine" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 sqlalchemy = [
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -304,8 +315,11 @@ requires-dist = [
     { name = "azure-storage-file-datalake", marker = "extra == 'azure'", specifier = ">=12.19.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6,<1.43.0" },
     { name = "daft", marker = "extra == 'daft'", specifier = ">=0.7.1,<0.8.0" },
-    { name = "duckdb", specifier = ">=1.1.3,<1.5.0" },
-    { name = "duckdb-engine", specifier = ">=0.17.0,<0.18.0" },
+    { name = "daft", marker = "extra == 'incremental'", specifier = ">=0.7.1,<0.8.0" },
+    { name = "duckdb", marker = "extra == 'incremental'", specifier = ">=1.1.3,<1.5.0" },
+    { name = "duckdb", marker = "extra == 'sql'", specifier = ">=1.1.3,<1.5.0" },
+    { name = "duckdb-engine", marker = "extra == 'incremental'", specifier = ">=0.17.0,<0.18.0" },
+    { name = "duckdb-engine", marker = "extra == 'sql'", specifier = ">=0.17.0,<0.18.0" },
     { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=37.1.0,<39.1.0" },
     { name = "fastapi", extras = ["standard"], specifier = "==0.127.0" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.2.0" },
@@ -316,13 +330,16 @@ requires-dist = [
     { name = "obstore", specifier = ">=0.9.1,<0.10.0" },
     { name = "opentelemetry-exporter-otlp", specifier = "==1.39.1" },
     { name = "opentelemetry-exporter-prometheus", specifier = "==0.60b1" },
+    { name = "orjson", specifier = ">=3.11.6,<3.12.0" },
     { name = "orjson", marker = "extra == 'workflows'", specifier = ">=3.11.6,<3.12.0" },
-    { name = "pandas", specifier = ">=2.2.3,<2.4.0" },
+    { name = "pandas", marker = "extra == 'incremental'", specifier = ">=2.2.3,<2.4.0" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3,<2.4.0" },
+    { name = "pandas", marker = "extra == 'sql'", specifier = ">=2.2.3,<2.4.0" },
     { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = ">=0.23.1,<0.28.0" },
     { name = "psutil", specifier = ">=7.0.0,<7.3.0" },
-    { name = "pyarrow", specifier = ">=20.0.0,<23.0.0" },
+    { name = "pyarrow", marker = "extra == 'incremental'", specifier = ">=20.0.0,<23.0.0" },
     { name = "pyarrow", marker = "extra == 'pandas'", specifier = ">=20.0.0,<23.0.0" },
+    { name = "pyarrow", marker = "extra == 'sql'", specifier = ">=20.0.0,<23.0.0" },
     { name = "pyatlan", specifier = ">=9,<10" },
     { name = "pydantic", specifier = ">=2.10.6,<2.13.0" },
     { name = "pytest-order", marker = "extra == 'tests'", specifier = ">=1.3.0,<1.4.0" },
@@ -330,11 +347,14 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.2,<6.1.0" },
     { name = "redis", extras = ["hiredis"], marker = "extra == 'distributed-lock'", specifier = ">=5.2.0,<7.2.0" },
     { name = "rocksdict", marker = "extra == 'incremental'", specifier = ">=0.3.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'incremental'", specifier = ">=2.0.36,<2.1.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sql'", specifier = ">=2.0.36,<2.1.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlalchemy'", specifier = ">=2.0.36,<2.1.0" },
+    { name = "temporalio", specifier = ">=1.7.1,<1.24.0" },
     { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.7.1,<1.24.0" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0,<0.23.0" },
 ]
-provides-extras = ["workflows", "pandas", "daft", "sqlalchemy", "iam-auth", "azure", "tests", "scale-data-generator", "distributed-lock", "mcp", "incremental"]
+provides-extras = ["workflows", "sql", "daft", "incremental", "iam-auth", "azure", "distributed-lock", "mcp", "tests", "scale-data-generator", "sqlalchemy", "pandas"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1312,12 +1332,13 @@ wheels = [
 
 [[package]]
 name = "fastmcp"
-version = "3.2.0"
+version = "3.2.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
     { name = "cyclopts" },
     { name = "exceptiongroup" },
+    { name = "griffelib" },
     { name = "httpx" },
     { name = "jsonref" },
     { name = "jsonschema-path" },
@@ -1337,9 +1358,9 @@ dependencies = [
     { name = "watchfiles" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d0/32/4f1b2cfd7b50db89114949f90158b1dcc2c92a1917b9f57c0ff24e47a2f4/fastmcp-3.2.0.tar.gz", hash = "sha256:d4830b8ffc3592d3d9c76dc0f398904cf41f04910e41a0de38cc1004e0903bef", size = 26318581, upload-time = "2026-03-30T20:25:37.692Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9c/13/29544fbc6dfe45ea38046af0067311e0bad7acc7d1f2ad38bb08f2409fe2/fastmcp-3.2.4.tar.gz", hash = "sha256:083ecb75b44a4169e7fc0f632f94b781bdb0ff877c6b35b9877cbb566fd4d4d1", size = 28746127, upload-time = "2026-04-14T01:42:24.174Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/67/684fa2d2de1e7504549d4ca457b4f854ccec3cd3be03bd86b33b599fbf58/fastmcp-3.2.0-py3-none-any.whl", hash = "sha256:e71aba3df16f86f546a4a9e513261d3233bcc92bef0dfa647bac3fa33623f681", size = 705550, upload-time = "2026-03-30T20:25:35.499Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/76/b310d52fa0e30d39bd937eb58ec2c1f1ea1b5f519f0575e9dd9612f01deb/fastmcp-3.2.4-py3-none-any.whl", hash = "sha256:e6c9c429171041455e47ab94bb3f83c4657622a0ec28922f6940053959bd58a9", size = 728599, upload-time = "2026-04-14T01:42:26.85Z" },
 ]
 
 [[package]]
@@ -1561,6 +1582,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/57/b9/f8025d71a6085c441a7eaff0fd928bbb275a6633773667023d19179fe815/greenlet-3.3.0-cp314-cp314t-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3c6e9b9c1527a78520357de498b0e709fb9e2f49c3a513afd5a249007261911b", size = 653783, upload-time = "2025-12-04T14:26:06.225Z" },
     { url = "https://files.pythonhosted.org/packages/f6/c7/876a8c7a7485d5d6b5c6821201d542ef28be645aa024cfe1145b35c120c1/greenlet-3.3.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:286d093f95ec98fdd92fcb955003b8a3d054b4e2cab3e2707a5039e7b50520fd", size = 1614857, upload-time = "2025-12-04T15:04:28.484Z" },
     { url = "https://files.pythonhosted.org/packages/4f/dc/041be1dff9f23dac5f48a43323cd0789cb798342011c19a248d9c9335536/greenlet-3.3.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:6c10513330af5b8ae16f023e8ddbfb486ab355d04467c4679c5cfe4659975dd9", size = 1676034, upload-time = "2025-12-04T14:27:33.531Z" },
+]
+
+[[package]]
+name = "griffelib"
+version = "2.0.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/82/74f4a3310cdabfbb10da554c3a672847f1ed33c6f61dd472681ce7f1fe67/griffelib-2.0.2.tar.gz", hash = "sha256:3cf20b3bc470e83763ffbf236e0076b1211bac1bc67de13daf494640f2de707e", size = 166461, upload-time = "2026-03-27T11:34:51.091Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/11/8c/c9138d881c79aa0ea9ed83cbd58d5ca75624378b38cee225dcf5c42cc91f/griffelib-2.0.2-py3-none-any.whl", hash = "sha256:925c857658fb1ba40c0772c37acbc2ab650bd794d9c1b9726922e36ea4117ea1", size = 142357, upload-time = "2026-03-27T11:34:46.275Z" },
 ]
 
 [[package]]
@@ -1897,14 +1927,14 @@ wheels = [
 
 [[package]]
 name = "jaraco-context"
-version = "6.1.2"
+version = "6.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "backports-tarfile", marker = "python_full_version < '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/50/4763cd07e722bb6285316d390a164bc7e479db9d90daa769f22578f698b4/jaraco_context-6.1.2.tar.gz", hash = "sha256:f1a6c9d391e661cc5b8d39861ff077a7dc24dc23833ccee564b234b81c82dfe3", size = 16801, upload-time = "2026-03-20T22:13:33.922Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/7d/41acf8e22d791bde812cb6c2c36128bb932ed8ae066bcb5e39cb198e8253/jaraco_context-6.0.2.tar.gz", hash = "sha256:953ae8dddb57b1d791bf72ea1009b32088840a7dd19b9ba16443f62be919ee57", size = 14994, upload-time = "2025-12-24T19:21:35.784Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/58/bc8954bda5fcda97bd7c19be11b85f91973d67a706ed4a3aec33e7de22db/jaraco_context-6.1.2-py3-none-any.whl", hash = "sha256:bf8150b79a2d5d91ae48629d8b427a8f7ba0e1097dd6202a9059f29a36379535", size = 7871, upload-time = "2026-03-20T22:13:32.808Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/0c/1e0096ced9c55f9c6c6655446798df74165780375d3f5ab5f33751e087ae/jaraco_context-6.0.2-py3-none-any.whl", hash = "sha256:55fc21af4b4f9ca94aa643b6ee7fe13b1e4c01abf3aeb98ca4ad9c80b741c786", size = 6988, upload-time = "2025-12-24T19:21:34.557Z" },
 ]
 
 [[package]]
@@ -3148,11 +3178,11 @@ wheels = [
 
 [[package]]
 name = "prometheus-client"
-version = "0.25.0"
+version = "0.23.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/1b/fb/d9aa83ffe43ce1f19e557c0971d04b90561b0cfd50762aafb01968285553/prometheus_client-0.25.0.tar.gz", hash = "sha256:5e373b75c31afb3c86f1a52fa1ad470c9aace18082d39ec0d2f918d11cc9ba28", size = 86035, upload-time = "2026-04-09T19:53:42.359Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/23/53/3edb5d68ecf6b38fcbcc1ad28391117d2a322d9a1a3eff04bfdb184d8c3b/prometheus_client-0.23.1.tar.gz", hash = "sha256:6ae8f9081eaaaf153a2e959d2e6c4f4fb57b12ef76c8c7980202f1e57b48b2ce", size = 80481, upload-time = "2025-09-18T20:47:25.043Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8d/9b/d4b1e644385499c8346fa9b622a3f030dce14cd6ef8a1871c221a17a67e7/prometheus_client-0.25.0-py3-none-any.whl", hash = "sha256:d5aec89e349a6ec230805d0df882f3807f74fd6c1a2fa86864e3c2279059fed1", size = 64154, upload-time = "2026-04-09T19:53:41.324Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/db/14bafcb4af2139e046d03fd00dea7873e48eafe18b7d2797e73d6681f210/prometheus_client-0.23.1-py3-none-any.whl", hash = "sha256:dd1913e6e76b59cfe44e7a4b83e01afc9873c1bdfd2ed8739f1e76aeca115f99", size = 61145, upload-time = "2025-09-18T20:47:23.875Z" },
 ]
 
 [[package]]
@@ -3443,7 +3473,7 @@ wheels = [
 
 [[package]]
 name = "pyatlan"
-version = "9.4.0"
+version = "9.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -3459,9 +3489,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/73/fe9bf1789f188bae6e1ecc52b24329052423a6659bd6ad16c98c611f72e3/pyatlan-9.4.0.tar.gz", hash = "sha256:a98373727dcc1df03e8f45b37c4f85bb4366a8fb313ffb1d23f03ef3d95c6c29", size = 3135782, upload-time = "2026-04-10T08:11:34.929Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/ec/bf8732ae58d91431c79f0a27c66e91bc45c3fffb9919a499e60cf342c56f/pyatlan-9.3.1.tar.gz", hash = "sha256:d0da2050881a05cb87772bad32fd00c5e583d1046d8e4b4aefaf097b519ff409", size = 2759384, upload-time = "2026-03-23T08:08:20.39Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/86/c2e1026006ac49f78b5643a71d723683987adf59fd5d573aaa38434336ed/pyatlan-9.4.0-py3-none-any.whl", hash = "sha256:70a288ceca3f5a3658f69e8f092d5722a40ec63665e4913b30b46d074bb1f781", size = 4988228, upload-time = "2026-04-10T08:11:33.118Z" },
+    { url = "https://files.pythonhosted.org/packages/10/b5/2b84f95c0653ad5280f1eb24923adce190ad0af3e8f587382ffe8e28d877/pyatlan-9.3.1-py3-none-any.whl", hash = "sha256:3af2246b54685bb785473b725c86dee4cec7ea2024cb66d5f8d92b473468ec27", size = 4659707, upload-time = "2026-03-23T08:08:22.647Z" },
 ]
 
 [[package]]
@@ -4679,11 +4709,11 @@ wheels = [
 
 [[package]]
 name = "uncalled-for"
-version = "0.2.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/02/7c/b5b7d8136f872e3f13b0584e576886de0489d7213a12de6bebf29ff6ebfc/uncalled_for-0.2.0.tar.gz", hash = "sha256:b4f8fdbcec328c5a113807d653e041c5094473dd4afa7c34599ace69ccb7e69f", size = 49488, upload-time = "2026-02-27T17:40:58.137Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e1/68/35c1d87e608940badbcfeb630347aa0509897284684f61fab6423d02b253/uncalled_for-0.3.1.tar.gz", hash = "sha256:5e412ac6708f04b56bef5867b5dcf6690ebce4eb7316058d9c50787492bb4bca", size = 49693, upload-time = "2026-04-07T13:05:06.462Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/7f/4320d9ce3be404e6310b915c3629fe27bf1e2f438a1a7a3cb0396e32e9a9/uncalled_for-0.2.0-py3-none-any.whl", hash = "sha256:2c0bd338faff5f930918f79e7eb9ff48290df2cb05fcc0b40a7f334e55d4d85f", size = 11351, upload-time = "2026-02-27T17:40:56.804Z" },
+    { url = "https://files.pythonhosted.org/packages/11/e1/7ec67882ad8fc9f86384bef6421fa252c9cbe5744f8df6ce77afc9eca1f5/uncalled_for-0.3.1-py3-none-any.whl", hash = "sha256:074cdc92da8356278f93d0ded6f2a66dd883dbecaf9bc89437646ee2289cc200", size = 11361, upload-time = "2026-04-07T13:05:05.341Z" },
 ]
 
 [[package]]

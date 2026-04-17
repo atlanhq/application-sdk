@@ -11,11 +11,12 @@ Functions:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Set
-
-import duckdb
+from typing import TYPE_CHECKING, Set
 
 from application_sdk.common.exc_utils import rewrap
+
+if TYPE_CHECKING:
+    import duckdb
 from application_sdk.common.incremental.models import EntityType
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnectionManager,
@@ -156,6 +157,8 @@ def _load_tables_to_duckdb(
         """)
 
     union_query = " UNION ALL ".join(union_parts)
+
+    import duckdb
 
     try:
         conn.execute(f"""
