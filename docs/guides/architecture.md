@@ -239,8 +239,7 @@ application_sdk/
 │   ├── base.py             # App class, run() wrapper, determinism helpers
 │   ├── task.py             # @task decorator, signature validation
 │   ├── registry.py         # AppRegistry, TaskRegistry singletons
-│   ├── context.py          # AppContext, logging, infra/credential access
-│   └── client.py           # Child app invocation (call, call_by_name)
+│   └── context.py          # AppContext, logging, infra/credential access
 │
 ├── contracts/              # Typed cross-boundary contracts
 │   ├── base.py             # Input, Output, HeartbeatDetails base classes
