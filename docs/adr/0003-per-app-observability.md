@@ -7,7 +7,7 @@
 
 Each app runs in its own worker. Observability (logs, traces, metrics) is configured at startup to export to an OTLP endpoint — in the current SDK, this is the cluster's central OTLP collector, reached via the node's IP (`$(K8S_NODE_IP):4317`), wired automatically by the Helm chart.
 
-When App A calls App B (e.g., RelationalAssetsPipeline calls a shared Loader), a question arises: how do we link App A's trace to App B's trace so a full execution can be reconstructed?
+When multiple apps execute as part of the same pipeline (e.g., orchestrated by Automation Engine), a question arises: how do we link each app's trace to the shared execution so the full run can be reconstructed?
 
 ## Decision
 
@@ -21,10 +21,8 @@ Each app exports to the central OTLP collector under its own `OTEL_SERVICE_NAME`
 RelationalAssetsPipeline Worker       Loader Worker
 ├── OTEL_SERVICE_NAME: relational-assets-pipeline-worker
 ├── Logs: "Starting pipeline"         Logs: "Loading 500 records"
-├── correlation_id: abc-123           correlation_id: abc-123 (propagated)
-│                                     │
-│   call_by_name("loader") ──────────►│
-│                                     │
+├── correlation_id: abc-123           correlation_id: abc-123 (propagated via AE)
+│
 └── Logs: "Pipeline complete"         └── Logs: "Load complete"
 ```
 
@@ -38,7 +36,7 @@ Each app configures its own `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` a
 
 **Pros:**
 - **App-centric observability**: Each app owner sees all activity for their app in one service
-- **Shared app insights**: For shared apps (e.g., Loader), the owner sees consolidated usage from all callers — useful for capacity planning and debugging
+- **App-scoped insights**: Each app owner sees consolidated usage for their app — useful for capacity planning and debugging
 - **Standard pattern**: Aligns with distributed tracing in microservices
 - **Simple implementation**: No dynamic exporter configuration needed
 - **Performance**: Long-lived exporters with batching; no per-request overhead

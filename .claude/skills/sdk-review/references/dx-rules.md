@@ -43,7 +43,6 @@ New APIs must follow established SDK idioms. Connector developers build muscle m
 - `App` subclassing with `run()` or `@entrypoint` as the orchestrator
 - `self.logger`, `self.now()`, `self.uuid()` for determinism
 - `self.task_context.run_in_thread()` for blocking ops
-- `call_by_name()` for inter-app coordination
 
 Flag:
 - New orchestration methods that bypass `run()` / `@entrypoint`
