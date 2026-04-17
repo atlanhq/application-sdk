@@ -251,6 +251,10 @@ incremental = [
 mcp = [
     { name = "fastmcp" },
 ]
+pandas = [
+    { name = "pandas" },
+    { name = "pyarrow" },
+]
 scale-data-generator = [
     { name = "faker" },
     { name = "numpy" },
@@ -320,7 +324,6 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = "==0.127.0" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.2.0" },
     { name = "httpx", marker = "extra == 'tests'", specifier = ">=0.27.0,<0.29.0" },
-    { name = "httpx-retries", specifier = ">=0.4.0" },
     { name = "httpx-retries", specifier = ">=0.4.0,<0.5.0" },
     { name = "loguru", specifier = ">=0.7.3,<0.8.0" },
     { name = "numpy", marker = "extra == 'scale-data-generator'", specifier = ">=1.23.5,<2.5.0" },
@@ -330,10 +333,12 @@ requires-dist = [
     { name = "orjson", specifier = ">=3.11.6,<3.12.0" },
     { name = "orjson", marker = "extra == 'workflows'", specifier = ">=3.11.6,<3.12.0" },
     { name = "pandas", marker = "extra == 'incremental'", specifier = ">=2.2.3,<2.4.0" },
+    { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3,<2.4.0" },
     { name = "pandas", marker = "extra == 'sql'", specifier = ">=2.2.3,<2.4.0" },
     { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = ">=0.23.1,<0.28.0" },
     { name = "psutil", specifier = ">=7.0.0,<7.3.0" },
     { name = "pyarrow", marker = "extra == 'incremental'", specifier = ">=20.0.0,<23.0.0" },
+    { name = "pyarrow", marker = "extra == 'pandas'", specifier = ">=20.0.0,<23.0.0" },
     { name = "pyarrow", marker = "extra == 'sql'", specifier = ">=20.0.0,<23.0.0" },
     { name = "pyatlan", specifier = ">=9,<10" },
     { name = "pydantic", specifier = ">=2.10.6,<2.13.0" },
@@ -349,7 +354,7 @@ requires-dist = [
     { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.7.1,<1.24.0" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0,<0.23.0" },
 ]
-provides-extras = ["workflows", "sql", "daft", "incremental", "iam-auth", "azure", "distributed-lock", "mcp", "tests", "scale-data-generator", "sqlalchemy"]
+provides-extras = ["workflows", "sql", "daft", "incremental", "iam-auth", "azure", "distributed-lock", "mcp", "tests", "scale-data-generator", "sqlalchemy", "pandas"]
 
 [package.metadata.requires-dev]
 dev = [

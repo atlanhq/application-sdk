@@ -33,9 +33,8 @@ dependencies = [
     "python-dotenv>=1.1.0,<1.3.0",
     "pyyaml>=6.0.2,<6.1.0",
     "obstore>=0.9.1,<0.10.0",
-    # Temporal runtime + Dapr HTTP client (httpx-based, replaces sync dapr library)
+    # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
     "temporalio>=1.7.1,<1.24.0",
-    "httpx-retries>=0.4.0",
     "orjson>=3.11.6,<3.12.0",
 ]
 
@@ -103,6 +102,11 @@ scale_data_generator = [
 # Removed in v3.1 — use sql extra instead
 sqlalchemy = [
     "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
+]
+# Removed in v3.1 — use sql extra instead
+pandas = [
+    "pandas>=2.2.3,<2.4.0",
+    "pyarrow>=20.0.0,<23.0.0",
 ]
 
 # Development dependencies - Install using: uv sync --group dev
