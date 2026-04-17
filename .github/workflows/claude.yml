@@ -51,8 +51,7 @@ jobs:
   # ── @sdk-review handler ─────────────────────────────────────
   # The ONLY entry point for AI-assisted PR review on this repo.
   # Triggered by @sdk-review comments on PRs.
-  # Runs the full multi-model review pipeline (3 Opus agents +
-  # GPT-5.3-codex adversarial), with auto-fix loop, conflict
+  # Runs the Opus review pipeline with auto-fix loop, conflict
   # resolution, and inline comment Q&A.
   #
   # Commands:
@@ -92,6 +91,9 @@ jobs:
         contains(github.event.comment.body, '@sdk-review') &&
         !contains(github.event.comment.body, '@sdk-review stop') &&
         !contains(github.event.comment.body, '@sdk-review cancel') &&
+        github.event.comment.user.login != 'claude[bot]' &&
+        github.event.comment.user.login != 'github-actions[bot]' &&
+        github.event.comment.user.login != 'atlan-ci' &&
         (github.event.comment.author_association == 'OWNER' ||
          github.event.comment.author_association == 'MEMBER' ||
          github.event.comment.author_association == 'COLLABORATOR')
@@ -117,7 +119,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.ORG_PAT_GITHUB }}
 
       # NOTE: VPN connect is intentionally AFTER Resolve PR metadata and
       # Acknowledge trigger. Those first two steps only talk to GitHub
@@ -152,7 +154,7 @@ jobs:
             # original requester if we can find it (from the last
             # @sdk-review auto-complete comment on the PR); otherwise
             # fall back to the bot itself.
-            COMMENTER=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            COMMENTER=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
               --jq '[.[] | select(.body | test("@sdk-review\\s+auto[- ]?complete|@sdk-review\\s+resolve"; "i"))
                     | select(.user.login != "github-actions[bot]")] | last | .user.login // "github-actions[bot]"')
             COMMENT_BODY=""  # no comment in dispatch path
@@ -227,8 +229,7 @@ jobs:
 
           # Classify PR complexity for smart agent routing.
           #   tests-only → all changed .py files are under tests/ (no production code)
-          #                 → dispatch ONLY Agent B (QUALITY/TEST), skip A + C + Codex
-          #   standard   → full 3-agent + Codex pipeline
+          #   standard   → full review pipeline
           ALL_FILES=$(gh pr view "$PR_NUMBER" --json files --jq '.files[].path')
           PY_FILES=$(printf '%s' "$ALL_FILES" | grep '\.py$' || echo "")
           NON_TEST_PY=$(printf '%s' "$PY_FILES" | grep -v '^tests/' || echo "")
@@ -266,7 +267,7 @@ jobs:
           # Count prior SDK_REVIEW_V2 comments (none posted yet in this run).
           #   0  → first Review on this PR
           #   >0 → Re-review (there's a prior review in the history)
-          PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+          PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
             --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 0)
           if [ "${PRIOR_REVIEWS:-0}" -gt 0 ]; then
             VERB="Re-review"
@@ -296,10 +297,8 @@ jobs:
           # Bucketed so users aren't misled by a fixed "~5-8 min" when
           # they've pushed a 3,000-line PR that will realistically take
           # 15-25 min (big diff → bigger subagent context → slower).
-          # Simple honest estimate — ~10 min for most PRs.
-          # With 3 subagents + Codex adversarial + reconcile + CI wait,
-          # even small PRs take ~8-10 min. Large PRs or auto-complete
-          # can take longer.
+          # Simple honest estimate — ~5-8 min for most PRs.
+          # Large PRs or auto-complete can take longer.
           TOTAL_LINES=$(gh pr view "$PR_NUMBER" --json files \
             --jq '[.files[] | (.additions // 0) + (.deletions // 0)] | add // 0' 2>/dev/null || echo 0)
           if [ "$TOTAL_LINES" -lt 500 ]; then
@@ -352,12 +351,11 @@ jobs:
       - name: Conflict pre-flight (Tier 1 + 2)
         id: conflicts
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           REPO: ${{ github.repository }}
           PR: ${{ steps.pr.outputs.number }}
           BASE: ${{ steps.pr.outputs.base_branch }}
           HEAD: ${{ steps.pr.outputs.head_branch }}
-          TOUCHES_WORKFLOWS: ${{ steps.pr.outputs.touches_workflows }}
         run: |
           # Set git identity BEFORE any merge/commit so we don't cascade
           # into 'empty ident name' errors if a tier step runs.
@@ -370,20 +368,6 @@ jobs:
           if [ "$MERGEABLE" = "MERGEABLE" ] && [ "$MERGE_STATE" = "CLEAN" ]; then
             echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
             echo "No conflicts."
-            exit 0
-          fi
-
-          # If the PR touches .github/workflows/*, GITHUB_TOKEN cannot
-          # push a branch update without the `workflows` scope (which
-          # GITHUB_TOKEN does NOT carry). Attempting Tier 1/2 would fail
-          # with a cryptic 403 → cascade into 'empty ident name' →
-          # 'there is no merge to abort'. Skip tier attempts cleanly,
-          # tell the author, and proceed with the review anyway.
-          if [ "$TOUCHES_WORKFLOWS" = "true" ]; then
-            echo "PR modifies .github/workflows/* — skipping branch update (GITHUB_TOKEN lacks workflow scope)."
-            gh pr comment "$PR" --body \
-              "⚠️ This PR modifies \`.github/workflows/*\` files. GitHub's \`GITHUB_TOKEN\` cannot update the branch (lacks \`workflows\` scope). **Review will proceed**, but you will need to **update the branch manually** (or a maintainer with a PAT that has the \`workflow\` scope must do it) before the PR can be merged."
-            echo "needs_resolution=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -596,7 +580,7 @@ jobs:
             and without sycophancy.
 
             1. Fetch the most recent prior SDK_REVIEW_V2 comment:
-               gh api repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments \
+               gh api repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments --paginate \
                  --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | last | .body'
 
             2. Fetch the triggering challenge comment body via $GITHUB_EVENT_PATH
@@ -852,171 +836,12 @@ jobs:
           ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
           GH_TOKEN: ${{ github.token }}
 
-      # Adversarial review (Wave 2 — GPT-5.3-codex via LiteLLM).
-      # Second cross-model opinion. Posts a separate comment with
-      # SDK_REVIEW_V2_ADVERSARIAL marker. Runs BEFORE verdict parsing
-      # so Reconcile (next step) can fold Codex's disagreements back
-      # into the Opus SDK_REVIEW_V2 comment, and Parse verdict reads
-      # the reconciled version.
-      - name: Adversarial review (GPT-5.3-codex)
-        id: adversarial
-        if: |
-          steps.pr.outputs.mode != 'override' &&
-          steps.pr.outputs.mode != 'challenge' &&
-          steps.pr.outputs.complexity != 'tests-only'
-        continue-on-error: true
-        env:
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
-        run: |
-          CLAUDE_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" \
-            | jq -r '[.[] | select(.body | contains("SDK_REVIEW_V2"))
-              | select(.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
-              | select(.body | contains("SDK_REVIEW_V2_RECONCILED") | not)] | last | .body // ""')
-
-          if [ -z "$CLAUDE_REVIEW" ]; then
-            echo "No SDK_REVIEW_V2 comment found — skipping adversarial pass."
-            echo "ran=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          DIFF=$(gh pr diff "$PR_NUMBER" 2>/dev/null | head -c 40000)
-
-          if [ -z "$DIFF" ]; then
-            echo "Empty diff — skipping adversarial pass."
-            echo "ran=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          REQUEST_BODY=$(jq -n \
-            --arg diff "$DIFF" \
-            --arg claude "$CLAUDE_REVIEW" \
-            '{
-              model: "gpt-5.3-codex",
-              messages: [
-                {
-                  role: "system",
-                  content: "You are a senior Python engineer doing adversarial re-review. Another reviewer (Claude Opus) reviewed this PR. Output JSON ONLY — no prose. Fields: missed (array of findings the other review missed), false_positives (array of findings you think are wrong), severity_changes (array of {file,line,from,to,reason}). Each finding: {severity, tag, file, line, description}. If no disagreements, all arrays empty."
-                },
-                {
-                  role: "user",
-                  content: ("## PR diff\n```\n" + $diff + "\n```\n\n## Opus review\n" + $claude + "\n\nReturn STRICT JSON matching the schema described in the system prompt. No markdown, no prose outside the JSON.")
-                }
-              ],
-              temperature: 0.2,
-              max_tokens: 4000,
-              response_format: {type: "json_object"}
-            }')
-
-          echo "Calling GPT-5.3-codex..."
-          RESPONSE=$(curl -sS -X POST "https://llmproxy.atlan.dev/v1/chat/completions" \
-            -H "Authorization: Bearer $LITELLM_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "$REQUEST_BODY" 2>&1)
-
-          CODEX_JSON=$(printf '%s' "$RESPONSE" | jq -r '.choices[0].message.content // ""')
-
-          if [ -z "$CODEX_JSON" ]; then
-            ERR=$(printf '%s' "$RESPONSE" | jq -r '.error.message // "unknown"')
-            echo "::warning::Codex returned no content: $ERR"
-            echo "ran=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Save JSON to disk for the Reconcile step
-          printf '%s' "$CODEX_JSON" > /tmp/codex_disagreements.json
-
-          # Codex findings saved to /tmp/codex_disagreements.json.
-          # The Reconcile step will fold them into the main Opus review
-          # comment in-place — no separate comment needed.
-          echo "ran=true" >> "$GITHUB_OUTPUT"
-
-      # Reconcile — fold Codex disagreements into the Opus SDK_REVIEW_V2
-      # comment. If Codex caught something Opus missed, add it. If
-      # Codex flagged a false positive, remove it. If severity differs,
-      # pick the median (more conservative).
-      #
-      # Runs a short Claude session that reads both the Opus review
-      # and the Codex JSON disagreements, edits the Opus comment in
-      # place (PATCH), re-evaluates the verdict on the reconciled set.
-      - name: Reconcile Opus + Codex findings
-        if: steps.adversarial.outputs.ran == 'true'
-        continue-on-error: true
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.LITELLM_API_KEY }}
-          show_full_output: true
-          prompt: |
-            You are reconciling two reviews on PR #${{ steps.pr.outputs.number }}
-            in repo ${{ github.repository }}.
-
-            1. Fetch the most recent SDK_REVIEW_V2 comment (NOT
-               _ADVERSARIAL, NOT _RECONCILED):
-               gh api "repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments" \
-                 --jq '[.[] | select(.body | contains("SDK_REVIEW_V2")
-                   and (.body | contains("SDK_REVIEW_V2_ADVERSARIAL") | not)
-                   and (.body | contains("SDK_REVIEW_V2_RECONCILED") | not))] | last'
-               Remember its `id` (comment id) and `body`.
-
-            2. Read /tmp/codex_disagreements.json (GPT-5.3-codex's
-               disagreements, JSON schema: missed, false_positives,
-               severity_changes).
-
-            3. Produce a reconciled SDK_REVIEW_V2 comment body:
-               - ADD each finding from Codex's `missed` array
-                 (if not already in the Opus review).
-               - REMOVE each finding from Codex's `false_positives`
-                 array (match by file+line+description similarity).
-                 Only remove if Codex's reasoning is strong.
-               - ADJUST severity per `severity_changes` — but apply a
-                 CONSERVATIVE rule: use the HIGHER of {Opus, Codex}
-                 severity when they disagree (never silently downgrade
-                 a Critical).
-               - Re-evaluate verdict with the reconciled findings
-                 using the standard rules (Critical [SEC] → BLOCKED,
-                 any Important or 3+ Minor → NEEDS_FIXES, etc.).
-               - Add a new section "### Cross-model reconciliation"
-                 BEFORE the Findings list that summarizes what was
-                 added/removed/adjusted. Example:
-                   - Added 1 missed finding (SEC at api/foo.py:42)
-                   - Removed 0 false positives
-                   - Adjusted 1 severity (bar.py:10: Minor → Important)
-               - Keep the SDK_REVIEW_V2 marker. Replace it with both
-                 markers stacked:
-                   <!-- SDK_REVIEW_V2 -->
-                   <!-- SDK_REVIEW_V2_RECONCILED -->
-
-            4. Edit the Opus comment in place:
-               gh api -X PATCH \
-                 "repos/${{ github.repository }}/issues/comments/<comment_id>" \
-                 -f body="<reconciled body>"
-
-            5. Output VERDICT:<new verdict> as the LAST LINE.
-
-            If /tmp/codex_disagreements.json is missing or Codex had
-            no disagreements (all arrays empty), skip everything and
-            output VERDICT:UNCHANGED.
-          claude_args: |
-            --model claude-opus-4-6
-            --allowedTools "Read,Glob,Grep,Bash(gh api:*),Bash(cat:*),Bash(jq:*),Bash(python3:*),Bash(python:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(wc:*),Bash(echo:*),Bash(sed:*),Bash(awk:*),Bash(cut:*),Bash(tr:*),Bash(sort:*),Bash(diff:*)"
-        env:
-          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          ANTHROPIC_BASE_URL: https://llmproxy.atlan.dev
-          GH_TOKEN: ${{ github.token }}
-
       # Parse verdict by reading the SDK_REVIEW_V2 comment Claude posted.
       # The action output 'result' isn't reliably exposed by
       # anthropics/claude-code-action@v1 — it resolved to empty string
       # in testing, causing the pipeline to always fall through to
       # NEEDS_FIXES and skip Finalize. Fetching the comment we just
       # posted gives a stable, authoritative source for the verdict.
-      #
-      # Note: this runs AFTER Adversarial + Reconcile, so the comment
-      # we read is the RECONCILED version (if Reconcile ran).
       - name: Parse verdict
         id: verdict
         env:
@@ -1025,7 +850,7 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
           # Find the most recent SDK_REVIEW_V2 comment on this PR
-          REVIEW_COMMENT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+          REVIEW_COMMENT=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
             --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | last | .body // ""')
 
           if [ -z "$REVIEW_COMMENT" ]; then
@@ -1072,11 +897,12 @@ jobs:
               PATCH or MIGRATE
             - SKIP all REFACTOR and DESIGN_CHANGE scope findings
             - Full git history is already checked out. Do NOT run git fetch.
+            - uv, python, ruff, and all dev tools are already installed on PATH. Do NOT attempt to install them.
 
             Process:
 
             1. Read the most recent SDK review comment on this PR:
-               gh api repos/atlanhq/application-sdk/issues/${{ steps.pr.outputs.number }}/comments \
+               gh api repos/atlanhq/application-sdk/issues/${{ steps.pr.outputs.number }}/comments --paginate \
                  --jq '.[] | select(.body | contains("SDK_REVIEW_V2")) | .body' | tail -1
 
             2. Parse REVIEW_DATA — extract findings with status "open"
@@ -1110,7 +936,7 @@ jobs:
             Output: FIXES_APPLIED:<count> or FIXES_APPLIED:0
           claude_args: |
             --model claude-opus-4-6
-            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(uv run:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git diff:*),Bash(git checkout:*),Bash(git status:*),Bash(gh api:*),Bash(gh pr view:*),Bash(cat:*),Bash(jq:*),Bash(python3:*),Bash(python:*),Bash(wc:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(grep:*),Bash(find:*),Bash(echo:*),Bash(tr:*),Bash(cut:*),Bash(uniq:*),Bash(diff:*),Bash(xargs:*),Bash(sed:*),Bash(awk:*),Bash(ruff:*),Bash(pip:*),Bash(mkdir:*),Bash(tee:*)"
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(uv run:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git diff:*),Bash(git checkout:*),Bash(git status:*),Bash(gh api:*),Bash(gh pr view:*),Bash(cat:*),Bash(jq:*),Bash(python3:*),Bash(python:*),Bash(wc:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(grep:*),Bash(find:*),Bash(echo:*),Bash(tr:*),Bash(cut:*),Bash(uniq:*),Bash(diff:*),Bash(xargs:*),Bash(sed:*),Bash(awk:*),Bash(ruff:*),Bash(pip:*),Bash(mkdir:*),Bash(tee:*),Bash(which:*),Bash(cp:*),Bash(mv:*),Bash(touch:*),Bash(chmod:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
@@ -1171,10 +997,10 @@ jobs:
           if gh api "repos/${REPO}/actions/workflows/claude.yml/dispatches" \
                -X POST \
                -f ref="${DEFAULT_BRANCH}" \
-               -F "inputs[pr_number]=${PR_NUMBER}" \
-               -F "inputs[iteration]=${NEXT}" \
-               -F "inputs[max_iter]=${MAX}" \
-               -F "inputs[trigger_reason]=auto-complete iteration ${NEXT}/${MAX}"; then
+               -f "inputs[pr_number]=${PR_NUMBER}" \
+               -f "inputs[iteration]=${NEXT}" \
+               -f "inputs[max_iter]=${MAX}" \
+               -f "inputs[trigger_reason]=auto-complete iteration ${NEXT}/${MAX}"; then
             # Post a short informational comment on the PR (not a
             # trigger — just user-facing visibility).
             gh pr comment "$PR_NUMBER" --body \
@@ -1191,7 +1017,8 @@ jobs:
         id: finalize
         if: steps.verdict.outputs.verdict == 'READY_TO_MERGE'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GITHUB_TOKEN: ${{ github.token }}
           PR: ${{ steps.pr.outputs.number }}
           MODE: ${{ steps.pr.outputs.mode }}
           REPO: ${{ github.repository }}
@@ -1270,7 +1097,7 @@ jobs:
           if [ "$MODE" = "override" ]; then
             # Find the most recent @sdk-review override:… comment by a
             # human collaborator and extract admin + reason.
-            OVERRIDE_INFO=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+            OVERRIDE_INFO=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
               --jq '[.[] | select(.body | test("@sdk-review\\s+override:"; "i"))] | last // {}')
             OVERRIDE_ADMIN=$(printf '%s' "$OVERRIDE_INFO" | jq -r '.user.login // "unknown"')
             OVERRIDE_REASON=$(printf '%s' "$OVERRIDE_INFO" | jq -r '.body // ""' \
@@ -1285,7 +1112,7 @@ jobs:
           elif [ "$MODE" = "challenge" ]; then
             APPROVE_BODY="SDK Re-review (challenge response): blocking findings withdrawn or softened after re-evaluating author pushback. CI passing. Branch up to date. Approved."
           else
-            PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+            PRIOR_REVIEWS=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
               --jq '[.[] | select(.body | contains("SDK_REVIEW_V2"))] | length' 2>/dev/null || echo 1)
 
             if [ "${PRIOR_REVIEWS:-1}" -gt 1 ]; then
@@ -1324,34 +1151,10 @@ jobs:
           gh pr edit "$PR" --remove-label "needs-human-review" 2>/dev/null || true
           gh pr edit "$PR" --remove-label "needs-rebase" 2>/dev/null || true
 
-          # Auto-resolve ALL remaining bot inline comment threads.
-          # PR is approved → all findings are either fixed or accepted.
-          # No reason to leave resolved/stale threads cluttering the
-          # Files Changed tab.
-          THREADS=$(gh api graphql -f query='
-            query($owner:String!,$name:String!,$num:Int!) {
-              repository(owner:$owner, name:$name) {
-                pullRequest(number:$num) {
-                  reviewThreads(first:100) {
-                    nodes { id isResolved
-                      comments(first:1) {
-                        nodes { author{login} }
-                      }
-                    }
-                  }
-                }
-              }
-            }' -F owner=atlanhq -F name=application-sdk -F num="$PR" \
-            --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | select(.comments.nodes[0].author.login == "claude[bot]" or .comments.nodes[0].author.login == "github-actions[bot]") | .id' 2>/dev/null || echo "")
-
-          for thread_id in $THREADS; do
-            gh api graphql -f query='
-              mutation($id:ID!) {
-                resolveReviewThread(input:{threadId:$id}) {
-                  thread { id isResolved }
-                }
-              }' -F id="$thread_id" 2>/dev/null || true
-          done
+          # Auto-resolve bot inline threads is disabled until
+          # ORG_PAT_GITHUB gets read:org scope. The GraphQL query
+          # for author.login requires it. Threads remain open on
+          # approval — cosmetic only, doesn't affect merge.
 
           # Final status on the (possibly updated) HEAD SHA
           NEW_SHA=$(gh pr view "$PR" --json headRefOid -q .headRefOid)
@@ -1386,6 +1189,7 @@ jobs:
             - Follow CLAUDE.md commit conventions (Conventional Commits format)
             - NEVER add Co-Authored-By lines to commits
             - Full git history is already checked out. Do NOT run git fetch.
+            - uv, python, ruff, and all dev tools are already installed on PATH. Do NOT attempt to install them.
 
             Process:
 
@@ -1411,8 +1215,8 @@ jobs:
 
             Output: CI_FIXED:<count of files changed> or CI_FIXED:0 if nothing needed fixing.
           claude_args: |
-            --model claude-opus-4-6
-            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(uv run:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git diff:*),Bash(git checkout:*),Bash(git status:*),Bash(gh pr:*),Bash(gh api:*),Bash(cat:*),Bash(jq:*),Bash(python3:*),Bash(python:*),Bash(wc:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(grep:*),Bash(find:*),Bash(echo:*),Bash(tr:*),Bash(cut:*),Bash(uniq:*),Bash(diff:*),Bash(xargs:*),Bash(sed:*),Bash(awk:*),Bash(ruff:*),Bash(pip:*),Bash(mkdir:*),Bash(tee:*)"
+            --model claude-sonnet-4-6
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(uv run:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git diff:*),Bash(git checkout:*),Bash(git status:*),Bash(gh pr:*),Bash(gh api:*),Bash(cat:*),Bash(jq:*),Bash(python3:*),Bash(python:*),Bash(wc:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(grep:*),Bash(find:*),Bash(echo:*),Bash(tr:*),Bash(cut:*),Bash(uniq:*),Bash(diff:*),Bash(xargs:*),Bash(sed:*),Bash(awk:*),Bash(ruff:*),Bash(pip:*),Bash(mkdir:*),Bash(tee:*),Bash(which:*),Bash(cp:*),Bash(mv:*),Bash(touch:*),Bash(chmod:*)"
         env:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.LITELLM_API_KEY }}
@@ -1449,10 +1253,10 @@ jobs:
           if gh api "repos/${REPO}/actions/workflows/claude.yml/dispatches" \
                -X POST \
                -f ref="${DEFAULT_BRANCH}" \
-               -F "inputs[pr_number]=${PR_NUMBER}" \
-               -F "inputs[iteration]=${NEXT}" \
-               -F "inputs[max_iter]=${MAX}" \
-               -F "inputs[trigger_reason]=CI remediation iteration ${NEXT}/${MAX}"; then
+               -f "inputs[pr_number]=${PR_NUMBER}" \
+               -f "inputs[iteration]=${NEXT}" \
+               -f "inputs[max_iter]=${MAX}" \
+               -f "inputs[trigger_reason]=CI remediation iteration ${NEXT}/${MAX}"; then
             gh pr comment "$PR_NUMBER" --body \
               "🔁 **CI fix pushed — re-review iteration ${NEXT}/${MAX} dispatched.** [Watch live progress](${{ github.server_url }}/${{ github.repository }}/actions/workflows/claude.yml)"
           else
@@ -1573,9 +1377,9 @@ jobs:
           # Dismiss the bot's prior APPROVED review. Removing the label
           # isn't enough — the formal PR review stays green unless
           # explicitly dismissed via the Reviews API. We only dismiss
-          # reviews authored by github-actions[bot] — never a human's.
+          # reviews authored by github-actions[bot] or atlan-ci (ORG_PAT) — never a human's.
           BOT_REVIEW_IDS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
-            --jq '[.[] | select(.user.login == "github-actions[bot]" and .state == "APPROVED")] | .[].id' 2>/dev/null || echo "")
+            --jq '[.[] | select((.user.login == "github-actions[bot]" or .user.login == "atlan-ci") and .state == "APPROVED")] | .[].id' 2>/dev/null || echo "")
           for review_id in $BOT_REVIEW_IDS; do
             gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
               -X PUT \
@@ -1626,6 +1430,9 @@ jobs:
       github.event.issue.pull_request &&
       (contains(github.event.comment.body, '@sdk-review stop') ||
        contains(github.event.comment.body, '@sdk-review cancel')) &&
+      github.event.comment.user.login != 'claude[bot]' &&
+      github.event.comment.user.login != 'github-actions[bot]' &&
+      github.event.comment.user.login != 'atlan-ci' &&
       (github.event.comment.author_association == 'OWNER' ||
        github.event.comment.author_association == 'MEMBER' ||
        github.event.comment.author_association == 'COLLABORATOR')
