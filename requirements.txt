@@ -48,7 +48,9 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   uvicorn
 coverage==7.13.1
 cryptography==46.0.5
-    # via authlib
+    # via
+    #   authlib
+    #   trustme
 distlib==0.4.0
     # via virtualenv
 dnspython==2.8.0
@@ -104,6 +106,7 @@ idna==3.11
     #   email-validator
     #   httpx
     #   requests
+    #   trustme
     #   yarl
 importlib-metadata==8.7.1
     # via opentelemetry-api
@@ -271,6 +274,7 @@ temporalio==1.21.1
     # via atlan-application-sdk
 tenacity==9.1.2
     # via pyatlan
+trustme==1.2.1
 typer==0.21.1
     # via
     #   fastapi-cli

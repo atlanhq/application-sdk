@@ -440,6 +440,13 @@ DUCKDB_COMMON_TEMP_FOLDER = "/tmp/incremental_duckdb"
 #: Default memory limit for DuckDB (fixed for K8s pods)
 DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
 
+SSL_CERT_DIR = os.getenv("SSL_CERT_DIR", "")
+"""Custom SSL/TLS certificate directory for corporate/private CAs.
+
+If set and points to a directory, all .pem/.crt/.cer/.ca-bundle files
+in that directory are trusted in addition to system CAs.
+"""
+
 # Daft analytics are disabled via ENV vars in the Dockerfile (DO_NOT_TRACK,
 # SCARF_NO_ANALYTICS, DAFT_ANALYTICS_ENABLED). They must NOT be set here at
 # module level — os.environ assignments call os.putenv(), which Temporal's
