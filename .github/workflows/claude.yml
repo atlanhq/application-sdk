@@ -1153,34 +1153,35 @@ jobs:
 
           # Auto-resolve ALL remaining bot inline comment threads.
           # PR is approved → all findings are either fixed or accepted.
-          # No reason to leave resolved/stale threads cluttering the
-          # Files Changed tab.
-          # Use GITHUB_TOKEN for GraphQL — ORG_PAT_GITHUB lacks read:org
-          # scope needed for author.login fields in the GraphQL schema.
-          THREADS=$(GH_TOKEN="${GITHUB_TOKEN}" gh api graphql -f query='
-            query($owner:String!,$name:String!,$num:Int!) {
-              repository(owner:$owner, name:$name) {
-                pullRequest(number:$num) {
-                  reviewThreads(first:100) {
-                    nodes { id isResolved
-                      comments(first:1) {
-                        nodes { author{login} }
+          # Wrapped in a subshell so GraphQL failures (e.g. token scope
+          # issues) never crash the Finalize step — thread resolution
+          # is cosmetic, the approval and status update must not fail.
+          (
+            THREADS=$(gh api graphql -f query='
+              query($owner:String!,$name:String!,$num:Int!) {
+                repository(owner:$owner, name:$name) {
+                  pullRequest(number:$num) {
+                    reviewThreads(first:100) {
+                      nodes { id isResolved
+                        comments(first:1) {
+                          nodes { author{login} }
+                        }
                       }
                     }
                   }
                 }
-              }
-            }' -F owner=atlanhq -F name=application-sdk -F num="$PR" \
-            --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | select(.comments.nodes[0].author.login == "claude[bot]" or .comments.nodes[0].author.login == "github-actions[bot]" or .comments.nodes[0].author.login == "atlan-ci") | .id' 2>/dev/null || echo "")
+              }' -F owner=atlanhq -F name=application-sdk -F num="$PR" \
+              --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | select(.comments.nodes[0].author.login == "claude[bot]" or .comments.nodes[0].author.login == "github-actions[bot]" or .comments.nodes[0].author.login == "atlan-ci") | .id' 2>/dev/null || echo "")
 
-          for thread_id in $THREADS; do
-            GH_TOKEN="${GITHUB_TOKEN}" gh api graphql -f query='
-              mutation($id:ID!) {
-                resolveReviewThread(input:{threadId:$id}) {
-                  thread { id isResolved }
-                }
-              }' -F id="$thread_id" 2>/dev/null || true
-          done
+            for thread_id in $THREADS; do
+              gh api graphql -f query='
+                mutation($id:ID!) {
+                  resolveReviewThread(input:{threadId:$id}) {
+                    thread { id isResolved }
+                  }
+                }' -F id="$thread_id" 2>/dev/null || true
+            done
+          ) || echo "::warning::Auto-resolve threads failed (non-fatal). Threads may remain unresolved."
 
           # Final status on the (possibly updated) HEAD SHA
           NEW_SHA=$(gh pr view "$PR" --json headRefOid -q .headRefOid)
