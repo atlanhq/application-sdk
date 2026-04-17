@@ -111,7 +111,9 @@ class _TaskFailureLoggingActivityInboundInterceptor(ActivityInboundInterceptor):
                 if tenant_from_corr:
                     attrs["tenant_id"] = tenant_from_corr
         except Exception:
-            pass
+            logger.debug(
+                "Failed to read tenant_id from correlation context", exc_info=True
+            )
         if "tenant_id" not in attrs:
             attrs["tenant_id"] = APP_TENANT_ID
 
@@ -125,7 +127,7 @@ class _TaskFailureLoggingActivityInboundInterceptor(ActivityInboundInterceptor):
             if ctx and ctx.correlation_id:
                 attrs["correlation_id"] = ctx.correlation_id
         except Exception:
-            pass
+            logger.debug("Failed to read correlation_id from context", exc_info=True)
 
         return attrs
 

@@ -148,6 +148,20 @@ def _build_common_attrs() -> dict[str, str]:
     }
 
 
+def _build_workflow_identity_attrs(info: Any) -> dict[str, Any]:
+    """Extract workflow identity attributes from a Temporal WorkflowInfo object."""
+    return {
+        "workflow_id": info.workflow_id or "",
+        "workflow_run_id": info.run_id or "",
+        "workflow_type": info.workflow_type or "",
+        "task_queue": info.task_queue or "",
+        "namespace": info.namespace or "",
+        "parent_workflow_id": info.parent.workflow_id if info.parent else "",
+        "parent_run_id": info.parent.run_id if info.parent else "",
+        "continued_run_id": info.continued_run_id or "",
+    }
+
+
 def _emit_log_event(
     event_name: str,
     attrs: dict[str, Any],
@@ -308,14 +322,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
         summary: dict[str, Any] = {
             **common,
-            "workflow_id": info.workflow_id or "",
-            "workflow_run_id": info.run_id or "",
-            "workflow_type": info.workflow_type or "",
-            "task_queue": info.task_queue or "",
-            "namespace": info.namespace or "",
-            "parent_workflow_id": info.parent.workflow_id if info.parent else "",
-            "parent_run_id": info.parent.run_id if info.parent else "",
-            "continued_run_id": info.continued_run_id or "",
+            **_build_workflow_identity_attrs(info),
             "status": wf_status,
             "duration_ms": round(wf_duration_ms, 1),
             "total_activities": len(acts),
@@ -352,14 +359,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             common = _build_common_attrs()
             started_attrs: dict[str, Any] = {
                 **common,
-                "workflow_id": info.workflow_id or "",
-                "workflow_run_id": info.run_id or "",
-                "workflow_type": info.workflow_type or "",
-                "task_queue": info.task_queue or "",
-                "namespace": info.namespace or "",
-                "parent_workflow_id": info.parent.workflow_id if info.parent else "",
-                "parent_run_id": info.parent.run_id if info.parent else "",
-                "continued_run_id": info.continued_run_id or "",
+                **_build_workflow_identity_attrs(info),
                 "cron_schedule": info.cron_schedule or "",
                 "dimension": "reliability",
                 "source": "temporal",
@@ -446,14 +446,7 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
         event_attrs: dict[str, Any] = {
             **common,
-            "workflow_id": info.workflow_id or "",
-            "workflow_run_id": info.run_id or "",
-            "workflow_type": info.workflow_type or "",
-            "task_queue": info.task_queue or "",
-            "namespace": info.namespace or "",
-            "parent_workflow_id": info.parent.workflow_id if info.parent else "",
-            "parent_run_id": info.parent.run_id if info.parent else "",
-            "continued_run_id": info.continued_run_id or "",
+            **_build_workflow_identity_attrs(info),
             "cron_schedule": info.cron_schedule or "",
             "status": status,
             "error_type": error_type,
