@@ -52,6 +52,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "url",
         "workflow_id",
         "run_id",
+        "workflow_run_id",  # App Vitals uses this alias alongside run_id
         "workflow_type",
         "namespace",
         "task_queue",
@@ -65,7 +66,62 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "log_type",
         "app_name",
         "trace_id",
+        "span_id",
         "correlation_id",
+        # ── App Vitals ───────────────────────────────────────────────────
+        # Deterministic filter flag — marks every App Vitals log event
+        "app_vitals",
+        # Per-workflow identity (deployment-level fields are on OTel Resource;
+        # tenant_id is redundant with ResourceAttributes['k8s.cluster.name'])
+        # Outcome
+        "status",
+        "error_type",
+        "error_class",
+        "error_message",
+        "is_retriable",
+        "error_cause_chain",
+        "stack_trace",
+        "error_fingerprint",
+        # Metric classification
+        "dimension",
+        "source",
+        "metric_name",
+        # Throughput
+        "assets_processed",
+        # Efficiency (per-activity resource deltas)
+        "cpu_seconds",
+        "mem_gb_sec",
+        # Performance timings
+        "schedule_to_start_ms",
+        "timeout_budget_total_ms",
+        "timeout_budget_used_pct",
+        # Retry context
+        "retry_max_attempts",
+        # Payload size
+        "input_payload_bytes",
+        # Activity wall-clock timestamps (ISO 8601)
+        "activity_start_time",
+        "activity_end_time",
+        # Workflow hierarchy
+        "parent_workflow_id",
+        "parent_run_id",
+        "continued_run_id",
+        "cron_schedule",
+        # Workflow-level timeout budget
+        "wf_timeout_budget_total_ms",
+        "wf_timeout_budget_used_pct",
+        "history_length",
+        # Workflow summary — activity duration rollup
+        "sum_activity_duration_ms",
+        # Workflow summary (app_vitals.wf.summary event)
+        "total_activities",
+        "succeeded_activities",
+        "failed_activities",
+        "total_child_workflows",
+        "first_failure_activity_type",
+        "first_failure_error_type",
+        "bottleneck_activity_type",
+        "bottleneck_duration_ms",
     }
 )
 

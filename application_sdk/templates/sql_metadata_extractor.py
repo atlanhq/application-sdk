@@ -245,3 +245,36 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             raise rewrap(
                 e, f"SQL metadata extraction failed (workflow_id={workflow_id})"
             ) from e
+
+
+def compute_ae_output_fields(
+    *,
+    output_path: str = "",
+    output_prefix: str = "",
+    connection_qualified_name: str = "",
+) -> dict[str, str]:
+    """Return the AE-facing publish fields derived from workflow output context.
+
+    Wraps ``PublishInputMixin`` to compute the three fields the Automation
+    Engine reads via JSONPath (``$.extract.outputs.*``) when chaining to the
+    Publish App:
+
+    - ``transformed_data_prefix`` — object-store path to transformed files
+    - ``publish_state_prefix``    — path for Publish App state snapshots
+    - ``current_state_prefix``    — path for current-state delta files
+
+    Pass the returned dict as ``**compute_ae_output_fields(...)`` when
+    constructing ``ExtractionOutput`` (which inherits ``PublishInputMixin``).
+    """
+    from application_sdk.contracts.base import PublishInputMixin
+
+    mixin = PublishInputMixin(
+        output_path=output_path,
+        output_prefix=output_prefix,
+        connection_qualified_name=connection_qualified_name,
+    )
+    return {
+        "transformed_data_prefix": mixin.transformed_data_prefix,
+        "publish_state_prefix": mixin.publish_state_prefix,
+        "current_state_prefix": mixin.current_state_prefix,
+    }
