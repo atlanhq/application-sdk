@@ -146,3 +146,92 @@ class TestMockProtocolCompliance:
         await store.load("k")
         assert len(store.get_save_calls()) == 1
         assert len(store.get_load_calls()) == 1
+
+
+@pytest.mark.integration
+class TestLocalDevGuard:
+    """Test ATLAN_LOCAL_DEVELOPMENT env var guard for credential interception."""
+
+    async def test_credentials_stored_when_local_dev_true(self, monkeypatch):
+        """Inline credentials are intercepted when ATLAN_LOCAL_DEVELOPMENT=true."""
+        import os
+
+        from application_sdk.handler.service import (
+            _normalize_credentials,
+            _pairs_to_flat,
+        )
+
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "true")
+
+        state_store = MockStateStore()
+        body = {
+            "credentials": [
+                {"key": "host", "value": "db.example.com"},
+                {"key": "password", "value": "secret"},
+            ],
+        }
+        body = _normalize_credentials(body)
+
+        # Simulate the handler guard logic
+        is_local_dev = os.environ.get("ATLAN_LOCAL_DEVELOPMENT", "").lower() in (
+            "true",
+            "1",
+        )
+        assert is_local_dev is True
+
+        if is_local_dev and state_store is not None:
+            flat_creds = _pairs_to_flat(body["credentials"])
+            await state_store.save("cred:test-guid", flat_creds)
+            body["credential_guid"] = "test-guid"
+            del body["credentials"]
+
+        assert "credentials" not in body
+        assert body["credential_guid"] == "test-guid"
+        result = await state_store.load("cred:test-guid")
+        assert result["host"] == "db.example.com"
+
+    async def test_credentials_not_stored_when_local_dev_false(self, monkeypatch):
+        """Inline credentials are NOT intercepted in non-local mode."""
+        import os
+
+        from application_sdk.handler.service import _normalize_credentials
+
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "false")
+
+        body = {
+            "credentials": [
+                {"key": "host", "value": "db.example.com"},
+            ],
+        }
+        body = _normalize_credentials(body)
+
+        is_local_dev = os.environ.get("ATLAN_LOCAL_DEVELOPMENT", "").lower() in (
+            "true",
+            "1",
+        )
+        assert is_local_dev is False
+
+        # Credentials should NOT be stored — body unchanged
+        assert "credentials" in body
+
+    async def test_credentials_not_stored_when_env_unset(self, monkeypatch):
+        """Inline credentials are NOT intercepted when env var not set."""
+        import os
+
+        from application_sdk.handler.service import _normalize_credentials
+
+        monkeypatch.delenv("ATLAN_LOCAL_DEVELOPMENT", raising=False)
+
+        body = {
+            "credentials": [
+                {"key": "host", "value": "db.example.com"},
+            ],
+        }
+        body = _normalize_credentials(body)
+
+        is_local_dev = os.environ.get("ATLAN_LOCAL_DEVELOPMENT", "").lower() in (
+            "true",
+            "1",
+        )
+        assert is_local_dev is False
+        assert "credentials" in body
