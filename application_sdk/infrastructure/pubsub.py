@@ -123,3 +123,18 @@ class PubSub(Protocol):
             PubSubError: If subscription fails.
         """
         ...
+
+
+def __getattr__(name: str):
+    if name in ("InMemoryPubSub", "InMemorySubscription"):
+        import warnings
+
+        warnings.warn(
+            f"{name} is removed in v3. Use application_sdk.testing.mocks.MockPubSub.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from application_sdk.testing.mocks import MockPubSub
+
+        return MockPubSub
+    raise AttributeError(name)

@@ -56,3 +56,18 @@ class StateStore(Protocol):
     async def load(self, key: str) -> dict[str, Any] | None: ...
     async def delete(self, key: str) -> bool: ...
     async def list_keys(self, prefix: str = "") -> list[str]: ...
+
+
+def __getattr__(name: str):
+    if name == "InMemoryStateStore":
+        import warnings
+
+        warnings.warn(
+            "InMemoryStateStore is removed in v3. Use application_sdk.testing.mocks.MockStateStore.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from application_sdk.testing.mocks import MockStateStore
+
+        return MockStateStore
+    raise AttributeError(name)

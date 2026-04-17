@@ -249,3 +249,18 @@ class EnvironmentSecretStore:
             for k in os.environ.keys()
             if k.startswith(self._prefix)
         ]
+
+
+def __getattr__(name: str):
+    if name == "InMemorySecretStore":
+        import warnings
+
+        warnings.warn(
+            "InMemorySecretStore is removed in v3. Use application_sdk.testing.mocks.MockSecretStore.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from application_sdk.testing.mocks import MockSecretStore
+
+        return MockSecretStore
+    raise AttributeError(name)

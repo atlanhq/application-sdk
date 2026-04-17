@@ -146,3 +146,18 @@ class OutputBinding(Protocol):
             BindingError: If write fails.
         """
         ...
+
+
+def __getattr__(name: str):
+    if name == "InMemoryBinding":
+        import warnings
+
+        warnings.warn(
+            "InMemoryBinding is removed in v3. Use application_sdk.testing.mocks.MockBinding.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from application_sdk.testing.mocks import MockBinding
+
+        return MockBinding
+    raise AttributeError(name)
