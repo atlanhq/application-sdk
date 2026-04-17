@@ -15,55 +15,7 @@ from application_sdk.infrastructure._dapr.credential_vault import (
 from application_sdk.infrastructure._secret_utils import (
     process_secret_data as _process_secret_data,
 )
-from application_sdk.infrastructure.credential_vault import (
-    CredentialVault,
-    CredentialVaultError,
-    InMemoryCredentialVault,
-)
-
-# ---------------------------------------------------------------------------
-# InMemoryCredentialVault
-# ---------------------------------------------------------------------------
-
-
-class TestInMemoryCredentialVault:
-    async def test_get_credentials_returns_stored_dict(self) -> None:
-        vault = InMemoryCredentialVault(
-            {"guid-1": {"host": "db.example.com", "port": 5432}}
-        )
-        result = await vault.get_credentials("guid-1")
-        assert result == {"host": "db.example.com", "port": 5432}
-
-    async def test_get_credentials_raises_for_missing_guid(self) -> None:
-        vault = InMemoryCredentialVault()
-        with pytest.raises(CredentialVaultError) as exc_info:
-            await vault.get_credentials("nonexistent")
-        assert "nonexistent" in str(exc_info.value)
-
-    async def test_set_then_get(self) -> None:
-        vault = InMemoryCredentialVault()
-        vault.set("abc", {"user": "admin"})
-        result = await vault.get_credentials("abc")
-        assert result["user"] == "admin"
-
-    async def test_get_returns_copy(self) -> None:
-        """Mutations to the returned dict should not affect the stored value."""
-        vault = InMemoryCredentialVault({"g": {"key": "value"}})
-        result = await vault.get_credentials("g")
-        result["key"] = "mutated"
-        result2 = await vault.get_credentials("g")
-        assert result2["key"] == "value"
-
-    async def test_clear_removes_all(self) -> None:
-        vault = InMemoryCredentialVault({"g": {"k": "v"}})
-        vault.clear()
-        with pytest.raises(CredentialVaultError):
-            await vault.get_credentials("g")
-
-    def test_satisfies_protocol(self) -> None:
-        vault = InMemoryCredentialVault()
-        assert isinstance(vault, CredentialVault)
-
+from application_sdk.infrastructure.credential_vault import CredentialVaultError
 
 # ---------------------------------------------------------------------------
 # _process_secret_data

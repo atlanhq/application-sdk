@@ -58,28 +58,16 @@ class StateStore(Protocol):
     async def list_keys(self, prefix: str = "") -> list[str]: ...
 
 
-class InMemoryStateStore:
-    """In-memory state store for testing and development."""
+def __getattr__(name: str):
+    if name == "InMemoryStateStore":
+        import warnings
 
-    def __init__(self) -> None:
-        self._data: dict[str, dict[str, Any]] = {}
+        warnings.warn(
+            "InMemoryStateStore is removed in v3. Use application_sdk.testing.mocks.MockStateStore.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from application_sdk.testing.mocks import MockStateStore
 
-    async def save(self, key: str, value: dict[str, Any]) -> None:
-        self._data[key] = value
-
-    async def load(self, key: str) -> dict[str, Any] | None:
-        return self._data.get(key)
-
-    async def delete(self, key: str) -> bool:
-        if key in self._data:
-            del self._data[key]
-            return True
-        return False
-
-    async def list_keys(self, prefix: str = "") -> list[str]:
-        if not prefix:
-            return list(self._data.keys())
-        return [k for k in self._data if k.startswith(prefix)]
-
-    def clear(self) -> None:
-        self._data.clear()
+        return MockStateStore
+    raise AttributeError(name)
