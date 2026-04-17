@@ -15,6 +15,8 @@ from temporalio.worker import Worker
 from application_sdk.execution._temporal.interceptors.outputs import OutputInterceptor
 from application_sdk.outputs import Artifact, Metric, get_outputs
 
+pytestmark = pytest.mark.integration
+
 
 @activity.defn
 async def fetch_tables(args: dict) -> dict:
