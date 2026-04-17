@@ -1151,37 +1151,10 @@ jobs:
           gh pr edit "$PR" --remove-label "needs-human-review" 2>/dev/null || true
           gh pr edit "$PR" --remove-label "needs-rebase" 2>/dev/null || true
 
-          # Auto-resolve ALL remaining bot inline comment threads.
-          # PR is approved → all findings are either fixed or accepted.
-          # Wrapped in a subshell so GraphQL failures (e.g. token scope
-          # issues) never crash the Finalize step — thread resolution
-          # is cosmetic, the approval and status update must not fail.
-          (
-            THREADS=$(gh api graphql -f query='
-              query($owner:String!,$name:String!,$num:Int!) {
-                repository(owner:$owner, name:$name) {
-                  pullRequest(number:$num) {
-                    reviewThreads(first:100) {
-                      nodes { id isResolved
-                        comments(first:1) {
-                          nodes { author{login} }
-                        }
-                      }
-                    }
-                  }
-                }
-              }' -F owner=atlanhq -F name=application-sdk -F num="$PR" \
-              --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | select(.comments.nodes[0].author.login == "claude[bot]" or .comments.nodes[0].author.login == "github-actions[bot]" or .comments.nodes[0].author.login == "atlan-ci") | .id' 2>/dev/null || echo "")
-
-            for thread_id in $THREADS; do
-              gh api graphql -f query='
-                mutation($id:ID!) {
-                  resolveReviewThread(input:{threadId:$id}) {
-                    thread { id isResolved }
-                  }
-                }' -F id="$thread_id" 2>/dev/null || true
-            done
-          ) || echo "::warning::Auto-resolve threads failed (non-fatal). Threads may remain unresolved."
+          # Auto-resolve bot inline threads is disabled until
+          # ORG_PAT_GITHUB gets read:org scope. The GraphQL query
+          # for author.login requires it. Threads remain open on
+          # approval — cosmetic only, doesn't affect merge.
 
           # Final status on the (possibly updated) HEAD SHA
           NEW_SHA=$(gh pr view "$PR" --json headRefOid -q .headRefOid)
