@@ -8,13 +8,12 @@ their incremental state (CREATED, UPDATED, or BACKFILL).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Set, Tuple
-
-import daft
-from daft import DataFrame
-from daft.functions import format as daft_format
+from typing import TYPE_CHECKING, Any, Dict, Set, Tuple
 
 from application_sdk.common.exc_utils import rewrap
+
+if TYPE_CHECKING:
+    from daft import DataFrame
 from application_sdk.common.incremental.models import EntityType
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -77,6 +76,9 @@ def get_tables_needing_column_extraction(
         - no_change_count: Number of unchanged tables
     """
     try:
+        import daft
+        from daft.functions import format as daft_format
+
         backfill_qns = backfill_qualified_names or set()
 
         table_dir = transformed_dir.joinpath(EntityType.TABLE.value)
