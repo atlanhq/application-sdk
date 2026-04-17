@@ -69,7 +69,6 @@ class TestProcessMarkerTimestamp:
 class TestFetchMarkerFromStorage:
     """Tests for fetch_marker_from_storage (multi-source fallback)."""
 
-    @pytest.mark.asyncio
     async def test_marker_from_existing_marker_param(self):
         """Marker provided via existing_marker is used directly (no S3 call)."""
         with patch(
@@ -84,7 +83,6 @@ class TestFetchMarkerFromStorage:
         assert next_marker  # Should be a valid timestamp string
         mock_s3.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_marker_from_s3_fallback(self):
         """When existing_marker is not provided, marker is downloaded from S3."""
         with patch(
@@ -99,7 +97,6 @@ class TestFetchMarkerFromStorage:
         assert marker == "2025-01-10T08:00:00Z"
         assert next_marker
 
-    @pytest.mark.asyncio
     async def test_no_marker_returns_none(self):
         """First run: no existing_marker and S3 returns None → (None, next_marker)."""
         with patch(
@@ -114,7 +111,6 @@ class TestFetchMarkerFromStorage:
         assert marker is None
         assert next_marker  # next_marker is always set
 
-    @pytest.mark.asyncio
     async def test_marker_with_prepone(self):
         """Fetched marker is preponed when enabled."""
         marker, _ = await fetch_marker_from_storage(
@@ -126,7 +122,6 @@ class TestFetchMarkerFromStorage:
 
         assert marker == "2025-01-15T08:00:00Z"
 
-    @pytest.mark.asyncio
     async def test_next_marker_always_generated(self):
         """next_marker is always a fresh timestamp regardless of existing marker."""
         with patch(
@@ -151,14 +146,11 @@ class TestFetchMarkerFromStorage:
 class TestPersistMarkerToStorage:
     """Tests for persist_marker_to_storage (local write + S3 upload)."""
 
-    @pytest.mark.asyncio
     async def test_writes_and_uploads_marker(self):
         """Writes marker to local file and uploads to S3."""
         with patch(
-            "application_sdk.common.incremental.marker.ObjectStore"
+            "application_sdk.common.incremental.marker.upload_file"
         ) as mock_store:
-            mock_store.upload_file = AsyncMock()
-
             result = await persist_marker_to_storage(
                 connection_qualified_name="t/c/123",
                 marker_value="2025-01-15T10:00:00Z",
@@ -169,16 +161,15 @@ class TestPersistMarkerToStorage:
         assert result["marker_timestamp"] == "2025-01-15T10:00:00Z"
         assert "s3_key" in result
         assert "marker.txt" in result["s3_key"]
-        mock_store.upload_file.assert_awaited_once()
+        mock_store.assert_awaited_once()
 
-    @pytest.mark.asyncio
     async def test_s3_upload_failure_raises(self):
         """S3 upload failure propagates the exception."""
         with patch(
-            "application_sdk.common.incremental.marker.ObjectStore"
-        ) as mock_store:
-            mock_store.upload_file = AsyncMock(side_effect=Exception("S3 unavailable"))
-
+            "application_sdk.common.incremental.marker.upload_file",
+            new_callable=AsyncMock,
+            side_effect=Exception("S3 unavailable"),
+        ):
             with pytest.raises(
                 Exception, match="Failed to upload marker to S3"
             ) as exc_info:

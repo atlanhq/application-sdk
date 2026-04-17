@@ -1,20 +1,4 @@
-"""SQL metadata extraction App — v3 implementation.
-
-Replaces the v2 ``BaseSQLMetadataExtractionWorkflow`` +
-``BaseSQLMetadataExtractionActivities`` split with a single typed ``App`` class.
-
-Migration from v2::
-
-    # v2: separate workflow + activities, all Dict[str, Any]
-    from application_sdk.workflows.metadata_extraction.sql import (
-        BaseSQLMetadataExtractionWorkflow,
-    )
-    from application_sdk.activities.metadata_extraction.sql import (
-        BaseSQLMetadataExtractionActivities,
-    )
-
-    # v3: single App class with typed contracts
-    from application_sdk.templates import SqlMetadataExtractor
+"""SQL metadata extraction App.
 
 Subclass ``SqlMetadataExtractor`` to implement connector-specific logic::
 
@@ -156,6 +140,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         logger.info("Starting SQL metadata extraction: %s", workflow_id)
 
         try:
+            # v2-compat: remove credential_guid fallback when all connectors use credential_ref.
             # Prefer credential_ref; fall back to legacy credential_guid
             cred_ref = input.credential_ref
             if cred_ref is None and input.credential_guid:
@@ -260,3 +245,36 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             raise rewrap(
                 e, f"SQL metadata extraction failed (workflow_id={workflow_id})"
             ) from e
+
+
+def compute_ae_output_fields(
+    *,
+    output_path: str = "",
+    output_prefix: str = "",
+    connection_qualified_name: str = "",
+) -> dict[str, str]:
+    """Return the AE-facing publish fields derived from workflow output context.
+
+    Wraps ``PublishInputMixin`` to compute the three fields the Automation
+    Engine reads via JSONPath (``$.extract.outputs.*``) when chaining to the
+    Publish App:
+
+    - ``transformed_data_prefix`` — object-store path to transformed files
+    - ``publish_state_prefix``    — path for Publish App state snapshots
+    - ``current_state_prefix``    — path for current-state delta files
+
+    Pass the returned dict as ``**compute_ae_output_fields(...)`` when
+    constructing ``ExtractionOutput`` (which inherits ``PublishInputMixin``).
+    """
+    from application_sdk.contracts.base import PublishInputMixin
+
+    mixin = PublishInputMixin(
+        output_path=output_path,
+        output_prefix=output_prefix,
+        connection_qualified_name=connection_qualified_name,
+    )
+    return {
+        "transformed_data_prefix": mixin.transformed_data_prefix,
+        "publish_state_prefix": mixin.publish_state_prefix,
+        "current_state_prefix": mixin.current_state_prefix,
+    }

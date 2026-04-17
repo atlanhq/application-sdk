@@ -302,7 +302,8 @@ async def download(
         :class:`~application_sdk.contracts.storage.DownloadOutput`
     """
     from application_sdk.contracts.storage import DownloadOutput
-    from application_sdk.storage.ops import _resolve_store, list_keys, normalize_key
+    from application_sdk.storage.batch import list_keys
+    from application_sdk.storage.ops import _resolve_store, normalize_key
 
     resolved = _resolve_store(store)
     norm_path = normalize_key(storage_path)

@@ -19,9 +19,8 @@ from application_sdk.common.incremental.helpers import (
     get_persistent_artifacts_path,
     get_persistent_s3_prefix,
 )
-from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.batch import download_prefix
 
 logger = get_logger(__name__)
 
@@ -76,10 +75,9 @@ async def download_current_state(
     json_count = 0
 
     try:
-        await ObjectStore.download_prefix(
-            source=current_state_s3_prefix,
-            destination=str(current_state_dir),
-            store_name=UPSTREAM_OBJECT_STORE_NAME,
+        await download_prefix(
+            prefix=current_state_s3_prefix,
+            local_dir=str(current_state_dir),
         )
 
         json_count = count_json_files_recursive(current_state_dir)

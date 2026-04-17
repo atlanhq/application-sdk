@@ -38,7 +38,7 @@ workflow.logger = logger
 _event_token_service: "OAuthTokenService | None" = None
 
 
-def _get_event_token_service() -> "OAuthTokenService | None":
+async def _get_event_token_service() -> "OAuthTokenService | None":
     """Return the singleton OAuthTokenService for event auth, or None if unconfigured."""
     global _event_token_service  # noqa: PLW0603
 
@@ -57,8 +57,8 @@ def _get_event_token_service() -> "OAuthTokenService | None":
         from application_sdk.credentials.types import OAuthClientCredential
         from application_sdk.infrastructure.secrets import get_deployment_secret
 
-        client_id = get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
-        client_secret = get_deployment_secret(WORKFLOW_AUTH_CLIENT_SECRET_KEY)
+        client_id = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
+        client_secret = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_SECRET_KEY)
         token_url = AUTH_URL
 
         if not client_id or not client_secret or not token_url:
@@ -137,7 +137,6 @@ def _enrich_event_metadata(event: Event) -> Event:
 def _send_lifecycle_event_to_segment(event: Event) -> None:
     """Send lifecycle event to Segment (best-effort side-channel).
 
-    Mirrors the logic from the v2 EventStore._send_lifecycle_event_to_segment.
     Never raises — failures are logged at DEBUG level.
     """
     if event.event_name not in LIFECYCLE_EVENTS:
@@ -240,7 +239,7 @@ async def _publish_event_via_binding(event: Event) -> None:
     binding_metadata: dict[str, str] = {"content-type": "application/json"}
 
     try:
-        token_service = _get_event_token_service()
+        token_service = await _get_event_token_service()
         if token_service is not None:
             binding_metadata.update(await token_service.get_headers())
     except Exception:

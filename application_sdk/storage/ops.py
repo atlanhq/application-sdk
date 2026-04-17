@@ -19,21 +19,11 @@ Internal helpers (small payloads)
 ----------------------------------
 * ``_put(key, data)``    — write bytes (sidecars, metadata, JSON configs)
 * ``_get_bytes(key)``    — read bytes (sidecars, metadata, JSON configs)
-* ``_get_content(key)``  — v2-compatible alias for ``_get_bytes``
 
 Streaming API (large files)
 ----------------------------
 * ``upload_file(key, local_path)``   — streaming upload with adaptive multipart
 * ``download_file(key, local_path)`` — streaming download with optional hash
-
-Migration from v2
------------------
-* ``objectstore.get_content(key)``  →  ``upload_file`` / ``download_file``
-* ``objectstore.upload_bytes(key, data)``  →  ``_put(key, data)`` (internal)
-* ``objectstore.delete(key)``  →  ``delete(key)``
-* ``objectstore.exists(key)``  →  ``exists(key)``
-* ``objectstore.list_keys(prefix)``  →  ``list_keys(prefix)``
-* ``objectstore.delete_prefix(prefix)``  →  ``delete_prefix(prefix)``
 
 All calls that previously went through the implicit singleton store now
 resolve from the infrastructure context automatically.  Pass ``store=my_store``
@@ -53,6 +43,10 @@ import obstore
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
+
+# stdlib logger: cannot use get_logger here due to circular import
+# (observability -> storage -> batch -> ops -> observability)
+logger = logging.getLogger(__name__)
 
 
 def normalize_key(key: str) -> str:
@@ -221,7 +215,7 @@ async def upload_file(
             try:
                 resolved_path.unlink(missing_ok=True)
             except OSError as exc:
-                logging.debug(
+                logger.debug(
                     "Failed to delete local file (cleanup): %s", type(exc).__name__
                 )
 
@@ -347,10 +341,6 @@ async def _get_bytes(
         raise StorageError(f"Failed to get key '{key}'", key=key, cause=exc) from exc
 
 
-#: v2-compatible alias for :func:`_get_bytes` — internal use only.
-_get_content = _get_bytes
-
-
 async def _put(
     key: str,
     data: bytes,
@@ -469,146 +459,3 @@ async def exists(
         raise StorageError(
             f"Failed to check existence of key '{key}'", key=key, cause=exc
         ) from exc
-
-
-async def delete_prefix(
-    prefix: str,
-    store: "ObjectStore | None" = None,
-    *,
-    normalize: bool = True,
-) -> int:
-    """Delete all objects whose key starts with *prefix*.
-
-    Mirrors ``ObjectStore.delete_prefix()`` from v2 for migration parity.
-    Lists all matching keys then deletes each one individually.
-
-    When *store* is omitted the store is resolved from the current
-    infrastructure context (see :func:`_resolve_store`).
-
-    Args:
-        prefix: Key prefix — all objects under this prefix are deleted.
-            Normalised by default (see :func:`normalize_key`).
-        store: An obstore-compatible store instance, or ``None`` to use the
-            store from the current infrastructure context.
-        normalize: When ``True`` (default), normalise *prefix* before use.
-
-    Returns:
-        Number of objects deleted.
-
-    Raises:
-        StorageError: If the listing or any deletion fails.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
-    """
-    resolved = _resolve_store(store)
-    keys = await list_keys(prefix, resolved, normalize=normalize)
-    count = 0
-    for key in keys:
-        if await delete(key, resolved, normalize=False):
-            count += 1
-    return count
-
-
-async def list_keys(
-    prefix: str = "",
-    store: "ObjectStore | None" = None,
-    *,
-    suffix: str = "",
-    normalize: bool = True,
-) -> list[str]:
-    """List all object keys under *prefix*.
-
-    When *store* is omitted the store is resolved from the current
-    infrastructure context (see :func:`_resolve_store`).
-
-    Args:
-        prefix: Key prefix to filter by.  Empty string lists all keys.
-            Normalised by default (see :func:`normalize_key`).  A trailing
-            ``/`` is preserved (or added) after normalisation so that prefix
-            matching never bleeds into sibling directories
-            (e.g. ``"artifacts"`` won't match ``"artifacts_backup/"``).
-        store: An obstore-compatible store instance, or ``None`` to use the
-            store from the current infrastructure context.
-        suffix: Optional file extension or suffix filter.  When set, only
-            keys ending with this string are returned (e.g. ``".parquet"``).
-        normalize: When ``True`` (default), normalise *prefix* before use.
-            Pass ``False`` to use *prefix* exactly as supplied.
-
-    Returns:
-        Sorted list of matching object keys.
-
-    Raises:
-        StorageError: If the listing fails.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
-    """
-    resolved = _resolve_store(store)
-    if normalize and prefix:
-        prefix = normalize_key(prefix)
-        # Ensure trailing slash so the prefix matches only its own subtree.
-        if prefix and not prefix.endswith("/"):
-            prefix = prefix + "/"
-    try:
-        keys: list[str] = []
-        for batch in obstore.list(resolved, prefix=prefix or None):
-            for item in batch:
-                key = str(item["path"])
-                if not suffix or key.endswith(suffix):
-                    keys.append(key)
-        return sorted(keys)
-    except Exception as exc:
-        from application_sdk.storage.errors import StorageError
-
-        raise StorageError(
-            f"Failed to list keys with prefix '{prefix}'", cause=exc
-        ) from exc
-
-
-async def download_prefix(
-    prefix: str,
-    local_dir: "str | Path",
-    store: "ObjectStore | None" = None,
-    *,
-    suffix: str = "",
-    normalize: bool = True,
-    max_concurrency: int = 4,
-) -> list[str]:
-    """Download all objects under *prefix* to a local directory.
-
-    Each key's relative path (after the prefix) is preserved under *local_dir*.
-    Downloads run concurrently (up to *max_concurrency* at a time).
-
-    Args:
-        prefix: Object key prefix to download.
-        local_dir: Local directory to write files into.
-        store: Source store, or ``None`` to use the infrastructure store.
-        suffix: Optional extension filter (e.g. ``".parquet"``).
-        normalize: When ``True`` (default), normalise *prefix* before use.
-        max_concurrency: Maximum parallel downloads (default 10).
-
-    Returns:
-        List of local file paths that were downloaded.
-
-    Raises:
-        StorageError: If listing or downloading fails.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
-    """
-    import asyncio
-
-    keys = await list_keys(prefix, store, suffix=suffix, normalize=normalize)
-    local = Path(local_dir)
-    destinations = [str(local / key) for key in keys]
-
-    sem = asyncio.Semaphore(max_concurrency)
-
-    async def _download_one(key: str, dest: str) -> None:
-        async with sem:
-            await download_file(key, dest, store, normalize=False)
-
-    await asyncio.gather(*[_download_one(k, d) for k, d in zip(keys, destinations)])
-    return destinations
-
-
-#: v2-compatible alias for :func:`delete`.
-delete_file = delete
-
-#: v2-compatible alias for :func:`list_keys`.
-list_files = list_keys
