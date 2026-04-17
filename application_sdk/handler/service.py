@@ -1074,6 +1074,7 @@ def create_app_handler_service(
             with open(tmp) as f:
                 return _json.load(f)
         except Exception:
+            logger.warning("Failed to load config from object store", exc_info=True)
             return None
         finally:
             if os.path.exists(tmp):
