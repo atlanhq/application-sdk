@@ -6,7 +6,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
 from fastapi.testclient import TestClient
 
 from application_sdk.contracts.base import Input, Output
@@ -30,7 +29,6 @@ from application_sdk.handler.contracts import (
 )
 from application_sdk.handler.service import (
     _flatten_to_pairs,
-    _load_entrypoint_registry,
     _normalize_credentials,
     _pairs_to_flat,
     _wrap_response,
@@ -920,6 +918,83 @@ class TestManifestEndpoint:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_simple_app_manifest_lives_at_root_not_in_subdir(
+        self, tmp_path: Path
+    ) -> None:
+        """Simple apps (only run(), no @entrypoint) place manifest.json at
+        CONTRACT_GENERATED_DIR/manifest.json — no subdirectory.
+
+        Heracles does not pass ?entrypoint= for these apps.  The endpoint must
+        serve the root file when no param is present, and must NOT search inside
+        any named subdirectory.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+        # Root manifest — correct location for a simple app.
+        (contract_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear", "app_name": "simple-app"})
+        )
+        # A subdir manifest should NOT be found when no ?entrypoint= is provided.
+        subdir = contract_dir / "run"
+        subdir.mkdir()
+        (subdir / "manifest.json").write_text(json.dumps({"app_name": "wrong"}))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            # No ?entrypoint= → root manifest, not the subdir one.
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["app_name"] == "simple-app"
+            assert body["execution_mode"] == "linear"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_simple_app_manifest_convention_vs_multi_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """Documents the path convention side-by-side:
+
+        - Simple app (no @entrypoint):  CONTRACT_GENERATED_DIR/manifest.json
+          Served via GET /manifest (no ?entrypoint= param).
+        - Multi-entrypoint app:         CONTRACT_GENERATED_DIR/{name}/manifest.json
+          Served via GET /manifest?entrypoint={name}.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+
+        # Simple-app root manifest.
+        (contract_dir / "manifest.json").write_text(json.dumps({"app_name": "simple"}))
+        # Multi-entrypoint subdir manifests.
+        for ep_name in ("crawler", "miner"):
+            ep_dir = contract_dir / ep_name
+            ep_dir.mkdir()
+            (ep_dir / "manifest.json").write_text(json.dumps({"app_name": ep_name}))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+
+            # Simple app path: no param → root.
+            resp = client.get("/workflows/v1/manifest")
+            assert resp.status_code == 200
+            assert resp.json()["app_name"] == "simple"
+
+            # Multi-entrypoint paths: ?entrypoint= → subdir.
+            for ep_name in ("crawler", "miner"):
+                resp = client.get(f"/workflows/v1/manifest?entrypoint={ep_name}")
+                assert resp.status_code == 200
+                assert resp.json()["app_name"] == ep_name
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
 
 class TestNormalizeCredentials:
     """Tests for _normalize_credentials v2→v3 compat shim."""
@@ -1328,180 +1403,39 @@ class TestStartCredentialPersistence:
 
 
 # ---------------------------------------------------------------------------
-# Entrypoint registry tests
-# ---------------------------------------------------------------------------
-
-
-class TestLoadEntrypointRegistry:
-    """Tests for _load_entrypoint_registry()."""
-
-    def test_returns_mapping_from_valid_atlan_yaml(self, tmp_path: Path) -> None:
-        """Valid atlan.yaml with entrypoints returns {name: generated_dir}."""
-        from application_sdk.handler import service as svc_module
-
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text(
-            yaml.dump(
-                {
-                    "entrypoints": [
-                        {"name": "snowflake", "generated_dir": "snowflake-generated"},
-                        {"name": "bigquery", "generated_dir": "bigquery-generated"},
-                    ]
-                }
-            )
-        )
-
-        original = svc_module.ATLAN_YAML_PATH
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
-        try:
-            registry = _load_entrypoint_registry()
-            assert registry == {
-                "snowflake": "snowflake-generated",
-                "bigquery": "bigquery-generated",
-            }
-        finally:
-            svc_module.ATLAN_YAML_PATH = original
-
-    def test_returns_empty_when_file_missing(self, tmp_path: Path) -> None:
-        """Non-existent atlan.yaml returns empty dict."""
-        from application_sdk.handler import service as svc_module
-
-        original = svc_module.ATLAN_YAML_PATH
-        svc_module.ATLAN_YAML_PATH = tmp_path / "nonexistent" / "atlan.yaml"
-        try:
-            assert _load_entrypoint_registry() == {}
-        finally:
-            svc_module.ATLAN_YAML_PATH = original
-
-    def test_returns_empty_when_malformed_yaml(self, tmp_path: Path) -> None:
-        """Malformed YAML returns empty dict."""
-        from application_sdk.handler import service as svc_module
-
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text(":::bad yaml{{{")
-
-        original = svc_module.ATLAN_YAML_PATH
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
-        try:
-            assert _load_entrypoint_registry() == {}
-        finally:
-            svc_module.ATLAN_YAML_PATH = original
-
-    def test_returns_empty_when_no_entrypoints_key(self, tmp_path: Path) -> None:
-        """atlan.yaml without entrypoints key returns empty dict."""
-        from application_sdk.handler import service as svc_module
-
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text(yaml.dump({"name": "my-app", "version": "1.0"}))
-
-        original = svc_module.ATLAN_YAML_PATH
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
-        try:
-            assert _load_entrypoint_registry() == {}
-        finally:
-            svc_module.ATLAN_YAML_PATH = original
-
-    def test_returns_empty_when_entrypoints_is_not_list(self, tmp_path: Path) -> None:
-        """atlan.yaml where entrypoints is a string returns empty dict."""
-        from application_sdk.handler import service as svc_module
-
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text(yaml.dump({"entrypoints": "not-a-list"}))
-
-        original = svc_module.ATLAN_YAML_PATH
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
-        try:
-            assert _load_entrypoint_registry() == {}
-        finally:
-            svc_module.ATLAN_YAML_PATH = original
-
-    def test_skips_entries_without_name_or_generated_dir(self, tmp_path: Path) -> None:
-        """Entries missing name or generated_dir are silently skipped."""
-        from application_sdk.handler import service as svc_module
-
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text(
-            yaml.dump(
-                {
-                    "entrypoints": [
-                        {"name": "valid", "generated_dir": "gen"},
-                        {"name": "missing-dir"},
-                        {"generated_dir": "missing-name"},
-                        "not-a-dict",
-                    ]
-                }
-            )
-        )
-
-        original = svc_module.ATLAN_YAML_PATH
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
-        try:
-            registry = _load_entrypoint_registry()
-            assert registry == {"valid": "gen"}
-        finally:
-            svc_module.ATLAN_YAML_PATH = original
-
-    def test_returns_empty_when_yaml_is_empty_file(self, tmp_path: Path) -> None:
-        """Empty atlan.yaml (parses as None) returns empty dict."""
-        from application_sdk.handler import service as svc_module
-
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text("")
-
-        original = svc_module.ATLAN_YAML_PATH
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
-        try:
-            assert _load_entrypoint_registry() == {}
-        finally:
-            svc_module.ATLAN_YAML_PATH = original
-
-
-# ---------------------------------------------------------------------------
-# Entrypoint manifest resolution tests
+# Entrypoint manifest resolution tests (Option B: name == folder name)
 # ---------------------------------------------------------------------------
 
 
 class TestEntrypointManifestResolution:
-    """Tests for GET /workflows/v1/manifest?entrypoint={name}."""
+    """Tests for GET /workflows/v1/manifest?entrypoint={name}.
+
+    Option B: entrypoint name IS the folder name — no atlan.yaml parsing.
+    GET /manifest?entrypoint=X serves CONTRACT_GENERATED_DIR/X/manifest.json.
+    """
 
     def test_manifest_with_entrypoint_returns_correct_manifest(
         self, tmp_path: Path
     ) -> None:
-        """GET /manifest?entrypoint=snow resolves to correct sub-dir manifest."""
+        """GET /manifest?entrypoint=snowflake resolves to snowflake/manifest.json."""
         from application_sdk.handler import service as svc_module
 
-        # Set up atlan.yaml with entrypoints
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text(
-            yaml.dump(
-                {
-                    "entrypoints": [
-                        {"name": "snow", "generated_dir": "snow-gen"},
-                    ]
-                }
-            )
-        )
-
-        # Set up contract generated dir with sub-dir manifest
         contract_dir = tmp_path / "generated"
-        snow_dir = contract_dir / "snow-gen"
-        snow_dir.mkdir(parents=True)
+        ep_dir = contract_dir / "snowflake"
+        ep_dir.mkdir(parents=True)
         manifest_data = {"execution_mode": "dag", "app_name": "snowflake-extractor"}
-        (snow_dir / "manifest.json").write_text(json.dumps(manifest_data))
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
 
-        original_yaml = svc_module.ATLAN_YAML_PATH
         original_dir = svc_module.CONTRACT_GENERATED_DIR
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
         svc_module.CONTRACT_GENERATED_DIR = contract_dir
         try:
             client = _make_client()
-            response = client.get("/workflows/v1/manifest?entrypoint=snow")
+            response = client.get("/workflows/v1/manifest?entrypoint=snowflake")
             assert response.status_code == 200
             body = response.json()
             assert body["execution_mode"] == "dag"
             assert body["app_name"] == "snowflake-extractor"
         finally:
-            svc_module.ATLAN_YAML_PATH = original_yaml
             svc_module.CONTRACT_GENERATED_DIR = original_dir
 
     def test_manifest_substitutes_deployment_name_for_entrypoint(
@@ -1510,27 +1444,14 @@ class TestEntrypointManifestResolution:
         """Entrypoint manifest replaces {deployment_name} placeholder."""
         from application_sdk.handler import service as svc_module
 
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text(
-            yaml.dump(
-                {
-                    "entrypoints": [
-                        {"name": "ep1", "generated_dir": "ep1-gen"},
-                    ]
-                }
-            )
-        )
-
         contract_dir = tmp_path / "generated"
-        ep_dir = contract_dir / "ep1-gen"
+        ep_dir = contract_dir / "ep1"
         ep_dir.mkdir(parents=True)
         manifest_data = {"task_queue": "{deployment_name}-queue"}
         (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
 
-        original_yaml = svc_module.ATLAN_YAML_PATH
         original_dir = svc_module.CONTRACT_GENERATED_DIR
         original_dep = svc_module.DEPLOYMENT_NAME
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
         svc_module.CONTRACT_GENERATED_DIR = contract_dir
         svc_module.DEPLOYMENT_NAME = "prod-deploy"
         try:
@@ -1540,133 +1461,106 @@ class TestEntrypointManifestResolution:
             body = response.json()
             assert body["task_queue"] == "prod-deploy-queue"
         finally:
-            svc_module.ATLAN_YAML_PATH = original_yaml
             svc_module.CONTRACT_GENERATED_DIR = original_dir
             svc_module.DEPLOYMENT_NAME = original_dep
 
-    def test_unknown_entrypoint_returns_404(self, tmp_path: Path) -> None:
-        """GET /manifest?entrypoint=unknown returns 404."""
+    def test_valid_but_unknown_entrypoint_returns_404(self, tmp_path: Path) -> None:
+        """Well-formed name with no matching subdir on disk returns 404."""
         from application_sdk.handler import service as svc_module
 
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text(
-            yaml.dump(
-                {
-                    "entrypoints": [
-                        {"name": "snow", "generated_dir": "snow-gen"},
-                    ]
-                }
-            )
-        )
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
 
-        original_yaml = svc_module.ATLAN_YAML_PATH
         original_dir = svc_module.CONTRACT_GENERATED_DIR
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
-        svc_module.CONTRACT_GENERATED_DIR = tmp_path / "generated"
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
         try:
             client = _make_client()
             response = client.get("/workflows/v1/manifest?entrypoint=unknown")
             assert response.status_code == 404
+            assert "No manifest found" in response.json()["detail"]
         finally:
-            svc_module.ATLAN_YAML_PATH = original_yaml
             svc_module.CONTRACT_GENERATED_DIR = original_dir
 
     def test_entrypoint_with_missing_manifest_file_returns_404(
         self, tmp_path: Path
     ) -> None:
-        """Entrypoint exists in registry but manifest.json missing on disk."""
+        """Subdir exists but manifest.json is absent — returns 404."""
         from application_sdk.handler import service as svc_module
 
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text(
-            yaml.dump(
-                {
-                    "entrypoints": [
-                        {"name": "snow", "generated_dir": "snow-gen"},
-                    ]
-                }
-            )
-        )
-
-        # Create the contract dir but NOT the sub-dir manifest
         contract_dir = tmp_path / "generated"
-        contract_dir.mkdir(parents=True)
+        (contract_dir / "snowflake").mkdir(parents=True)  # dir, but no manifest.json
 
-        original_yaml = svc_module.ATLAN_YAML_PATH
         original_dir = svc_module.CONTRACT_GENERATED_DIR
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
         svc_module.CONTRACT_GENERATED_DIR = contract_dir
         try:
             client = _make_client()
-            response = client.get("/workflows/v1/manifest?entrypoint=snow")
+            response = client.get("/workflows/v1/manifest?entrypoint=snowflake")
             assert response.status_code == 404
         finally:
-            svc_module.ATLAN_YAML_PATH = original_yaml
             svc_module.CONTRACT_GENERATED_DIR = original_dir
 
-    def test_path_traversal_in_generated_dir_returns_404(self, tmp_path: Path) -> None:
-        """generated_dir with path traversal (../) is rejected with 404."""
+    def test_invalid_entrypoint_name_returns_400(self, tmp_path: Path) -> None:
+        """Entrypoint names with path-traversal or illegal chars return 400."""
         from application_sdk.handler import service as svc_module
-
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text(
-            yaml.dump(
-                {
-                    "entrypoints": [
-                        {"name": "evil", "generated_dir": "../../etc"},
-                    ]
-                }
-            )
-        )
 
         contract_dir = tmp_path / "generated"
         contract_dir.mkdir(parents=True)
 
-        original_yaml = svc_module.ATLAN_YAML_PATH
         original_dir = svc_module.CONTRACT_GENERATED_DIR
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
         svc_module.CONTRACT_GENERATED_DIR = contract_dir
         try:
             client = _make_client()
-            response = client.get("/workflows/v1/manifest?entrypoint=evil")
-            assert response.status_code == 404
+            for bad_name in ["../etc", "a/b", "name with spaces", "name@bad"]:
+                resp = client.get(f"/workflows/v1/manifest?entrypoint={bad_name}")
+                assert resp.status_code == 400, f"Expected 400 for {bad_name!r}"
+                assert resp.json()["detail"] == "Invalid entrypoint name"
         finally:
-            svc_module.ATLAN_YAML_PATH = original_yaml
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_invalid_entrypoint_location_returns_400(self, tmp_path: Path) -> None:
+        """Resolved path outside CONTRACT_GENERATED_DIR returns 400 with 'location' detail."""
+        from unittest.mock import patch
+
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            # Monkeypatch is_relative_to to simulate the path escaping (belt-and-braces
+            # guard 2; unreachable from HTTP because guard 1 pre-filters the name).
+            with patch.object(
+                type(contract_dir / "valid" / "manifest.json"),
+                "is_relative_to",
+                return_value=False,
+            ):
+                # Use a valid name so guard 1 passes; guard 2 then rejects.
+                resp = client.get("/workflows/v1/manifest?entrypoint=valid")
+                assert resp.status_code == 400
+                assert resp.json()["detail"] == "Invalid entrypoint location"
+        finally:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
 
     def test_legacy_manifest_alias_forwards_entrypoint(self, tmp_path: Path) -> None:
         """GET /manifest?entrypoint=name uses the legacy alias correctly."""
         from application_sdk.handler import service as svc_module
 
-        atlan_yaml = tmp_path / "atlan.yaml"
-        atlan_yaml.write_text(
-            yaml.dump(
-                {
-                    "entrypoints": [
-                        {"name": "snow", "generated_dir": "snow-gen"},
-                    ]
-                }
-            )
-        )
-
         contract_dir = tmp_path / "generated"
-        snow_dir = contract_dir / "snow-gen"
-        snow_dir.mkdir(parents=True)
-        manifest_data = {"app_name": "snow-app"}
-        (snow_dir / "manifest.json").write_text(json.dumps(manifest_data))
+        ep_dir = contract_dir / "snow"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"app_name": "snow-app"}))
 
-        original_yaml = svc_module.ATLAN_YAML_PATH
         original_dir = svc_module.CONTRACT_GENERATED_DIR
-        svc_module.ATLAN_YAML_PATH = atlan_yaml
         svc_module.CONTRACT_GENERATED_DIR = contract_dir
         try:
             client = _make_client()
             response = client.get("/manifest?entrypoint=snow")
             assert response.status_code == 200
-            body = response.json()
-            assert body["app_name"] == "snow-app"
+            assert response.json()["app_name"] == "snow-app"
         finally:
-            svc_module.ATLAN_YAML_PATH = original_yaml
             svc_module.CONTRACT_GENERATED_DIR = original_dir
 
     def test_no_entrypoint_param_serves_root_manifest(self, tmp_path: Path) -> None:
@@ -1675,8 +1569,9 @@ class TestEntrypointManifestResolution:
 
         contract_dir = tmp_path / "generated"
         contract_dir.mkdir(parents=True)
-        manifest_data = {"execution_mode": "linear"}
-        (contract_dir / "manifest.json").write_text(json.dumps(manifest_data))
+        (contract_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear"})
+        )
 
         original_dir = svc_module.CONTRACT_GENERATED_DIR
         svc_module.CONTRACT_GENERATED_DIR = contract_dir
@@ -1684,8 +1579,7 @@ class TestEntrypointManifestResolution:
             client = _make_client()
             response = client.get("/workflows/v1/manifest")
             assert response.status_code == 200
-            body = response.json()
-            assert body["execution_mode"] == "linear"
+            assert response.json()["execution_mode"] == "linear"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
 

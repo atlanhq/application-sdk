@@ -36,7 +36,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
-import yaml
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -271,50 +270,6 @@ _storage: ObjectStore | None = None
 
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
-
-# Path to atlan.yaml at the app repo root. Multi-entrypoint native apps
-# declare each entrypoint's ``generated_dir`` here; the SDK uses that
-# mapping to resolve ``?entrypoint={name}`` to the correct subdir of
-# ``CONTRACT_GENERATED_DIR`` at runtime.
-ATLAN_YAML_PATH = Path.cwd() / "atlan.yaml"
-
-
-def _load_entrypoint_registry() -> dict[str, str]:
-    """Return ``{entrypoint_name: generated_dir}`` from atlan.yaml.
-
-    Empty dict when atlan.yaml doesn't exist, has no ``entrypoints`` key,
-    or is malformed. Read on each call — the file is tiny and only hit on
-    manifest requests.
-    """
-    if not ATLAN_YAML_PATH.exists():
-        return {}
-    try:
-        data = yaml.safe_load(ATLAN_YAML_PATH.read_text()) or {}
-    except yaml.YAMLError as exc:
-        logger.warning(
-            "atlan.yaml is not valid YAML (%s); entrypoint registry empty", exc
-        )
-        return {}
-    if not isinstance(data, dict):
-        logger.warning(
-            "atlan.yaml did not parse as a mapping; entrypoint registry empty"
-        )
-        return {}
-    packages = data.get("entrypoints") or []
-    if not isinstance(packages, list):
-        logger.warning(
-            "atlan.yaml entrypoints must be a list; entrypoint registry empty"
-        )
-        return {}
-    registry: dict[str, str] = {}
-    for i, pkg in enumerate(packages):
-        if not isinstance(pkg, dict):
-            continue
-        name = pkg.get("name")
-        generated_dir = pkg.get("generated_dir")
-        if isinstance(name, str) and isinstance(generated_dir, str):
-            registry[name] = generated_dir
-    return registry
 
 
 async def _get_temporal_client() -> Client:
@@ -1487,23 +1442,27 @@ def create_app_handler_service(
         deployment = (DEPLOYMENT_NAME or "default").encode()
 
         if entrypoint:
-            # Multi-entrypoint: look up generated_dir from atlan.yaml registry
-            registry = _load_entrypoint_registry()
-            generated_dir = registry.get(entrypoint)
-            if generated_dir is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No entrypoint {entrypoint!r} in atlan.yaml",
-                )
+            # Guard 1 (400 — malformed input): name must be an identifier-safe
+            # kebab segment (letters, digits, hyphens, underscores only). Mirrors
+            # the @entrypoint decorator so any SDK-produced name passes here.
+            if not entrypoint.replace("-", "_").isidentifier():
+                raise HTTPException(status_code=400, detail="Invalid entrypoint name")
             ep_manifest = (
-                CONTRACT_GENERATED_DIR / generated_dir / "manifest.json"
+                CONTRACT_GENERATED_DIR / entrypoint / "manifest.json"
             ).resolve()
+            # Guard 2 (400 — defense-in-depth): resolved path must stay inside
+            # CONTRACT_GENERATED_DIR. Distinct message so operators can tell
+            # this guard fired vs. the name validator above.
             if not ep_manifest.is_relative_to(CONTRACT_GENERATED_DIR.resolve()):
-                raise HTTPException(status_code=404, detail="Invalid generated_dir")
+                raise HTTPException(
+                    status_code=400, detail="Invalid entrypoint location"
+                )
+            # Guard 3 (404 — well-formed but not found): name is valid but this
+            # image has no manifest for it.
             if not ep_manifest.exists():
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Entrypoint {entrypoint!r} has no manifest.json in {generated_dir}/",
+                    detail=f"No manifest found for entrypoint {entrypoint!r}",
                 )
             raw = ep_manifest.read_bytes().replace(b"{deployment_name}", deployment)
             return Response(content=raw, media_type="application/json")

@@ -42,7 +42,9 @@ _ALLOWED_TYPES = {"connector", "miner", "orchestrator", "utility", "custom"}
 
 # Required keys for each entrypoints entry. description and icon_url
 # are optional (default empty string on GM side).
-_REQUIRED_PACKAGE_KEYS = {"name", "display_name", "type", "generated_dir"}
+# generated_dir is auto-derived from name (Option B: name == folder) so it is
+# optional here; if provided it must equal name.
+_REQUIRED_PACKAGE_KEYS = {"name", "display_name", "type"}
 
 
 class AtlanYamlError(Exception):
@@ -97,9 +99,18 @@ def _validate_entrypoints(wp_val: Any) -> str:
                 f"{sorted(_ALLOWED_TYPES)}; got {pkg_type!r}"
             )
 
+        # Option B: entrypoint name IS the generated directory.
+        # generated_dir is optional in atlan.yaml — defaults to name when absent.
+        # If explicitly provided it must equal name so the convention is enforced.
         generated_dir = pkg.get("generated_dir")
-        if not isinstance(generated_dir, str) or not generated_dir.strip():
-            _err(f"entrypoints[{i}].generated_dir must be a non-empty string")
+        if generated_dir is None:
+            pkg["generated_dir"] = name
+        elif generated_dir != name:
+            _err(
+                f"entrypoints[{i}].generated_dir must equal name ({name!r}); "
+                f"got {generated_dir!r}. "
+                "Set generated_dir equal to name or omit it (it will default to name)."
+            )
 
         display_name = pkg.get("display_name")
         if not isinstance(display_name, str) or not display_name.strip():
