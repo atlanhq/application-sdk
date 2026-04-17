@@ -529,15 +529,21 @@ async def test_start_saves_config_to_state_store(run_worker, trivial_wf_client):
 
 
 @pytest.fixture
-async def credential_wf_client(temporal_client, task_queue, reregister_app):
-    """Handler service configured with CredentialAwareApp and a live InMemorySecretStore."""
+async def credential_wf_client(
+    temporal_client, task_queue, reregister_app, monkeypatch
+):
+    """Handler service configured with CredentialAwareApp, state store, and ATLAN_LOCAL_DEVELOPMENT."""
     from application_sdk.handler import service as svc
     from application_sdk.handler.service import create_app_handler_service
-    from application_sdk.testing.mocks import MockSecretStore
+    from application_sdk.testing.mocks import MockSecretStore, MockStateStore
 
     reregister_app(CredentialAwareApp)
 
+    # Credential interception requires ATLAN_LOCAL_DEVELOPMENT=true
+    monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "true")
+
     secret_store = MockSecretStore()
+    state_store = MockStateStore()
     handler = DefaultHandler()
     app = create_app_handler_service(
         handler,
@@ -546,10 +552,11 @@ async def credential_wf_client(temporal_client, task_queue, reregister_app):
         temporal_host="localhost:7233",
         task_queue=task_queue,
         secret_store=secret_store,
+        state_store=state_store,
     )
     svc._temporal_client = temporal_client
 
-    return app, secret_store
+    return app, state_store
 
 
 @pytest.mark.integration
@@ -564,9 +571,8 @@ async def test_start_intercepts_inline_credentials(
     - stored format is a flat dict {key: value}, matching production Dapr/Vault format
     - Temporal start event payload carries credential_guid (not raw credentials)
     """
-    import json
 
-    app, secret_store = credential_wf_client
+    app, state_store = credential_wf_client
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -584,16 +590,18 @@ async def test_start_intercepts_inline_credentials(
     wf_id = resp.json()["data"]["workflow_id"]
     assert wf_id
 
-    # Secret store must have exactly one entry — the intercepted credential
-    stored_names = await secret_store.list_names()
-    assert len(stored_names) == 1
-    credential_guid = stored_names[0]
+    # State store must have exactly one cred: entry — the intercepted credential
+    save_calls = state_store.get_save_calls()
+    cred_saves = [c for c in save_calls if c["key"].startswith("cred:")]
+    assert len(cred_saves) == 1
+    cred_key = cred_saves[0]["key"]
+    credential_guid = cred_key.removeprefix("cred:")
 
     # The key must be a valid UUID
     UUID(credential_guid)
 
     # Stored value must be flat dict {key: value}, not the v3 list [{key, value}]
-    stored = json.loads(await secret_store.get(credential_guid))
+    stored = await state_store.load(cred_key)
     assert stored == {"password": "s3cr3t"}
 
     # Confirm the Temporal workflow start event carries credential_guid and no raw
