@@ -6,7 +6,7 @@ from unittest.mock import mock_open, patch
 import pytest
 
 from application_sdk.common.error_codes import CommonError
-from application_sdk.common.utils import (
+from application_sdk.common.sql_filters import (
     extract_database_names_from_regex_common,
     normalize_filters,
     parse_filter_input,
@@ -75,7 +75,7 @@ class TestPrepareQuery:
             }
         }
 
-        with patch("application_sdk.common.utils.logger") as mock_logger:
+        with patch("application_sdk.common.sql_filters.logger") as mock_logger:
             result = prepare_query(query, workflow_args)
             mock_logger.error.assert_called_once_with(
                 "Error preparing query",
@@ -433,7 +433,7 @@ class TestExtractDatabaseNamesFromIncludeRegex:
 
         assert result == "'.*'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_include_regex_logs_warnings_for_invalid_names(
         self, mock_logger
     ) -> None:
@@ -451,7 +451,7 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         )
         assert result == "'^(valid_db)$'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_include_regex_logs_warnings_for_processing_errors(
         self, mock_logger
     ) -> None:
@@ -471,7 +471,7 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         )
         assert result == "'^(db1|db2)$'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_include_regex_logs_error_for_general_exception(
         self, mock_logger
     ) -> None:
@@ -755,7 +755,7 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         # Should handle incomplete patterns and only extract for wildcard schemas
         assert result == "'^(db2)$'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_exclude_regex_logs_warnings_for_invalid_names(
         self, mock_logger
     ) -> None:
@@ -773,7 +773,7 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         )
         assert result == "'^(valid_db)$'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_exclude_regex_logs_warnings_for_processing_errors(
         self, mock_logger
     ) -> None:
@@ -791,7 +791,7 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         )
         assert result == "'^(db1|db2)$'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_exclude_regex_logs_error_for_general_exception(
         self, mock_logger
     ) -> None:
