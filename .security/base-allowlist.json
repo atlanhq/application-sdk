@@ -153,14 +153,14 @@
   "CVE-2026-23949": {
     "package": "jaraco.context",
     "severity": "HIGH",
-    "reason": "Base image — system Python package (jaraco.context 5.3.0) shipped by Chainguard Wolfi in cgr.dev/atlan.com/app-framework-golden:3.13. Fixed in 6.1.0; awaiting Wolfi base image rebuild with patched python3-jaraco-context APK. Not used at runtime by SDK apps (apps install their own deps in .venv).",
+    "reason": "Base image — Chainguard Wolfi system Python package",
     "expires": "2026-07-16",
     "added_by": "anuj-atlan"
   },
   "CVE-2026-24049": {
     "package": "wheel",
     "severity": "HIGH",
-    "reason": "Base image — system Python package (wheel 0.45.1) shipped by Chainguard Wolfi in cgr.dev/atlan.com/app-framework-golden:3.13. Fixed in 0.46.2; awaiting Wolfi base image rebuild with patched python3-wheel APK. Not used at runtime by SDK apps (apps install their own deps in .venv).",
+    "reason": "Base image — Chainguard Wolfi system Python package",
     "expires": "2026-07-16",
     "added_by": "anuj-atlan"
   }
