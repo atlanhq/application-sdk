@@ -304,7 +304,9 @@ jobs:
         with:
           repository: atlanhq/application-sdk
           ref: main
-          sparse-checkout: .security
+          sparse-checkout: |
+            .security
+            .github/scripts
           path: _sdk
           token: ${{ secrets.ORG_PAT_GITHUB }}
 
@@ -362,98 +364,7 @@ jobs:
           category: trivy-container
 
       - name: Check against allowlist
-        run: |
-          python3 - <<'PYEOF'
-          import json, sys, os
-          from datetime import datetime
-
-          # Load base allowlist (from SDK) — single source of truth for all apps.
-          # Per-repo allowlists are not supported; all CVE exceptions must go
-          # through the centralized base-allowlist in atlanhq/application-sdk.
-          base_path = "_sdk/.security/base-allowlist.json"
-          try:
-              with open(base_path) as f:
-                  base_raw = json.load(f)
-              allowlist = {k: v for k, v in base_raw.items() if not k.startswith("_")}
-              print(f"Base allowlist: {len(allowlist)} entries")
-          except FileNotFoundError:
-              print(f"Warning: {base_path} not found — findings reported but gate disabled.")
-              allowlist = None
-          except json.JSONDecodeError as e:
-              print(f"Error: base allowlist has invalid JSON: {e}")
-              sys.exit(1)
-
-          today = datetime.now().strftime("%Y-%m-%d")
-          all_vulns = {}
-
-          trivy_count = 0
-          try:
-              with open("trivy-results.json") as f:
-                  trivy = json.load(f)
-              for result in trivy.get("Results", []):
-                  for vuln in result.get("Vulnerabilities", []):
-                      vid = vuln.get("VulnerabilityID")
-                      if vid and vid not in all_vulns:
-                          all_vulns[vid] = {
-                              "id": vid,
-                              "severity": vuln.get("Severity", "").upper(),
-                              "package": vuln.get("PkgName", ""),
-                              "installed": vuln.get("InstalledVersion", ""),
-                              "fixed": vuln.get("FixedVersion", ""),
-                          }
-                          trivy_count += 1
-          except Exception as e:
-              print(f"Warning: Trivy results unavailable: {e}")
-
-          unique = list(all_vulns.values())
-
-          if allowlist is None:
-              print(f"Base allowlist unavailable — {len(unique)} CRITICAL/HIGH findings reported (gate disabled).")
-              for v in sorted(unique, key=lambda x: {"CRITICAL": 0, "HIGH": 1}.get(x["severity"], 9)):
-                  print(f"  {v['severity']:8s} {v['id']} {v['package']}@{v['installed']}")
-              sys.exit(0)
-
-          allowed, expired, new_vulns = [], [], []
-          for v in unique:
-              entry = allowlist.get(v["id"])
-              if entry:
-                  if today > entry.get("expires", "9999-12-31"):
-                      expired.append(v)
-                  else:
-                      allowed.append(v)
-              else:
-                  new_vulns.append(v)
-
-          sev_order = {"CRITICAL": 0, "HIGH": 1}
-          new_vulns.sort(key=lambda x: sev_order.get(x["severity"], 9))
-          expired.sort(key=lambda x: sev_order.get(x["severity"], 9))
-
-          print(f"Trivy: {trivy_count} findings | Total: {len(unique)} | Allowlisted: {len(allowed)} | Expired: {len(expired)} | New: {len(new_vulns)}")
-
-          blockers = new_vulns + expired
-          if blockers:
-              summary = f"### \U0001f6e1\ufe0f Security Gate Failed\n\n"
-              summary += f"Trivy: {trivy_count} findings | Total: {len(unique)} | Allowlisted: {len(allowed)} | **New: {len(new_vulns)}**"
-              if expired:
-                  summary += f" | Expired: {len(expired)}"
-              summary += "\n\n"
-              summary += "| Severity | ID | Package | Fix Available |\n"
-              summary += "|----------|----|---------|---------------|\n"
-              for v in blockers:
-                  fix = v["fixed"] if v["fixed"] else "No fix"
-                  summary += f"| {v['severity']} | `{v['id']}` | `{v['package']}@{v['installed']}` | {fix} |\n"
-              summary += "\n**To resolve:** fix the vulnerability or open a PR against `atlanhq/application-sdk` to add it to `.security/base-allowlist.json` (SDK security owner approval required).\n"
-              with open(os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null"), "a") as f:
-                  f.write(summary)
-              print(f"GATE FAILED: {len(blockers)} non-allowlisted vulnerabilities")
-              sys.exit(1)
-          else:
-              summary = f"### \U0001f6e1\ufe0f Security Gate Passed\n\n"
-              summary += f"Trivy: {trivy_count} findings | Total: {len(unique)} CRITICAL/HIGH | All allowlisted \u2705\n"
-              with open(os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null"), "a") as f:
-                  f.write(summary)
-              print(f"GATE PASSED: All {len(unique)} vulnerabilities are allowlisted")
-          PYEOF
+        run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results trivy-results.json
 
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
   app-deployment-dispatcher:
