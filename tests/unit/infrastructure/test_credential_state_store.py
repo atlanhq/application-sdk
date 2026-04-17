@@ -244,29 +244,25 @@ class TestNonLocalModeRejectsCredentials:
 class TestDaprRequiredStartup:
     """Verify main.py requires Dapr sidecar."""
 
-    def test_no_dapr_raises_runtime_error(self, monkeypatch):
+    async def test_no_dapr_raises_runtime_error(self, monkeypatch):
         """_create_infrastructure raises when DAPR_HTTP_PORT not set."""
-        import asyncio
+        import pytest
 
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 
         from application_sdk.main import _create_infrastructure
 
-        with __import__("pytest").raises(
-            RuntimeError, match="Dapr sidecar not detected"
-        ):
-            asyncio.get_event_loop().run_until_complete(_create_infrastructure())
+        with pytest.raises(RuntimeError, match="Dapr sidecar not detected"):
+            await _create_infrastructure()
 
-    def test_error_message_includes_poe_command(self, monkeypatch):
+    async def test_error_message_includes_poe_command(self, monkeypatch):
         """Error message tells developer how to fix it."""
-        import asyncio
-
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 
         from application_sdk.main import _create_infrastructure
 
         try:
-            asyncio.get_event_loop().run_until_complete(_create_infrastructure())
+            await _create_infrastructure()
         except RuntimeError as e:
             assert "poe start-deps" in str(e)
             assert "DAPR_HTTP_PORT" in str(e)
