@@ -10,8 +10,6 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - 'entrypoint.sh'
-      - 'application_sdk/**'
-      - 'tests/**'
 
 permissions:
   contents: read
@@ -44,10 +42,8 @@ jobs:
         run: echo "version=$(awk -F'"' '/^version = / {print $2}' pyproject.toml)" >> $GITHUB_OUTPUT
         id: get_version
 
-      - name: Lowercase and sanitise branch name
-        # Replace '/' and '_' with '-' so feature branches like "gaurav/app-vitals"
-        # produce a valid GHCR image tag (no slashes allowed in tag portion).
-        run: echo "lowercase_branch=$(echo '${{ steps.get_branch.outputs.branch }}' | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')" >> $GITHUB_OUTPUT
+      - name: Lowercase branch name
+        run: echo "lowercase_branch=$(echo '${{ steps.get_branch.outputs.branch }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
         id: get_lowercase_branch
 
   push-to-ghcr:
