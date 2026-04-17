@@ -123,6 +123,7 @@ class APIServer(ServerInterface):
         has_configmap: bool = False,
         subscriptions: List[Subscription] = [],
         manifest: Optional[dict[str, Any]] = None,
+        manifest_version: Optional[dict[str, Any]] = None,
     ):
         """Initialize the FastAPI application.
 
@@ -139,6 +140,7 @@ class APIServer(ServerInterface):
         self.ui_enabled = ui_enabled
         self.has_configmap = has_configmap
         self.manifest = manifest
+        self.manifest_version = manifest_version
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -455,6 +457,14 @@ class APIServer(ServerInterface):
             self.app.add_api_route(
                 "/manifest",
                 lambda: manifest_data,
+                methods=["GET"],
+            )
+
+        if self.manifest_version is not None:
+            manifest_version_data = self.manifest_version
+            self.app.add_api_route(
+                "/manifest/version",
+                lambda: manifest_version_data,
                 methods=["GET"],
             )
 

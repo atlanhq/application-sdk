@@ -32,14 +32,15 @@ class _MockWorkflow(WorkflowInterface):
         return []
 
 
-def _make_server(manifest=None, has_configmap=False):
-    """Create an APIServer with optional manifest."""
+def _make_server(manifest=None, manifest_version=None, has_configmap=False):
+    """Create an APIServer with optional manifest and manifest_version."""
     server = APIServer(
         handler=_MockHandler(),
         workflow_client=Mock(),
         ui_enabled=False,
         has_configmap=has_configmap,
         manifest=manifest,
+        manifest_version=manifest_version,
     )
     return server
 
@@ -88,6 +89,33 @@ class TestManifestRoute:
 
         assert response.status_code == 200
         assert response.json() == manifest_data
+
+
+class TestManifestVersionRoute:
+    """Tests for the /manifest/version endpoint registration and response."""
+
+    async def test_manifest_version_route_registered_when_provided(self):
+        """When manifest_version is not None, /manifest/version route should be registered."""
+        version_data = {"manifest_version": "abc123hash"}
+        server = _make_server(manifest_version=version_data)
+
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/manifest/version")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["manifest_version"] == "abc123hash"
+
+    async def test_manifest_version_route_not_registered_when_none(self):
+        """When manifest_version is None, /manifest/version route should not exist."""
+        server = _make_server(manifest_version=None)
+
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/manifest/version")
+
+        assert response.status_code in (404, 405)
 
 
 class TestListConfigmaps:

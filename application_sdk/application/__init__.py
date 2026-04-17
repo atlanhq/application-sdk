@@ -75,6 +75,13 @@ class BaseApplication:
 
             self.mcp_server = MCPServer(application_name=name)
 
+    def _get_manifest_path(self) -> Optional[Any]:
+        """Return the manifest file path (pathlib.Path) if it exists, else None."""
+        from pathlib import Path
+
+        manifest_path = Path.cwd() / "contract" / "generated" / "manifest.json"
+        return manifest_path if manifest_path.exists() else None
+
     def get_manifest(self) -> Optional[Dict[str, Any]]:
         """Return the manifest dict for the GET /manifest endpoint.
 
@@ -87,12 +94,11 @@ class BaseApplication:
         with actual values at serve time.
         """
         import json
-        from pathlib import Path
 
         from application_sdk.constants import DEPLOYMENT_NAME
 
-        manifest_path = Path.cwd() / "contract" / "generated" / "manifest.json"
-        if manifest_path.exists():
+        manifest_path = self._get_manifest_path()
+        if manifest_path is not None:
             logger.info(f"Serving manifest from contract: {manifest_path}")
             with open(manifest_path) as f:
                 raw = f.read()
@@ -100,6 +106,29 @@ class BaseApplication:
             raw = raw.replace("{app_name}", self.application_name)
             return json.loads(raw)
         return None
+
+    def get_manifest_version(self) -> Optional[Dict[str, Any]]:
+        """Return a stable hash of the DAG portion of the raw manifest.
+
+        Uses the raw manifest (no placeholder substitution) so the hash
+        is deterministic across deployments.
+        """
+        import hashlib
+        import json
+
+        manifest_path = self._get_manifest_path()
+        if manifest_path is None:
+            return None
+
+        with open(manifest_path) as f:
+            raw = json.load(f)
+
+        dag = raw.get("dag")
+        if dag is None:
+            return None
+
+        version = hashlib.sha256(json.dumps(dag, sort_keys=True).encode()).hexdigest()
+        return {"manifest_version": version}
 
     def bootstrap_event_registration(self):
         self.event_subscriptions: Dict[str, EventWorkflowTrigger] = {}
@@ -303,6 +332,7 @@ class BaseApplication:
             handler=self.handler_class(client=self.client_class()),
             has_configmap=has_configmap,
             manifest=self.get_manifest(),
+            manifest_version=self.get_manifest_version(),
         )
 
         # Mount MCP at root
