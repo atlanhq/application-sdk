@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from application_sdk.lakehouse.catalog_client import PolarisCatalogClient
@@ -69,12 +69,11 @@ class LakehouseConsumer:
                     table = catalog_client.load_table()
                     outcome_writer = OutcomeWriter(table)
 
-                    cutoff = datetime.now(timezone.utc) - timedelta(
-                        days=self._lookback_days
-                    )
-                    scan = table.scan(
-                        row_filter=f"ingested_at >= timestamp '{cutoff.strftime('%Y-%m-%d %H:%M:%S')}'",
-                    )
+                    # Scan all rows — partition pruning handles efficiency.
+                    # PyIceberg's string expression parser doesn't support
+                    # timestamp literals, so we skip the row_filter and let
+                    # DuckDB's work query handle the recency filter.
+                    scan = table.scan()
                     arrow_table = scan.to_arrow()
 
                     if arrow_table.num_rows == 0:
