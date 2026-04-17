@@ -32,7 +32,7 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 **Rule:** Each app exports telemetry under its own `OTEL_SERVICE_NAME`. Distributed traces linked via `correlation_id`.
 
 **Violations to flag:**
-- Missing `correlation_id` propagation in inter-app calls (`call_by_name`)
+- Missing `correlation_id` propagation across app boundaries
 - Log statements without structured context (app_name, run_id, correlation_id should come from `self.logger`)
 - Custom logger instantiation instead of using `self.logger` (which auto-includes correlation context)
 - Hardcoded service names instead of using framework-provided `ATLAN_SERVICE_NAME`
@@ -83,12 +83,13 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 
 ## ADR-0007: Apps as Unit of Inter-App Coordination
 
-**Rule:** Apps invoke other Apps as Temporal child workflows via `call_by_name()`. Tasks are strictly internal — never callable from outside the App.
+> **⚠️ Under Review — BLDX-878**: `call()` / `call_by_name()` are **deactivated** in the SDK. Do not recommend or flag missing usage of these methods. Multi-app coordination goes through Automation Engine DAG orchestration.
+
+**Rule (still enforced):** Tasks are strictly internal — never callable from outside the App.
 
 **Violations to flag:**
 - Direct task method invocation across App boundaries
 - Importing another App's implementation class (should only import its contracts)
-- Missing `task_queue` parameter in `call_by_name()` calls
 - Tight coupling: one App class importing internals of another
 
 ---
