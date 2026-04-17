@@ -8,7 +8,7 @@ Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.2...v3.0
 
 This is a major version bump. All v2 imports remain functional in v3.0.x with `DeprecationWarning` and will be removed in v3.1.0. See the [v3 Upgrade Guide](docs/upgrade-guide-v3.md) for upgrade instructions.
 
-**Storage API removals** (`application_sdk.storage`): The backward-compat aliases `delete_file` and `list_files` have been removed. Use `delete` and `list_keys` respectively. See [Upgrading ObjectStore calls](docs/upgrade-guide-v3.md#migrating-objectstore-calls) in the upgrade guide.
+**Storage API removals** (`application_sdk.storage`): The backward-compat aliases `delete_file` and `list_files` have been removed. Use `delete` and `list_keys` respectively. See [Upgrading ObjectStore calls](docs/upgrade-guide-v3.md#upgrading-objectstore-calls) in the upgrade guide.
 
 ### Features
 
