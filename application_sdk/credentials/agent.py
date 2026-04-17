@@ -274,19 +274,30 @@ def _flatten_auth_section(creds: dict[str, Any]) -> dict[str, Any]:
     ``_expand_dotted`` nests as ``{"basic": {"username": "u"}}``.
     SQL/REST/NoSQL clients expect ``username`` and ``password`` at the
     root level.  This function reads ``auth-type`` (e.g. ``"basic"``),
-    finds the matching nested dict, and merges its contents to root.
+    finds the matching nested dict, and **deep-merges** its contents
+    to root — so existing root-level dicts (e.g. ``extra``) are merged
+    rather than overwritten.
 
     Example::
 
-        {"auth-type": "basic", "basic": {"username": "u", "password": "p"}, "host": "h"}
+        {"auth-type": "gcp-wif",
+         "extra": {"connect_type": "public"},
+         "gcp-wif": {"extra": {"project_id": "p"}}}
         →
-        {"auth-type": "basic", "basic": {"username": "u", "password": "p"},
-         "host": "h", "username": "u", "password": "p"}
+        {"auth-type": "gcp-wif",
+         "extra": {"connect_type": "public", "project_id": "p"},
+         "gcp-wif": {"extra": {"project_id": "p"}}}
     """
     auth_type = creds.get("auth-type", "")
     if not auth_type:
         return creds
     auth_section = creds.get(auth_type)
-    if isinstance(auth_section, dict):
-        creds.update(auth_section)
+    if not isinstance(auth_section, dict):
+        return creds
+    for key, value in auth_section.items():
+        existing = creds.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            existing.update(value)
+        else:
+            creds[key] = value
     return creds
