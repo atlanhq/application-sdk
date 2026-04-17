@@ -175,61 +175,6 @@ class SecretStore(Protocol):
         ...
 
 
-class InMemorySecretStore:
-    """In-memory secret store for testing.
-
-    WARNING: Do not use in production. Secrets are stored in plain text.
-    """
-
-    def __init__(self, secrets: dict[str, str] | None = None) -> None:
-        self._secrets: dict[str, str] = secrets or {}
-
-    async def get(self, name: str) -> str:
-        """Get a secret by name."""
-        if name not in self._secrets:
-            raise SecretNotFoundError(name)
-        return self._secrets[name]
-
-    async def get_optional(self, name: str) -> str | None:
-        """Get a secret by name, returning None if not found."""
-        return self._secrets.get(name)
-
-    async def get_bulk(self, names: list[str]) -> dict[str, str]:
-        """Get multiple secrets."""
-        result = {}
-        missing = []
-        for name in names:
-            if name in self._secrets:
-                result[name] = self._secrets[name]
-            else:
-                missing.append(name)
-        if missing and not result:
-            logger.warning(
-                "get_bulk: no secrets resolved; %d names not found: %s",
-                len(missing),
-                missing,
-            )
-        elif missing:
-            logger.debug(
-                "get_bulk: resolved %d, skipped %d not-found names",
-                len(result),
-                len(missing),
-            )
-        return result
-
-    async def list_names(self) -> list[str]:
-        """List available secret names."""
-        return list(self._secrets.keys())
-
-    def set(self, name: str, value: str) -> None:
-        """Set a secret (for test setup)."""
-        self._secrets[name] = value
-
-    def clear(self) -> None:
-        """Clear all secrets (for testing)."""
-        self._secrets.clear()
-
-
 class EnvironmentSecretStore:
     """Secret store backed by environment variables.
 
@@ -304,3 +249,18 @@ class EnvironmentSecretStore:
             for k in os.environ.keys()
             if k.startswith(self._prefix)
         ]
+
+
+def __getattr__(name: str):
+    if name == "InMemorySecretStore":
+        import warnings
+
+        warnings.warn(
+            "InMemorySecretStore is removed in v3. Use application_sdk.testing.mocks.MockSecretStore.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from application_sdk.testing.mocks import MockSecretStore
+
+        return MockSecretStore
+    raise AttributeError(name)
