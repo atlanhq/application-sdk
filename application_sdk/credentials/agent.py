@@ -1,26 +1,17 @@
-"""Agent-shape credential resolution for v3 inline ``agent_json`` payloads.
+"""Agent-shape credential resolution for v3 inline agent payloads.
 
 This module mirrors the behaviour of the v2
 ``application_sdk.services.secretstore.SecretStore.get_credentials()``
-flow, but operates on an inline JSON string carried on the workflow
-input rather than a GUID-indexed blob in the state store.
+flow, but operates on an :class:`AgentCredentialSpec` (the typed
+representation of the ``agent_json`` workflow field) rather than a
+GUID-indexed blob in the state store.
 
-The Atlan platform emits agent-shape credentials in this shape on
-workflow_args::
-
-    {
-        "agent_json": "{...JSON string...}",
-        "extraction_method": "agent",
-        "credential_guid": "",
-        ...
-    }
-
-The JSON inside ``agent_json`` describes *how to resolve* a credential
-against an external secret manager (AWS Secrets Manager, Azure Key
-Vault, K8s secrets) — not the secret values themselves. Its fields mix
-literal configuration values (``host``, ``port``, ``aws-region``) with
-**ref-keys**: string values that name a field inside the secret bundle
-stored at ``secret-path``.
+The ``agent_json`` field on the workflow input describes *how to
+resolve* a credential against an external secret manager (AWS Secrets
+Manager, Azure Key Vault, K8s secrets) — **not** the secret values
+themselves.  Its fields mix literal configuration values (``host``,
+``port``, ``aws-region``) with **ref-keys**: string values that name
+a field inside the secret bundle stored at ``secret-path``.
 
 Resolution is a three-step process:
 
@@ -29,7 +20,7 @@ Resolution is a three-step process:
    concrete backend (Dapr + AWS Secrets Manager in production, an
    :class:`~application_sdk.infrastructure.secrets.InMemorySecretStore`
    under test) is opaque to this module.
-2. **Substitute** each string value in the agent JSON that matches a
+2. **Substitute** each string value in the agent spec that matches a
    key in the bundle with the real value.  Mirrors v2's
    ``resolve_credentials`` — walks the root dict plus one level of
    ``extra`` when ``extra`` is a nested dict.  Literal keys
@@ -63,6 +54,7 @@ from application_sdk.infrastructure.secrets import SecretNotFoundError
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
+    from application_sdk.credentials.spec import AgentCredentialSpec
     from application_sdk.infrastructure.secrets import SecretStore
 
 logger = get_logger(__name__)
@@ -82,67 +74,70 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
         "host",
         "port",
         "auth-type",
+        "agent-type",
+        "key-type",
     }
 )
 
 
-async def resolve_agent_json(
-    agent_json: str,
+async def resolve_agent_credential(
+    spec: "AgentCredentialSpec",
     secret_store: "SecretStore",
 ) -> dict[str, Any]:
-    """Resolve an agent-shape JSON credential payload to a flat dict.
+    """Resolve a typed agent credential spec to a flat dict.
 
     Args:
-        agent_json: JSON string carried on ``workflow_args["agent_json"]``.
-            Must contain at minimum a ``secret-path`` key pointing at a
-            bundle in the external secret manager.
+        spec: The :class:`AgentCredentialSpec` parsed from the workflow
+            input's ``agent_json`` field.
         secret_store: The :class:`SecretStore` injected into the app's
             :class:`~application_sdk.app.context.AppContext` at worker
-            startup.  Concrete backend depends on the app's deployment
-            (Dapr AWS Secrets Manager in prod, in-memory in tests).
+            startup.
 
     Returns:
         A flat ``dict[str, Any]`` with all ref-keys substituted for
         their real values and dotted root keys (``extra.database``,
-        ``basic.username``) collapsed into nested dicts. The shape is
-        client-agnostic — any connector that consumes a credentials
-        dict (SQL, REST, NoSQL, cloud storage) reads from it directly.
+        ``basic.username``) collapsed into nested dicts.
 
     Raises:
-        CredentialParseError: If ``agent_json`` isn't valid JSON, is
-            missing ``secret-path``, or if the fetched bundle isn't
-            valid JSON.
+        CredentialParseError: If ``secret_path`` is empty or the
+            fetched bundle isn't valid JSON.
         CredentialNotFoundError: If the secret store does not have
-            a bundle at ``secret-path``.
+            a bundle at ``secret_path``.
         CredentialError: For any other secret-store failure.
     """
-    spec = _parse_agent_json(agent_json)
-    secret_path = spec.get("secret-path")
-    if not secret_path:
+    if not spec.secret_path:
         raise CredentialParseError(
             "agent_json is missing required field 'secret-path'",
         )
 
-    bundle = await _fetch_bundle(secret_store, secret_path)
-    resolved_flat = _substitute(spec, bundle)
+    raw = spec.to_raw_dict()
+    bundle = await _fetch_bundle(secret_store, spec.secret_path)
+    resolved_flat = _substitute(raw, bundle)
     expanded = _expand_dotted(resolved_flat)
     return _flatten_auth_section(expanded)
 
 
-def _parse_agent_json(agent_json: str) -> dict[str, Any]:
-    """Parse ``agent_json`` string into a dict; raise on invalid JSON."""
-    try:
-        parsed = orjson.loads(agent_json)
-    except orjson.JSONDecodeError as exc:
-        raise CredentialParseError(
-            f"agent_json is not valid JSON: {exc}",
-            cause=exc,
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise CredentialParseError(
-            f"agent_json must be a JSON object, got {type(parsed).__name__}",
-        )
-    return parsed
+# Keep backward-compatible alias for existing callers and tests
+async def resolve_agent_json(
+    agent_json: str,
+    secret_store: "SecretStore",
+) -> dict[str, Any]:
+    """Resolve an agent-shape JSON string to a flat dict.
+
+    Backward-compatible wrapper around :func:`resolve_agent_credential`
+    that accepts a raw JSON string.
+
+    Args:
+        agent_json: JSON string carried on ``workflow_args["agent_json"]``.
+        secret_store: The secret store instance.
+
+    Returns:
+        A flat ``dict[str, Any]`` with substituted and expanded credentials.
+    """
+    from application_sdk.credentials.spec import AgentCredentialSpec
+
+    spec = AgentCredentialSpec.model_validate(agent_json)
+    return await resolve_agent_credential(spec, secret_store)
 
 
 async def _fetch_bundle(

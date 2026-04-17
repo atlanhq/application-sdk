@@ -23,13 +23,13 @@ class CredentialResolver:
     Supports three resolution paths, selected by which field on the
     :class:`~application_sdk.credentials.ref.CredentialRef` is populated:
 
-    1. **Agent path** (``agent_json`` is non-empty): Parses the inline
-       JSON, fetches the bundle at ``secret-path`` via the injected
+    1. **Agent path** (``agent_spec`` is non-None): Uses the typed
+       :class:`AgentCredentialSpec`, fetches the bundle at ``secret-path`` via the injected
        :class:`SecretStore`, substitutes ref-keys for real values, and
        collapses dotted root keys into nested dicts.  See
        :mod:`application_sdk.credentials.agent` for the substitution
-       contract.  Typed resolution uses the ``auth-type`` field in the
-       agent JSON when ``credential_type`` is empty.
+       contract.  Typed resolution uses the ``auth_type`` field on the
+       spec when ``credential_type`` is empty.
 
     2. **GUID path** (``credential_guid`` is non-empty): First checks
        ``secret_store.get(ref.name)`` to cover in-process inline credentials
@@ -70,7 +70,7 @@ class CredentialResolver:
             CredentialNotFoundError: If the credential cannot be found.
             CredentialParseError: If the JSON cannot be parsed.
         """
-        if ref.agent_json:
+        if ref.agent_spec:
             return await self._resolve_agent(ref)
         if ref.credential_guid:
             return await self._resolve_legacy(ref)
@@ -88,7 +88,7 @@ class CredentialResolver:
         Returns:
             The raw credential data as a dict.
         """
-        if ref.agent_json:
+        if ref.agent_spec:
             return await self._resolve_agent_raw(ref)
         if ref.credential_guid:
             return await self._resolve_by_guid(ref)
@@ -107,13 +107,18 @@ class CredentialResolver:
     async def _resolve_agent(self, ref: "CredentialRef") -> "Credential":
         """Resolve an agent-shape ref to a typed Credential.
 
-        Falls back to the ``auth-type`` field inside the agent JSON
+        Falls back to the ``auth_type`` field on the agent spec
         when ``ref.credential_type`` is empty (the common case —
         ``CredentialRef.from_workflow_args`` does not populate
         ``credential_type`` for agent refs).
         """
         data = await self._resolve_agent_raw(ref)
-        type_name = ref.credential_type or data.get("auth-type") or "unknown"
+        type_name = (
+            ref.credential_type
+            or (ref.agent_spec.auth_type if ref.agent_spec else "")
+            or data.get("auth-type")
+            or "unknown"
+        )
         if type_name == "unknown":
             from application_sdk.credentials.types import RawCredential
 
@@ -126,9 +131,10 @@ class CredentialResolver:
 
     async def _resolve_agent_raw(self, ref: "CredentialRef") -> dict[str, Any]:
         """Resolve an agent-shape ref to a flat dict with ``extra`` nested."""
-        from application_sdk.credentials.agent import resolve_agent_json
+        from application_sdk.credentials.agent import resolve_agent_credential
 
-        return await resolve_agent_json(ref.agent_json, self._secret_store)
+        assert ref.agent_spec is not None  # guaranteed by caller
+        return await resolve_agent_credential(ref.agent_spec, self._secret_store)
 
     async def _fetch_raw_json(self, ref: "CredentialRef") -> dict[str, Any]:
         from application_sdk.credentials.errors import (

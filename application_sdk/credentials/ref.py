@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    from application_sdk.credentials.spec import AgentCredentialSpec
 
 
 class CredentialRef(BaseModel, frozen=True):
@@ -21,8 +23,8 @@ class CredentialRef(BaseModel, frozen=True):
     resolution flow.  Its populated field tells the resolver which path
     to take:
 
-    * ``agent_json`` non-empty → v3 agent-shape inline resolution.  The
-      JSON describes *how* to look up the credential from an external
+    * ``agent_spec`` non-empty → v3 agent-shape inline resolution.  The
+      spec describes *how* to look up the credential from an external
       secret manager (e.g. AWS Secrets Manager).  The resolver fetches
       the bundle at ``secret-path`` via the injected
       :class:`~application_sdk.infrastructure.secrets.SecretStore`,
@@ -41,8 +43,8 @@ class CredentialRef(BaseModel, frozen=True):
     name: str = ""
     """Secret store key or human-readable name for this credential.
 
-    Empty when resolution goes through ``agent_json`` — in that case
-    the secret-store key lives inside the parsed JSON (``secret-path``).
+    Empty when resolution goes through ``agent_spec`` — in that case
+    the secret-store key lives inside the spec (``secret_path``).
     """
 
     credential_type: str = ""
@@ -52,7 +54,7 @@ class CredentialRef(BaseModel, frozen=True):
     Optional for the ``resolve_raw`` path (agent + legacy GUID both
     return raw dicts regardless of type).  Required for the typed
     ``resolve`` path — for agent refs the resolver falls back to the
-    ``auth-type`` field inside ``agent_json`` when ``credential_type``
+    ``auth_type`` field on the spec when ``credential_type``
     is empty.
     """
 
@@ -62,20 +64,19 @@ class CredentialRef(BaseModel, frozen=True):
     credential_guid: str = ""
     """Platform-issued credential GUID — non-empty triggers GUID resolution path."""
 
-    agent_json: str = ""
-    """Inline agent-shape JSON payload — non-empty triggers v3 agent resolution.
+    agent_spec: "AgentCredentialSpec | None" = None
+    """Typed agent credential spec — non-None triggers v3 agent resolution.
 
-    Always stored as a JSON string.  Factories accept either a string
-    (wire format) or a ``dict`` (already-parsed Input field) and
-    normalise to a string at construction time so the resolver has a
-    single consistent shape.
+    Parsed from the ``agent_json`` workflow field.  Contains the typed
+    envelope (``agent_name``, ``secret_path``, ``auth_type``, …) plus
+    any connector-specific dotted keys in ``model_extra``.
     """
 
     def __repr__(self) -> str:
-        # Intentionally terse — agent_json and credential_guid are
-        # logged separately when useful; we don't want the whole JSON
+        # Intentionally terse — agent_spec and credential_guid are
+        # logged separately when useful; we don't want the whole spec
         # blob in every repr.
-        agent_flag = "<agent>" if self.agent_json else ""
+        agent_flag = "<agent>" if self.agent_spec else ""
         guid_flag = f"guid={self.credential_guid[:8]}…" if self.credential_guid else ""
         extras = " ".join(x for x in (agent_flag, guid_flag) if x)
         return (
@@ -115,10 +116,10 @@ class CredentialRef(BaseModel, frozen=True):
         +-----------------------+-------------+------------------+-------------+
 
         ``extraction_method`` is case-insensitive and trimmed.
-        ``agent_json`` may arrive as either a JSON string (raw
-        wire format from Argo) or an already-parsed ``dict`` (when the
-        typed Pydantic Input has coerced it). Both are normalised to a
-        JSON string on the returned ref.
+        ``agent_json`` may arrive as a JSON string (raw wire format from
+        Argo), a ``dict`` (already-parsed Input field), or an
+        :class:`~application_sdk.credentials.spec.AgentCredentialSpec`
+        instance.  All are normalised to a typed spec on the returned ref.
 
         Args:
             workflow_args: The Temporal workflow input dict — typically
@@ -127,27 +128,32 @@ class CredentialRef(BaseModel, frozen=True):
 
         Returns:
             A :class:`CredentialRef` with exactly one routing field
-            populated (``agent_json`` or ``credential_guid``).
+            populated (``agent_spec`` or ``credential_guid``).
 
         Raises:
             ValueError: If no routable credential source is present.
         """
+        from application_sdk.credentials.spec import AgentCredentialSpec
+
         method = (workflow_args.get("extraction_method") or "").strip().lower()
         raw_agent = workflow_args.get("agent_json")
 
-        # Normalise agent_json: accept str (wire format) or dict (typed Input).
-        if isinstance(raw_agent, dict):
-            agent_json_str = json.dumps(raw_agent) if raw_agent else ""
-        else:
-            agent_json_str = str(raw_agent or "")
+        # Build a spec from whatever shape agent_json arrived in.
+        # AgentCredentialSpec's model_validator handles str, dict, and spec.
+        spec: AgentCredentialSpec | None = None
+        if raw_agent is not None:
+            if isinstance(raw_agent, AgentCredentialSpec):
+                spec = raw_agent
+            else:
+                try:
+                    spec = AgentCredentialSpec.model_validate(raw_agent)
+                except Exception:
+                    spec = None
 
-        agent_json_populated = bool(agent_json_str) and agent_json_str.strip() not in (
-            "",
-            "{}",
-        )
+        agent_populated = spec is not None and spec.is_populated()
 
-        if method == "agent" and agent_json_populated:
-            return cls(agent_json=agent_json_str)
+        if method == "agent" and agent_populated:
+            return cls(agent_spec=spec)
 
         guid = workflow_args.get("credential_guid") or ""
         if guid:

@@ -1,17 +1,17 @@
-"""Tests for :mod:`application_sdk.credentials.agent`.
+"""Tests for :mod:`application_sdk.credentials.agent` and
+:class:`application_sdk.credentials.spec.AgentCredentialSpec`.
 
-Covers the agent-shape JSON credential resolution path: substitution of
+Covers the agent-shape credential resolution path: substitution of
 ref-keys against an external secret bundle, dotted-key expansion into
 nested dicts, v2-compatible behaviour for nested ``extra`` payloads,
-and the error contract for malformed input.
+the :class:`AgentCredentialSpec` typed model, and the error contract
+for malformed input.
 """
 
 from __future__ import annotations
 
 import json
 from typing import Any
-
-import pytest
 
 from application_sdk.credentials.agent import (
     _expand_dotted,
@@ -23,6 +23,7 @@ from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
 )
+from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.infrastructure.secrets import InMemorySecretStore, SecretStoreError
 
 # ---------------------------------------------------------------------------
@@ -63,6 +64,77 @@ def _store_with(**bundles: str) -> InMemorySecretStore:
     for path, raw in bundles.items():
         store.set(path, raw)
     return store
+
+
+# ---------------------------------------------------------------------------
+# AgentCredentialSpec — typed model tests
+# ---------------------------------------------------------------------------
+
+
+class TestAgentCredentialSpec:
+    def test_parse_from_json_string(self) -> None:
+        spec = AgentCredentialSpec.model_validate(CLOUDSQL_POSTGRES_AGENT_JSON)
+        assert spec.agent_name == "cloudsql-postgres-agent"
+        assert spec.secret_manager == "awssecretmanager"
+        assert spec.secret_path == "atlan/dev/cloudsql"
+        assert spec.auth_type == "basic"
+        assert spec.host == "34.122.182.89"
+        assert spec.port == 5432
+        assert spec.aws_region == "ap-south-1"
+        assert spec.connect_by == "host"
+
+    def test_parse_from_dict(self) -> None:
+        d = json.loads(CLOUDSQL_POSTGRES_AGENT_JSON)
+        spec = AgentCredentialSpec.model_validate(d)
+        assert spec.agent_name == "cloudsql-postgres-agent"
+        assert spec.secret_path == "atlan/dev/cloudsql"
+
+    def test_parse_from_spec_instance(self) -> None:
+        spec = AgentCredentialSpec.model_validate(CLOUDSQL_POSTGRES_AGENT_JSON)
+        spec2 = AgentCredentialSpec.model_validate(spec)
+        assert spec2.agent_name == spec.agent_name
+
+    def test_dotted_keys_in_model_extra(self) -> None:
+        spec = AgentCredentialSpec.model_validate(CLOUDSQL_POSTGRES_AGENT_JSON)
+        assert spec.model_extra is not None
+        assert "basic.username" in spec.model_extra
+        assert "basic.password" in spec.model_extra
+        assert "extra.database" in spec.model_extra
+
+    def test_to_raw_dict_round_trips(self) -> None:
+        spec = AgentCredentialSpec.model_validate(CLOUDSQL_POSTGRES_AGENT_JSON)
+        raw = spec.to_raw_dict()
+        # Typed fields use alias names
+        assert raw["agent-name"] == "cloudsql-postgres-agent"
+        assert raw["secret-path"] == "atlan/dev/cloudsql"
+        assert raw["auth-type"] == "basic"
+        # Dotted keys preserved
+        assert raw["basic.username"] == "username"
+        assert raw["extra.database"] == "database"
+
+    def test_is_populated(self) -> None:
+        spec = AgentCredentialSpec.model_validate(CLOUDSQL_POSTGRES_AGENT_JSON)
+        assert spec.is_populated()
+
+    def test_empty_string_not_populated(self) -> None:
+        spec = AgentCredentialSpec.model_validate("")
+        assert not spec.is_populated()
+
+    def test_empty_dict_not_populated(self) -> None:
+        spec = AgentCredentialSpec.model_validate({})
+        assert not spec.is_populated()
+
+    def test_invalid_json_raises_parse_error(self) -> None:
+        import pytest
+
+        with pytest.raises(CredentialParseError, match="not valid JSON"):
+            AgentCredentialSpec.model_validate("{not-json")
+
+    def test_non_dict_json_raises_parse_error(self) -> None:
+        import pytest
+
+        with pytest.raises(CredentialParseError, match="must be a JSON object"):
+            AgentCredentialSpec.model_validate(json.dumps(["a", "b"]))
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +187,7 @@ class TestResolveAgentJsonHappyPath:
         """
         agent_json = json.dumps(
             {
+                "agent-name": "test-agent",
                 "secret-path": "bundle",
                 "host": "literal.example.com",
                 "port": 5432,
@@ -149,6 +222,7 @@ class TestResolveAgentJsonHappyPath:
         """
         agent_json = json.dumps(
             {
+                "agent-name": "test-agent",
                 "secret-path": "bundle",
                 "host": "h",
                 "basic.username": "username",  # present in bundle
@@ -169,6 +243,7 @@ class TestResolveAgentJsonHappyPath:
         """
         agent_json = json.dumps(
             {
+                "agent-name": "test-agent",
                 "secret-path": "bundle",
                 "host": "h",
                 "auth-type": "basic",
@@ -205,7 +280,13 @@ class TestResolveAgentJsonHappyPath:
             async def get(self, name: str) -> Any:
                 return {"user_ref": "real_user"}
 
-        agent_json = json.dumps({"secret-path": "bundle", "basic.username": "user_ref"})
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "secret-path": "bundle",
+                "basic.username": "user_ref",
+            }
+        )
         resolved = await resolve_agent_json(agent_json, DictReturningStore())  # type: ignore[arg-type]
         assert resolved["basic"] == {"username": "real_user"}
 
@@ -217,51 +298,79 @@ class TestResolveAgentJsonHappyPath:
 
 class TestResolveAgentJsonErrorPaths:
     async def test_invalid_agent_json_raises_parse_error(self) -> None:
+        import pytest
+
         store = _store_with()
         with pytest.raises(CredentialParseError, match="not valid JSON"):
             await resolve_agent_json("{not-json", store)
 
     async def test_agent_json_not_a_dict_raises_parse_error(self) -> None:
+        import pytest
+
         store = _store_with()
         with pytest.raises(CredentialParseError, match="must be a JSON object"):
             await resolve_agent_json(json.dumps(["a", "b"]), store)
 
     async def test_missing_secret_path_raises_parse_error(self) -> None:
+        import pytest
+
         store = _store_with()
-        agent_json = json.dumps({"host": "h", "basic.username": "u"})
+        agent_json = json.dumps(
+            {"agent-name": "test", "host": "h", "basic.username": "u"}
+        )
         with pytest.raises(CredentialParseError, match="secret-path"):
             await resolve_agent_json(agent_json, store)
 
     async def test_empty_secret_path_raises_parse_error(self) -> None:
+        import pytest
+
         store = _store_with()
-        agent_json = json.dumps({"secret-path": "", "basic.username": "u"})
+        agent_json = json.dumps(
+            {"agent-name": "test", "secret-path": "", "basic.username": "u"}
+        )
         with pytest.raises(CredentialParseError, match="secret-path"):
             await resolve_agent_json(agent_json, store)
 
     async def test_secret_not_found_raises_credential_not_found(self) -> None:
+        import pytest
+
         store = _store_with()  # empty — no bundle at the path
-        agent_json = json.dumps({"secret-path": "missing/path", "basic.username": "u"})
+        agent_json = json.dumps(
+            {"agent-name": "test", "secret-path": "missing/path", "basic.username": "u"}
+        )
         with pytest.raises(CredentialNotFoundError):
             await resolve_agent_json(agent_json, store)
 
     async def test_generic_store_failure_wrapped_in_credential_error(self) -> None:
+        import pytest
+
         class FlakyStore:
             async def get(self, name: str) -> str:
                 raise SecretStoreError("upstream dapr outage")
 
-        agent_json = json.dumps({"secret-path": "p", "basic.username": "u"})
+        agent_json = json.dumps(
+            {"agent-name": "test", "secret-path": "p", "basic.username": "u"}
+        )
         with pytest.raises(CredentialError, match="dapr outage"):
             await resolve_agent_json(agent_json, FlakyStore())  # type: ignore[arg-type]
 
     async def test_bundle_not_valid_json_raises_parse_error(self) -> None:
+        import pytest
+
         store = _store_with(**{"bundle": "not-json-at-all"})
-        agent_json = json.dumps({"secret-path": "bundle", "basic.username": "u"})
+        agent_json = json.dumps(
+            {"agent-name": "test", "secret-path": "bundle", "basic.username": "u"}
+        )
         with pytest.raises(CredentialParseError, match="not valid JSON"):
             await resolve_agent_json(agent_json, store)
 
     async def test_bundle_not_a_dict_raises_parse_error(self) -> None:
+        import pytest
+
         store = _store_with(**{"bundle": json.dumps(["a", "b"])})
-        agent_json = json.dumps({"secret-path": "bundle", "basic.username": "u"})
+        agent_json = json.dumps(
+            {"agent-name": "test", "secret-path": "bundle", "basic.username": "u"}
+        )
         with pytest.raises(CredentialParseError, match="must be a JSON object"):
             await resolve_agent_json(agent_json, store)
 
@@ -363,24 +472,22 @@ class TestExpandDotted:
 
 
 # ---------------------------------------------------------------------------
-# Integration: AppContext.resolve_workflow_credentials routing
+# CredentialRef.from_workflow_args routing
 # ---------------------------------------------------------------------------
 
 
 class TestCredentialRefFromWorkflowArgs:
-    """Unit tests for the ``CredentialRef.from_workflow_args`` factory.
-
-    This is the single construction site where ``extraction_method`` is
-    interpreted. Once the factory returns, the ref carries the routing
-    decision as typed fields (``agent_json`` or ``credential_guid``),
-    and the resolver never touches ``workflow_args`` directly.
-    """
+    """Unit tests for the ``CredentialRef.from_workflow_args`` factory."""
 
     def test_agent_method_and_populated_agent_json_makes_agent_ref(self) -> None:
         from application_sdk.credentials.ref import CredentialRef
 
         agent_json = json.dumps(
-            {"secret-path": "atlan/dev/cloudsql", "basic.username": "u"}
+            {
+                "agent-name": "test-agent",
+                "secret-path": "atlan/dev/cloudsql",
+                "basic.username": "u",
+            }
         )
         ref = CredentialRef.from_workflow_args(
             {
@@ -389,33 +496,48 @@ class TestCredentialRefFromWorkflowArgs:
                 "credential_guid": "",
             }
         )
-        assert ref.agent_json == agent_json
+        assert ref.agent_spec is not None
+        assert ref.agent_spec.agent_name == "test-agent"
+        assert ref.agent_spec.secret_path == "atlan/dev/cloudsql"
         assert ref.credential_guid == ""
 
     def test_agent_method_accepts_dict_agent_json(self) -> None:
         """The generated Pydantic ``Input`` contracts declare
-        ``agent_json: dict[str, Any]`` even though the wire format is a
-        JSON string. The factory handles both shapes.
+        ``agent_json: AgentCredentialSpec | None`` but legacy callers
+        may pass a dict. The factory handles both shapes.
         """
         from application_sdk.credentials.ref import CredentialRef
 
-        spec_dict = {"secret-path": "p", "basic.username": "u"}
+        spec_dict = {
+            "agent-name": "test-agent",
+            "secret-path": "p",
+            "basic.username": "u",
+        }
         ref = CredentialRef.from_workflow_args(
             {"extraction_method": "agent", "agent_json": spec_dict}
         )
-        # Always normalised to a JSON string on the ref.
-        assert isinstance(ref.agent_json, str)
-        assert json.loads(ref.agent_json) == spec_dict
+        assert ref.agent_spec is not None
+        assert ref.agent_spec.agent_name == "test-agent"
+
+    def test_agent_method_accepts_spec_instance(self) -> None:
+        from application_sdk.credentials.ref import CredentialRef
+
+        spec = AgentCredentialSpec.model_validate(CLOUDSQL_POSTGRES_AGENT_JSON)
+        ref = CredentialRef.from_workflow_args(
+            {"extraction_method": "agent", "agent_json": spec}
+        )
+        assert ref.agent_spec is not None
+        assert ref.agent_spec.agent_name == "cloudsql-postgres-agent"
 
     def test_agent_method_case_insensitive_and_trimmed(self) -> None:
         from application_sdk.credentials.ref import CredentialRef
 
-        agent_json = json.dumps({"secret-path": "p"})
+        agent_json = json.dumps({"agent-name": "test", "secret-path": "p"})
         for method in ("AGENT", "Agent", " agent ", "agent"):
             ref = CredentialRef.from_workflow_args(
                 {"extraction_method": method, "agent_json": agent_json}
             )
-            assert ref.agent_json == agent_json, f"failed for method={method!r}"
+            assert ref.agent_spec is not None, f"failed for method={method!r}"
 
     def test_populated_agent_json_without_method_falls_through_to_guid(self) -> None:
         """Strict gate: an upstream bug that populates ``agent_json``
@@ -426,11 +548,11 @@ class TestCredentialRefFromWorkflowArgs:
         ref = CredentialRef.from_workflow_args(
             {
                 # No extraction_method.
-                "agent_json": json.dumps({"secret-path": "p"}),
+                "agent_json": json.dumps({"agent-name": "test", "secret-path": "p"}),
                 "credential_guid": "my-guid-123",
             }
         )
-        assert ref.agent_json == ""
+        assert ref.agent_spec is None
         assert ref.credential_guid == "my-guid-123"
 
     def test_agent_method_with_empty_agent_json_falls_through_to_guid(self) -> None:
@@ -444,7 +566,7 @@ class TestCredentialRefFromWorkflowArgs:
                     "credential_guid": "my-guid-123",
                 }
             )
-            assert ref.agent_json == "", f"failed for placeholder={placeholder!r}"
+            assert ref.agent_spec is None, f"failed for placeholder={placeholder!r}"
             assert ref.credential_guid == "my-guid-123"
 
     def test_agent_method_with_empty_dict_falls_through_to_guid(self) -> None:
@@ -458,7 +580,7 @@ class TestCredentialRefFromWorkflowArgs:
                 "credential_guid": "my-guid-123",
             }
         )
-        assert ref.agent_json == ""
+        assert ref.agent_spec is None
         assert ref.credential_guid == "my-guid-123"
 
     def test_direct_method_with_guid_uses_guid_path(self) -> None:
@@ -472,7 +594,7 @@ class TestCredentialRefFromWorkflowArgs:
             }
         )
         assert ref.credential_guid == "my-guid-123"
-        assert ref.agent_json == ""
+        assert ref.agent_spec is None
         assert ref.name == "my-guid-123"  # legacy ref sets name = guid
 
     def test_guid_only_no_method(self) -> None:
@@ -482,6 +604,8 @@ class TestCredentialRefFromWorkflowArgs:
         assert ref.credential_guid == "g"
 
     def test_no_routable_source_raises(self) -> None:
+        import pytest
+
         from application_sdk.credentials.ref import CredentialRef
 
         with pytest.raises(ValueError, match="no routable credential source"):
@@ -493,6 +617,8 @@ class TestCredentialRefFromWorkflowArgs:
             )
 
     def test_agent_method_but_no_json_and_no_guid_raises(self) -> None:
+        import pytest
+
         from application_sdk.credentials.ref import CredentialRef
 
         with pytest.raises(ValueError, match="no routable credential source"):
@@ -502,11 +628,7 @@ class TestCredentialRefFromWorkflowArgs:
 
 
 class TestCredentialResolverAgentBranch:
-    """Exercises the agent branch of CredentialResolver. Uses a real
-    resolver + InMemorySecretStore end-to-end; proves the single typed
-    ``resolve_raw(ref)`` API handles agent refs identically to legacy
-    refs from the caller's perspective.
-    """
+    """Exercises the agent branch of CredentialResolver."""
 
     async def test_resolve_raw_agent_ref_returns_flat_dict_with_nested_extra(
         self,
@@ -560,7 +682,7 @@ class TestCredentialResolverAgentBranch:
     async def test_resolve_typed_agent_ref_uses_auth_type_for_parser(self) -> None:
         """When ``credential_type`` is empty on an agent ref (which is
         what ``from_workflow_args`` produces), the resolver reads
-        ``auth-type`` from the agent JSON to pick the registry parser.
+        ``auth_type`` from the spec to pick the registry parser.
         """
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver
@@ -569,6 +691,7 @@ class TestCredentialResolverAgentBranch:
         store = _store_with(**{"p": _bundle(username="real_user", password="real_pw")})
         agent_json = json.dumps(
             {
+                "agent-name": "test-agent",
                 "secret-path": "p",
                 "auth-type": "basic",
                 "basic.username": "username",
