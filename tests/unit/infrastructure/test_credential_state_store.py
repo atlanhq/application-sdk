@@ -10,8 +10,22 @@ from __future__ import annotations
 import json
 import os
 
+import pytest
+
 from application_sdk.handler.service import _normalize_credentials, _pairs_to_flat
 from application_sdk.testing.mocks import MockSecretStore, MockStateStore
+
+
+@pytest.fixture(autouse=True)
+def _clean_infrastructure():
+    """Reset infrastructure context after each test to prevent cross-test pollution."""
+    yield
+    from application_sdk.infrastructure.context import (
+        InfrastructureContext,
+        set_infrastructure,
+    )
+
+    set_infrastructure(InfrastructureContext())
 
 
 class TestCredentialStateStoreRoundtrip:
@@ -44,8 +58,6 @@ class TestCredentialStateStoreRoundtrip:
         assert result["host"] == "db.example.com"
         assert result["port"] == "5432"
 
-        set_infrastructure(InfrastructureContext())
-
     async def test_state_store_takes_precedence_over_secret_store(self):
         """State store (from /start handler) takes precedence over secret store."""
         from application_sdk.credentials.ref import CredentialRef
@@ -71,8 +83,6 @@ class TestCredentialStateStoreRoundtrip:
 
         assert result["source"] == "state_store"
 
-        set_infrastructure(InfrastructureContext())
-
     async def test_fallback_to_secret_store(self):
         """Falls back to secret store when not in state store."""
         from application_sdk.credentials.ref import CredentialRef
@@ -96,8 +106,6 @@ class TestCredentialStateStoreRoundtrip:
         result = await resolver.resolve_raw(ref)
 
         assert result["host"] == "from-secret"
-
-        set_infrastructure(InfrastructureContext())
 
 
 class TestLocalDevGuard:

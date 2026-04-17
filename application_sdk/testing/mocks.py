@@ -197,7 +197,7 @@ class MockPubSub:
     async def subscribe(
         self,
         topic: str,
-        handler: Any,
+        handler: Callable[[Message], Awaitable[None]],
     ) -> _MockSubscription:
         """Subscribe to a topic."""
         if topic not in self._subscriptions:

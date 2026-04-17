@@ -742,16 +742,20 @@ def create_app_handler_service(
                         "Saved inline credentials to state store: guid=%s",
                         credential_guid,
                     )
-                elif not is_local_dev:
-                    logger.warning(
-                        "Inline credentials ignored in non-local mode; "
-                        "use credential_guid for production workflows."
-                    )
                 else:
-                    logger.warning(
-                        "State store not available; inline credentials will be "
-                        "passed through on the workflow input."
-                    )
+                    # Always strip raw credentials — never pass through to
+                    # Temporal history, regardless of mode or store availability.
+                    del body["credentials"]
+                    if not is_local_dev:
+                        logger.warning(
+                            "Inline credentials stripped in non-local mode; "
+                            "use credential_guid for production workflows."
+                        )
+                    else:
+                        logger.warning(
+                            "State store not available; inline credentials stripped "
+                            "to prevent exposure in Temporal history."
+                        )
 
             input_data = input_type(**body)
 
