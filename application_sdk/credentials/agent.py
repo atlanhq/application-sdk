@@ -50,8 +50,9 @@ consumable by any SQL, REST, NoSQL, or cloud-storage client whose
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
+
+import orjson
 
 from application_sdk.credentials.errors import (
     CredentialError,
@@ -130,8 +131,8 @@ async def resolve_agent_json(
 def _parse_agent_json(agent_json: str) -> dict[str, Any]:
     """Parse ``agent_json`` string into a dict; raise on invalid JSON."""
     try:
-        parsed = json.loads(agent_json)
-    except json.JSONDecodeError as exc:
+        parsed = orjson.loads(agent_json)
+    except orjson.JSONDecodeError as exc:
         raise CredentialParseError(
             f"agent_json is not valid JSON: {exc}",
             cause=exc,
@@ -162,8 +163,8 @@ async def _fetch_bundle(
         # Some SecretStore backends may return a dict directly; accept it.
         return raw
     try:
-        bundle = json.loads(raw)
-    except json.JSONDecodeError as exc:
+        bundle = orjson.loads(raw)
+    except orjson.JSONDecodeError as exc:
         raise CredentialParseError(
             f"Agent secret bundle at '{secret_path}' is not valid JSON: {exc}",
             credential_name=secret_path,
