@@ -33,10 +33,11 @@ from typing import Any
 
 import yaml
 
-# Strict kebab-case: lowercase a-z, 0-9, hyphen separators only. Mirrors the
-# Pydantic validator on the GM side. Tile name flows downstream as a URL/route
-# param + configmap filename stem — must stay safe for both.
-_KEBAB_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+# Strict kebab-case: must start with a letter (matches the runtime handler's
+# _ENTRYPOINT_NAME_RE which also requires letter-start). Digits, hyphens, and
+# lowercase letters are allowed in subsequent segments. Tile name flows
+# downstream as a URL/route param + configmap filename stem.
+_KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 
 # Closed type set. Mirrors core.version.model.EntrypointPackageType in GM.
 _ALLOWED_TYPES = {"connector", "miner", "orchestrator", "utility", "custom"}

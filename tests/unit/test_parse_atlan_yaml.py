@@ -149,7 +149,15 @@ def test_generated_dir_mismatch_rejected(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "bad_name",
-    ["Teradata-Miner", "teradata_miner", "teradata miner", "-tera", "tera-", "UPPER"],
+    [
+        "Teradata-Miner",
+        "teradata_miner",
+        "teradata miner",
+        "-tera",
+        "tera-",
+        "UPPER",
+        "1-bad",
+    ],
 )
 def test_kebab_case_name_rejected(tmp_path, monkeypatch, bad_name):
     monkeypatch.chdir(tmp_path)
