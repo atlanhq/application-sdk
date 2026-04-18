@@ -1170,16 +1170,12 @@ def create_app_handler_service(
         from application_sdk.storage.ops import upload_file  # noqa: PLC0415
 
         key = _config_objectstore_key(config_id, config_type)
-        fd, tmp = tempfile.mkstemp(suffix=".json")
-        safe_tmp = _validated_temp_path(tmp)
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(orjson.dumps(body))
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=True) as tmp_f:
+            tmp_f.write(orjson.dumps(body))
+            tmp_f.flush()
+            safe_tmp = _validated_temp_path(tmp_f.name)
             await upload_file(key, safe_tmp, _storage)
-            return True
-        finally:
-            if os.path.exists(safe_tmp):
-                os.unlink(safe_tmp)
+        return True
 
     @app.get("/workflows/v1/config/{config_id}")
     async def get_workflow_config(
