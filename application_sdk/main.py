@@ -176,6 +176,13 @@ class AppConfig:
 
         app_module = app_module_raw.strip()
 
+        if "," in app_module:
+            raise ValueError(
+                f"ATLAN_APP_MODULE contains a comma: {app_module!r}. "
+                "The multi-app pattern is not supported in v3. "
+                "Define multiple @entrypoint methods on a single App subclass instead."
+            )
+
         service_name = (
             getattr(args, "service_name", None)
             or _env("ATLAN_SERVICE_NAME")

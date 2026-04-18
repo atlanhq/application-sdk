@@ -33,6 +33,7 @@ import json
 import mimetypes
 import os
 import re
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -676,8 +677,17 @@ def create_app_handler_service(
         workflow_id = explicit_workflow_id or "(unknown)"
 
         if legacy_workflow_type is not None and entrypoint_param is None:
+            import warnings  # noqa: PLC0415
+
+            warnings.warn(
+                f"App {app_name}: 'workflow_type' body field is deprecated and will be "
+                "removed in v3.1.0. Use ?entrypoint=<name> query param instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
             logger.warning(
-                "App %s: 'workflow_type' body field is deprecated; use ?entrypoint=<name> query param instead.",
+                "App %s: 'workflow_type' body field is deprecated (removed in v3.1.0); "
+                "use ?entrypoint=<name> query param instead.",
                 app_name,
             )
 
@@ -1103,11 +1113,8 @@ def create_app_handler_service(
         """Load workflow config from object store (S3) fallback."""
         if _storage is None:
             return None
-        import json as _json
-        import os
-        import tempfile
 
-        from application_sdk.storage.ops import download_file
+        from application_sdk.storage.ops import download_file  # noqa: PLC0415
 
         key = _config_objectstore_key(config_id, config_type)
         fd, tmp = tempfile.mkstemp(suffix=".json")
@@ -1115,8 +1122,9 @@ def create_app_handler_service(
         try:
             await download_file(key, tmp, _storage)
             with open(tmp) as f:
-                return _json.load(f)
-        except Exception:
+                return json.load(f)
+        except Exception as exc:
+            logger.warning("Object-store config load failed for key=%s: %r", key, exc)
             return None
         finally:
             if os.path.exists(tmp):
@@ -1128,17 +1136,14 @@ def create_app_handler_service(
         """Save workflow config to object store (S3) fallback."""
         if _storage is None:
             return False
-        import json as _json
-        import os
-        import tempfile
 
-        from application_sdk.storage.ops import upload_file
+        from application_sdk.storage.ops import upload_file  # noqa: PLC0415
 
         key = _config_objectstore_key(config_id, config_type)
         fd, tmp = tempfile.mkstemp(suffix=".json")
         try:
             with os.fdopen(fd, "w") as f:
-                _json.dump(body, f)
+                json.dump(body, f)
             await upload_file(key, tmp, _storage)
             return True
         finally:
@@ -1150,6 +1155,8 @@ def create_app_handler_service(
         config_id: str, type: str = "workflows"
     ) -> JSONResponse:
         """Fetch workflow config — tries statestore first, falls back to object store."""
+        if not _CONFIG_KEY_RE.match(config_id) or not _CONFIG_KEY_RE.match(type):
+            raise HTTPException(status_code=400, detail="Invalid config_id or type")
         config = None
 
         # Try statestore
@@ -1192,6 +1199,8 @@ def create_app_handler_service(
         Object store fallback is only used for non-credential config types
         to avoid persisting sensitive credential data to S3.
         """
+        if not _CONFIG_KEY_RE.match(config_id) or not _CONFIG_KEY_RE.match(type):
+            raise HTTPException(status_code=400, detail="Invalid config_id or type")
         body = await request.json()
         saved = False
 
@@ -1242,7 +1251,6 @@ def create_app_handler_service(
         import asyncio
         import os
         import shutil
-        import tempfile
         from pathlib import PurePosixPath
 
         from application_sdk.storage.ops import upload_file as _upload_file

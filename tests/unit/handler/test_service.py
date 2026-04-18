@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk.contracts.base import Input, Output
@@ -556,8 +557,10 @@ class TestStartWorkflowRouting:
                 json={"workflow_type": "load", "name": "x"},
             )
             assert response.status_code == 200
+            assert mock_client.start_workflow.call_count == 1
             # The started workflow name must end in ':extract', not ':load'
             started_name = mock_client.start_workflow.call_args[0][0]
+            assert ":load" not in started_name, f"load was dispatched: {started_name!r}"
             assert started_name.endswith(
                 ":extract"
             ), f"Expected :extract, got {started_name!r}"
@@ -728,6 +731,82 @@ class TestConfigMapEndpoints:
             assert response.json()["data"]["configmaps"] == []
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+
+class TestWorkflowConfigValidation:
+    """Tests for _CONFIG_KEY_RE validation on /workflows/v1/config/{config_id}."""
+
+    @pytest.mark.parametrize(
+        "config_id",
+        [
+            "../foo",
+            "a/b",
+            "a.b",
+            "",
+            "a" * 129,
+            "%2e%2e",
+            "a b",
+        ],
+    )
+    def test_get_config_rejects_invalid_config_id(self, config_id: str) -> None:
+        client = _make_client()
+        response = client.get(f"/workflows/v1/config/{config_id}")
+        assert response.status_code in {
+            400,
+            404,
+            422,
+        }, f"Expected rejection for {config_id!r}, got {response.status_code}"
+
+    @pytest.mark.parametrize(
+        "config_id",
+        [
+            "../foo",
+            "a/b",
+            "a.b",
+            "",
+            "a" * 129,
+            "%2e%2e",
+            "a b",
+        ],
+    )
+    def test_post_config_rejects_invalid_config_id(self, config_id: str) -> None:
+        client = _make_client()
+        response = client.post(
+            f"/workflows/v1/config/{config_id}",
+            json={"key": "value"},
+        )
+        assert response.status_code in {
+            400,
+            404,
+            422,
+        }, f"Expected rejection for {config_id!r}, got {response.status_code}"
+
+    @pytest.mark.parametrize(
+        "type_param",
+        ["../etc", "a/b", "a.b", "a" * 129],
+    )
+    def test_get_config_rejects_invalid_type_param(self, type_param: str) -> None:
+        client = _make_client()
+        response = client.get(
+            "/workflows/v1/config/valid-id",
+            params={"type": type_param},
+        )
+        assert response.status_code in {
+            400,
+            503,
+        }, f"Expected rejection for type={type_param!r}, got {response.status_code}"
+
+    @pytest.mark.parametrize(
+        "config_id",
+        ["abc123", "ABC_123", "a-b", "a" * 128],
+    )
+    def test_get_config_accepts_valid_config_id(self, config_id: str) -> None:
+        """Valid config_ids pass the regex check (result is 503/404 without a store, not 400)."""
+        client = _make_client()
+        response = client.get(f"/workflows/v1/config/{config_id}")
+        assert (
+            response.status_code != 400
+        ), f"Valid config_id {config_id!r} was wrongly rejected"
 
 
 class TestDaprSubscribeEndpoint:
