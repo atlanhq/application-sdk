@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -552,8 +553,6 @@ class TestStartWorkflowRouting:
         patcher.start()
         tc = TestClient(svc, raise_server_exceptions=False)
         try:
-            import warnings
-
             # ?entrypoint=extract wins over body workflow_type=load;
             # the canonical query-param path must NOT emit a DeprecationWarning.
             with warnings.catch_warnings(record=True) as caught:

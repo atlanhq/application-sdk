@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 import pytest
 
 from application_sdk.app.base import App
@@ -177,6 +180,238 @@ class TestSqlMetadataExtractorSubclass:
             import asyncio
 
             asyncio.run(extractor.fetch_databases(FetchDatabasesInput()))
+
+
+class _StubSQLClient:
+    """Test double for BaseSQLClient.
+
+    Exposes ``last_query`` and ``closed`` so tests can assert the
+    extractor prepared the right SQL and cleaned up after itself.
+    """
+
+    def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
+        self._rows = rows or []
+        self.loaded_with: dict[str, object] | None = None
+        self.last_query: str | None = None
+        self.closed: bool = False
+
+    async def load(self, credentials: dict[str, object]) -> None:
+        self.loaded_with = credentials
+
+    async def run_query(self, query: str, batch_size: int = 100000):
+        self.last_query = query
+        # Single-batch generator — matches BaseSQLClient's async iterator.
+        yield self._rows
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class TestSqlMetadataExtractorPrepareSql:
+    """Tests for the ``_prepare_sql`` filter placeholder substitution."""
+
+    def _extractor(self) -> SqlMetadataExtractor:
+        return SqlMetadataExtractor.__new__(SqlMetadataExtractor)
+
+    def test_substitutes_default_regexes_when_filters_empty(self) -> None:
+        sql = (
+            "WHERE name !~ '{normalized_exclude_regex}' "
+            "AND name ~ '{normalized_include_regex}'"
+        )
+        result = self._extractor()._prepare_sql(sql, ExtractionTaskInput())
+        assert result == "WHERE name !~ '^$' AND name ~ '.*'"
+
+    def test_substitutes_user_filters(self) -> None:
+        sql = "{normalized_exclude_regex}|{normalized_include_regex}"
+        result = self._extractor()._prepare_sql(
+            sql,
+            ExtractionTaskInput(exclude_filter="^tmp_", include_filter="^prod_"),
+        )
+        assert result == "^tmp_|^prod_"
+
+    def test_temp_table_fragment_injected_in_table_mode(self) -> None:
+        class _E(SqlMetadataExtractor):
+            _app_registered = True
+            extract_temp_table_regex_table_sql = "AND name !~ '{exclude_table_regex}'"
+
+        extractor = _E.__new__(_E)
+        result = extractor._prepare_sql(
+            "{temp_table_regex_sql}",
+            ExtractionTaskInput(temp_table_regex="tmp_.*"),
+        )
+        assert result == "AND name !~ 'tmp_.*'"
+
+    def test_temp_table_fragment_uses_column_variant_in_column_mode(self) -> None:
+        class _E(SqlMetadataExtractor):
+            _app_registered = True
+            extract_temp_table_regex_table_sql = "TABLE({exclude_table_regex})"
+            extract_temp_table_regex_column_sql = "COLUMN({exclude_table_regex})"
+
+        extractor = _E.__new__(_E)
+        table_sql = extractor._prepare_sql(
+            "{temp_table_regex_sql}",
+            ExtractionTaskInput(temp_table_regex="tmp_.*"),
+            column_mode=False,
+        )
+        column_sql = extractor._prepare_sql(
+            "{temp_table_regex_sql}",
+            ExtractionTaskInput(temp_table_regex="tmp_.*"),
+            column_mode=True,
+        )
+        assert table_sql == "TABLE(tmp_.*)"
+        assert column_sql == "COLUMN(tmp_.*)"
+
+    def test_temp_table_placeholder_empty_when_no_regex(self) -> None:
+        class _E(SqlMetadataExtractor):
+            _app_registered = True
+            extract_temp_table_regex_table_sql = "AND name !~ '{exclude_table_regex}'"
+
+        extractor = _E.__new__(_E)
+        result = extractor._prepare_sql(
+            "x {temp_table_regex_sql} y", ExtractionTaskInput()
+        )
+        assert result == "x  y"
+
+    def test_temp_table_placeholder_empty_when_fragment_unset(self) -> None:
+        extractor = self._extractor()
+        result = extractor._prepare_sql(
+            "x {temp_table_regex_sql} y",
+            ExtractionTaskInput(temp_table_regex="tmp_.*"),
+        )
+        assert result == "x  y"
+
+
+class TestSqlMetadataExtractorLoadSqlClient:
+    """Tests for ``_load_sql_client`` and default fetch task execution."""
+
+    def test_load_sql_client_raises_when_class_not_set(self) -> None:
+        extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
+        with pytest.raises(NotImplementedError, match="sql_client_class"):
+            asyncio.run(extractor._load_sql_client(ExtractionTaskInput()))
+
+    def test_load_sql_client_instantiates_and_loads(self) -> None:
+        created: list[_StubSQLClient] = []
+
+        class _Stub(_StubSQLClient):
+            def __init__(self) -> None:
+                super().__init__()
+                created.append(self)
+
+        class _E(SqlMetadataExtractor):
+            _app_registered = True
+            sql_client_class = _Stub  # type: ignore[assignment]
+
+        extractor = _E.__new__(_E)
+
+        async def _fake_get_credentials(_input: ExtractionTaskInput) -> dict[str, Any]:
+            return {"user": "u", "pass": "p"}
+
+        extractor._get_credentials = _fake_get_credentials  # type: ignore[method-assign]
+
+        client = asyncio.run(extractor._load_sql_client(ExtractionTaskInput()))
+
+        assert isinstance(client, _Stub)
+        assert client.loaded_with == {"user": "u", "pass": "p"}
+        assert created == [client]
+
+    def test_fetch_databases_happy_path(self) -> None:
+        rows = [
+            {"database_name": "db1"},
+            {"database_name": "db2"},
+            {"database_name": ""},  # filtered out
+        ]
+        stub = _StubSQLClient(rows=rows)
+
+        class _E(SqlMetadataExtractor):
+            _app_registered = True
+            sql_client_class = type(stub)  # type: ignore[assignment]
+            fetch_database_sql = (
+                "SELECT db FROM meta "
+                "WHERE db !~ '{normalized_exclude_regex}' "
+                "AND db ~ '{normalized_include_regex}'"
+            )
+
+        extractor = _E.__new__(_E)
+
+        async def _fake_load(_input: ExtractionTaskInput):
+            return stub
+
+        extractor._load_sql_client = _fake_load  # type: ignore[method-assign]
+
+        out = asyncio.run(
+            extractor.fetch_databases(
+                FetchDatabasesInput(exclude_filter="^x$", include_filter="^prod_"),
+            )
+        )
+
+        assert isinstance(out, FetchDatabasesOutput)
+        assert out.databases == ["db1", "db2"]
+        assert out.total_record_count == 2
+        assert out.chunk_count == 1
+        assert stub.last_query is not None
+        assert "^x$" in stub.last_query
+        assert "^prod_" in stub.last_query
+        assert stub.closed is True
+
+    def test_fetch_columns_streams_and_counts(self) -> None:
+        # Three batches — extractor must sum len() across them, not materialize rows.
+        batches = [
+            [{"c": 1}, {"c": 2}],
+            [{"c": 3}],
+            [{"c": 4}, {"c": 5}, {"c": 6}],
+        ]
+
+        class _MultiBatchClient(_StubSQLClient):
+            async def run_query(self, query: str, batch_size: int = 100000):
+                self.last_query = query
+                for batch in batches:
+                    yield batch
+
+        stub = _MultiBatchClient()
+
+        class _E(SqlMetadataExtractor):
+            _app_registered = True
+            sql_client_class = type(stub)  # type: ignore[assignment]
+            fetch_column_sql = "SELECT * FROM columns"
+
+        extractor = _E.__new__(_E)
+
+        async def _fake_load(_input: ExtractionTaskInput):
+            return stub
+
+        extractor._load_sql_client = _fake_load  # type: ignore[method-assign]
+
+        out = asyncio.run(extractor.fetch_columns(FetchColumnsInput()))
+
+        assert out.total_record_count == 6
+        assert out.chunk_count == 1
+        assert stub.closed is True
+
+    def test_fetch_tables_closes_client_on_exception(self) -> None:
+        class _BoomClient(_StubSQLClient):
+            async def run_query(self, query: str, batch_size: int = 100000):
+                self.last_query = query
+                raise RuntimeError("boom")
+                yield  # pragma: no cover — satisfy async-generator typing
+
+        stub = _BoomClient()
+
+        class _E(SqlMetadataExtractor):
+            _app_registered = True
+            sql_client_class = type(stub)  # type: ignore[assignment]
+            fetch_table_sql = "SELECT t FROM meta"
+
+        extractor = _E.__new__(_E)
+
+        async def _fake_load(_input: ExtractionTaskInput):
+            return stub
+
+        extractor._load_sql_client = _fake_load  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="boom"):
+            asyncio.run(extractor.fetch_tables(FetchTablesInput()))
+
+        assert stub.closed is True
 
 
 class TestPublishInputMixin:
