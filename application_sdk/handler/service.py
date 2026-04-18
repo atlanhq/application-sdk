@@ -278,6 +278,11 @@ CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 # in get_manifest() before any filesystem path is constructed.
 _ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
+# Allowed characters for config_id and config_type path components.
+# Prevents path traversal (no slashes, dots, or percent-encoding) when these
+# values are interpolated into object-store keys.
+_CONFIG_KEY_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,128}$")
+
 
 async def _get_temporal_client() -> Client:
     """Get or lazily create the singleton Temporal client."""
@@ -773,7 +778,7 @@ def create_app_handler_service(
                             "to prevent exposure in Temporal history."
                         )
 
-            input_data = input_type(**body)
+            input_data = input_type.model_validate(body)
 
             if explicit_workflow_id:
                 workflow_id = explicit_workflow_id
@@ -1084,6 +1089,10 @@ def create_app_handler_service(
 
         Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json
         """
+        if not _CONFIG_KEY_RE.match(config_id):
+            raise ValueError(f"Invalid config_id: {config_id!r}")
+        if not _CONFIG_KEY_RE.match(config_type):
+            raise ValueError(f"Invalid config_type: {config_type!r}")
         from application_sdk.constants import APPLICATION_NAME
 
         return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
@@ -1101,7 +1110,8 @@ def create_app_handler_service(
         from application_sdk.storage.ops import download_file
 
         key = _config_objectstore_key(config_id, config_type)
-        tmp = tempfile.mktemp(suffix=".json")
+        fd, tmp = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
         try:
             await download_file(key, tmp, _storage)
             with open(tmp) as f:
@@ -1125,9 +1135,9 @@ def create_app_handler_service(
         from application_sdk.storage.ops import upload_file
 
         key = _config_objectstore_key(config_id, config_type)
-        tmp = tempfile.mktemp(suffix=".json")
+        fd, tmp = tempfile.mkstemp(suffix=".json")
         try:
-            with open(tmp, "w") as f:
+            with os.fdopen(fd, "w") as f:
                 _json.dump(body, f)
             await upload_file(key, tmp, _storage)
             return True

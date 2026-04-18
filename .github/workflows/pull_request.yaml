@@ -6,12 +6,10 @@ on:
     branches: [main]
 
 permissions:
-  id-token: write
-  contents: write
-  issues: write
+  contents: read
   pull-requests: write
+  issues: write
   security-events: write
-  actions: write
 
 jobs:
   # Detect which files changed
@@ -23,8 +21,8 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
       helm: ${{ steps.filter.outputs.helm }}
     steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         id: filter
         with:
           filters: |
@@ -45,10 +43,10 @@ jobs:
     name: Conventional Commits
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-      - uses: webiny/action-conventional-commits@v1.3.1
+      - uses: webiny/action-conventional-commits@faccb24fc2550dd15c0390d944379d2d8ed9690e # v1.3.1
         with:
           GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
 
@@ -58,7 +56,7 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/docstring-coverage"
         with:
           module-name: application_sdk
@@ -71,7 +69,7 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/trivy"
         with:
           add-report-comment-to-pr: "true"
@@ -82,7 +80,7 @@ jobs:
     if: needs.changes.outputs.container == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/trivy-container"
         with:
           chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
@@ -105,7 +103,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
@@ -119,13 +117,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/setup-deps"
 
       - name: Install Temporal CLI
         run: |
-          curl -sSf https://temporal.download/cli.sh | sh -s -- --version v1.3.0
-          echo "$HOME/.temporalio/bin" >> $GITHUB_PATH
+          TEMPORAL_VERSION="1.3.0"
+          mkdir -p "$HOME/.temporalio/bin"
+          curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_VERSION}/temporal_cli_${TEMPORAL_VERSION}_linux_amd64.tar.gz" \
+            -o /tmp/temporal.tar.gz
+          tar -xzf /tmp/temporal.tar.gz -C /tmp
+          mv /tmp/temporal "$HOME/.temporalio/bin/temporal"
+          chmod +x "$HOME/.temporalio/bin/temporal"
+          echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
 
       - name: Start Temporal dev server
         run: temporal server start-dev --db-filename /tmp/temporal-integ.db &
@@ -142,7 +146,12 @@ jobs:
 
       - name: Install and start Dapr runtime (daprd)
         run: |
-          wget -q https://raw.githubusercontent.com/dapr/cli/refs/tags/v1.16.2/install/install.sh -O - | /bin/bash -s 1.16.2
+          DAPR_CLI_VERSION="1.16.2"
+          curl -sSLf "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" \
+            -o /tmp/dapr-cli.tar.gz
+          tar -xzf /tmp/dapr-cli.tar.gz -C /tmp dapr
+          chmod +x /tmp/dapr
+          sudo mv /tmp/dapr /usr/local/bin/dapr
           dapr init --runtime-version 1.16.0 --slim
           mkdir -p tests/integration/dapr-data/objectstore
           # Run daprd directly (no sidecar pattern) for deterministic behavior
@@ -174,11 +183,11 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Get PR Labels
         id: get-labels
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -253,7 +262,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/e2e-examples"
         with:
           operating-system: ${{ matrix.os }}
@@ -274,7 +283,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/e2e-apps"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
@@ -291,7 +300,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'helm-test')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
@@ -320,10 +329,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Create kind cluster
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
 
       - uses: "./.github/actions/setup-deps"
 
@@ -349,7 +358,7 @@ jobs:
 
       - name: Upload test logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e2e-test-logs
           path: test-logs/

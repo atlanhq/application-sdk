@@ -61,7 +61,7 @@ jobs:
       scan_image: ${{ steps.meta.outputs.scan_image }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -78,17 +78,17 @@ jobs:
           echo "scan_image=scan-target:${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ steps.meta.outputs.dockerfile }}
@@ -103,7 +103,7 @@ jobs:
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: docker-image
           path: /tmp/image.tar
@@ -119,7 +119,7 @@ jobs:
     steps:
       - name: Download image artifact
         if: inputs.image == ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: docker-image
           path: /tmp
@@ -130,7 +130,7 @@ jobs:
 
       - name: Log in to GHCR
         if: inputs.image != ''
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -163,7 +163,7 @@ jobs:
             "$IMAGE"
 
       - name: Upload Trivy results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: trivy-results
           path: /tmp/trivy_results.json
@@ -179,7 +179,7 @@ jobs:
     steps:
       - name: Download image artifact
         if: inputs.image == ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: docker-image
           path: /tmp
@@ -190,14 +190,14 @@ jobs:
 
       - name: Log in to GHCR
         if: inputs.image != ''
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Set up Snyk CLI
-        uses: snyk/actions/setup@0.4.0
+        uses: snyk/actions/setup@b98d498629f1c368650224d6d212bf7dfa89e4bf # 0.4.0
 
       - name: Run Snyk container scan
         env:
@@ -222,7 +222,7 @@ jobs:
             --org=${{ inputs.snyk_org }}
 
       - name: Upload Snyk results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: snyk-results
           path: /tmp/snyk_results.json
@@ -237,19 +237,19 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout (for allowlist)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Download Trivy results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         continue-on-error: true
         with:
           name: trivy-results
           path: /tmp
 
       - name: Download Snyk results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         continue-on-error: true
         with:
           name: snyk-results
