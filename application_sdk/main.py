@@ -629,7 +629,14 @@ async def run_worker_mode(config: AppConfig) -> None:
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _signal_handler)
+        try:
+            loop.add_signal_handler(sig, _signal_handler)
+        except (NotImplementedError, OSError):
+            logger.warning(
+                "loop.add_signal_handler() not supported on this platform "
+                "(signal=%s); graceful shutdown via signals is unavailable",
+                sig.name,
+            )
 
     from application_sdk.server.health import WorkerHealthServer
 
@@ -885,7 +892,14 @@ async def run_combined_mode(config: AppConfig) -> None:
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _signal_handler)
+        try:
+            loop.add_signal_handler(sig, _signal_handler)
+        except (NotImplementedError, OSError):
+            logger.warning(
+                "loop.add_signal_handler() not supported on this platform "
+                "(signal=%s); graceful shutdown via signals is unavailable",
+                sig.name,
+            )
 
     from application_sdk.server.health import WorkerHealthServer
 

@@ -11,6 +11,8 @@ Subclass to implement connector-specific logic::
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, ClassVar
+
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.observability.logger_adaptor import get_logger
@@ -24,6 +26,9 @@ from application_sdk.templates.contracts.sql_query import (
     QueryFetchOutput,
 )
 
+if TYPE_CHECKING:
+    from application_sdk.clients.sql import BaseSQLClient
+
 logger = get_logger(__name__)
 
 
@@ -35,16 +40,43 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
     The ``run()`` method orchestrates the full extraction:
     get_query_batches → fetch_queries (per batch) → aggregate output.
+
+    SQL-string pattern: set ``sql_client_class`` and ``fetch_queries_sql``
+    on your subclass and implement ``get_query_batches`` / ``fetch_queries``
+    using those attributes.  When ``sql_client_class`` is not set the base
+    ``get_query_batches`` returns zero batches so the workflow completes
+    successfully with no data — suitable for testing the framework without
+    a live database connection.
     """
+
+    # Prevent auto-registration of the abstract base template.
+    _app_registered: ClassVar[bool] = True
+
+    # Set to a BaseSQLClient subclass to enable database connectivity.
+    sql_client_class: ClassVar[type[BaseSQLClient] | None] = None
+
+    # SQL template for query fetching — set in subclasses.
+    fetch_queries_sql: ClassVar[str] = ""
 
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
         """Determine how many batches to process and their size.
 
-        Override this method in your connector subclass.
+        Default: returns zero batches when ``sql_client_class`` is not set,
+        causing ``run()`` to complete immediately with no queries fetched.
+
+        Override in your subclass (or set ``sql_client_class``) to implement
+        connector-specific batch counting.
         """
+        if self.sql_client_class is None:
+            logger.info(
+                "sql_client_class not set on %s — returning 0 batches",
+                type(self).__name__,
+            )
+            return QueryBatchOutput(total_batches=0, batch_size=0, total_count=0)
         raise NotImplementedError(
-            f"{type(self).__name__} must implement get_query_batches()."
+            f"{type(self).__name__} must implement get_query_batches() "
+            "when sql_client_class is set."
         )
 
     @task(timeout_seconds=3600)

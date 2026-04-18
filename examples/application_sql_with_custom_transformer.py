@@ -65,6 +65,8 @@ class PostgresExtractorWithCustomTransformer(SqlMetadataExtractor):
     See examples/sql_query_templates/database.yaml for the template format.
     """
 
+    sql_client_class = SQLClient
+
     fetch_database_sql = """
     SELECT datname as database_name FROM pg_database WHERE datname = current_database();
     """

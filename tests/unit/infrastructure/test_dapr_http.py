@@ -42,12 +42,12 @@ class TestAsyncDaprClientState:
             status_code=204, raise_for_status=MagicMock()
         )
 
-        await client.save_state("mystore", "key1", '{"value": 1}')
+        await client.save_state("mystore", "key1", {"value": 1})
 
         mock_http.post.assert_called_once()
         args = mock_http.post.call_args
         assert "/v1.0/state/mystore" in args[0][0]
-        assert args[1]["json"] == [{"key": "key1", "value": '{"value": 1}'}]
+        assert args[1]["json"] == [{"key": "key1", "value": {"value": 1}}]
 
     async def test_get_state_returns_data(self, mock_client):
         client, mock_http = mock_client
