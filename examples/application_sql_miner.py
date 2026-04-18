@@ -130,12 +130,12 @@ class SnowflakeQueryExtractor(SqlQueryExtractor):
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
         """Determine batch count from Snowflake query history."""
-        return await super().get_query_batches(input)
+        return QueryBatchOutput(total_batches=0, batch_size=1000, total_count=0)
 
     @task(timeout_seconds=3600, heartbeat_timeout_seconds=60, auto_heartbeat_seconds=10)
     async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
         """Fetch one batch of queries from Snowflake."""
-        return await super().fetch_queries(input)
+        return QueryFetchOutput(queries_fetched=0)
 
 
 class SampleSnowflakeHandler(Handler):

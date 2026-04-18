@@ -8,7 +8,8 @@ Subclass to implement connector-specific logic::
 
         @task(timeout_seconds=3600)
         async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
-            return await super().get_query_batches(input)
+            # Implement connector-specific batch counting
+            return QueryBatchOutput(total_batches=10, batch_size=1000)
 
         @task(timeout_seconds=3600)
         async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
