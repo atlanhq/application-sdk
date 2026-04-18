@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
+from application_sdk.credentials import CredentialResolver, legacy_credential_ref
+from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.base_metadata_extraction import UploadInput
@@ -114,8 +116,6 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             "1",
         )
 
-        from application_sdk.infrastructure.context import get_infrastructure
-
         infra = get_infrastructure()
 
         if cred_guid and is_local_dev and infra and infra.state_store:
@@ -124,10 +124,6 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 return data
 
         # Production path: use CredentialResolver
-        from application_sdk.credentials import (
-            CredentialResolver,
-            legacy_credential_ref,
-        )
 
         ref = input.credential_ref or (
             legacy_credential_ref(cred_guid) if cred_guid else None
@@ -353,8 +349,6 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             # Prefer credential_ref; fall back to legacy credential_guid
             cred_ref = input.credential_ref
             if cred_ref is None and input.credential_guid:
-                from application_sdk.credentials import legacy_credential_ref
-
                 cred_ref = legacy_credential_ref(input.credential_guid)
 
             # Fetch all metadata types in parallel

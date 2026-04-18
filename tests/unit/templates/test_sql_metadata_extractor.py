@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import pytest
@@ -110,12 +109,10 @@ class TestFetchProceduresTask:
     def test_fetch_procedures_is_task_decorated(self) -> None:
         assert is_task(SqlMetadataExtractor.fetch_procedures)
 
-    def test_fetch_procedures_raises_not_implemented(self) -> None:
+    async def test_fetch_procedures_raises_not_implemented(self) -> None:
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
         with pytest.raises(NotImplementedError):
-            import asyncio
-
-            asyncio.run(extractor.fetch_procedures(FetchProceduresInput()))
+            await extractor.fetch_procedures(FetchProceduresInput())
 
     def test_fetch_procedures_input_has_no_workflow_args(self) -> None:
         assert "workflow_args" not in FetchProceduresInput.model_fields
@@ -174,12 +171,10 @@ class TestSqlMetadataExtractorSubclass:
         # Direct subclasses inherit _app_registered=True so they don't auto-register.
         assert issubclass(SqlMetadataExtractor, App)
 
-    def test_fetch_databases_raises_not_implemented_by_default(self) -> None:
+    async def test_fetch_databases_raises_not_implemented_by_default(self) -> None:
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
         with pytest.raises(NotImplementedError):
-            import asyncio
-
-            asyncio.run(extractor.fetch_databases(FetchDatabasesInput()))
+            await extractor.fetch_databases(FetchDatabasesInput())
 
 
 class _StubSQLClient:
@@ -284,12 +279,12 @@ class TestSqlMetadataExtractorPrepareSql:
 class TestSqlMetadataExtractorLoadSqlClient:
     """Tests for ``_load_sql_client`` and default fetch task execution."""
 
-    def test_load_sql_client_raises_when_class_not_set(self) -> None:
+    async def test_load_sql_client_raises_when_class_not_set(self) -> None:
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
         with pytest.raises(NotImplementedError, match="sql_client_class"):
-            asyncio.run(extractor._load_sql_client(ExtractionTaskInput()))
+            await extractor._load_sql_client(ExtractionTaskInput())
 
-    def test_load_sql_client_instantiates_and_loads(self) -> None:
+    async def test_load_sql_client_instantiates_and_loads(self) -> None:
         created: list[_StubSQLClient] = []
 
         class _Stub(_StubSQLClient):
@@ -308,13 +303,13 @@ class TestSqlMetadataExtractorLoadSqlClient:
 
         extractor._get_credentials = _fake_get_credentials  # type: ignore[method-assign]
 
-        client = asyncio.run(extractor._load_sql_client(ExtractionTaskInput()))
+        client = await extractor._load_sql_client(ExtractionTaskInput())
 
         assert isinstance(client, _Stub)
         assert client.loaded_with == {"user": "u", "pass": "p"}
         assert created == [client]
 
-    def test_fetch_databases_happy_path(self) -> None:
+    async def test_fetch_databases_happy_path(self) -> None:
         rows = [
             {"database_name": "db1"},
             {"database_name": "db2"},
@@ -338,10 +333,8 @@ class TestSqlMetadataExtractorLoadSqlClient:
 
         extractor._load_sql_client = _fake_load  # type: ignore[method-assign]
 
-        out = asyncio.run(
-            extractor.fetch_databases(
-                FetchDatabasesInput(exclude_filter="^x$", include_filter="^prod_"),
-            )
+        out = await extractor.fetch_databases(
+            FetchDatabasesInput(exclude_filter="^x$", include_filter="^prod_"),
         )
 
         assert isinstance(out, FetchDatabasesOutput)
@@ -353,7 +346,48 @@ class TestSqlMetadataExtractorLoadSqlClient:
         assert "^prod_" in stub.last_query
         assert stub.closed is True
 
-    def test_fetch_columns_streams_and_counts(self) -> None:
+    async def test_fetch_schemas_happy_path(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import (
+            FetchSchemasInput,
+            FetchSchemasOutput,
+        )
+
+        rows = [
+            {"schema_name": "public"},
+            {"schema_name": "analytics"},
+            {"schema_name": ""},  # filtered out
+        ]
+        stub = _StubSQLClient(rows=rows)
+
+        class _E(SqlMetadataExtractor):
+            _app_registered = True
+            sql_client_class = type(stub)  # type: ignore[assignment]
+            fetch_schema_sql = (
+                "SELECT schema FROM meta "
+                "WHERE schema !~ '{normalized_exclude_regex}' "
+                "AND schema ~ '{normalized_include_regex}'"
+            )
+
+        extractor = _E.__new__(_E)
+
+        async def _fake_load(_input: ExtractionTaskInput):
+            return stub
+
+        extractor._load_sql_client = _fake_load  # type: ignore[method-assign]
+
+        out = await extractor.fetch_schemas(
+            FetchSchemasInput(exclude_filter="^tmp_", include_filter=".*"),
+        )
+
+        assert isinstance(out, FetchSchemasOutput)
+        assert out.schemas == ["public", "analytics"]
+        assert out.total_record_count == 2
+        assert out.chunk_count == 1
+        assert stub.last_query is not None
+        assert "^tmp_" in stub.last_query
+        assert stub.closed is True
+
+    async def test_fetch_columns_streams_and_counts(self) -> None:
         # Three batches — extractor must sum len() across them, not materialize rows.
         batches = [
             [{"c": 1}, {"c": 2}],
@@ -381,13 +415,13 @@ class TestSqlMetadataExtractorLoadSqlClient:
 
         extractor._load_sql_client = _fake_load  # type: ignore[method-assign]
 
-        out = asyncio.run(extractor.fetch_columns(FetchColumnsInput()))
+        out = await extractor.fetch_columns(FetchColumnsInput())
 
         assert out.total_record_count == 6
         assert out.chunk_count == 1
         assert stub.closed is True
 
-    def test_fetch_tables_closes_client_on_exception(self) -> None:
+    async def test_fetch_tables_closes_client_on_exception(self) -> None:
         class _BoomClient(_StubSQLClient):
             async def run_query(self, query: str, batch_size: int = 100000):
                 self.last_query = query
@@ -409,7 +443,7 @@ class TestSqlMetadataExtractorLoadSqlClient:
         extractor._load_sql_client = _fake_load  # type: ignore[method-assign]
 
         with pytest.raises(RuntimeError, match="boom"):
-            asyncio.run(extractor.fetch_tables(FetchTablesInput()))
+            await extractor.fetch_tables(FetchTablesInput())
 
         assert stub.closed is True
 
