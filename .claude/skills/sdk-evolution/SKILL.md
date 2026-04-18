@@ -1,11 +1,11 @@
 ---
 name: sdk-evolution
-description: Autonomous SDK Evolution — holistic review of the refactor-v3 branch. Dispatches 10 discovery agents, cross-model adversarial gates (Claude discovers + Codex reviews), creates Linear tickets with branches, raises PRs with TDD, then hands off to @sdk-review auto-complete for review/fix loop/confirmation. Self-improves SKILL.md. Invoke with /sdk-evolution.
+description: Autonomous SDK Evolution — holistic review of the main branch. Dispatches 10 discovery agents, cross-model adversarial gates (Claude discovers + Codex reviews), creates Linear tickets with branches, raises PRs with TDD, then hands off to @sdk-review auto-complete for review/fix loop/confirmation. Self-improves SKILL.md. Invoke with /sdk-evolution.
 ---
 
 # Autonomous SDK Evolution
 
-Holistic review of the application-sdk refactor-v3 branch. Finds bugs, architectural issues, test gaps, doc drift, security concerns, performance problems, and v2 remnants. Every finding survives two adversarial challenges before a PR is raised. After Gate 2 passes, posts `@sdk-review auto-complete` on each PR — the existing GHA workflow handles SDK Review, fix loop, and confirmation autonomously.
+Holistic review of the application-sdk main branch. Finds bugs, architectural issues, test gaps, doc drift, security concerns, performance problems, and v2 remnants. Every finding survives two adversarial challenges before a PR is raised. After Gate 2 passes, posts `@sdk-review auto-complete` on each PR — the existing GHA workflow handles SDK Review, fix loop, and confirmation autonomously.
 
 **Spec:** `docs/superpowers/specs/2026-04-09-autonomous-sdk-evolution-design.md`
 
@@ -33,13 +33,13 @@ The pipeline has 9 stages. Execute every one. Do NOT declare "run complete" afte
 - **Use Linear comments for decisions/reasoning** — keep the description clean and short, put the narrative in comments so people can follow the thread
 
 ### 3. Verify branch bases IMMEDIATELY after creation
-After creating any fix branch, run: `git log --oneline -1` and verify the parent commit matches `origin/refactor-v3` HEAD. Do this BEFORE making any changes.
+After creating any fix branch, run: `git log --oneline -1` and verify the parent commit matches `origin/main` HEAD. Do this BEFORE making any changes.
 
 ### 4. `isolation: "worktree"` creates branches from the repo DEFAULT branch (main), NOT the current checkout
-**NEVER use `isolation: "worktree"` for fix agents** in this pipeline. The worktree always bases off `main`, which has different content than `refactor-v3`. Instead:
+**NEVER use `isolation: "worktree"` for fix agents** in this pipeline. The worktree always bases off `main`, which has different content than the default branch. Instead:
 - Do fixes sequentially on the main working directory
-- Create branches explicitly from `origin/refactor-v3`: `git checkout -b <branch> origin/refactor-v3`
-- Or use worktrees ONLY if you explicitly `git checkout refactor-v3` inside the worktree first
+- Create branches explicitly from `origin/main`: `git checkout -b <branch> origin/main`
+- Or use worktrees ONLY if you explicitly `git checkout main` inside the worktree first
 
 ### 5. Never run parallel fix agents without worktree isolation
 Multiple agents sharing the same working directory will stomp on each other's changes. Commits get mixed, branches contain wrong files, and git state becomes corrupted. If you cannot use worktrees (see #4), do fixes **sequentially** — one at a time.
@@ -148,7 +148,7 @@ If the fix modifies GitHub Actions permissions, workflow triggers, Helm values, 
 1. Identify every job/step that uses the changed permission or config
 2. Verify each one still works — don't assume `contents: read` is sufficient without checking
 3. For permission downgrades: search the workflow for actions that may need the old permission (e.g., `add-pr-comment` may need `contents: write` or `pull-requests: write`)
-4. For CI-only PRs: run the workflow on a test branch before merging to refactor-v3
+4. For CI-only PRs: run the workflow on a test branch before merging to main
 
 *Lesson from 2026-04-16 run: PR #1405 downgraded `contents: write` to `contents: read` without verifying the docs preview job (which uses add-pr-comment + S3 sync) still works.*
 
@@ -233,7 +233,7 @@ The 2026-04-09 retrospective found 12 improvements. Zero were committed to rule 
 **In Stage 10, BEFORE writing summary.json:**
 1. Read all retrospective findings that survived
 2. For each finding that updates a rule file: make the edit
-3. `git add .claude/skills/sdk-evolution/ && git commit -m "chore(sdk-evolution): self-improvement from {DATE} run" && git push origin refactor-v3`
+3. `git add .claude/skills/sdk-evolution/ && git commit -m "chore(sdk-evolution): self-improvement from {DATE} run" && git push origin main`
 4. Log which rules were updated in summary.json under `"rules_updated": [...]`
 5. If no retrospective findings need rule updates, log `"rules_updated": []` with reasoning
 
@@ -313,10 +313,10 @@ For EACH milestone: list_issues to get open tickets
 
 This gives full project context — what's being worked on elsewhere, design decisions in flight, etc.
 
-### 0.3 Scan ALL Open PRs on refactor-v3
+### 0.3 Scan ALL Open PRs on main
 
 ```bash
-gh pr list --repo atlanhq/application-sdk --base refactor-v3 --state open --json number,title,headRefName,labels
+gh pr list --repo atlanhq/application-sdk --base main --state open --json number,title,headRefName,labels
 ```
 
 ### 0.4 Resolve User for Ticket Assignment
@@ -347,7 +347,7 @@ Store as a suppression list. During Stage 2 (Discovery), any finding that matche
 Print:
 ```
 Found N existing open tickets across M milestones.
-Found P open PRs on refactor-v3.
+Found P open PRs on main.
 Suppressing duplicates for: [list of file:rule pairs]
 ```
 
@@ -358,8 +358,8 @@ Suppressing duplicates for: [list of file:rule pairs]
 ### 1.1 Pull Latest
 
 ```bash
-git checkout refactor-v3
-git pull origin refactor-v3
+git checkout main
+git pull origin main
 ```
 
 ### 1.2 Create Workspace
@@ -1158,13 +1158,13 @@ For **each PR group**, fix sequentially (Guardrail #5 — no parallel fixes with
 **Fix process for each group:**
 
 ```
-1. Create branch from refactor-v3 using the Linear ticket identifier:
-   git checkout -b {TICKET_IDENTIFIER} origin/refactor-v3
-   (e.g., git checkout -b BLDX-456 origin/refactor-v3)
+1. Create branch from main using the Linear ticket identifier:
+   git checkout -b {TICKET_IDENTIFIER} origin/main
+   (e.g., git checkout -b BLDX-456 origin/main)
 
 2. Verify branch base (Guardrail #3):
    git log --oneline -1
-   Confirm parent matches origin/refactor-v3 HEAD.
+   Confirm parent matches origin/main HEAD.
 
 3. Read the flagged file(s) to understand full context.
 
@@ -1204,7 +1204,7 @@ For **each PR group**, fix sequentially (Guardrail #5 — no parallel fixes with
 10. Create PR:
     gh pr create \
       --repo atlanhq/application-sdk \
-      --base refactor-v3 \
+      --base main \
       --title "{type}({scope}): {short description} [{TICKET_IDENTIFIER}]" \
       --label "Autonomous SDK Evolution" \
       --label "needs-review" \
@@ -1263,8 +1263,8 @@ For **each PR group**, fix sequentially (Guardrail #5 — no parallel fixes with
     - Add comment: "PR #{pr_number} created — awaiting SDK review"
     - Attach PR link to ticket
 
-12. Switch back to refactor-v3:
-    git checkout refactor-v3
+12. Switch back to main:
+    git checkout main
 ```
 
 Write PR info to `{WORKSPACE}/prs/{finding.id}.json`:
@@ -1520,11 +1520,11 @@ Check if any patterns emerged during this run:
 
 If updates are needed:
 ```bash
-git checkout refactor-v3
+git checkout main
 # Edit SKILL.md and/or reference rules
 git add .claude/skills/sdk-evolution/
 git commit -m "chore(sdk-evolution): self-improvement from {RUN_DATE} run"
-git push origin refactor-v3
+git push origin main
 ```
 
 ### 9.5 Security Audit of Pipeline Output (Guardrail #18)

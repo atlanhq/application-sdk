@@ -97,7 +97,7 @@ nav:
       - Monitoring: concepts/monitoring.md
   - Migration:
       - What's New in v3: whats-new-v3.md
-      - Migration Guide v3: migration-guide-v3.md
+      - Upgrade Guide v3: upgrade-guide-v3.md
   - Agent Guides:
       - Project Structure: agents/project-structure.md
       - Development Commands: agents/dev-commands.md

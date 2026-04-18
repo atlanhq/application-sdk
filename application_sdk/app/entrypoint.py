@@ -1,7 +1,8 @@
 """Entry point decorator for defining independently-triggerable execution paths in Apps.
 
 Entry points generate Temporal workflows at worker startup. Each entry point can be
-triggered independently via HTTP /start?workflow_type=<name>.
+triggered independently via HTTP POST /workflows/v1/start?entrypoint=<name>.
+The body field 'workflow_type' is also accepted as a transitional fallback.
 
 Usage::
 
@@ -170,7 +171,8 @@ def entrypoint(
     Each entry point generates one Temporal workflow at worker startup. Multiple
     entry points on the same App share @task methods as Temporal activities.
 
-    Entry points are triggered via HTTP /start?workflow_type=<name>.
+    Entry points are triggered via HTTP POST /workflows/v1/start?entrypoint=<name>.
+    The body field 'workflow_type' is also accepted as a transitional fallback.
 
     Workflow naming:
     - Single-entry-point apps: ``{app-name}`` (backward compat, no colon)

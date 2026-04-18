@@ -83,7 +83,7 @@ class TestModulePathChange:
         # Interceptors are auto-registered by create_worker(); the rewriter keeps
         # the module path unchanged and emits a structural TODO to remove the import.
         assert "from application_sdk.interceptors.events import EventInterceptor" in out
-        assert "# TODO(v3-migration): Remove this import" in out
+        assert "# TODO(upgrade-v3): Remove this import" in out
 
     def test_activity_sql_utils(self):
         src = "from application_sdk.activities.common.sql_utils import some_util"
@@ -146,24 +146,24 @@ class TestStructuralImports:
         src = "from application_sdk.workflows import WorkflowInterface"
         out, changes = rewrite(src)
         assert "from application_sdk.app import App" in out
-        assert "# TODO(v3-migration):" in out
+        assert "# TODO(upgrade-v3):" in out
 
     def test_sql_workflow_gets_todo(self):
         src = "from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow"
         out, changes = rewrite(src)
         assert "from application_sdk.templates import SqlMetadataExtractor" in out
-        assert "# TODO(v3-migration):" in out
+        assert "# TODO(upgrade-v3):" in out
 
     def test_activities_interface_gets_todo(self):
         src = "from application_sdk.activities import ActivitiesInterface"
         out, changes = rewrite(src)
         assert "from application_sdk.app import App" in out
-        assert "# TODO(v3-migration):" in out
+        assert "# TODO(upgrade-v3):" in out
 
     def test_auto_heartbeater_gets_todo(self):
         src = "from application_sdk.activities.common.utils import auto_heartbeater"
         out, changes = rewrite(src)
-        assert "# TODO(v3-migration):" in out
+        assert "# TODO(upgrade-v3):" in out
         # Structural — removed decorator, replaced by @task built-in
         assert any("auto_heartbeater" in c for c in changes)
 
@@ -171,7 +171,7 @@ class TestStructuralImports:
         src = "from application_sdk.worker import Worker"
         out, changes = rewrite(src)
         assert "from application_sdk.execution import create_worker" in out
-        assert "# TODO(v3-migration):" in out
+        assert "# TODO(upgrade-v3):" in out
 
 
 class TestNonDeprecatedImports:

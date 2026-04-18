@@ -24,7 +24,8 @@ from application_sdk.credentials.errors import (
     CredentialParseError,
 )
 from application_sdk.credentials.spec import AgentCredentialSpec
-from application_sdk.infrastructure.secrets import InMemorySecretStore, SecretStoreError
+from application_sdk.infrastructure.secrets import SecretStoreError
+from application_sdk.testing.mocks import MockSecretStore
 
 # ---------------------------------------------------------------------------
 # Fixtures — based on the real cloudsql-postgres agent payload from dbbi-331
@@ -58,9 +59,9 @@ def _bundle(**values: str) -> str:
     return json.dumps(values)
 
 
-def _store_with(**bundles: str) -> InMemorySecretStore:
-    """Helper: build an InMemorySecretStore preloaded with ``{path: json}``."""
-    store = InMemorySecretStore()
+def _store_with(**bundles: str) -> MockSecretStore:
+    """Helper: build a MockSecretStore preloaded with ``{path: json}``."""
+    store = MockSecretStore()
     for path, raw in bundles.items():
         store.set(path, raw)
     return store

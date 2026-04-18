@@ -32,22 +32,22 @@ To begin developing with the Application SDK:
 
 1. Clone the repository
 2. Follow the setup instructions for your platform:
-   - [Windows](https://github.com/atlanhq/application-sdk/blob/refactor-v3/docs/setup/WINDOWS.md)
-   - [Mac](https://github.com/atlanhq/application-sdk/blob/refactor-v3/docs/setup/MAC.md)
-   - [Linux](https://github.com/atlanhq/application-sdk/blob/refactor-v3/docs/setup/LINUX.md)
+   - [Windows](https://github.com/atlanhq/application-sdk/blob/main/docs/setup/WINDOWS.md)
+   - [Mac](https://github.com/atlanhq/application-sdk/blob/main/docs/setup/MAC.md)
+   - [Linux](https://github.com/atlanhq/application-sdk/blob/main/docs/setup/LINUX.md)
 3. Run the example application:
-   - [Hello World](https://github.com/atlanhq/application-sdk/blob/refactor-v3/examples/application_hello_world.py)
-   - [SQL](https://github.com/atlanhq/application-sdk/blob/refactor-v3/examples/application_sql.py)
+   - [Hello World](https://github.com/atlanhq/application-sdk/blob/main/examples/application_hello_world.py)
+   - [SQL](https://github.com/atlanhq/application-sdk/blob/main/examples/application_sql.py)
 
 
 ## Documentation
 
-- Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/refactor-v3/docs) folder.
+- Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/main/docs) folder.
 
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](https://github.com/atlanhq/application-sdk/blob/refactor-v3/CONTRIBUTING.md) for guidelines.
+We welcome contributions! Please see our [Contributing Guide](https://github.com/atlanhq/application-sdk/blob/main/CONTRIBUTING.md) for guidelines.
 
 ## Need Help?
 
@@ -57,11 +57,11 @@ Get support through any of these channels:
 
 ## Security
 
-Have you discovered a vulnerability or have concerns about the SDK? Please read our [SECURITY.md](https://github.com/atlanhq/application-sdk/blob/refactor-v3/SECURITY.md) document for guidance on responsible disclosure, or Please e-mail security@atlan.com and we will respond promptly.
+Have you discovered a vulnerability or have concerns about the SDK? Please read our [SECURITY.md](https://github.com/atlanhq/application-sdk/blob/main/SECURITY.md) document for guidance on responsible disclosure, or Please e-mail security@atlan.com and we will respond promptly.
 
 
 ## License and Attribution
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](https://github.com/atlanhq/application-sdk/blob/refactor-v3/LICENSE) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](https://github.com/atlanhq/application-sdk/blob/main/LICENSE) file for details.
 
-This project includes dependencies with various open-source licenses. See the [NOTICE](https://github.com/atlanhq/application-sdk/blob/refactor-v3/NOTICE) file for third-party attributions.
+This project includes dependencies with various open-source licenses. See the [NOTICE](https://github.com/atlanhq/application-sdk/blob/main/NOTICE) file for third-party attributions.

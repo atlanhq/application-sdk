@@ -468,27 +468,6 @@ def _derive_task_queue(app_module: str) -> str:
     return f"{_derive_service_name(app_module)}-queue"
 
 
-def _load_extra_app_modules(extra_app_modules: list[str] | None) -> list[str]:
-    """Load additional app modules so they register with AppRegistry.
-
-    Returns:
-        List of loaded app names.
-    """
-    names: list[str] = []
-    if not extra_app_modules:
-        return names
-    for module_path in extra_app_modules:
-        app_cls = load_app_class(module_path)
-        validate_app_class(app_cls)
-        names.append(app_cls._app_name)  # type: ignore[attr-defined]
-        logger.info(
-            "Loaded extra app %s version %s",
-            app_cls._app_name,  # type: ignore[attr-defined]
-            app_cls._app_version,  # type: ignore[attr-defined]
-        )
-    return names
-
-
 async def _flush_observability() -> None:
     """Flush all observability buffers before exit."""
     from application_sdk.observability.observability import AtlanObservability
@@ -671,10 +650,6 @@ def run_handler_mode(config: AppConfig) -> None:
 
     Loads the handler class (or DefaultHandler) and runs the FastAPI
     server via uvicorn. This is synchronous — uvicorn manages its own loop.
-
-    Note: extra_app_modules are intentionally NOT loaded here. Handler mode
-    only serves HTTP for the primary app — no Temporal worker, so secondary
-    apps don't need to register.
     """
     import asyncio
 
@@ -1039,9 +1014,8 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 Environment Variables:
   ATLAN_APP_MODE           Execution mode (worker, handler, or combined)
-  ATLAN_APP_MODULE         App class path(s), comma-separated for multi-app
-                           First is primary (HTTP handler), rest register on worker
-                           (e.g., app.main:MainApp,app.secondary:SecondaryApp)
+  ATLAN_APP_MODULE         App class path in 'module:ClassName' form (e.g. app.main:MyApp)
+                           Apps expose multiple workflows via @entrypoint methods
   ATLAN_HANDLER_MODULE     Optional custom handler module path
   ATLAN_TEMPORAL_HOST      Temporal server address (default: localhost:7233)
                            Falls back to ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT (v2)
@@ -1072,7 +1046,7 @@ Examples:
     parser.add_argument(
         "--app",
         "-a",
-        help="App module path(s), comma-separated for multi-app (e.g., app.main:MainApp,app.secondary:SecondaryApp). First is primary (HTTP handler), rest register on worker.",
+        help="App class path in 'module:ClassName' form (e.g. app.main:MyApp). Use @entrypoint methods to expose multiple workflows from one App.",
     )
     parser.add_argument(
         "--handler",

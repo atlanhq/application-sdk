@@ -2,7 +2,7 @@
 
 This guide walks through building a SQL metadata extraction connector using the v3 Application SDK. By the end, you will have a working connector that extracts databases, schemas, tables, and columns, transforms them using an asset mapper, and publishes the results.
 
-v3 replaces the v2 `BaseSQLMetadataExtractionWorkflow` + `BaseSQLMetadataExtractionActivities` split with a single `SqlMetadataExtractor` class. If you are migrating an existing v2 connector, see the [Migration Guide](../migration-guide-v3.md) for a step-by-step checklist.
+v3 replaces the v2 `BaseSQLMetadataExtractionWorkflow` + `BaseSQLMetadataExtractionActivities` split with a single `SqlMetadataExtractor` class. If you are upgrading an existing v2 connector, see the [Upgrade Guide](../upgrade-guide-v3.md) for a step-by-step checklist.
 
 ## Overview
 
@@ -575,7 +575,7 @@ The base image handles the entrypoint, Dapr, and the `application-sdk` CLI. You 
 
 ```dockerfile
 # Application-sdk v3 base image (Chainguard-based)
-FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
+FROM registry.atlan.com/public/app-runtime-base:main-latest
 
 WORKDIR /app
 
@@ -596,7 +596,7 @@ ENV ATLAN_CONTRACT_GENERATED_DIR=app/generated
 
 Key points:
 
-- **Base image**: `registry.atlan.com/public/app-runtime-base:refactor-v3-latest` --- includes Dapr, the `application-sdk` CLI, and the entrypoint.
+- **Base image**: `registry.atlan.com/public/app-runtime-base:main-latest` --- includes Dapr, the `application-sdk` CLI, and the entrypoint.
 - **No `CMD` needed**: The base image handles mode selection at runtime.
 - **`COPY . .`**: Copies the entire project (including `app/`, `main.py`, SQL files, etc.). The `.dockerignore` should exclude `.git`, `tests/`, etc.
 - **`--no-install-project`**: Installs only dependencies, not the project itself (the app code is copied separately).
@@ -691,7 +691,7 @@ if __name__ == "__main__":
 
 ```dockerfile
 # Dockerfile
-FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
+FROM registry.atlan.com/public/app-runtime-base:main-latest
 
 WORKDIR /app
 
@@ -729,11 +729,11 @@ dapr:
 6. **Log with the SDK logger.** Use `application_sdk.observability.logger_adaptor.get_logger` for structured logging that integrates with Temporal.
 7. **Test without sidecars.** Use `MockStateStore` and `MockSecretStore` from `application_sdk.testing.mocks` to test your connector and handler without Dapr or Temporal running.
 8. **Set `ATLAN_APP_MODULE` in the Dockerfile.** This locks the app module to the image and avoids runtime misconfiguration.
-9. **Use `on_complete` for cleanup.** Override `on_complete(success: bool)` for post-run cleanup (see [Migration Guide Step 12](../migration-guide-v3.md#step-12-app-lifecycle-hooks)).
+9. **Use `on_complete` for cleanup.** Override `on_complete()` for post-run cleanup (see [Upgrade Guide Step 12](../upgrade-guide-v3.md#step-12-app-lifecycle-hooks)).
 
 ## Next Steps
 
 - [What's New in v3](../whats-new-v3.md) --- detailed comparison of v2 and v3 patterns
-- [Migration Guide](../migration-guide-v3.md) --- step-by-step migration from v2 to v3
+- [Upgrade Guide](../upgrade-guide-v3.md) --- step-by-step upgrade from v2 to v3
 - [Getting Started](getting-started.md) --- development environment setup
 - [Architecture](architecture.md) --- SDK architecture and component overview

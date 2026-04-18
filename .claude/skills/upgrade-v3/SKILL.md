@@ -1,20 +1,20 @@
 ---
-name: migrate-v3
-description: Migrate a connector repo from application-sdk v2 to v3 — runs the import rewriter, performs AI-assisted structural refactoring, and validates the result with the migration checker.
+name: upgrade-v3
+description: Upgrade a connector repo from application-sdk v2 to v3 — runs the import rewriter, performs AI-assisted structural refactoring, and validates the result with the upgrade checker.
 argument-hint: "<path-to-connector-repo>"
 ---
 
-# /migrate-v3
+# /upgrade-v3
 
-Performs a complete v2 → v3 migration of an application-sdk connector.
+Performs a complete v2 → v3 upgrade of an application-sdk connector.
 
-**Must be run from the application-sdk repo root** (so the migration tooling and docs are reachable).
+**Must be run from the application-sdk repo root** (so the upgrade tooling and docs are reachable).
 
 ## Usage
 
 ```
-/migrate-v3 ../my-connector/src
-/migrate-v3 /absolute/path/to/connector/
+/upgrade-v3 ../my-connector/src
+/upgrade-v3 /absolute/path/to/connector/
 ```
 
 ---
@@ -27,7 +27,7 @@ Performs a complete v2 → v3 migration of an application-sdk connector.
 4. **Check the connector's SDK dependency.** Read the connector's `pyproject.toml` and look for `atlan-application-sdk` in the dependencies. Until v3 is released on PyPI the connector must use the git source:
    ```toml
    [tool.uv.sources]
-   atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "refactor-v3" }
+   atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "main" }
    ```
    If it still points to a v2 PyPI release (e.g. `atlan-application-sdk>=2.x`), add the `[tool.uv.sources]` block above and run `uv sync` in the connector repo before continuing. If it already has this source override or references a v3+ PyPI release, proceed.
 
@@ -41,7 +41,7 @@ Performs a complete v2 → v3 migration of an application-sdk connector.
    ```
 
 5. Read `tools/migrate_v3/MIGRATION_PROMPT.md` in full. This is the authoritative reference for all structural changes you will make. Do not proceed to Phase 3 without having read it.
-5b. Read the **migration guide** at `docs/migration-guide-v3.md` in the application-sdk repo (also available at https://github.com/atlanhq/application-sdk/blob/refactor-v3/docs/migration-guide-v3.md). This is the user-facing guide with v2 → v3 code examples for every migration step (imports, templates, handler, entry point, infrastructure, credentials, tests). Use it as a reference when making structural changes — it has the canonical before/after code snippets.
+5b. Read the **upgrade guide** at `docs/upgrade-guide-v3.md` in the application-sdk repo (also available at https://github.com/atlanhq/application-sdk/blob/main/docs/upgrade-guide-v3.md). This is the user-facing guide with v2 → v3 code examples for every upgrade step (imports, templates, handler, entry point, infrastructure, credentials, tests). Use it as a reference when making structural changes — it has the canonical before/after code snippets.
 6. Run an initial checker pass to establish the baseline — **do not fix anything yet**:
 
 ```bash
@@ -108,6 +108,7 @@ Examine the source files in the target path (exclude test files from this analys
 - Look for HTTP/REST client usage (`httpx`, `aiohttp`, `requests`, or custom `BaseClient` subclasses) with no SQL queries → REST/HTTP metadata extractor (§2d)
 - Look for any other `WorkflowInterface` / `ActivitiesInterface` subclasses that don't fit above → Custom App (§3)
 - In all cases: identify the handler class (§4) and the entry point (§5)
+- **Count the total number of distinct `WorkflowInterface` subclasses** (exclude base classes from the SDK). If there is more than one, this is a **multi-workflow connector** — flag it and handle it in Phase 2a′ below before proceeding.
 
 > **Tip — auto-detect the connector type:**
 > ```bash
@@ -125,6 +126,12 @@ After identifying the connector type, determine the transformation strategy:
   1. **Keep existing transformer** — preserve `QueryBasedTransformer`/`AtlasTransformer` usage inside `transform_data()`. Less migration effort, leverages existing YAML query files.
   2. **Asset-mapper approach** — replace the transformer with pure Python mapper functions that take typed records and return pyatlan Asset instances directly. More upfront work but eliminates Daft DataFrame and YAML query file dependencies.
 - If the user has no preference, keep the existing transformer to minimize migration risk.
+
+**Multi-workflow connectors** (more than one `WorkflowInterface` subclass detected):
+- Consolidate into a **single `App` subclass** with one `@entrypoint`-decorated method per v2 workflow. All entry points share `@task` methods, the handler, and `AppContext`.
+- `ATLAN_APP_MODULE` stays a single `module:ClassName` — no comma-separated list.
+- See §5b of MIGRATION_PROMPT.md for the full pattern and `tests/integration/test_multi_entrypoint.py` for a canonical example.
+- Inform the user: _"This connector has N workflows. In v3 they become N `@entrypoint` methods on one App class, sharing task helpers and the handler. I'll consolidate them into a single App."_
 
 **REST/API connectors** (BaseMetadataExtractor, Custom App):
 - **Default to the asset-mapper approach.** This is the v3-native pattern (see `atlan-openapi-app` as the reference implementation). Inform the user:
@@ -157,7 +164,7 @@ Follow the exact checklists in `tools/migrate_v3/MIGRATION_PROMPT.md` for the co
 - You MUST NOT modify test method bodies, assertions, fixtures, mock setup, or test data in any file under any directory whose name contains `test` or starts with `test_`.
 - You MUST NOT add, remove, or rewrite test cases.
 - You MUST NOT change the logic of any existing test.
-- The only change permitted in test files is the mechanical import rewrite already performed in Phase 1. If a test file needs structural changes to compile (e.g. it directly instantiates a v2 class that no longer exists), add a `# TODO(v3-migration): update test to use v3 API` comment and leave the test body unchanged. The user will update tests manually after verifying the migration is correct.
+- The only change permitted in test files is the mechanical import rewrite already performed in Phase 1. If a test file needs structural changes to compile (e.g. it directly instantiates a v2 class that no longer exists), add a `# TODO(upgrade-v3): update test to use v3 API` comment and leave the test body unchanged. The user will update tests manually after verifying the migration is correct.
 
 **Hard constraint — handler method signatures:**
 
@@ -174,7 +181,7 @@ Follow the exact checklists in `tools/migrate_v3/MIGRATION_PROMPT.md` for the co
 
 Apply changes in this order:
 
-1. **App class** — merge Workflow + Activities into the appropriate template subclass with `@task` methods. Preserve all SQL query strings and business logic verbatim.
+1. **App class** — merge Workflow + Activities into the appropriate template subclass with `@task` methods. Preserve all SQL query strings and business logic verbatim. For multi-workflow connectors, give each v2 workflow its own `@entrypoint` method on the single shared App class (see §5b of MIGRATION_PROMPT.md); hoist duplicated activity helpers into shared `@task` methods.
 
    > After completing this step, run:
    > ```bash
@@ -216,9 +223,9 @@ Work through one section at a time. After completing each section, check your ch
 
 ### 2c — Directory consolidation
 
-After completing the structural migration in 2b, consolidate the v2 directory layout. v2 connectors split logic across `app/activities/` and `app/workflows/`; v3 uses a single flat file.
+After completing the structural migration in 2b, consolidate the v2 directory layout. v2 connectors split logic across `app/activities/` and `app/workflows/`; v3 uses a single flat file. For multi-workflow connectors this means all `@entrypoint` methods live in one file — do **not** split back into multiple files.
 
-1. Identify the main App class file (typically `app/activities/<name>.py`).
+1. Identify the main App class file (typically `app/activities/<name>.py`, or whichever file holds the merged multi-workflow App).
 2. Move it to `app/<app_name>.py` (derive the filename from the App class or connector name, snake_cased).
 3. If `app/workflows/<name>.py` exists and only re-exports from activities (e.g. `from app.activities.<name> import MyConnector`), delete it.
 4. Delete the now-empty `app/activities/` and `app/workflows/` directories.
@@ -231,7 +238,7 @@ After completing the structural migration in 2b, consolidate the v2 directory la
         --internal-map '{"app.activities.<name>": "app.<name>"}' \
         <target-path>/tests/
       ```
-   c. For any **symbol names** that also changed (e.g. `AnaplanMetadataExtractionActivities` → `AnaplanApp`), manually update the import line's symbol name in each affected test file AND add a comment at the top of that file: `# TODO(v3-migration): update references from OldClass to NewClass in test bodies`. Do NOT modify test bodies, assertions, fixtures, or mocks.
+   c. For any **symbol names** that also changed (e.g. `AnaplanMetadataExtractionActivities` → `AnaplanApp`), manually update the import line's symbol name in each affected test file AND add a comment at the top of that file: `# TODO(upgrade-v3): update references from OldClass to NewClass in test bodies`. Do NOT modify test bodies, assertions, fixtures, or mocks.
 7. Re-run the checker to confirm the `no-v2-directory-structure` advisory is gone.
 
 If the connector does not have an `activities/` or `workflows/` directory, skip this step.
@@ -289,7 +296,7 @@ If `uv` is not available in the connector repo, try `python -m pytest --tb=short
 
 Do **not** modify any test to make it pass. If tests fail:
 - Read the failing test and the code it exercises.
-- If the failure is due to a production code issue introduced during migration (e.g. wrong method signature, missing attribute), fix the production code.
+- If the failure is due to a production code issue introduced during upgrade (e.g. wrong method signature, missing attribute), fix the production code.
 - If the failure requires understanding test intent or rewriting test logic, do NOT fix it. Add it to the manual follow-up list.
 
 ### Phase 4b — E2E test generation
@@ -301,10 +308,10 @@ After the test suite run, check whether the connector has e2e tests using the v2
 3. Generate a **new** equivalent e2e test file using the v3 `application_sdk.testing.e2e` API (§9 of MIGRATION_PROMPT.md):
    - For **each** test method in the original, generate a corresponding `async def test_xxx(deployed_app)` function. The generated file MUST have at least as many test functions as the original has test methods.
    - Extract actual payload values from the original (hardcoded dicts, `default_payload()` bodies, connection IDs) — do **not** substitute placeholder values like `"test-connection"` if the original has real values.
-   - If an assertion checks response fields whose format changed (e.g. `result['authenticationCheck']`), keep the assertion but add `# TODO(v3-migration): response format changed — update field names`.
+   - If an assertion checks response fields whose format changed (e.g. `result['authenticationCheck']`), keep the assertion but add `# TODO(upgrade-v3): response format changed — update field names`.
    - Use the `AppConfig` fixture with real values derived from the connector's `pyproject.toml` (`name`, `tool.poetry.name`, or Helm chart values) — not generic placeholders.
 4. Place the new file alongside the original, named `tests/e2e/test_<connector_name>_v3.py`.
-5. Add `# TODO(v3-migration): human must validate this test is equivalent to the original` at the top of the new file.
+5. Add `# TODO(upgrade-v3): human must validate this test is equivalent to the original` at the top of the new file.
 6. Do NOT delete or modify the original test file.
 7. Add the new test file to the manual follow-up list so the user knows to validate it.
 
@@ -390,7 +397,7 @@ methods that return a different response shape than v2, which may break frontend
 
 Remind the user:
 - Run `uv run pre-commit run --all-files` in the connector repo before committing.
-- Review all `# TODO(v3-migration)` comments — each one marks a location that needs human verification.
+- Review all `# TODO(upgrade-v3)` comments — each one marks a location that needs human verification.
 - The typed `Input`/`Output` models for custom `@task` methods should be defined (see §7 of MIGRATION_PROMPT.md) — these were not auto-generated.
 - If an e2e test was generated in Phase 4b, validate that it is logically equivalent to the original before deleting the old file.
 
@@ -499,8 +506,12 @@ curl -s http://localhost:8000/workflows/v1/configmaps
 # Get specific configmap
 curl -s http://localhost:8000/workflows/v1/configmap/<id>
 
-# Get manifest
+# Get manifest (single-entry-point app)
 curl -s http://localhost:8000/workflows/v1/manifest
+
+# Get manifest for a specific entry point (multi-entry-point app)
+curl -s 'http://localhost:8000/workflows/v1/manifest?entrypoint=extract-metadata'
+curl -s 'http://localhost:8000/workflows/v1/manifest?entrypoint=mine-queries'
 ```
 
 If any endpoint returns 500, check the app terminal for the traceback. Common issues:
@@ -515,6 +526,7 @@ Ask the user:
 
 If confirmed:
 ```bash
+# Single-entry-point app — no entrypoint selector needed
 curl -s -X POST http://localhost:8000/workflows/v1/start \
   -H "Content-Type: application/json" \
   -d '{
@@ -522,7 +534,18 @@ curl -s -X POST http://localhost:8000/workflows/v1/start \
     "metadata": { <connector-specific metadata> },
     "connection": {"connection": "dev"}
   }'
+
+# Multi-entry-point app — ?entrypoint=<name> is required
+curl -s -X POST 'http://localhost:8000/workflows/v1/start?entrypoint=<entry-point-name>' \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credentials": { ... },
+    "metadata": { <connector-specific metadata> },
+    "connection": {"connection": "dev"}
+  }'
 ```
+
+The entry-point name is the kebab-case method name (e.g. `extract_metadata` → `extract-metadata`). Omitting `?entrypoint=` on a multi-entry-point app returns 400.
 
 Capture `workflow_id` and `run_id` from the response. Monitor status:
 ```bash
@@ -624,7 +647,7 @@ Only print this after parity is achieved or the user accepts the result:
 
 **This is a HARD, NON-NEGOTIABLE constraint. Read every word.**
 
-During migration, if you encounter a bug, crash, incorrect behavior, or missing feature **in the application-sdk itself** (i.e., code under `application_sdk/` on the `refactor-v3` branch — NOT in the connector being migrated), you MUST follow this protocol. There are NO exceptions.
+During migration, if you encounter a bug, crash, incorrect behavior, or missing feature **in the application-sdk itself** (i.e., code under `application_sdk/` on the `main` branch — NOT in the connector being migrated), you MUST follow this protocol. There are NO exceptions.
 
 ### How to identify an SDK bug vs a connector bug
 
@@ -635,13 +658,13 @@ If in doubt, it's an SDK bug. Treat it as one.
 
 ### What you MUST do
 
-1. **Stop all migration work immediately.** Do not attempt to continue the migration. Do not try to "work around it for now." Do not pass Go. Do not collect $200.
+1. **Stop all migration work immediately.** Do not attempt to continue the upgrade. Do not try to "work around it for now." Do not pass Go. Do not collect $200.
 
 2. **Create a fix branch in the SDK repo.** From the application-sdk repo root:
    ```bash
    cd <application-sdk-repo-root>
-   git fetch origin refactor-v3
-   git checkout -b fix/sdk-<short-description> origin/refactor-v3
+   git fetch origin main
+   git checkout -b fix/sdk-<short-description> origin/main
    ```
 
 3. **Write the fix.** Fix the actual SDK code. Write it properly — this is going into the SDK, not a throwaway patch. Include a test if the area has existing test coverage.
@@ -659,13 +682,13 @@ If in doubt, it's an SDK bug. Treat it as one.
    git push -u origin fix/sdk-<short-description>
    ```
 
-6. **Create a PR against `refactor-v3`:**
+6. **Create a PR against `main`:**
    ```bash
    gh pr create \
-     --base refactor-v3 \
+     --base main \
      --title "fix(<area>): <short description>" \
      --body "$(cat <<'EOF'
-   ## Bug found during v3 migration of <connector-name>
+   ## Bug found during v3 upgrade of <connector-name>
 
    ### What broke
    <description of the bug — what was expected vs what happened>
@@ -680,8 +703,8 @@ If in doubt, it's an SDK bug. Treat it as one.
    Migration of `<connector-name>` to v3 SDK.
 
    ---
-   > This PR was auto-generated during a `/migrate-v3` session.
-   > **SDK team**: please review and merge so the migration can continue.
+   > This PR was auto-generated during a `/upgrade-v3` session.
+   > **SDK team**: please review and merge so the upgrade can continue.
 
    🤖 Generated with [Claude Code](https://claude.com/claude-code)
    EOF
@@ -707,7 +730,7 @@ If in doubt, it's an SDK bug. Treat it as one.
    1. Ping the SDK team on Slack to review the PR above.
       They're nice people. They will merge it. Probably.
    2. Once merged, run `uv sync` in the connector to pick up the fix.
-   3. Then come back and we'll continue the migration where we left off.
+   3. Then come back and we'll continue the upgrade where we left off.
 
    I know this is annoying. I know you "just want to ship."
    But workarounds in connector code are how we got tech debt
@@ -718,7 +741,7 @@ If in doubt, it's an SDK bug. Treat it as one.
    Go bug the SDK team. I'll wait. ☕
    ```
 
-8. **STOP.** Do not continue the migration. Do not proceed to the next phase. The migration is blocked until the SDK fix is merged and `uv sync` picks it up.
+8. **STOP.** Do not continue the upgrade. Do not proceed to the next phase. The migration is blocked until the SDK fix is merged and `uv sync` picks it up.
 
 ### What you MUST NOT do — THE WALL OF SHAME
 
@@ -751,7 +774,7 @@ No workarounds. No exceptions. No "just this once." 🪨
 - Every workaround in a connector becomes invisible tech debt
 - The SDK team cannot fix bugs they don't know about
 - If 15 connectors each work around the same bug differently, that's 15 cleanup PRs later
-- The `refactor-v3` branch is still in active development — bugs SHOULD be found and fixed now, not papered over
+- The `main` branch is the active development branch — bugs SHOULD be found and fixed now, not papered over
 
 ### Resuming after the fix is merged
 
@@ -766,9 +789,9 @@ Once the user confirms the SDK PR is merged:
 
 ---
 
-## Known Gotchas — learned from real migrations
+## Known Gotchas — learned from real upgrades
 
-These are issues discovered during production migrations that are not covered by the automated checker or migration tooling. Read these before starting.
+These are issues discovered during production migrations that are not covered by the automated checker or upgrade tooling. Read these before starting.
 
 ### Handler discovery
 
@@ -886,7 +909,7 @@ The Dockerfile MUST follow this exact pattern. Do NOT deviate from the base imag
 
 ```dockerfile
 # syntax=docker/dockerfile:1
-FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
+FROM registry.atlan.com/public/app-runtime-base:main-latest
 
 # git is required for uv to fetch git-sourced dependencies (atlan-application-sdk)
 USER root
@@ -906,16 +929,15 @@ RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
 # Copy application code only
 COPY --chown=appuser:appuser app/ app/
 
-# Comma-separated: first is primary (HTTP handler), rest register on worker
 ENV ATLAN_APP_MODULE=app.my_app:MyApp
 ENV ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
 ENV APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR=false
 ```
 
 Key rules:
-- Base image: `registry.atlan.com/public/app-runtime-base:refactor-v3-latest` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
+- Base image: `registry.atlan.com/public/app-runtime-base:main-latest` — NOT `ghcr.io/atlanhq/application-sdk-main:2.x`
 - `COPY app/ app/` — only app code, NOT the entire repo
-- `ATLAN_APP_MODULE` — hardcoded, comma-separated for multi-app
+- `ATLAN_APP_MODULE` — always a single `module:ClassName` entry; use `@entrypoint` methods to expose multiple workflows (comma-separated multi-app is not supported)
 - No `CMD` — the base image handles mode via `APPLICATION_MODE` env var set by Helm
 - No `entrypoint.sh`, `supervisord.conf`, `otel-config.yaml` — v3 base image handles all of these
 
@@ -925,7 +947,7 @@ v3 does not auto-compute `output_path` like v2 did. If `input.output_path` is em
 
 ```python
 from application_sdk.constants import TEMPORARY_PATH
-from application_sdk.common.utils import build_output_path
+from application_sdk.execution import build_output_path
 
 if not input.output_path:
     output_path = os.path.join(TEMPORARY_PATH, build_output_path())
@@ -948,9 +970,9 @@ The contract toolkit generates `_input.py` and other files in `app/generated/`. 
 
 ### Local dev — verify Dapr is actually being used
 
-The v3 SDK checks `DAPR_HTTP_PORT` (not `ATLAN_DAPR_HTTP_PORT`) to detect the Dapr sidecar. If running via `atlan app run`, the CLI sets this automatically. If running manually (`uv run python main.py`), Dapr will be skipped and the SDK falls back to InMemory + LocalStore silently. This means misconfigured Dapr components won't be caught until production.
+The v3 SDK checks `DAPR_HTTP_PORT` (not `ATLAN_DAPR_HTTP_PORT`) to detect the Dapr sidecar. If running via `atlan app run`, the CLI sets this automatically. If running manually (`uv run python main.py`), you must export `DAPR_HTTP_PORT=3500` first — without it, any SecretStore or StateStore access will raise at runtime.
 
-**Fix:** When running manually, export `DAPR_HTTP_PORT=3500` before starting the app, or use `atlan app run` which handles this.
+**Fix:** When running manually, export `DAPR_HTTP_PORT=3500` before starting the app, or use `atlan app run` which handles this. For quick local iteration without a sidecar (e.g. unit tests), inject `MockSecretStore`/`MockStateStore` from `application_sdk.testing.mocks` instead.
 
 ### run() return type must match AE JSONPath queries
 
@@ -964,60 +986,56 @@ class MyExtractionOutput(Output):
 
 If these fields are empty or named differently, AE won't find the output and the publish step fails silently.
 
-### Multi-app connectors (multiple v2 workflows → multiple v3 Apps)
+### Multi-workflow connectors (multiple v2 workflows → one v3 App with @entrypoint methods)
 
-When the v2 connector has multiple workflows (e.g. metadata extraction + lineage extraction), each becomes a separate `App` subclass in v3. All apps share the same Temporal worker and task queue.
+When the v2 connector has multiple workflows (e.g. metadata extraction + lineage), consolidate them into **one `App` subclass** with one `@entrypoint`-decorated method per v2 workflow. All entry points share `@task` methods, the handler, and `AppContext`.
 
-**Rules:**
-- ONE primary app — serves the HTTP handler (`/auth`, `/check`, `/start`, `/metadata`)
-- N secondary apps — registered on the worker, triggered only via Temporal by workflow name
-- ONE handler total — imported in the primary app module. Secondary apps have no handler.
-
-**Dockerfile pattern:**
-```dockerfile
-# Comma-separated: first is primary (HTTP), rest register on worker
-ENV ATLAN_APP_MODULE=app.primary_app:PrimaryApp,app.secondary_app:SecondaryApp
-```
-
-**Handler registration** — import in the primary app module (recommended approach):
+**Pattern:**
 ```python
-# app/primary_app.py
-from app.handlers import MyHandler  # noqa: F401 — registers handler
+from application_sdk.app import App, entrypoint, task
+
+class SnowflakeApp(App):
+    # Shared task — callable from both entry points
+    @task(timeout_seconds=3600)
+    async def fetch_tables(self, input: ExtractionInput) -> ExtractionOutput: ...
+
+    @entrypoint
+    async def extract_metadata(self, input: ExtractionInput) -> ExtractionOutput:
+        return await self.fetch_tables(input)
+
+    @entrypoint
+    async def extract_lineage(self, input: LineageInput) -> LineageOutput: ...
 ```
 
-The SDK parses `ATLAN_APP_MODULE`:
-1. First entry → loaded as primary app, serves HTTP via handler
-2. Remaining entries → loaded and registered on the worker (workflows + tasks)
-3. Only explicitly declared apps' tasks are registered — template base classes imported transitively are excluded
+**Workflow naming:** `{app-name}:{entrypoint-name}` (kebab-case). The `extract_metadata` method becomes workflow `my-connector:extract-metadata`.
+
+**Dockerfile:** always a single entry — no comma-separated list:
+```dockerfile
+ENV ATLAN_APP_MODULE=app.connector:SnowflakeApp
+```
+
+**HTTP dispatch:** `POST /workflows/v1/start?entrypoint=<name>`. Required when the App has more than one entry point (400 otherwise). Argo/marketplace templates that previously passed `workflow_type` in the body still work as a transitional fallback.
 
 **File structure:**
 ```
 app/
-  primary_app.py         — PrimaryApp(App) with @task methods
-  secondary_app.py       — SecondaryApp(App) with @task methods
-  handlers/__init__.py   — MyHandler(Handler) — shared by primary app's HTTP endpoints
-  contracts.py           — Input/Output for all apps
-  clients/__init__.py    — Shared API client
+  connector.py    — SnowflakeApp(App) with all @entrypoint and @task methods
+  handlers/       — MyHandler(Handler) — one handler for all entry points
+  contracts.py    — Input/Output dataclasses for all entry points
+  clients/        — Shared API client
 ```
 
-**Do NOT:**
-- Import secondary apps inside the primary app module — use `ATLAN_APP_MODULE` comma syntax instead
-- Define handlers on secondary apps — only the primary app serves HTTP
-- Give each app its own handler — one handler per connector
+**on_complete():** fires after every entry point, on success and failure.
 
-**Marketplace template:**
-Each app has a distinct `workflow-type` (kebab-case of the App class name). The Argo template triggers them by name:
-```yaml
-# Primary app
-- name: workflow-type
-  value: "primary-app"
-
-# Secondary app
-- name: workflow-type
-  value: "secondary-app"
+**Manifest layout:** for multi-entry-point apps, `ATLAN_CONTRACT_GENERATED_DIR` must be split into one subfolder per entry point (kebab-case name), each containing its own `manifest.json`. Single-entry-point apps are unaffected.
 ```
+app/generated/
+  extract-metadata/manifest.json
+  mine-queries/manifest.json
+```
+See [`docs/concepts/entry-points.md`](../../../docs/concepts/entry-points.md) for the full manifest-per-entrypoint reference.
 
-Both run on the same task queue (derived from `ATLAN_APPLICATION_NAME` + `ATLAN_DEPLOYMENT_NAME`).
+See §5b of `tools/migrate_v3/MIGRATION_PROMPT.md` and `tests/integration/test_multi_entrypoint.py` for canonical examples.
 
 ### self.context vs self.task_context
 
@@ -1053,14 +1071,14 @@ with output_file.open("wb") as f:
 "atlan-application-sdk[daft,iam-auth,pandas,workflows]"
 ```
 
-### InMemorySecretStore for local dev
+### Seeding credentials for local dev
 
-For local testing with credentials, use `run_dev_combined()` with `InMemorySecretStore`:
+For local testing with credentials, use `run_dev_combined()` with `MockSecretStore`:
 ```python
-from application_sdk.infrastructure.secrets import InMemorySecretStore
+from application_sdk.testing.mocks import MockSecretStore
 
 secrets = {"my-cred": json.dumps({"host": "...", "password": "..."})}
-credential_stores = {"default": InMemorySecretStore(secrets)}
+credential_stores = {"default": MockSecretStore(secrets)}
 
 await run_dev_combined(MyApp, credential_stores=credential_stores)
 ```
@@ -1116,11 +1134,9 @@ async def my_long_task(self, input: MyInput) -> MyOutput:
     ...
 ```
 
-### Template base classes auto-register and can shadow task overrides
+### Template base classes auto-register but do not leak workflows
 
-When you `from application_sdk.templates import SqlMetadataExtractor`, Python imports all templates from `__init__.py`. Each has a concrete `run()`, so `__init_subclass__` registers them all in `AppRegistry`. If the worker uses `app_names=None`, base class tasks like `fetch_databases` register first and shadow your connector's overrides.
-
-The SDK handles this by only registering tasks for apps explicitly declared in `ATLAN_APP_MODULE`. Template base classes register in `AppRegistry` (harmless) but their tasks are excluded from the worker. You don't need to do anything — just make sure all your apps are listed in `ATLAN_APP_MODULE`.
+When you `from application_sdk.templates import SqlMetadataExtractor`, Python imports all templates from `__init__.py`. Each template has a concrete `run()`, so `__init_subclass__` registers them in `AppRegistry`. This is harmless: template base classes are abstract (or not concrete subclasses of your connector), so the worker generates Temporal workflow classes only for non-abstract `App` subclasses that have `@entrypoint` methods or an overridden `run()`. You don't need to do anything — just make sure your connector's App class is the one listed in `ATLAN_APP_MODULE`.
 
 ### os.environ is blocked inside Temporal workflow sandbox
 

@@ -310,7 +310,7 @@ class TestDaprRequiredStartup:
 
 
 class TestMockPubSubSelfContained:
-    """Verify MockPubSub works without InMemoryPubSub base class."""
+    """Verify MockPubSub implements the PubSub protocol correctly."""
 
     async def test_publish_and_get_published(self):
         from application_sdk.testing.mocks import MockPubSub

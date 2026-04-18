@@ -4,7 +4,7 @@ Application SDK v3 is a ground-up rethink of how you build apps on the Atlan pla
 If you know v2 well, this guide will orient you quickly — it explains *what* changed, *why*,
 and shows each change side-by-side.
 
-> For a step-by-step migration checklist, see [`migration-guide-v3.md`](migration-guide-v3.md).
+> For a step-by-step upgrade checklist, see [`upgrade-guide-v3.md`](upgrade-guide-v3.md).
 > For automated tooling, see [`tools/migrate_v3/`](../tools/migrate_v3/README.md).
 
 ---
@@ -314,8 +314,7 @@ class MyConnector(App):
 
 **The key improvements:**
 
-- **No Dapr sidecar in tests.** Inject `InMemoryStateStore` / `InMemorySecretStore` and run
-  your task methods in pure Python — no sidecar, no gRPC, no environment variables.
+- **No Dapr sidecar in tests.** Inject `MockStateStore` / `MockSecretStore` from `application_sdk.testing.mocks` and run your task methods in pure Python — no sidecar, no gRPC, no environment variables.
 - **No gRPC size limits.** Object storage is now backed by `obstore`, which talks directly to
   S3/GCS/Azure or the local filesystem. The Dapr gRPC binding had a ~4 MB message limit that
   bit connectors with large files; that limit is gone.
@@ -336,13 +335,13 @@ await delete("output/old.parquet")
 **Local dev with custom secrets:**
 
 ```python
-from application_sdk.infrastructure import InMemorySecretStore
+from application_sdk.testing.mocks import MockSecretStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
     handler_class=MyHandler,
-    secret_store=InMemorySecretStore({"my-api-key": "dev-secret"}),
+    secret_store=MockSecretStore({"my-api-key": "dev-secret"}),
 ))
 ```
 
@@ -525,7 +524,7 @@ headers = cred.to_headers()  # {"X-API-Key": "secret"}
 | `AtlanOAuthClient` | `atlan_oauth_client_ref(name)` | `to_headers()`, `validate()` |
 
 **Backward compatibility** — `credential_guid` still works. When only a GUID is present in
-the input, the SDK auto-wraps it via `legacy_credential_ref()`, so you can migrate gradually:
+the input, the SDK auto-wraps it via `legacy_credential_ref()`, so you can upgrade gradually:
 
 ```python
 ExtractionInput(credential_guid="abc-123")          # legacy — still works
@@ -625,7 +624,7 @@ activities or tacked on as a final workflow step.
 
 #### on_complete
 
-`on_complete(success: bool)` is called after `run()` finishes, whether it succeeded or raised
+`on_complete()` is called after `run()` finishes, whether it succeeded or raised
 an exception. v2 had no equivalent — cleanup was either a final activity or omitted entirely.
 
 ```python
@@ -633,11 +632,9 @@ class MyConnector(App):
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
         ...
 
-    async def on_complete(self, success: bool) -> None:
-        if success:
-            await self.notify_downstream()
-        await self.cleanup_files()    # remove local temp files tracked via FileReference
-        await self.cleanup_storage()  # remove object store artifacts from this run
+    async def on_complete(self) -> None:
+        await self.notify_downstream()
+        await super().on_complete()  # preserves built-in file/storage cleanup
 ```
 
 #### Built-in cleanup tasks
@@ -724,8 +721,8 @@ controller = MockHeartbeatController()
 
 ## Further Reading
 
-- **Step-by-step migration:** [`docs/migration-guide-v3.md`](migration-guide-v3.md)
-- **Automated migration tooling:** [`tools/migrate_v3/README.md`](../tools/migrate_v3/README.md)
+- **Step-by-step upgrade:** [`docs/upgrade-guide-v3.md`](upgrade-guide-v3.md)
+- **Automated upgrade tooling:** [`tools/migrate_v3/README.md`](../tools/migrate_v3/README.md)
 - **Design rationale (ADRs):**
   - [ADR-0005: Infrastructure Abstraction](adr/0005-infrastructure-abstraction.md)
   - [ADR-0006: Schema-Driven Contracts](adr/0006-schema-driven-contracts.md)

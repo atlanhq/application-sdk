@@ -1,4 +1,4 @@
-# Migration Guide: v2 → v3
+# Upgrade Guide: v2 → v3
 
 Application SDK v3.0 introduces three major improvements:
 
@@ -76,7 +76,7 @@ ENV ATLAN_APP_MODULE=app.app:MyIncrementalConnector
 
 ---
 
-## Step 1: Migrate SQL Metadata Extraction
+## Step 1: Upgrade SQL Metadata Extraction
 
 ### v2
 
@@ -119,7 +119,7 @@ Key changes:
 
 ---
 
-## Step 2: Migrate SQL Query Extraction
+## Step 2: Upgrade SQL Query Extraction
 
 ### v2
 
@@ -154,7 +154,7 @@ class MyQueryExtractor(SqlQueryExtractor):
 
 ---
 
-## Step 3: Migrate Incremental SQL Extraction
+## Step 3: Upgrade Incremental SQL Extraction
 
 ### v2
 
@@ -201,7 +201,7 @@ Override `run()` if you need to customise this sequence. The incremental state f
 
 ---
 
-## Step 4: Migrate the Handler
+## Step 4: Upgrade the Handler
 
 ### v2
 
@@ -243,7 +243,7 @@ The `load()` method is removed — handler context (secrets, state) is injected 
 
 ---
 
-## Step 5: Migrate the Application Entry Point
+## Step 5: Upgrade the Application Entry Point
 
 ### v2
 
@@ -266,13 +266,13 @@ await app.start()
 startup if it is not set. Set it in your app's `Dockerfile` — it should never be left to Helm
 values or runtime defaults.
 
-The base image (`registry.atlan.com/public/app-runtime-base:refactor-v3-latest`) includes
+The base image (`registry.atlan.com/public/app-runtime-base:main-latest`) includes
 the `application-sdk` CLI, Dapr, and the entrypoint. You do **not** need a custom `ENTRYPOINT`
 or `entrypoint.sh`. The base image handles mode selection at runtime:
 
 ```dockerfile
 # Application-sdk v3 base image (Chainguard-based)
-FROM registry.atlan.com/public/app-runtime-base:refactor-v3-latest
+FROM registry.atlan.com/public/app-runtime-base:main-latest
 
 WORKDIR /app
 
@@ -312,7 +312,119 @@ Three modes are available:
 
 ---
 
-## Step 6: Migrate Worker Setup
+## Step 5b: Multiple Workflows Per App
+
+> Skip this step if your v2 connector had only one workflow.
+
+In v2 there was no first-class pattern for a connector that needed multiple workflows (e.g. metadata extraction + lineage + query mining). Teams worked around this with multiple `WorkflowInterface`/`ActivitiesInterface` pairs, separate entrypoint scripts, or other ad-hoc conventions.
+
+In v3, one `App` subclass can expose multiple independently-triggerable workflows by decorating methods with `@entrypoint`. All entry points share `@task` methods, the HTTP handler, and `AppContext` — no code duplication.
+
+### v2 — two separate workflow/activities pairs
+
+```python
+# app/workflows/metadata_extraction.py
+class MetadataExtractionWorkflow(WorkflowInterface):
+    async def run(self, input):
+        await execute_activity_method(self.activities.extract_tables, ...)
+        await execute_activity_method(self.activities.transform, ...)
+
+# app/activities/metadata_extraction.py
+class MetadataExtractionActivities(ActivitiesInterface):
+    async def extract_tables(self, input): ...
+    async def transform(self, input): ...
+
+# app/workflows/lineage.py
+class LineageWorkflow(WorkflowInterface):
+    async def run(self, input):
+        await execute_activity_method(self.activities.fetch_lineage, ...)
+
+# app/activities/lineage.py
+class LineageActivities(ActivitiesInterface):
+    async def fetch_lineage(self, input): ...
+```
+
+### v3 — one App, multiple @entrypoint methods
+
+```python
+# app/connector.py
+from application_sdk.app import App, entrypoint, task
+from application_sdk.contracts.base import Input, Output
+from dataclasses import dataclass, field
+
+@dataclass
+class ExtractionInput(Input, allow_unbounded_fields=True):
+    credential_guid: str = ""
+    connection: dict = field(default_factory=dict)
+
+@dataclass
+class ExtractionOutput(Output):
+    transformed_data_prefix: str = ""
+
+@dataclass
+class LineageInput(Input, allow_unbounded_fields=True):
+    credential_guid: str = ""
+    connection: dict = field(default_factory=dict)
+
+@dataclass
+class LineageOutput(Output):
+    transformed_data_prefix: str = ""
+
+class SnowflakeApp(App):
+    # Shared task — callable from both entry points
+    @task(timeout_seconds=3600)
+    async def extract_tables(self, input: ExtractionInput) -> ExtractionOutput:
+        ...
+
+    @task(timeout_seconds=3600)
+    async def fetch_lineage(self, input: LineageInput) -> LineageOutput:
+        ...
+
+    @entrypoint
+    async def extract_metadata(self, input: ExtractionInput) -> ExtractionOutput:
+        return await self.extract_tables(input)
+
+    @entrypoint
+    async def extract_lineage(self, input: LineageInput) -> LineageOutput:
+        return await self.fetch_lineage(input)
+```
+
+### Workflow naming and HTTP dispatch
+
+| Entry point method | Temporal workflow name | HTTP trigger |
+|---|---|---|
+| `extract_metadata` | `{app-name}:extract-metadata` | `POST /workflows/v1/start?entrypoint=extract-metadata` |
+| `extract_lineage` | `{app-name}:extract-lineage` | `POST /workflows/v1/start?entrypoint=extract-lineage` |
+
+For multi-entry-point apps the `?entrypoint=` query parameter is **required** — omitting it returns 400.
+
+### Dockerfile
+
+One App = one `ATLAN_APP_MODULE` entry. No comma-separated list:
+
+```dockerfile
+ENV ATLAN_APP_MODULE=app.connector:SnowflakeApp
+```
+
+### Manifest layout for multi-entry-point apps
+
+For apps with multiple entry points, restructure `ATLAN_CONTRACT_GENERATED_DIR` into one subfolder per entry point (kebab-case):
+
+```
+app/generated/
+  extract-metadata/
+    manifest.json
+  extract-lineage/
+    manifest.json
+```
+
+Each manifest is served via `GET /workflows/v1/manifest?entrypoint=<name>` (returns 400 for invalid names, 404 if the folder is missing). Single-entry-point apps are unaffected — `GET /workflows/v1/manifest` (no query param) still works.
+
+See [`docs/concepts/entry-points.md`](concepts/entry-points.md) for the full `@entrypoint` and manifest reference.
+
+---
+
+## Step 6: Upgrade Worker Setup
 
 In v2, connecting to Temporal and registering workflow/activity classes was done explicitly.
 In v3, `create_worker()` auto-discovers all `App` subclasses and their `@task` methods — you
@@ -445,7 +557,7 @@ async def process(self, input: ProcessInput) -> ProcessOutput:
 
 ---
 
-## Step 8: Migrate Infrastructure Access
+## Step 8: Upgrade Infrastructure Access
 
 In v3, infrastructure services are created automatically at startup (by `main.py`) and
 injected into `@task` methods and handlers via `self.context`.
@@ -470,7 +582,7 @@ You do not need to create `DaprClient` instances in your code.
 | `/workflows/v1/config/{id}` (503 error) | Works automatically (state store wired) |
 | `/workflows/v1/file` (503 error) | Works automatically (storage binding wired) |
 
-### Migrating ObjectStore calls
+### Upgrading ObjectStore calls
 
 ```python
 # v2 — all calls went through the Dapr binding
@@ -509,19 +621,21 @@ await self.upload(UploadInput(local_path="output/"))
 
 ### Local development with custom secrets
 
+Provide a seeded secret store for local dev by passing `MockSecretStore` from `application_sdk.testing.mocks`. For production-equivalent local testing, run the Dapr sidecar (`uv run poe start-deps`) and let the app pick it up automatically via `DAPR_HTTP_PORT`.
+
 ```python
-from application_sdk.infrastructure.secrets import InMemorySecretStore
+from application_sdk.testing.mocks import MockSecretStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyApp,
-    secret_store=InMemorySecretStore({"my-api-key": "test-value"}),
+    secret_store=MockSecretStore({"my-api-key": "test-value"}),
 ))
 ```
 
 ---
 
-## Step 9: Migrate to Typed Credentials
+## Step 9: Upgrade to Typed Credentials
 
 v3 introduces a typed credential system that replaces bare `credential_guid: str` +
 `Dict[str, Any]` with a `CredentialRef` → typed `Credential` pipeline.
@@ -614,7 +728,7 @@ register_credential_type("my_service", MyCredential, _parse_my)
 
 ---
 
-## Step 10: Migrate Atlan Client Access
+## Step 10: Upgrade Atlan Client Access
 
 ### v2
 
@@ -672,7 +786,7 @@ headers = await service.get_authenticated_headers()
 
 ---
 
-## Step 11: Migrate Heartbeating
+## Step 11: Upgrade Heartbeating
 
 In v2, you applied `@auto_heartbeater` to activity methods to prevent Temporal from
 timing them out. In v3, heartbeating is built into `@task` — no decorator needed.
@@ -758,10 +872,9 @@ class MyConnector(App):
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
         ...
 
-    async def on_complete(self, success: bool) -> None:
-        if success:
-            await self.notify_downstream()
-        # cleanup is automatic — see below
+    async def on_complete(self) -> None:
+        await self.notify_downstream()
+        await super().on_complete()  # preserves built-in file/storage cleanup
 ```
 
 ### Built-in cleanup tasks
@@ -769,12 +882,8 @@ class MyConnector(App):
 Two cleanup tasks are built into every `App`. Call them from `run()` or `on_complete()`:
 
 ```python
-async def on_complete(self, success: bool) -> None:
-    # Remove local temp files tracked via FileReference
-    await self.cleanup_files(CleanupInput())
-
-    # Remove object store artifacts uploaded during this run
-    await self.cleanup_storage(StorageCleanupInput())
+async def on_complete(self) -> None:
+    await super().on_complete()  # runs built-in file/storage cleanup
 ```
 
 `cleanup_files()` and `cleanup_storage()` are also available as individual workflow steps
@@ -782,7 +891,7 @@ if you need to trigger cleanup mid-run (e.g., after a particularly large interme
 
 ---
 
-## Step 13: Migrate Test Utilities
+## Step 13: Upgrade Test Utilities
 
 ### Import paths
 
@@ -865,18 +974,19 @@ controller = MockHeartbeatController()
 # controller.recorded_heartbeats contains all calls made
 ```
 
-### Running locally without Dapr
+### Running locally with mock infrastructure
+
+For quick local runs without a Dapr sidecar, pass mock infrastructure from `application_sdk.testing.mocks`:
 
 ```python
-from application_sdk.infrastructure.secrets import InMemorySecretStore
-from application_sdk.infrastructure.state import InMemoryStateStore
+from application_sdk.testing.mocks import MockSecretStore, MockStateStore
 from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
     handler_class=MyHandler,
-    secret_store=InMemorySecretStore({"my-api-key": "test-value"}),
-    state_store=InMemoryStateStore(),
+    secret_store=MockSecretStore({"my-api-key": "test-value"}),
+    state_store=MockStateStore(),
 ))
 ```
 
@@ -892,6 +1002,7 @@ All of the following emit `DeprecationWarning` on import in v3.0.x and will be *
 |---|---|
 | `application_sdk.application.BaseApplication` | `application_sdk.app.App` + `application_sdk.main.run_dev_combined` |
 | `application_sdk.application.metadata_extraction.sql.BaseSQLMetadataExtractionApplication` | `application_sdk.templates.SqlMetadataExtractor` |
+| Multiple `WorkflowInterface` pairs (comma-separated `ATLAN_APP_MODULE`) | Single `App` with multiple `@entrypoint` methods (see Step 5b) |
 
 ### Worker
 

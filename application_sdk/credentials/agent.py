@@ -17,9 +17,9 @@ Resolution is a three-step process:
 
 1. **Fetch the bundle** at ``secret-path`` via the injected
    :class:`~application_sdk.infrastructure.secrets.SecretStore`.  The
-   concrete backend (Dapr + AWS Secrets Manager in production, an
-   :class:`~application_sdk.infrastructure.secrets.InMemorySecretStore`
-   under test) is opaque to this module.
+   concrete backend (Dapr + AWS Secrets Manager in production,
+   :class:`~application_sdk.testing.mocks.MockSecretStore` under test)
+   is opaque to this module.
 2. **Substitute** each string value in the agent spec that matches a
    key in the bundle with the real value.  Mirrors v2's
    ``resolve_credentials`` — walks the root dict plus one level of

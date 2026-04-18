@@ -40,19 +40,19 @@ uv sync --all-extras --all-groups
 ### Connector dependency on application-sdk
 
 Until v3 is published to PyPI, the connector repo must install `atlan-application-sdk`
-directly from the `refactor-v3` branch.  Add the following to the connector's
+directly from the `main` branch.  Add the following to the connector's
 `pyproject.toml`:
 
 ```toml
 [tool.uv.sources]
-atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "refactor-v3" }
+atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "main" }
 ```
 
 Or run:
 
 ```bash
 # inside the connector repo
-uv add atlan-application-sdk --git https://github.com/atlanhq/application-sdk --branch refactor-v3
+uv add atlan-application-sdk --git https://github.com/atlanhq/application-sdk --branch main
 ```
 
 Once `atlan-application-sdk` v3 is released on PyPI, remove the `[tool.uv.sources]`
@@ -76,7 +76,7 @@ python -m tools.migrate_v3.rewrite_imports --dry-run src/my_connector/
 
 The rewriter:
 - Rewrites all deprecated `from application_sdk.<v2> import …` paths.
-- Adds `# TODO(v3-migration): …` comments above imports that also require
+- Adds `# TODO(upgrade-v3): …` comments above imports that also require
   structural refactoring (class merges, API changes, removed symbols).
 - Preserves all formatting, comments, and non-import code exactly.
 

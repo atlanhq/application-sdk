@@ -515,7 +515,7 @@ the full content:
 **Format for large files:**
 
 ```
-=== FILE: application_sdk/app/base.py (1629 lines) ===
+=== FILE: application_sdk/app/base.py (1739 lines) ===
 
 [Truncated full-file view — see relevant sections below]
 

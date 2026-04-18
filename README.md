@@ -29,7 +29,7 @@ poetry add atlan-application-sdk
 ## Getting Started
 
 - Want to develop locally or run examples from this repository? Check out our [Getting Started Guide](docs/guides/getting-started.md) for a step-by-step walkthrough!
-- Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/refactor-v3/docs/) folder.
+- Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/main/docs/) folder.
 
 ## 🐳 Docker
 
@@ -53,7 +53,7 @@ docker pull registry.atlan.com/public/app-runtime-base:sha-49c027f
 
 ## Contributing
 
-- We welcome contributions! Please see our [Contributing Guide](https://github.com/atlanhq/application-sdk/blob/refactor-v3/CONTRIBUTING.md) for guidelines.
+- We welcome contributions! Please see our [Contributing Guide](https://github.com/atlanhq/application-sdk/blob/main/CONTRIBUTING.md) for guidelines.
 
 ## Partner Collaboration
 
@@ -67,9 +67,9 @@ We’re here whenever you need us:
 
 ## Security
 
-Have you discovered a vulnerability or have concerns about the SDK? Please read our [SECURITY.md](https://github.com/atlanhq/application-sdk/blob/refactor-v3/SECURITY.md) document for guidance on responsible disclosure, or please e-mail security@atlan.com and we will respond promptly.
+Have you discovered a vulnerability or have concerns about the SDK? Please read our [SECURITY.md](https://github.com/atlanhq/application-sdk/blob/main/SECURITY.md) document for guidance on responsible disclosure, or please e-mail security@atlan.com and we will respond promptly.
 
 ## License and Attribution
 
-- This project is licensed under the Apache License 2.0 - see the [LICENSE](https://github.com/atlanhq/application-sdk/blob/refactor-v3/LICENSE) file for details.
-- This project includes dependencies with various open-source licenses. See the [NOTICE](https://github.com/atlanhq/application-sdk/blob/refactor-v3/NOTICE) file for third-party attributions.
+- This project is licensed under the Apache License 2.0 - see the [LICENSE](https://github.com/atlanhq/application-sdk/blob/main/LICENSE) file for details.
+- This project includes dependencies with various open-source licenses. See the [NOTICE](https://github.com/atlanhq/application-sdk/blob/main/NOTICE) file for third-party attributions.

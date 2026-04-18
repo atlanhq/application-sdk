@@ -51,10 +51,9 @@ Before approving any fix, determine whether it addresses the root cause or patch
 
 | File | Lines | Status |
 |------|-------|--------|
-| `app/base.py` | ~1629 | Needs decomposition |
-| `handler/service.py` | ~1510 | Needs decomposition |
-| `main.py` | ~1173 | Needs decomposition |
-| `common/utils.py` | ~610 | Dumping ground |
+| `app/base.py` | ~1739 | Needs decomposition (tracked) |
+| `handler/service.py` | ~1578 | Needs decomposition (tracked) |
+| `main.py` | ~1147 | Needs decomposition (tracked) |
 
 **Rule:** Any PR increasing line count of a file already over 500 lines must justify why new code belongs there. "It was already there" is not justification.
 
@@ -135,26 +134,24 @@ app  -->  execution  -->  infrastructure
 
 ---
 
-## STRUCT-007: v3 Replacement Detection (Critical)
+## STRUCT-007: v2 Symbol Detection in Connector PRs (Critical)
 
-Before approving any fix, check whether v3 already has a replacement.
+When reviewing connector migration PRs, check for v2 symbols that should have been replaced. These v2 class names have zero matches in `application_sdk/` itself — they only appear in unmigrated connector code:
 
-**Common traps:**
-
-| If PR patches... | Check v3 replacement in... |
-|-------------------|---------------------------|
-| `ObjectStore` methods | `application_sdk.storage` |
+| If PR still uses... | Correct v3 replacement |
+|---------------------|------------------------|
+| `ObjectStore` | `application_sdk.storage` (`CloudStore`, `create_local_store`) |
 | `WorkflowInterface` subclass | `application_sdk.app.App` with `@task` |
-| `ActivitiesInterface` subclass | `@task` methods on `App` |
+| `ActivitiesInterface` subclass | `@task` methods on `App` subclass |
 | `HandlerInterface` subclass | `application_sdk.handler.Handler` |
 | Direct `DaprClient` usage | `application_sdk.infrastructure` protocols |
 | Direct `temporalio` imports | `application_sdk.execution` public API |
-| Dict-based credential access | `application_sdk.credentials` typed models |
+| `BaseSQLMetadataExtractionActivities` | `application_sdk.templates.SqlMetadataExtractor` |
+| Dict-based credential access | `application_sdk.handler` typed contracts |
 
 **Review action:**
-- v3 replacement exists + PR patches v2 → classify as MIGRATE
-- v3 replacement exists + migration non-trivial → require TODO with issue
-- No v3 replacement → proceed with normal review
+- v2 symbol found in a connector PR → classify as MIGRATE, block until replaced
+- v2 symbol found in SDK source itself → this is a blocker bug; create a ticket immediately
 
 ---
 

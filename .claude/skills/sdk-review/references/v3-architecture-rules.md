@@ -35,7 +35,7 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 - Missing `correlation_id` propagation across app boundaries
 - Log statements without structured context (app_name, run_id, correlation_id should come from `self.logger`)
 - Custom logger instantiation instead of using `self.logger` (which auto-includes correlation context)
-- Hardcoded service names instead of using framework-provided `ATLAN_SERVICE_NAME`
+- Hardcoded service names instead of reading from the `OTEL_SERVICE_NAME` environment variable (see `application_sdk/constants.py`)
 
 ---
 
@@ -149,7 +149,7 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 
 ## General Architecture Checks
 
-- **App base.py size**: If changes increase `app/base.py` beyond ~1600 lines, flag for decomposition
+- **App base.py size**: `app/base.py` is currently ~1739 lines (decomposition tracked). Flag any PR that increases it further — do not allow unbounded growth
 - **Registry singleton safety**: `AppRegistry` and `TaskRegistry` mutations must be thread-safe
-- **Deprecation shims**: Any removed v2 import path must have a deprecation shim with `warnings.warn()` pointing to the v3 replacement
+- **Deprecation shims**: Only for v2 paths where connectors may already import the old symbol (i.e. `application_sdk.test_utils.integration` → `application_sdk.testing.integration`). Do NOT add shims for symbols that were removed before v3 shipped — those never existed from a public-API perspective
 - **`__init_subclass__` hooks**: New metaclass or `__init_subclass__` must not break existing subclass registration
