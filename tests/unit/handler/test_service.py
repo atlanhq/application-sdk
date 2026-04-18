@@ -508,10 +508,11 @@ class TestStartWorkflowRouting:
 
         client, patcher = self._make_routed_client(_MultiEpFallbackApp)
         try:
-            response = client.post(
-                "/workflows/v1/start",
-                json={"workflow_type": "extract", "name": "x"},
-            )
+            with pytest.warns(DeprecationWarning, match="workflow_type.*deprecated"):
+                response = client.post(
+                    "/workflows/v1/start",
+                    json={"workflow_type": "extract", "name": "x"},
+                )
             assert response.status_code == 200
         finally:
             patcher.stop()
@@ -790,6 +791,22 @@ class TestWorkflowConfigValidation:
         response = client.get(
             "/workflows/v1/config/valid-id",
             params={"type": type_param},
+        )
+        assert response.status_code in {
+            400,
+            503,
+        }, f"Expected rejection for type={type_param!r}, got {response.status_code}"
+
+    @pytest.mark.parametrize(
+        "type_param",
+        ["../etc", "a/b", "a.b", "a" * 129],
+    )
+    def test_post_config_rejects_invalid_type_param(self, type_param: str) -> None:
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/config/valid-id",
+            params={"type": type_param},
+            json={"key": "value"},
         )
         assert response.status_code in {
             400,

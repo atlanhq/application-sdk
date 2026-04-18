@@ -34,6 +34,7 @@ import mimetypes
 import os
 import re
 import tempfile
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -677,8 +678,6 @@ def create_app_handler_service(
         workflow_id = explicit_workflow_id or "(unknown)"
 
         if legacy_workflow_type is not None and entrypoint_param is None:
-            import warnings  # noqa: PLC0415
-
             warnings.warn(
                 f"App {app_name}: 'workflow_type' body field is deprecated and will be "
                 "removed in v3.1.0. Use ?entrypoint=<name> query param instead.",
@@ -946,12 +945,17 @@ def create_app_handler_service(
                         )
                     )
                 except Exception as e:
+                    logger.warning(
+                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        workflow_id,
+                        e,
+                    )
                     return JSONResponse(
                         content=_wrap_response(
                             {
                                 "status": "failed",
                                 "workflow_id": workflow_id,
-                                "error": str(e),
+                                "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
                         )
@@ -990,12 +994,17 @@ def create_app_handler_service(
                         )
                     )
                 except Exception as e:
+                    logger.warning(
+                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        workflow_id,
+                        e,
+                    )
                     return JSONResponse(
                         content=_wrap_response(
                             {
                                 "status": "failed",
                                 "workflow_id": workflow_id,
-                                "error": str(e),
+                                "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
                         )
