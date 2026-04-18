@@ -6,15 +6,13 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any
 
 from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionRef, MaxItems
-
-if TYPE_CHECKING:
-    from application_sdk.credentials import CredentialRef
+from application_sdk.credentials.ref import CredentialRef
 
 
 class QueryExtractionInput(Input, allow_unbounded_fields=True):

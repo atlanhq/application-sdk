@@ -71,6 +71,7 @@ from typing import (
     runtime_checkable,
 )
 
+import orjson
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
@@ -232,7 +233,6 @@ class Input(BaseModel):
         Returns:
             16-character hex string (64 bits of SHA-256).
         """
-        import orjson  # noqa: PLC0415
 
         exclude: set[str] = set()
         for cls in type(self).__mro__:

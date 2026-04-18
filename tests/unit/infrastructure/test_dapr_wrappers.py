@@ -48,7 +48,7 @@ class TestDaprStateStore:
         value = {"foo": "bar"}
         await self.store.save("k1", value)
         self.client.save_state.assert_awaited_once_with(
-            store_name="mystate", key="k1", value=json.dumps(value)
+            store_name="mystate", key="k1", value=value
         )
 
     async def test_save_error(self):

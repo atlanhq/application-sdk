@@ -54,7 +54,7 @@ class DaprStateStore:
             await self._client.save_state(
                 store_name=self._store_name,
                 key=key,
-                value=json.dumps(value),
+                value=value,
             )
         except Exception as e:
             raise StateStoreError(

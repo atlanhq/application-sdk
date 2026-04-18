@@ -71,6 +71,8 @@ class PostgresExtractor(SqlMetadataExtractor):
     The orchestration (run method) is inherited from SqlMetadataExtractor.
     """
 
+    sql_client_class = SQLClient
+
     fetch_database_sql = """
     SELECT datname as database_name FROM pg_database WHERE datname = current_database();
     """

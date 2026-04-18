@@ -104,7 +104,7 @@ class AsyncDaprClient:
     # State Store
     # ------------------------------------------------------------------
 
-    async def save_state(self, store_name: str, key: str, value: str) -> None:
+    async def save_state(self, store_name: str, key: str, value: Any) -> None:
         resp = await self._client.post(
             STATE_PATH.format(store_name=store_name),
             json=[{"key": key, "value": value}],
