@@ -184,6 +184,20 @@ WORKFLOW_TLS_ENABLED = (
     os.getenv("ATLAN_WORKFLOW_TLS_ENABLED", "false").lower() == "true"
 )
 
+# App Vitals / Release metadata (injected by Local Marketplace into HelmRelease)
+#: Semantic version of the app release (e.g., "1.2.3")
+APPLICATION_VERSION = os.getenv("ATLAN_APPLICATION_VERSION", "")
+#: Release UUID from Global Marketplace
+RELEASE_ID = os.getenv("ATLAN_RELEASE_ID", "")
+#: Release channel (all, beta, staging, specific)
+RELEASE_CHANNEL = os.getenv("ATLAN_RELEASE_CHANNEL", "")
+#: SDK version used to build this app image
+APP_SDK_VERSION = os.getenv("ATLAN_SDK_VERSION", "")
+#: App type from Global Marketplace (connector, system, etc.)
+APP_TYPE = os.getenv("ATLAN_APP_TYPE", "")
+#: Release publication timestamp from Global Marketplace (ISO 8601)
+PUBLISHED_AT = os.getenv("ATLAN_PUBLISHED_AT", "")
+
 # Deployment Secret Store Key Names
 #: Key name for OAuth2 client ID in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_ID_KEY)
 WORKFLOW_AUTH_CLIENT_ID_KEY = os.getenv(
@@ -389,6 +403,11 @@ MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
 #: Windows extended-length path prefix
 WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
+
+# SSL Configuration
+#: Custom SSL certificate directory path.
+#: When set, httpx and aiohttp clients will use certificates from this directory.
+SSL_CERT_DIR = os.getenv("SSL_CERT_DIR", "")
 
 
 class ApplicationMode(str, Enum):
