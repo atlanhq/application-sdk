@@ -539,14 +539,17 @@ class App(ABC):
         if inspect.isabstract(cls):
             return
 
-        # Only consider an explicitly overridden run(). Classes that do not
-        # override run() inherit the default raise-NotImplementedError stub —
-        # silently skip them (they may define only @entrypoint methods, or they
-        # may be intermediate base classes that are not yet concrete).
+        # Register classes that have a concrete run() available — either:
+        #   - Explicitly defined in the class's own __dict__, OR
+        #   - Inherited from an intermediate parent (not the App.run stub).
+        # Skip classes where cls.run resolves to the App.run stub: those are
+        # intermediate abstract bases or classes that only define @entrypoint.
         if "run" not in cls.__dict__:
-            return
-
-        run_method = cls.__dict__["run"]
+            if cls.run is App.run:
+                return
+            run_method = cls.run  # concrete implementation from intermediate parent
+        else:
+            run_method = cls.__dict__["run"]
 
         if getattr(run_method, "__isabstractmethod__", False):
             return
