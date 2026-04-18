@@ -800,11 +800,9 @@ class TestWorkflowConfigValidation:
             "/workflows/v1/config/valid-id",
             params={"type": type_param},
         )
-        assert response.status_code in {
-            400,
-            422,
-            503,
-        }, f"Expected rejection for type={type_param!r}, got {response.status_code}"
+        assert (
+            response.status_code == 422
+        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
 
     @pytest.mark.parametrize(
         "type_param",
@@ -817,11 +815,9 @@ class TestWorkflowConfigValidation:
             params={"type": type_param},
             json={"key": "value"},
         )
-        assert response.status_code in {
-            400,
-            422,
-            503,
-        }, f"Expected rejection for type={type_param!r}, got {response.status_code}"
+        assert (
+            response.status_code == 422
+        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
 
     @pytest.mark.parametrize(
         "config_id",

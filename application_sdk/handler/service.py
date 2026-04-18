@@ -41,8 +41,9 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
 import orjson
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.params import Path as PathParam
+from fastapi import FastAPI, File, Form, HTTPException
+from fastapi import Path as PathParam
+from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
@@ -1282,6 +1283,7 @@ def create_app_handler_service(
         from application_sdk.storage.ops import upload_file as _upload_file
 
         raw_name = filename or file.filename or "upload"
+        # Strip non-alphanumeric chars and cap at 16 chars for object-store key safety.
         extension = _SAFE_EXT_RE.sub("", PurePosixPath(raw_name).suffix.lstrip("."))[
             :16
         ]
