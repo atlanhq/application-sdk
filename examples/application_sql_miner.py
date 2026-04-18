@@ -119,10 +119,13 @@ class SQLClient(BaseSQLClient):
 
 
 class SnowflakeQueryExtractor(SqlQueryExtractor):
-    """Snowflake query miner.
+    """Snowflake query miner — example skeleton, not a production implementation.
 
-    Overrides get_query_batches and fetch_queries to implement
-    Snowflake-specific query history extraction.
+    In a real connector:
+    - ``get_query_batches`` queries QUERY_HISTORY to count rows and returns
+      the total batch count + batch size.
+    - ``fetch_queries`` pages through QUERY_HISTORY using ``fetch_queries_sql``
+      and writes results to the object store.
     """
 
     fetch_queries_sql = FETCH_QUERIES_SQL
@@ -130,12 +133,14 @@ class SnowflakeQueryExtractor(SqlQueryExtractor):
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
         """Determine batch count from Snowflake query history."""
-        return QueryBatchOutput(total_batches=0, batch_size=1000, total_count=0)
+        # TODO: implement — connect via sql_client_class, COUNT rows in QUERY_HISTORY
+        raise NotImplementedError("example stub — implement in your connector")
 
     @task(timeout_seconds=3600, heartbeat_timeout_seconds=60, auto_heartbeat_seconds=10)
     async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
         """Fetch one batch of queries from Snowflake."""
-        return QueryFetchOutput(queries_fetched=0)
+        # TODO: implement — page through QUERY_HISTORY using fetch_queries_sql
+        raise NotImplementedError("example stub — implement in your connector")
 
 
 class SampleSnowflakeHandler(Handler):

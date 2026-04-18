@@ -58,7 +58,14 @@ class QueryExtractionOutput(Output):
 
 
 class QueryBatchInput(Input, allow_unbounded_fields=True):
-    """Input for the get_query_batches task."""
+    """Input for the get_query_batches task.
+
+    ``workflow_args`` is a pass-through dict rather than typed fields because
+    query-mining connectors vary widely in what context they need for batch
+    sizing (e.g. date ranges, warehouse IDs, session filters).  The dict lets
+    each connector add connector-specific keys without requiring a base-class
+    change.  ``SqlQueryExtractor.run()`` populates it from ``QueryExtractionInput``.
+    """
 
     workflow_args: dict[str, Any] = Field(default_factory=dict)
 
@@ -72,7 +79,12 @@ class QueryBatchOutput(Output):
 
 
 class QueryFetchInput(Input, allow_unbounded_fields=True):
-    """Input for the fetch_queries task."""
+    """Input for the fetch_queries task.
+
+    ``workflow_args`` carries the same connector context as ``QueryBatchInput``
+    (see its docstring).  ``batch_number`` and ``batch_size`` are typed here
+    because all connectors need them for pagination.
+    """
 
     workflow_args: dict[str, Any] = Field(default_factory=dict)
     batch_number: int = 0

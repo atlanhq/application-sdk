@@ -8,7 +8,7 @@ import pytest
 
 from application_sdk.app.base import App, AppError, NonRetryableError, _pascal_to_kebab
 from application_sdk.app.entrypoint import EntryPointContractError
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppNotFoundError, AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE
 
@@ -193,7 +193,7 @@ class TestAppRegistration:
             pass
 
         registry = AppRegistry.get_instance()
-        with pytest.raises(Exception):
+        with pytest.raises(AppNotFoundError):
             registry.get("abstract-sub-app")
 
     def test_app_with_run_but_no_type_hints_raises_contract_error(self) -> None:
@@ -313,5 +313,5 @@ class TestAppRegistration:
             pass
 
         registry = AppRegistry.get_instance()
-        with pytest.raises(Exception):
+        with pytest.raises(AppNotFoundError):
             registry.get("no-run-app")

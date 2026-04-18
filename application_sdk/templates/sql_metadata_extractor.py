@@ -397,12 +397,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             )
 
             logger.info(
-                "Metadata extraction completed",
-                workflow_id=workflow_id,
-                databases=db_result.total_record_count,
-                schemas=schema_result.total_record_count,
-                tables=table_result.total_record_count,
-                columns=column_result.total_record_count,
+                "Metadata extraction completed: workflow_id=%s dbs=%d schemas=%d tables=%d cols=%d",
+                workflow_id,
+                db_result.total_record_count,
+                schema_result.total_record_count,
+                table_result.total_record_count,
+                column_result.total_record_count,
             )
 
             # Upload extracted data to Atlan

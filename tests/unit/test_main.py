@@ -13,6 +13,7 @@ from application_sdk.main import (
     AppConfig,
     _create_infrastructure,
     _derive_service_name,
+    _install_graceful_signal_handlers,
     _log_dapr_components,
     parse_args,
     run_main,
@@ -491,3 +492,47 @@ class TestCreateInfrastructureEventBinding:
 
         mock_binding.assert_not_called()
         assert infra.event_binding is None
+
+
+class TestInstallGracefulSignalHandlers:
+    """Tests for _install_graceful_signal_handlers()."""
+
+    def test_registers_sigint_and_sigterm(self) -> None:
+        import asyncio
+        import signal
+
+        loop = asyncio.new_event_loop()
+        try:
+            registered: list[signal.Signals] = []
+
+            def _fake_handler(sig: signal.Signals, cb: object) -> None:
+                registered.append(sig)
+
+            loop.add_signal_handler = _fake_handler  # type: ignore[method-assign]
+            _install_graceful_signal_handlers(loop, lambda: None)
+            assert signal.SIGINT in registered
+            assert signal.SIGTERM in registered
+        finally:
+            loop.close()
+
+    def test_windows_fallback_logs_warning_and_does_not_raise(self) -> None:
+        import asyncio
+        from unittest.mock import patch
+
+        loop = asyncio.new_event_loop()
+        try:
+
+            def _not_supported(*_: object, **__: object) -> None:
+                raise NotImplementedError
+
+            loop.add_signal_handler = _not_supported  # type: ignore[method-assign]
+            with patch("application_sdk.main.logger") as mock_log:
+                _install_graceful_signal_handlers(loop, lambda: None)
+
+            assert mock_log.warning.call_count == 2
+            # sig.name is passed as the %-format arg (index 1 in positional args)
+            called_names = {c.args[1] for c in mock_log.warning.call_args_list}
+            assert "SIGINT" in called_names
+            assert "SIGTERM" in called_names
+        finally:
+            loop.close()

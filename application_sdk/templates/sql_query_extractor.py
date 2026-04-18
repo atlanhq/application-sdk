@@ -1,12 +1,9 @@
 """SQL query extraction App.
 
-Subclass to implement connector-specific logic::
+Subclass and implement ``get_query_batches`` and ``fetch_queries``::
 
     class MyQueryExtractor(SqlQueryExtractor):
-        sql_client_class = MySQLClient
-        fetch_queries_sql = "SELECT ..."
-
-        @task(timeout_seconds=3600)
+        @task(timeout_seconds=600)
         async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
             # Implement connector-specific batch counting
             return QueryBatchOutput(total_batches=10, batch_size=1000)
@@ -16,14 +13,13 @@ Subclass to implement connector-specific logic::
             # connector-specific query fetching
             return QueryFetchOutput(queries_fetched=100)
 
-See :class:`application_sdk.templates.SqlMetadataExtractor` for the canonical
-example of the SQL-template pattern (``sql_client_class`` + ``fetch_*_sql``
-ClassVars + ``super()`` from the ``@task`` override).
+``run()`` orchestrates the pipeline automatically (get_query_batches → fetch_queries
+per batch → aggregate). Override ``run()`` to customise parallelism or error handling.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
@@ -38,50 +34,32 @@ from application_sdk.templates.contracts.sql_query import (
     QueryFetchOutput,
 )
 
-if TYPE_CHECKING:
-    from application_sdk.clients.sql import BaseSQLClient
-
 logger = get_logger(__name__)
 
 
 class SqlQueryExtractor(BaseMetadataExtractor):
-    """Base class for SQL query extraction apps.
+    """Abstract base class for SQL query extraction apps.
 
     Inherits ``upload_to_atlan``, ``client_class``, ``handler_class``,
     and ``transformer_class`` from ``BaseMetadataExtractor``.
 
     The ``run()`` method orchestrates the full extraction:
-    get_query_batches → fetch_queries (per batch) → aggregate output.
+    ``get_query_batches`` → ``fetch_queries`` (per batch) → aggregate output.
 
-    SQL-string pattern: set ``sql_client_class`` and ``fetch_queries_sql``
-    on your subclass and implement ``get_query_batches`` / ``fetch_queries``
-    using those attributes.
+    Implement both abstract tasks in your subclass; ``run()`` handles the rest.
     """
 
     # Prevent auto-registration of the abstract base template.
     _app_registered: ClassVar[bool] = True
 
-    # Set to a BaseSQLClient subclass to enable database connectivity.
-    sql_client_class: ClassVar[type[BaseSQLClient] | None] = None
-
-    # SQL template for query fetching — set in subclasses.
-    fetch_queries_sql: ClassVar[str] = ""
-
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
         """Determine how many batches to process and their size.
 
-        Override in your subclass (or set ``sql_client_class``) to implement
-        connector-specific batch counting.
+        Override in your subclass to implement connector-specific batch counting.
         """
-        if self.sql_client_class is None:
-            raise NotImplementedError(
-                f"{type(self).__name__} must set sql_client_class, or override "
-                "get_query_batches() to implement batch sizing."
-            )
         raise NotImplementedError(
-            f"{type(self).__name__} must implement get_query_batches() "
-            "when sql_client_class is set."
+            f"{type(self).__name__} must implement get_query_batches()."
         )
 
     @task(timeout_seconds=3600)
@@ -143,10 +121,10 @@ class SqlQueryExtractor(BaseMetadataExtractor):
                 total_queries += fetch_result.queries_fetched
 
             logger.info(
-                "Query extraction completed",
-                workflow_id=workflow_id,
-                total_batches=batch_result.total_batches,
-                total_queries=total_queries,
+                "Query extraction completed: workflow_id=%s batches=%d queries=%d",
+                workflow_id,
+                batch_result.total_batches,
+                total_queries,
             )
 
             return QueryExtractionOutput(

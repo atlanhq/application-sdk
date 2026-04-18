@@ -44,11 +44,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import obstore
+import orjson
 
 if TYPE_CHECKING:
     from typing import Any
 
     from obstore.store import ObjectStore
+
+    JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 # stdlib logger: cannot use get_logger here due to circular import
 # (observability -> storage -> batch -> ops -> observability)
@@ -387,7 +390,7 @@ async def _put(
 
 async def put_json(
     key: str,
-    obj: Any,
+    obj: JsonValue,
     store: "ObjectStore | None" = None,
     *,
     normalize: bool = True,
@@ -400,7 +403,7 @@ async def put_json(
 
     Args:
         key: Object key / path.  Normalised by default (see :func:`normalize_key`).
-        obj: A JSON-serialisable object (dict, list, etc.).
+        obj: A JSON-serialisable value (dict, list, str, int, float, bool, or None).
         store: An obstore-compatible store instance, or ``None`` to use the
             store from the current infrastructure context.
         normalize: When ``True`` (default), normalise *key* before use.
@@ -409,8 +412,6 @@ async def put_json(
         StorageError: If the write fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
-    import orjson
-
     await _put(key, orjson.dumps(obj), store, normalize=normalize)
 
 

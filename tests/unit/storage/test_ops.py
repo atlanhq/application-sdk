@@ -17,6 +17,7 @@ from application_sdk.storage.ops import (
     delete,
     download_file,
     normalize_key,
+    put_json,
     upload_file,
 )
 
@@ -316,3 +317,48 @@ class TestDownloadFile:
         dest = tmp_path / "a" / "b" / "c" / "out.bin"
         await download_file("n.bin", dest, store)
         assert dest.read_bytes() == b"nested"
+
+
+class TestPutJson:
+    """Tests for the public put_json() helper."""
+
+    async def test_serialises_dict_and_writes(self, store) -> None:
+        import orjson
+
+        payload = {"workflow_id": "wf-1", "count": 42}
+        await put_json("configs/wf-1.json", payload, store)
+        raw = await _get_bytes("configs/wf-1.json", store)
+        assert raw == orjson.dumps(payload)
+
+    async def test_normalises_staging_path_by_default(self, store) -> None:
+        import os
+
+        import orjson
+
+        from application_sdk.constants import TEMPORARY_PATH
+
+        staging = os.path.join(TEMPORARY_PATH, "configs/wf-2.json")
+        await put_json(staging, {"x": 1}, store)
+        raw = await _get_bytes("configs/wf-2.json", store)
+        assert raw == orjson.dumps({"x": 1})
+
+    async def test_normalize_false_uses_exact_key(self, store) -> None:
+        import orjson
+
+        await put_json("exact/key.json", [1, 2, 3], store, normalize=False)
+        raw = await _get_bytes("exact/key.json", store, normalize=False)
+        assert raw == orjson.dumps([1, 2, 3])
+
+    async def test_accepts_list_and_primitives(self, store) -> None:
+        import orjson
+
+        for value, key in [
+            ([1, 2], "list.json"),
+            ("hello", "str.json"),
+            (99, "int.json"),
+            (True, "bool.json"),
+            (None, "null.json"),
+        ]:
+            await put_json(key, value, store)
+            raw = await _get_bytes(key, store)
+            assert raw == orjson.dumps(value)
