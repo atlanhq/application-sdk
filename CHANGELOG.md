@@ -1,12 +1,12 @@
 # Changelog
 
-## v3.0.0 (March 17, 2026)
+## v3.0.0 (April 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.2...v3.0.0
 
 ### Breaking Changes
 
-This is a major version bump. All v2 imports remain functional in v3.0.x with `DeprecationWarning` and will be removed in v3.1.0. See the [v3 Upgrade Guide](docs/upgrade-guide-v3.md) for upgrade instructions.
+This is a major version bump with a clean break from v2. All v2 modules and APIs have been removed — there is no deprecation shim or compatibility layer. See the [v3 Upgrade Guide](docs/upgrade-guide-v3.md) for migration instructions and the v3 Replacements section below for the canonical v3 equivalents of each removed module.
 
 **Storage API removals** (`application_sdk.storage`): The backward-compat aliases `delete_file` and `list_files` have been removed. Use `delete` and `list_keys` respectively. See [Upgrading ObjectStore calls](docs/upgrade-guide-v3.md#upgrading-objectstore-calls) in the upgrade guide.
 
@@ -44,79 +44,94 @@ This is a major version bump. All v2 imports remain functional in v3.0.x with `D
 
 - **`PublishInputMixin`** (`application_sdk.contracts.base`): Pydantic mixin for apps whose workflow output feeds the Automation Engine Publish App. Auto-derives `publish_state_prefix` and `current_state_prefix` from `connection_qualified_name`; callers only need to set `connection_qualified_name` and `transformed_data_prefix`.
 
-### Deprecations
+### v3 Replacements
 
-All of the following v2 modules emit `DeprecationWarning` on import and will be removed in v3.1.0.
+All v2 modules have been removed. Use the following v3 equivalents directly.
 
 **Application**
 
-- `application_sdk.application` (`BaseApplication`) → `application_sdk.app.App` + `application_sdk.main.run_dev_combined`
-- `application_sdk.application.metadata_extraction.sql` (`BaseSQLMetadataExtractionApplication`) → `application_sdk.templates.SqlMetadataExtractor`
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.application` (`BaseApplication`) | `application_sdk.app.App` + `application_sdk.main.run_dev_combined` |
+| `application_sdk.application.metadata_extraction.sql` (`BaseSQLMetadataExtractionApplication`) | `application_sdk.templates.SqlMetadataExtractor` |
 
 **Worker**
 
-- `application_sdk.worker` (`Worker`) → `application_sdk.execution.create_worker`
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.worker` (`Worker`) | `application_sdk.execution.create_worker` |
 
 **Workflows**
 
-- `application_sdk.workflows` (`WorkflowInterface`) → `application_sdk.app.App` with `@task`
-- `application_sdk.workflows.metadata_extraction` → `application_sdk.templates.SqlMetadataExtractor`
-- `application_sdk.workflows.metadata_extraction.sql` → `application_sdk.templates.SqlMetadataExtractor`
-- `application_sdk.workflows.metadata_extraction.incremental_sql` → `application_sdk.templates.IncrementalSqlMetadataExtractor`
-- `application_sdk.workflows.query_extraction` → `application_sdk.templates.SqlQueryExtractor`
-- `application_sdk.workflows.query_extraction.sql` → `application_sdk.templates.SqlQueryExtractor`
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.workflows` (`WorkflowInterface`) | `application_sdk.app.App` with `@task` |
+| `application_sdk.workflows.metadata_extraction` | `application_sdk.templates.SqlMetadataExtractor` |
+| `application_sdk.workflows.metadata_extraction.sql` | `application_sdk.templates.SqlMetadataExtractor` |
+| `application_sdk.workflows.metadata_extraction.incremental_sql` | `application_sdk.templates.IncrementalSqlMetadataExtractor` |
+| `application_sdk.workflows.query_extraction` | `application_sdk.templates.SqlQueryExtractor` |
+| `application_sdk.workflows.query_extraction.sql` | `application_sdk.templates.SqlQueryExtractor` |
 
 **Activities**
 
-- `application_sdk.activities` (`ActivitiesInterface`) → `application_sdk.app.App` with `@task`
-- `application_sdk.activities.common.models` (`ActivityResult`) → `application_sdk.common.models` (`TaskStatistics`, `TaskResult`)
-- `application_sdk.activities.common.utils` → `application_sdk.execution._temporal.activity_utils`
-- `application_sdk.activities.common.sql_utils` → `application_sdk.common.sql_utils`
-- `application_sdk.activities.lock_management` → `application_sdk.execution._temporal.lock_activities`
-- `application_sdk.activities.metadata_extraction.base` → `application_sdk.templates.BaseMetadataExtractor`
-- `application_sdk.activities.metadata_extraction.sql` → `application_sdk.templates.SqlMetadataExtractor`
-- `application_sdk.activities.metadata_extraction.incremental` → `application_sdk.templates.IncrementalSqlMetadataExtractor`
-- `application_sdk.activities.query_extraction.sql` → `application_sdk.templates.SqlQueryExtractor`
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.activities` (`ActivitiesInterface`) | `application_sdk.app.App` with `@task` |
+| `application_sdk.activities.common.models` (`ActivityResult`) | `application_sdk.common.models` (`TaskStatistics`, `TaskResult`) |
+| `application_sdk.activities.common.utils` | `application_sdk.execution._temporal.activity_utils` |
+| `application_sdk.activities.common.sql_utils` | `application_sdk.common.sql_utils` |
+| `application_sdk.activities.lock_management` | `application_sdk.execution._temporal.lock_activities` |
+| `application_sdk.activities.metadata_extraction.base` | `application_sdk.templates.BaseMetadataExtractor` |
+| `application_sdk.activities.metadata_extraction.sql` | `application_sdk.templates.SqlMetadataExtractor` |
+| `application_sdk.activities.metadata_extraction.incremental` | `application_sdk.templates.IncrementalSqlMetadataExtractor` |
+| `application_sdk.activities.query_extraction.sql` | `application_sdk.templates.SqlQueryExtractor` |
 
 **Handlers**
 
-- `application_sdk.handlers` (`HandlerInterface`) → `application_sdk.handler.base.Handler`
-- `application_sdk.handlers.base` → `application_sdk.handler.base.DefaultHandler`
-- `application_sdk.handlers.sql` → `application_sdk.templates`
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.handlers` (`HandlerInterface`) | `application_sdk.handler.base.Handler` |
+| `application_sdk.handlers.base` | `application_sdk.handler.base.DefaultHandler` |
+| `application_sdk.handlers.sql` | `application_sdk.templates` |
 
 **Services**
 
-- `application_sdk.services.atlan_storage` → `application_sdk.storage` or `App.upload` / `App.download`
-- `application_sdk.services.eventstore` → `application_sdk.infrastructure.context.get_infrastructure().event_binding`
-- `application_sdk.services.objectstore` → `application_sdk.storage` or `App.upload` / `App.download`
-- `application_sdk.services.secretstore` → `application_sdk.infrastructure.secrets.SecretStore`
-- `application_sdk.services.statestore` → `application_sdk.infrastructure.state.StateStore`
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.services.atlan_storage` | `application_sdk.storage` or `App.upload` / `App.download` |
+| `application_sdk.services.eventstore` | `application_sdk.infrastructure.context.get_infrastructure().event_binding` |
+| `application_sdk.services.objectstore` | `application_sdk.storage` or `App.upload` / `App.download` |
+| `application_sdk.services.secretstore` | `application_sdk.infrastructure.secrets.SecretStore` |
+| `application_sdk.services.statestore` | `application_sdk.infrastructure.state.StateStore` |
 
 **Clients**
 
-- `application_sdk.clients.atlan` → `application_sdk.credentials.atlan_client`
-- `application_sdk.clients.atlan_auth` → `application_sdk.credentials.OAuthTokenService`
-- `application_sdk.clients.temporal` → `application_sdk.execution._temporal.worker`
-- `application_sdk.clients.workflow` → `application_sdk.execution._temporal.backend`
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.clients.atlan` | `application_sdk.credentials.atlan_client` |
+| `application_sdk.clients.atlan_auth` | `application_sdk.credentials.OAuthTokenService` |
+| `application_sdk.clients.temporal` | `application_sdk.execution._temporal.worker` |
+| `application_sdk.clients.workflow` | `application_sdk.execution._temporal.backend` |
 
 **Interceptors**
 
-- `application_sdk.interceptors.models` → `application_sdk.contracts.events`
-- `application_sdk.interceptors.events` → `application_sdk.execution._temporal.interceptors.events`
-- `application_sdk.interceptors.cleanup` → `application_sdk.execution._temporal.interceptors.cleanup`
-- `application_sdk.interceptors.lock` → `application_sdk.execution._temporal.interceptors.lock`
-- `application_sdk.interceptors.correlation_context` → `application_sdk.execution._temporal.interceptors.correlation_context`
-- `application_sdk.interceptors.activity_failure_logging` → `application_sdk.execution._temporal.interceptors.activity_failure_logging`
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.interceptors.models` | `application_sdk.contracts.events` |
+| `application_sdk.interceptors.events` | `application_sdk.execution._temporal.interceptors.events` |
+| `application_sdk.interceptors.cleanup` | `application_sdk.execution._temporal.interceptors.cleanup` |
+| `application_sdk.interceptors.lock` | `application_sdk.execution._temporal.interceptors.lock` |
+| `application_sdk.interceptors.correlation_context` | `application_sdk.execution._temporal.interceptors.correlation_context` |
+| `application_sdk.interceptors.activity_failure_logging` | `application_sdk.execution._temporal.interceptors.activity_failure_logging` |
+| `application_sdk.execution._temporal.interceptors.CleanupInterceptor` | `App.on_complete()` lifecycle hook |
 
 **Test utilities**
 
-- `application_sdk.test_utils` → `application_sdk.testing`
-- `application_sdk.test_utils.scale_data_generator` → `application_sdk.testing.scale_data_generator`
-- `application_sdk.test_utils.credentials` → `application_sdk.testing.MockCredentialStore`
-
-**Within v3**
-
-- `application_sdk.execution._temporal.interceptors.CleanupInterceptor` → `App.on_complete()` lifecycle hook
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.test_utils` | `application_sdk.testing` |
+| `application_sdk.test_utils.scale_data_generator` | `application_sdk.testing.scale_data_generator` |
+| `application_sdk.test_utils.credentials` | `application_sdk.testing.MockCredentialStore` |
 
 
 
