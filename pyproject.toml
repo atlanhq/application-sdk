@@ -235,7 +235,7 @@ extend-select = [
 [tool.uv]
 default-groups = ["dev", "test"]
 constraint-dependencies = [
-    "python-multipart>=0.0.22",  # CVE-2026-24486
+    "python-multipart>=0.0.26",  # CVE-2026-24486, CVE-2026-40347
     "protobuf>=6.33.5",          # CVE-2026-0994
     "authlib>=1.6.7",            # CVE-2026-28802
     "black>=26.3.1",             # CVE-2026-32274

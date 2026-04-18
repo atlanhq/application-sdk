@@ -3,7 +3,7 @@
 -e .
 aiohappyeyeballs==2.6.1
     # via aiohttp
-aiohttp==3.13.3
+aiohttp==3.13.5
     # via atlan-application-sdk
 aiosignal==1.4.0
     # via aiohttp
@@ -47,7 +47,7 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   pytest
     #   uvicorn
 coverage==7.13.1
-cryptography==46.0.5
+cryptography==46.0.7
     # via
     #   authlib
     #   trustme
@@ -219,11 +219,11 @@ pydantic-extra-types==2.11.0
     # via fastapi
 pydantic-settings==2.12.0
     # via fastapi
-pygments==2.19.2
+pygments==2.20.0
     # via
     #   pytest
     #   rich
-pytest==9.0.2
+pytest==9.0.3
     # via
     #   pytest-asyncio
     #   pytest-timeout
@@ -236,7 +236,7 @@ python-dotenv==1.2.1
     #   atlan-application-sdk
     #   pydantic-settings
     #   uvicorn
-python-multipart==0.0.22
+python-multipart==0.0.26
     # via fastapi
 pytz==2026.1.post1
     # via pyatlan
@@ -248,7 +248,7 @@ pyyaml==6.0.3
     #   pre-commit
     #   pyatlan
     #   uvicorn
-requests==2.32.5
+requests==2.33.1
     # via opentelemetry-exporter-otlp-proto-http
 rich==14.2.0
     # via
