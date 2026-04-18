@@ -124,6 +124,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     extract_temp_table_regex_table_sql: ClassVar[str] = ""
     extract_temp_table_regex_column_sql: ClassVar[str] = ""
 
+    # Column names expected in query result rows. Override in subclasses when
+    # the connector SQL aliases these columns differently.
+    database_name_column: ClassVar[str] = "database_name"
+    schema_name_column: ClassVar[str] = "schema_name"
+    table_name_column: ClassVar[str] = "table_name"
+
     # ------------------------------------------------------------------
     # Credential / client helpers (not @task — run in activity context)
     # ------------------------------------------------------------------
@@ -186,6 +192,13 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Replaces ``{normalized_exclude_regex}``, ``{normalized_include_regex}``,
         and ``{temp_table_regex_sql}`` with values derived from *input*.
         Uses str.replace() to avoid conflicts with any other curly braces.
+
+        Warning:
+            SQL templates that use these placeholders MUST wrap each substitution
+            in single quotes, e.g. ``WHERE name !~ '{normalized_exclude_regex}'``.
+            The ``_SAFE_FILTER_PATTERN`` guard blocks single quotes in filter
+            values but only prevents injection when this wrapping is present.
+            Templates that omit the surrounding quotes are not protected.
         """
         exclude_regex = input.exclude_filter or "^$"
         include_regex = input.include_filter or ".*"
@@ -229,14 +242,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         client = await self._load_sql_client(input)
         try:
             sql = self._prepare_sql(self.fetch_database_sql.strip(), input)
-            rows: list[dict[str, Any]] = []
+            key = self.database_name_column
+            databases: list[str] = []
             async for batch in client.run_query(sql):
-                rows.extend(batch)
-            databases = [
-                str(row.get("database_name", ""))
-                for row in rows
-                if row.get("database_name")
-            ]
+                databases.extend(str(row[key]) for row in batch if row.get(key))
             return FetchDatabasesOutput(
                 databases=databases,
                 chunk_count=1,
@@ -259,14 +268,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         client = await self._load_sql_client(input)
         try:
             sql = self._prepare_sql(self.fetch_schema_sql.strip(), input)
-            rows: list[dict[str, Any]] = []
+            key = self.schema_name_column
+            schemas: list[str] = []
             async for batch in client.run_query(sql):
-                rows.extend(batch)
-            schemas = [
-                str(row.get("schema_name", ""))
-                for row in rows
-                if row.get("schema_name")
-            ]
+                schemas.extend(str(row[key]) for row in batch if row.get(key))
             return FetchSchemasOutput(
                 schemas=schemas,
                 chunk_count=1,
@@ -289,12 +294,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         client = await self._load_sql_client(input)
         try:
             sql = self._prepare_sql(self.fetch_table_sql.strip(), input)
-            rows: list[dict[str, Any]] = []
+            key = self.table_name_column
+            tables: list[str] = []
             async for batch in client.run_query(sql):
-                rows.extend(batch)
-            tables = [
-                str(row.get("table_name", "")) for row in rows if row.get("table_name")
-            ]
+                tables.extend(str(row[key]) for row in batch if row.get(key))
             return FetchTablesOutput(
                 tables=tables,
                 chunk_count=1,

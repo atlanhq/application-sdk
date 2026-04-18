@@ -23,6 +23,7 @@ from typing import ClassVar
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
+from application_sdk.credentials import legacy_credential_ref
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.sql_query import (
@@ -90,8 +91,6 @@ class SqlQueryExtractor(BaseMetadataExtractor):
             # Prefer credential_ref; fall back to legacy credential_guid
             cred_ref = input.credential_ref
             if cred_ref is None and input.credential_guid:
-                from application_sdk.credentials import legacy_credential_ref
-
                 cred_ref = legacy_credential_ref(input.credential_guid)
 
             workflow_args = {

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, get_type_hints
 
 import pytest
+from pydantic import ValidationError
 
+import application_sdk.templates.sql_metadata_extractor as mod
 from application_sdk.app.base import App
-from application_sdk.app.task import is_task
+from application_sdk.app.task import get_task_metadata, is_task
+from application_sdk.contracts.base import Output, PublishInputMixin
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -18,6 +21,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchProceduresInput,
     FetchProceduresOutput,
     FetchSchemasInput,
+    FetchSchemasOutput,
     FetchTablesInput,
 )
 from application_sdk.templates.sql_metadata_extractor import SqlMetadataExtractor
@@ -55,7 +59,6 @@ class TestSqlMetadataExtractorStructure:
 
     def test_run_accepts_extraction_input(self) -> None:
         # After registration, run() is wrapped. Check original run() type hints.
-        from typing import get_type_hints
 
         original_run = getattr(
             SqlMetadataExtractor, "_original_run", SqlMetadataExtractor.run
@@ -64,8 +67,6 @@ class TestSqlMetadataExtractorStructure:
         assert hints.get("input") is ExtractionInput
 
     def test_run_returns_extraction_output(self) -> None:
-        from typing import get_type_hints
-
         original_run = getattr(
             SqlMetadataExtractor, "_original_run", SqlMetadataExtractor.run
         )
@@ -73,32 +74,22 @@ class TestSqlMetadataExtractorStructure:
         assert hints.get("return") is ExtractionOutput
 
     def test_fetch_databases_input_type(self) -> None:
-        from application_sdk.app.task import get_task_metadata
-
         meta = get_task_metadata(SqlMetadataExtractor.fetch_databases)
         assert meta.input_type is FetchDatabasesInput
 
     def test_fetch_databases_output_type(self) -> None:
-        from application_sdk.app.task import get_task_metadata
-
         meta = get_task_metadata(SqlMetadataExtractor.fetch_databases)
         assert meta.output_type is FetchDatabasesOutput
 
     def test_fetch_databases_timeout(self) -> None:
-        from application_sdk.app.task import get_task_metadata
-
         meta = get_task_metadata(SqlMetadataExtractor.fetch_databases)
         assert meta.timeout_seconds == 1800
 
     def test_fetch_procedures_input_type(self) -> None:
-        from application_sdk.app.task import get_task_metadata
-
         meta = get_task_metadata(SqlMetadataExtractor.fetch_procedures)
         assert meta.input_type is FetchProceduresInput
 
     def test_fetch_procedures_output_type(self) -> None:
-        from application_sdk.app.task import get_task_metadata
-
         meta = get_task_metadata(SqlMetadataExtractor.fetch_procedures)
         assert meta.output_type is FetchProceduresOutput
 
@@ -347,10 +338,7 @@ class TestSqlMetadataExtractorLoadSqlClient:
         assert stub.closed is True
 
     async def test_fetch_schemas_happy_path(self) -> None:
-        from application_sdk.templates.contracts.sql_metadata import (
-            FetchSchemasInput,
-            FetchSchemasOutput,
-        )
+        from application_sdk.templates.contracts.sql_metadata import FetchSchemasInput
 
         rows = [
             {"schema_name": "public"},
@@ -452,22 +440,16 @@ class TestPublishInputMixin:
     """Tests for PublishInputMixin mixin — auto-derives state prefixes."""
 
     def test_auto_derives_state_prefixes(self) -> None:
-        from application_sdk.contracts.base import PublishInputMixin
-
         out = PublishInputMixin(connection_qualified_name="default/snowflake/123")
         assert "default/snowflake/123" in out.publish_state_prefix
         assert "default/snowflake/123" in out.current_state_prefix
 
     def test_empty_connection_yields_empty_prefixes(self) -> None:
-        from application_sdk.contracts.base import PublishInputMixin
-
         out = PublishInputMixin()
         assert out.publish_state_prefix == ""
         assert out.current_state_prefix == ""
 
     def test_explicit_values_not_overridden(self) -> None:
-        from application_sdk.contracts.base import PublishInputMixin
-
         out = PublishInputMixin(
             connection_qualified_name="default/pg/456",
             publish_state_prefix="custom/publish",
@@ -477,15 +459,12 @@ class TestPublishInputMixin:
         assert out.current_state_prefix == "custom/current"
 
     def test_unsafe_connection_qn_no_derivation(self) -> None:
-        from application_sdk.contracts.base import PublishInputMixin
-
         out = PublishInputMixin(connection_qualified_name="../../attack")
         assert out.publish_state_prefix == ""
         assert out.current_state_prefix == ""
 
     def test_used_as_mixin(self) -> None:
         """Apps use PublishInputMixin as mixin alongside Output."""
-        from application_sdk.contracts.base import Output, PublishInputMixin
 
         class MyOutput(Output, PublishInputMixin, allow_unbounded_fields=True):
             records: int = 0
@@ -501,7 +480,6 @@ class TestPublishInputMixin:
 
     def test_output_path_derives_transformed_prefix(self) -> None:
         """output_path + output_prefix auto-derives transformed_data_prefix."""
-        from application_sdk.contracts.base import PublishInputMixin
 
         out = PublishInputMixin(
             connection_qualified_name="default/snowflake/123",
@@ -514,8 +492,6 @@ class TestPublishInputMixin:
         )
 
     def test_output_path_no_prefix_uses_full(self) -> None:
-        from application_sdk.contracts.base import PublishInputMixin
-
         out = PublishInputMixin(
             connection_qualified_name="c",
             output_path="some/path",
@@ -524,7 +500,6 @@ class TestPublishInputMixin:
 
     def test_output_path_auto_resolve_outside_temporal(self) -> None:
         """Outside Temporal context, output_path stays empty — no error."""
-        from application_sdk.contracts.base import PublishInputMixin
 
         out = PublishInputMixin(
             connection_qualified_name="default/snowflake/123",
@@ -536,8 +511,6 @@ class TestPublishInputMixin:
         assert out.transformed_data_prefix == ""
 
     def test_explicit_transformed_prefix_not_overridden(self) -> None:
-        from application_sdk.contracts.base import PublishInputMixin
-
         out = PublishInputMixin(
             connection_qualified_name="c",
             output_path="some/path",
@@ -546,8 +519,6 @@ class TestPublishInputMixin:
         assert out.transformed_data_prefix == "custom/transformed"
 
     def test_path_traversal_in_output_path_yields_empty(self) -> None:
-        from application_sdk.contracts.base import PublishInputMixin
-
         out = PublishInputMixin(
             connection_qualified_name="c",
             output_path="../../etc/passwd",
@@ -564,20 +535,14 @@ class TestFilterFieldValidation:
     """
 
     def test_exclude_filter_rejects_single_quote(self) -> None:
-        from pydantic import ValidationError
-
         with pytest.raises(ValidationError):
             ExtractionTaskInput(exclude_filter="prefix'injection")
 
     def test_include_filter_rejects_single_quote(self) -> None:
-        from pydantic import ValidationError
-
         with pytest.raises(ValidationError):
             ExtractionTaskInput(include_filter=".*'.*")
 
     def test_temp_table_regex_rejects_single_quote(self) -> None:
-        from pydantic import ValidationError
-
         with pytest.raises(ValidationError):
             ExtractionTaskInput(temp_table_regex="tmp_'suffix")
 
@@ -604,8 +569,6 @@ class TestGetCredentials:
     async def test_raises_when_no_credential_ref_and_no_guid(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import application_sdk.templates.sql_metadata_extractor as mod
-
         monkeypatch.setattr(mod, "get_infrastructure", lambda: None)
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
         with pytest.raises(
@@ -616,8 +579,6 @@ class TestGetCredentials:
     async def test_raises_when_no_secret_store_available(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import application_sdk.templates.sql_metadata_extractor as mod
-
         monkeypatch.setattr(mod, "get_infrastructure", lambda: None)
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
         with pytest.raises(ValueError, match="No secret store available"):
