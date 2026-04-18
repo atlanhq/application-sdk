@@ -185,10 +185,9 @@ class BaseClient(ClientInterface):
             ...     params={"limit": 100}
             ... )
         """
+        ssl_context = get_ssl_context()
         async with httpx.AsyncClient(
-            timeout=timeout,
-            transport=self.http_retry_transport,
-            verify=get_ssl_context(),
+            timeout=timeout, transport=self.http_retry_transport, verify=ssl_context
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:
@@ -265,10 +264,9 @@ class BaseClient(ClientInterface):
             ...         auth=("username", "password")
             ... )
         """
+        ssl_context = get_ssl_context()
         async with httpx.AsyncClient(
-            timeout=timeout,
-            transport=self.http_retry_transport,
-            verify=get_ssl_context(),
+            timeout=timeout, transport=self.http_retry_transport, verify=ssl_context
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:
