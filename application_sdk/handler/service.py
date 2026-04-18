@@ -285,6 +285,24 @@ _ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 # values are interpolated into object-store keys.
 _CONFIG_KEY_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,128}$")
 
+# Strips any character that is not a simple alphanumeric from file extensions
+# before they are used as mkstemp suffixes, preventing taint-flow path traversal.
+_SAFE_EXT_RE = re.compile(r"[^a-zA-Z0-9]")
+
+
+def _validated_temp_path(path: str) -> str:
+    """Resolve *path* and assert it lies within the system temp directory.
+
+    All temp-file paths in this module are created via :func:`tempfile.mkstemp`.
+    This check makes the invariant explicit so SAST tools can confirm no
+    user-supplied value can escape the temp directory.
+    """
+    tmp_root = os.path.realpath(tempfile.gettempdir())
+    real = os.path.realpath(path)
+    if real != tmp_root and not real.startswith(tmp_root + os.sep):
+        raise ValueError("Temp file path escapes system temp directory")
+    return real
+
 
 async def _get_temporal_client() -> Client:
     """Get or lazily create the singleton Temporal client."""
@@ -1127,17 +1145,18 @@ def create_app_handler_service(
 
         key = _config_objectstore_key(config_id, config_type)
         fd, tmp = tempfile.mkstemp(suffix=".json")
+        safe_tmp = _validated_temp_path(tmp)
         os.close(fd)
         try:
-            await download_file(key, tmp, _storage)
-            with open(tmp) as f:
+            await download_file(key, safe_tmp, _storage)
+            with open(safe_tmp) as f:
                 return json.load(f)
         except Exception as exc:
             logger.warning("Object-store config load failed for key=%s: %r", key, exc)
             return None
         finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+            if os.path.exists(safe_tmp):
+                os.unlink(safe_tmp)
 
     async def _config_save_to_objectstore(
         config_id: str, body: "dict[str, Any]", config_type: str = "workflows"
@@ -1150,14 +1169,15 @@ def create_app_handler_service(
 
         key = _config_objectstore_key(config_id, config_type)
         fd, tmp = tempfile.mkstemp(suffix=".json")
+        safe_tmp = _validated_temp_path(tmp)
         try:
             with os.fdopen(fd, "w") as f:
                 json.dump(body, f)
-            await upload_file(key, tmp, _storage)
+            await upload_file(key, safe_tmp, _storage)
             return True
         finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+            if os.path.exists(safe_tmp):
+                os.unlink(safe_tmp)
 
     @app.get("/workflows/v1/config/{config_id}")
     async def get_workflow_config(
@@ -1265,7 +1285,9 @@ def create_app_handler_service(
         from application_sdk.storage.ops import upload_file as _upload_file
 
         raw_name = filename or file.filename or "upload"
-        extension = PurePosixPath(raw_name).suffix.lstrip(".")
+        extension = _SAFE_EXT_RE.sub("", PurePosixPath(raw_name).suffix.lstrip("."))[
+            :16
+        ]
         resolved_type = (
             contentType
             or file.content_type
@@ -1281,19 +1303,20 @@ def create_app_handler_service(
         # Stream the upload: drain the spooled temp file to a named temp file,
         # then stream-upload to the object store (avoids materialising in memory).
         fd, tmp_path = tempfile.mkstemp(suffix=f".{extension}" if extension else "")
+        safe_tmp_path = _validated_temp_path(tmp_path)
         try:
             os.close(fd)
 
             def _drain_to_tmp() -> int:
-                with open(tmp_path, "wb") as dst:
+                with open(safe_tmp_path, "wb") as dst:
                     shutil.copyfileobj(file.file, dst)
-                return os.path.getsize(tmp_path)
+                return os.path.getsize(safe_tmp_path)
 
             file_size = await asyncio.to_thread(_drain_to_tmp)
-            await _upload_file(key, tmp_path, _storage)
+            await _upload_file(key, safe_tmp_path, _storage)
         finally:
             try:
-                os.unlink(tmp_path)
+                os.unlink(safe_tmp_path)
             except FileNotFoundError:
                 pass
 
