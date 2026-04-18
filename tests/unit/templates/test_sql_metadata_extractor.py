@@ -553,3 +553,74 @@ class TestPublishInputMixin:
             output_path="../../etc/passwd",
         )
         assert out.transformed_data_prefix == ""
+
+
+class TestFilterFieldValidation:
+    """Negative tests for the _SAFE_FILTER_PATTERN SQL-injection guard.
+
+    _prepare_sql() substitutes exclude_filter / include_filter / temp_table_regex
+    directly into SQL string literals via str.replace(). The Pydantic pattern
+    constraint (^[^']*$) is the primary guard; these tests pin that invariant.
+    """
+
+    def test_exclude_filter_rejects_single_quote(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            ExtractionTaskInput(exclude_filter="prefix'injection")
+
+    def test_include_filter_rejects_single_quote(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            ExtractionTaskInput(include_filter=".*'.*")
+
+    def test_temp_table_regex_rejects_single_quote(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            ExtractionTaskInput(temp_table_regex="tmp_'suffix")
+
+    def test_safe_values_accepted(self) -> None:
+        inp = ExtractionTaskInput(
+            exclude_filter="^tmp_.*$",
+            include_filter="^prod_.*$",
+            temp_table_regex="^temp_.*$",
+        )
+        assert inp.exclude_filter == "^tmp_.*$"
+        assert inp.include_filter == "^prod_.*$"
+        assert inp.temp_table_regex == "^temp_.*$"
+
+    def test_empty_values_accepted(self) -> None:
+        inp = ExtractionTaskInput()
+        assert inp.exclude_filter == ""
+        assert inp.include_filter == ""
+        assert inp.temp_table_regex == ""
+
+
+class TestGetCredentials:
+    """Tests for _get_credentials() error paths."""
+
+    async def test_raises_when_no_credential_ref_and_no_guid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import application_sdk.templates.sql_metadata_extractor as mod
+
+        monkeypatch.setattr(mod, "get_infrastructure", lambda: None)
+        extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
+        with pytest.raises(
+            ValueError, match="No credential reference or GUID available"
+        ):
+            await extractor._get_credentials(ExtractionTaskInput())
+
+    async def test_raises_when_no_secret_store_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import application_sdk.templates.sql_metadata_extractor as mod
+
+        monkeypatch.setattr(mod, "get_infrastructure", lambda: None)
+        extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
+        with pytest.raises(ValueError, match="No secret store available"):
+            await extractor._get_credentials(
+                ExtractionTaskInput(credential_guid="some-guid-that-needs-a-store")
+            )
