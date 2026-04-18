@@ -87,7 +87,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
         logger.info("Starting SQL query extraction: %s", workflow_id)
 
         try:
-            # v2-compat: remove credential_guid fallback when all connectors use credential_ref.
+            # TODO(v3-cleanup): remove credential_guid fallback when all connectors use credential_ref.
             # Prefer credential_ref; fall back to legacy credential_guid
             cred_ref = input.credential_ref
             if cred_ref is None and input.credential_guid:

@@ -119,10 +119,14 @@ class PostgresExtractorWithCustomTransformer(SqlMetadataExtractor):
     async def transform_data(self, input: TransformInput) -> TransformOutput:
         """Transform extracted metadata using custom YAML templates.
 
-        The custom templates at examples/sql_query_templates/ override the
-        default transformation for DATABASE, TABLE, COLUMN, SCHEMA, etc.
+        TODO: replace with a real implementation that reads from
+        ``{input.output_path}/raw/{input.typename}/`` and writes
+        transformed output using this connector's YAML templates.
         """
-        return await super().transform_data(input)
+        raise NotImplementedError(
+            f"{type(self).__name__}.transform_data() is a skeleton — "
+            "replace with a real implementation before running."
+        )
 
 
 class SampleSQLHandler(Handler):

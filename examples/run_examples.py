@@ -38,6 +38,8 @@ class ExampleConfig:
     module: str
     workflow_input: dict[str, Any]
     skip_if_missing_env: list[str] = field(default_factory=list)
+    # Set to True for skeleton/stub examples that should never be run in CI.
+    is_stub: bool = False
 
 
 def _build_examples() -> list[ExampleConfig]:
@@ -93,6 +95,7 @@ def _build_examples() -> list[ExampleConfig]:
                 ],
             },
             skip_if_missing_env=["POSTGRES_HOST", "POSTGRES_PASSWORD"],
+            is_stub=True,
         ),
         ExampleConfig(
             name="application_sql_miner",
@@ -110,11 +113,7 @@ def _build_examples() -> list[ExampleConfig]:
                 "lookback_days": 7,
                 "batch_size": 1000,
             },
-            skip_if_missing_env=[
-                "SNOWFLAKE_ACCOUNT_ID",
-                "SNOWFLAKE_USER",
-                "SNOWFLAKE_PASSWORD",
-            ],
+            is_stub=True,
         ),
     ]
 
@@ -190,6 +189,10 @@ def _kill(proc: subprocess.Popen) -> None:
 
 
 def run_example(example: ExampleConfig) -> tuple[str, float]:
+    if example.is_stub:
+        print("  SKIP — skeleton example (not a runnable implementation)", flush=True)
+        return "SKIPPED", 0.0
+
     missing = [k for k in example.skip_if_missing_env if not os.environ.get(k)]
     if missing:
         print(f"  SKIP — missing env: {', '.join(missing)}", flush=True)

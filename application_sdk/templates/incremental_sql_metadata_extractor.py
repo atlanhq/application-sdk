@@ -794,7 +794,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         conn_qn = input.connection.attributes.qualified_name
         application_name = os.getenv("ATLAN_APPLICATION_NAME", "")
 
-        # v2-compat: remove credential_guid fallback when all connectors use credential_ref.
+        # TODO(v3-cleanup): remove credential_guid fallback when all connectors use credential_ref.
         cred_ref = input.credential_ref
         if cred_ref is None and input.credential_guid:
             from application_sdk.credentials import legacy_credential_ref

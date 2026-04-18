@@ -152,6 +152,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             data = await infra.state_store.load(f"cred:{cred_guid}")
             if data is not None:
                 return data
+            logger.debug(
+                "credential state-store miss for guid=%s (local_dev=%s, state_store=%s); falling back to secret store",
+                cred_guid,
+                is_local_dev,
+                infra.state_store is not None,
+            )
 
         # Production path: use CredentialResolver
 
@@ -245,7 +251,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             key = self.database_name_column
             databases: list[str] = []
             async for batch in client.run_query(sql):
-                databases.extend(str(row[key]) for row in batch if row.get(key))
+                for row in batch:
+                    val = row.get(key)
+                    if val:
+                        databases.append(str(val))
             return FetchDatabasesOutput(
                 databases=databases,
                 chunk_count=1,
@@ -271,7 +280,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             key = self.schema_name_column
             schemas: list[str] = []
             async for batch in client.run_query(sql):
-                schemas.extend(str(row[key]) for row in batch if row.get(key))
+                for row in batch:
+                    val = row.get(key)
+                    if val:
+                        schemas.append(str(val))
             return FetchSchemasOutput(
                 schemas=schemas,
                 chunk_count=1,
@@ -297,7 +309,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             key = self.table_name_column
             tables: list[str] = []
             async for batch in client.run_query(sql):
-                tables.extend(str(row[key]) for row in batch if row.get(key))
+                for row in batch:
+                    val = row.get(key)
+                    if val:
+                        tables.append(str(val))
             return FetchTablesOutput(
                 tables=tables,
                 chunk_count=1,
@@ -372,7 +387,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         logger.info("Starting SQL metadata extraction: %s", workflow_id)
 
         try:
-            # v2-compat: remove credential_guid fallback when all connectors use credential_ref.
+            # TODO(v3-cleanup): remove credential_guid fallback when all connectors use credential_ref.
             # Prefer credential_ref; fall back to legacy credential_guid
             cred_ref = input.credential_ref
             if cred_ref is None and input.credential_guid:

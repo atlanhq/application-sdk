@@ -137,7 +137,10 @@ class SnowflakeQueryExtractor(SqlQueryExtractor):
         TODO: replace with real implementation — connect via sql_client_class,
         COUNT rows in QUERY_HISTORY, and return total_batches / batch_size.
         """
-        return QueryBatchOutput(total_batches=0, batch_size=1000, total_count=0)
+        raise NotImplementedError(
+            f"{type(self).__name__}.get_query_batches() is a skeleton — "
+            "replace with a real implementation before running."
+        )
 
     @task(timeout_seconds=3600, heartbeat_timeout_seconds=60, auto_heartbeat_seconds=10)
     async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
@@ -146,7 +149,10 @@ class SnowflakeQueryExtractor(SqlQueryExtractor):
         TODO: replace with real implementation — page through QUERY_HISTORY
         using fetch_queries_sql and write results to the object store.
         """
-        return QueryFetchOutput(queries_fetched=0)
+        raise NotImplementedError(
+            f"{type(self).__name__}.fetch_queries() is a skeleton — "
+            "replace with a real implementation before running."
+        )
 
 
 class SampleSnowflakeHandler(Handler):

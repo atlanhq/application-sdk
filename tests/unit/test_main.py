@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import signal
 from pathlib import Path
 from unittest import mock
 from unittest.mock import AsyncMock, patch
@@ -498,9 +500,6 @@ class TestInstallGracefulSignalHandlers:
     """Tests for _install_graceful_signal_handlers()."""
 
     def test_registers_sigint_and_sigterm(self) -> None:
-        import asyncio
-        import signal
-
         loop = asyncio.new_event_loop()
         try:
             registered: list[signal.Signals] = []
@@ -516,9 +515,6 @@ class TestInstallGracefulSignalHandlers:
             loop.close()
 
     def test_windows_fallback_logs_warning_and_does_not_raise(self) -> None:
-        import asyncio
-        from unittest.mock import patch
-
         loop = asyncio.new_event_loop()
         try:
 

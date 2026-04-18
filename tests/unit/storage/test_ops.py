@@ -350,4 +350,4 @@ class TestPutJson:
         ]:
             await put_json(key, value, store)
             raw = await _get_bytes(key, store)
-            assert raw == orjson.dumps(value)
+            assert raw == orjson.dumps(value), f"serialisation mismatch for key={key!r}"

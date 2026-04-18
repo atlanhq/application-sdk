@@ -338,8 +338,6 @@ class TestSqlMetadataExtractorLoadSqlClient:
         assert stub.closed is True
 
     async def test_fetch_schemas_happy_path(self) -> None:
-        from application_sdk.templates.contracts.sql_metadata import FetchSchemasInput
-
         rows = [
             {"schema_name": "public"},
             {"schema_name": "analytics"},
