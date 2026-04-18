@@ -552,11 +552,16 @@ class TestStartWorkflowRouting:
         patcher.start()
         tc = TestClient(svc, raise_server_exceptions=False)
         try:
-            # ?entrypoint=extract wins over body workflow_type=load
-            response = tc.post(
-                "/workflows/v1/start?entrypoint=extract",
-                json={"workflow_type": "load", "name": "x"},
-            )
+            import warnings
+
+            # ?entrypoint=extract wins over body workflow_type=load;
+            # the canonical query-param path must NOT emit a DeprecationWarning.
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                response = tc.post(
+                    "/workflows/v1/start?entrypoint=extract",
+                    json={"workflow_type": "load", "name": "x"},
+                )
             assert response.status_code == 200
             assert mock_client.start_workflow.call_count == 1
             # The started workflow name must end in ':extract', not ':load'
@@ -565,6 +570,9 @@ class TestStartWorkflowRouting:
             assert started_name.endswith(
                 ":extract"
             ), f"Expected :extract, got {started_name!r}"
+            assert not any(
+                issubclass(w.category, DeprecationWarning) for w in caught
+            ), "Canonical ?entrypoint= path must not emit DeprecationWarning"
         finally:
             patcher.stop()
 
@@ -794,6 +802,7 @@ class TestWorkflowConfigValidation:
         )
         assert response.status_code in {
             400,
+            422,
             503,
         }, f"Expected rejection for type={type_param!r}, got {response.status_code}"
 
@@ -810,6 +819,7 @@ class TestWorkflowConfigValidation:
         )
         assert response.status_code in {
             400,
+            422,
             503,
         }, f"Expected rejection for type={type_param!r}, got {response.status_code}"
 

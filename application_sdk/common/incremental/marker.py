@@ -76,11 +76,11 @@ def process_marker_timestamp(
 
     Example:
         >>> processed = process_marker_timestamp(
-        ...     "2024-01-15 10:00:00",
+        ...     "2024-01-15T10:00:00Z",
         ...     prepone_enabled=True,
         ...     prepone_hours=2
         ... )
-        >>> # Returns "2024-01-15 08:00:00"
+        >>> # Returns "2024-01-15T08:00:00Z"
     """
     normalized = normalize_marker_timestamp(marker)
 

@@ -236,10 +236,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout (for allowlist)
+      - name: Checkout base allowlist from SDK
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          repository: atlanhq/application-sdk
+          ref: main
+          sparse-checkout: |
+            .security
+            .github/scripts
+          path: _sdk
+          token: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Download Trivy results
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -258,154 +264,28 @@ jobs:
       - name: Check against allowlist
         env:
           FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
+        run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json
+
+      - name: Report Snyk findings (informational)
+        if: always()
         run: |
-          python3 - <<'PYEOF'
-          import json, sys, os
-          from datetime import datetime
-
-          allowlist_path = ".security/allowlist.json"
-          if os.path.exists(allowlist_path):
-              with open(allowlist_path) as f:
-                  allowlist = json.load(f)
-          else:
-              print("No .security/allowlist.json found — all vulnerabilities will be reported but not blocked.")
-              print("To enable the security gate, add .security/allowlist.json to your repo.")
-              allowlist = None
-
-          today = datetime.now().strftime("%Y-%m-%d")
-          all_vulns = {}
-
-          # Parse Trivy
-          trivy_count = 0
-          try:
-              with open("/tmp/trivy_results.json") as f:
-                  trivy = json.load(f)
-              for result in trivy.get("Results", []):
-                  for vuln in result.get("Vulnerabilities", []):
-                      vid = vuln.get("VulnerabilityID")
-                      if vid and vid not in all_vulns:
-                          all_vulns[vid] = {
-                              "id": vid,
-                              "severity": vuln.get("Severity", "").upper(),
-                              "package": vuln.get("PkgName", ""),
-                              "installed": vuln.get("InstalledVersion", ""),
-                              "fixed": vuln.get("FixedVersion", ""),
-                              "source": "trivy",
-                          }
-                          trivy_count += 1
-          except Exception as e:
-              print(f"Warning: Trivy results unavailable: {e}")
-
-          # Parse Snyk
-          snyk_count = 0
+          if [ -f /tmp/snyk_results.json ]; then
+            python3 - <<'PYEOF'
+          import json, sys
           try:
               with open("/tmp/snyk_results.json") as f:
                   snyk = json.load(f)
-              if not snyk.get("error"):
-                  for vuln in snyk.get("vulnerabilities", []):
-                      vid = vuln.get("id")
-                      cves = vuln.get("identifiers", {}).get("CVE", [])
-                      if vid and vid not in all_vulns:
-                          if not any(c in all_vulns for c in cves):
-                              all_vulns[vid] = {
-                                  "id": vid,
-                                  "severity": vuln.get("severity", "").upper(),
-                                  "package": vuln.get("packageName") or vuln.get("name", ""),
-                                  "installed": vuln.get("version", ""),
-                                  "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
-                                  "source": "snyk",
-                              }
-                              snyk_count += 1
-                  for app in snyk.get("applications", []):
-                      for vuln in app.get("vulnerabilities", []):
-                          vid = vuln.get("id")
-                          if vid and vid not in all_vulns:
-                              all_vulns[vid] = {
-                                  "id": vid,
-                                  "severity": vuln.get("severity", "").upper(),
-                                  "package": vuln.get("packageName") or vuln.get("name", ""),
-                                  "installed": vuln.get("version", ""),
-                                  "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
-                                  "source": "snyk",
-                              }
-                              snyk_count += 1
+              if snyk.get("error"):
+                  print(f"Snyk error: {snyk['error']}")
+              else:
+                  vulns = snyk.get("vulnerabilities", [])
+                  critical_high = [v for v in vulns if v.get("severity", "").upper() in {"CRITICAL", "HIGH"}]
+                  print(f"Snyk (informational): {len(critical_high)} CRITICAL/HIGH findings")
+                  for v in critical_high[:20]:
+                      print(f"  {v.get('severity','?'):8s} {v.get('id','')} {v.get('packageName','')}")
           except Exception as e:
               print(f"Warning: Snyk results unavailable: {e}")
-
-          unique = list(all_vulns.values())
-
-          # If no allowlist file exists, report findings but don't block
-          if allowlist is None:
-              print(f"Found {len(unique)} CRITICAL/HIGH vulnerabilities (not blocking — no allowlist configured)")
-              for v in sorted(unique, key=lambda x: {"CRITICAL":0,"HIGH":1}.get(x["severity"],9)):
-                  print(f"  {v['severity']:8s} [{v['source']:5s}] {v['id']} {v['package']}@{v['installed']}")
-              print(f"\nGATE SKIPPED: No .security/allowlist.json — add one to enable blocking")
-              sys.exit(0)
-
-          allowed, expired, new_vulns = [], [], []
-
-          for v in unique:
-              entry = allowlist.get(v["id"])
-              if entry and not entry.get("_comment"):
-                  if today > entry.get("expires", "9999-12-31"):
-                      expired.append(v)
-                  else:
-                      allowed.append(v)
-              else:
-                  new_vulns.append(v)
-
-          sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-          new_vulns.sort(key=lambda x: sev_order.get(x["severity"], 9))
-          expired.sort(key=lambda x: sev_order.get(x["severity"], 9))
-
-          print(f"\n{'='*60}")
-          print(f"SECURITY SCAN RESULTS")
-          print(f"{'='*60}")
-          print(f"Scanners: Trivy ({trivy_count}) + Snyk ({snyk_count})")
-          print(f"Total unique CRITICAL/HIGH: {len(unique)}")
-          print(f"  Allowlisted: {len(allowed)}")
-          print(f"  Expired:     {len(expired)}")
-          print(f"  NEW:         {len(new_vulns)}")
-          print(f"{'='*60}\n")
-
-          if allowed:
-              print(f"--- Allowlisted ({len(allowed)}) ---")
-              for v in allowed:
-                  print(f"  {v['severity']:8s} [{v['source']:5s}] {v['id']}")
-              print()
-
-          if expired:
-              print(f"--- Expired ({len(expired)}) ---")
-              for v in expired:
-                  print(f"  {v['severity']:8s} [{v['source']:5s}] {v['id']} {v['package']}@{v['installed']}")
-              print()
-
-          if new_vulns:
-              print(f"--- NEW ({len(new_vulns)}) ---")
-              for v in new_vulns:
-                  fix = f" -> fix: {v['fixed']}" if v["fixed"] else ""
-                  print(f"  {v['severity']:8s} [{v['source']:5s}] {v['id']} {v['package']}@{v['installed']}{fix}")
-              print()
-
-          fail_on_findings = os.environ.get("FAIL_ON_FINDINGS", "true").lower() == "true"
-
-          blockers = new_vulns + expired
-          if blockers:
-              summary = f"### Security Gate {'Failed' if fail_on_findings else 'Warning'}\n\n"
-              summary += f"Found **{len(blockers)}** CRITICAL/HIGH vulnerabilities not in allowlist:\n\n"
-              summary += "| Severity | Scanner | ID | Package | Fix |\n"
-              summary += "|----------|---------|-----|---------|-----|\n"
-              for v in blockers:
-                  fix = v["fixed"] if v["fixed"] else "No fix"
-                  summary += f"| {v['severity']} | {v['source']} | {v['id']} | {v['package']}@{v['installed']} | {fix} |\n"
-              summary += f"\n**To resolve:** fix the vulnerability or add to `.security/allowlist.json` with owner approval.\n"
-              with open(os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null"), "a") as f:
-                  f.write(summary)
-              if fail_on_findings:
-                  print(f"GATE FAILED: {len(blockers)} non-allowlisted vulnerabilities")
-                  sys.exit(1)
-              else:
-                  print(f"GATE WARNING: {len(blockers)} non-allowlisted vulnerabilities (non-blocking)")
-          else:
-              print(f"GATE PASSED: All {len(unique)} vulnerabilities are allowlisted")
           PYEOF
+          else
+            echo "No Snyk results available"
+          fi

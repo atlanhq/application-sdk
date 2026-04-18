@@ -37,10 +37,12 @@ import tempfile
 import warnings
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+import orjson
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.params import Path as PathParam
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
@@ -283,7 +285,8 @@ _ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 # Allowed characters for config_id and config_type path components.
 # Prevents path traversal (no slashes, dots, or percent-encoding) when these
 # values are interpolated into object-store keys.
-_CONFIG_KEY_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,128}$")
+_CONFIG_KEY_PATTERN = r"^[a-zA-Z0-9_\-]{1,128}$"
+_CONFIG_KEY_RE = re.compile(_CONFIG_KEY_PATTERN)
 
 # Strips any character that is not a simple alphanumeric from file extensions
 # before they are used as mkstemp suffixes, preventing taint-flow path traversal.
@@ -1149,8 +1152,7 @@ def create_app_handler_service(
         os.close(fd)
         try:
             await download_file(key, safe_tmp, _storage)
-            with open(safe_tmp) as f:
-                return json.load(f)
+            return orjson.loads(Path(safe_tmp).read_bytes())
         except Exception as exc:
             logger.warning("Object-store config load failed for key=%s: %r", key, exc)
             return None
@@ -1171,8 +1173,8 @@ def create_app_handler_service(
         fd, tmp = tempfile.mkstemp(suffix=".json")
         safe_tmp = _validated_temp_path(tmp)
         try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(body, f)
+            with os.fdopen(fd, "wb") as f:
+                f.write(orjson.dumps(body))
             await upload_file(key, safe_tmp, _storage)
             return True
         finally:
@@ -1181,11 +1183,10 @@ def create_app_handler_service(
 
     @app.get("/workflows/v1/config/{config_id}")
     async def get_workflow_config(
-        config_id: str, type: str = "workflows"
+        config_id: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
+        type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
     ) -> JSONResponse:
         """Fetch workflow config — tries statestore first, falls back to object store."""
-        if not _CONFIG_KEY_RE.match(config_id) or not _CONFIG_KEY_RE.match(type):
-            raise HTTPException(status_code=400, detail="Invalid config_id or type")
         config = None
 
         # Try statestore
@@ -1221,15 +1222,15 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/config/{config_id}")
     async def update_workflow_config(
-        config_id: str, request: Request, type: str = "workflows"
+        config_id: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
+        request: Request,
+        type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
     ) -> JSONResponse:
         """Save workflow config — tries statestore first, falls back to object store.
 
         Object store fallback is only used for non-credential config types
         to avoid persisting sensitive credential data to S3.
         """
-        if not _CONFIG_KEY_RE.match(config_id) or not _CONFIG_KEY_RE.match(type):
-            raise HTTPException(status_code=400, detail="Invalid config_id or type")
         body = await request.json()
         saved = False
 

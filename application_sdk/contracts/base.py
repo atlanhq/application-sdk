@@ -56,6 +56,7 @@ Evolution:
     Never remove fields or change their types - this breaks running workflows.
 """
 
+import hashlib
 import re
 from enum import StrEnum
 from typing import (
@@ -231,8 +232,7 @@ class Input(BaseModel):
         Returns:
             16-character hex string (64 bits of SHA-256).
         """
-        import hashlib
-        import json
+        import orjson  # noqa: PLC0415
 
         exclude: set[str] = set()
         for cls in type(self).__mro__:
@@ -263,8 +263,10 @@ class Input(BaseModel):
                 return obj.model_dump()
             return str(obj)
 
-        content = json.dumps(data, sort_keys=True, default=default_serializer)
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+        content = orjson.dumps(
+            data, option=orjson.OPT_SORT_KEYS, default=default_serializer
+        )
+        return hashlib.sha256(content).hexdigest()[:16]
 
     def __init_subclass__(
         cls, allow_unbounded_fields: bool = False, **kwargs: Any

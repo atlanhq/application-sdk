@@ -76,6 +76,7 @@ def get_tables_needing_column_extraction(
         - no_change_count: Number of unchanged tables
     """
     try:
+        # lazy import: heavy optional dependency (installed via [sql] extra)
         import daft
         from daft.functions import format as daft_format
 
