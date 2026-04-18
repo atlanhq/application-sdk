@@ -14,17 +14,35 @@ This is a major version bump. All v2 imports remain functional in v3.0.x with `D
 
 - **Schema-driven contracts** (`application_sdk.contracts`): `Input`/`Output` dataclass bases with payload-safety validation at class-definition time. Forbidden: `Any`, `bytes`, unbounded `list`/`dict`. Safe alternatives: `Annotated[list[T], MaxItems(N)]`, `FileReference`.
 
-- **Infrastructure abstraction** (`application_sdk.infrastructure`): Protocol-based interfaces for `StateStore`, `SecretStore`, `PubSub`, `Binding`, `CapacityPool`. Dapr implementations in `_dapr/`, Redis in `_redis/`, in-memory implementations for testing without Dapr.
+- **Infrastructure abstraction** (`application_sdk.infrastructure`): Protocol-based interfaces for `StateStore`, `SecretStore`, `PubSub`, `InputBinding`, `OutputBinding`, `CapacityPool`, `CredentialVault`, and `Subscription`. Dapr implementations in `_dapr/`, Redis in `_redis/`, mock implementations for testing in `application_sdk.testing` (`MockStateStore`, `MockSecretStore`, `MockPubSub`, etc.).
 
 - **App + @task abstractions** (`application_sdk.app`): `App` ABC auto-registers as a Temporal workflow. `@task` decorator auto-registers as a Temporal activity with heartbeating, typed contracts, and configurable timeouts. `AppRegistry` and `TaskRegistry` singletons enable auto-discovery.
 
+- **`@entrypoint` decorator** (`application_sdk.app`): Marks `App` methods as independently-triggerable execution paths. Each `@entrypoint` generates one Temporal workflow at worker startup. Multi-entry-point apps dispatch via `POST /workflows/v1/start?entrypoint=<name>`; single-entry-point apps retain backward-compatible naming. `EntryPointMetadata` carries the kebab-case name, typed input/output, and method name.
+
+- **Built-in storage tasks** (`application_sdk.app`): `App.upload()`, `App.download()`, `App.cleanup_files()`, and `App.cleanup_storage()` are pre-registered `@task` methods on every `App`. Contracts are in `application_sdk.contracts.storage` (`UploadInput`, `DownloadInput`) and `application_sdk.contracts.cleanup` (`CleanupInput`, `CleanupOutput`, `StorageCleanupInput`, `StorageCleanupOutput`).
+
+- **`App.on_complete()` lifecycle hook** (`application_sdk.app`): Override to run teardown logic after a workflow completes (success or failure). Replaces the v2 `CleanupInterceptor` pattern with an explicit, overridable method on the `App` class.
+
 - **Temporal execution layer** (`application_sdk.execution`): `create_worker()` factory auto-discovers all registered `App` subclasses and their `@task` methods. Includes correlation ID propagation, lifecycle event interceptors, and temp-directory cleanup interceptors.
 
-- **Handler framework** (`application_sdk.handler`): Typed `Handler` ABC with `test_auth`, `preflight_check`, `fetch_metadata`. `create_app_handler_service()` FastAPI factory replaces the untyped `HandlerInterface` + `APIServer` pattern.
+- **Handler framework** (`application_sdk.handler`): Typed `Handler` ABC with `test_auth`, `preflight_check`, `fetch_metadata`. Response contract types (`AuthStatus`, `PreflightStatus`, `ApiMetadataOutput`, `SqlMetadataOutput`) are exported from `application_sdk.handler`. `create_app_handler_service()` FastAPI factory replaces the untyped `HandlerInterface` + `APIServer` pattern.
 
 - **CLI entry point** (`application_sdk.main`): `application-sdk --mode worker|handler|combined --app module:Class`. `run_dev_combined()` for local development. Auto-discovery of all `App` subclasses in a module.
 
-- **Built-in SQL connector templates** (`application_sdk.templates`): `SqlMetadataExtractor` and `SqlQueryExtractor` replace `BaseSQLMetadataExtractionWorkflow`/`Activities` and `SQLQueryExtractionWorkflow`/`Activities` with typed contracts and single-class patterns.
+- **Built-in SQL connector templates** (`application_sdk.templates`): `SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor`, and `SqlQueryExtractor` replace the v2 workflow/activities split with typed contracts and single-class patterns. `IncrementalSqlMetadataExtractor` adds deletion detection: a current-state snapshot is uploaded at extraction time and diffed against the previous run to emit deleted-asset events automatically.
+
+- **External cloud storage** (`application_sdk.storage.cloud`): `CloudStore` provides async `download`, `upload`, `list`, and `get_bytes` against customer-provided S3, GCS, or Azure buckets, constructed via `CloudStore.from_credentials()` using the standard `csa-connectors-objectstore` credential format. Distinct from the tenant's own Dapr-backed store.
+
+- **OAuth 2.0 token service** (`application_sdk.credentials`): `OAuthTokenService` wraps an `OAuthClientCredential` and manages the full client-credentials token lifecycle (acquire, cache, refresh before expiry), serialising concurrent requests with an `asyncio.Lock`. Replaces `application_sdk.clients.atlan_auth`.
+
+- **Typed contract reference types** (`application_sdk.contracts.types`): `GitReference` (repo, branch, path), `ConnectionRef` (qualified name, type), and `StorageTier` (`TRANSIENT` / `RETAINED` / `PERSISTENT`) for use in `FileReference.tier`. These replace raw strings for external references in contract dataclasses; `TRANSIENT` files are cleaned up automatically after the workflow completes.
+
+- **Credential system** (`application_sdk.credentials`): `CredentialRef` for portable credential handles, `CredentialResolver` for runtime lookup and decryption via the infrastructure's `CredentialVault`, and `CredentialTypeRegistry` for mapping auth-type strings to typed credential classes. `AtlanClientMixin` provides a ready-made async Atlan platform client (`create_async_atlan_client()`) for `App` subclasses that need to call the Atlan API.
+
+- **Observability context APIs** (`application_sdk.observability`): `ExecutionContext` (workflow run ID, activity type, attempt, task queue, and related Temporal metadata) and `CorrelationContext` (correlation ID) are propagated automatically by the execution layer. Access via `get_execution_context()` / `set_execution_context()` and `get_correlation_context()` / `set_correlation_context()`.
+
+- **`PublishInputMixin`** (`application_sdk.contracts.base`): Pydantic mixin for apps whose workflow output feeds the Automation Engine Publish App. Auto-derives `publish_state_prefix` and `current_state_prefix` from `connection_qualified_name`; callers only need to set `connection_qualified_name` and `transformed_data_prefix`.
 
 ### Deprecations
 
