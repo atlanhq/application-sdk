@@ -132,15 +132,21 @@ class SnowflakeQueryExtractor(SqlQueryExtractor):
 
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
-        """Determine batch count from Snowflake query history."""
-        # TODO: implement — connect via sql_client_class, COUNT rows in QUERY_HISTORY
-        raise NotImplementedError("example stub — implement in your connector")
+        """Determine batch count from Snowflake query history.
+
+        TODO: replace with real implementation — connect via sql_client_class,
+        COUNT rows in QUERY_HISTORY, and return total_batches / batch_size.
+        """
+        return QueryBatchOutput(total_batches=0, batch_size=1000, total_count=0)
 
     @task(timeout_seconds=3600, heartbeat_timeout_seconds=60, auto_heartbeat_seconds=10)
     async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
-        """Fetch one batch of queries from Snowflake."""
-        # TODO: implement — page through QUERY_HISTORY using fetch_queries_sql
-        raise NotImplementedError("example stub — implement in your connector")
+        """Fetch one batch of queries from Snowflake.
+
+        TODO: replace with real implementation — page through QUERY_HISTORY
+        using fetch_queries_sql and write results to the object store.
+        """
+        return QueryFetchOutput(queries_fetched=0)
 
 
 class SampleSnowflakeHandler(Handler):
