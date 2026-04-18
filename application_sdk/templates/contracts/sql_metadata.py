@@ -15,6 +15,11 @@ from application_sdk.contracts.types import ConnectionRef, MaxItems
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
 
+# Disallow single quotes in filter/regex fields to prevent SQL injection when
+# values are substituted into SQL templates via _prepare_sql (str.replace).
+# Real-world DB name patterns never require single quotes.
+_SAFE_FILTER_PATTERN = r"^[^']*$"
+
 
 class ExtractionInput(Input, allow_unbounded_fields=True):
     """Top-level input for a SQL metadata extraction run."""
@@ -47,13 +52,13 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     output_path: str = ""
     """Local or object store path for output files."""
 
-    exclude_filter: str = ""
+    exclude_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     """Regex filter for excluding schemas/tables."""
 
-    include_filter: str = ""
+    include_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     """Regex filter for including schemas/tables."""
 
-    temp_table_regex: str = ""
+    temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     """Regex pattern identifying temporary tables."""
 
     source_tag_prefix: str = ""
@@ -90,9 +95,9 @@ class ExtractionTaskInput(Input, allow_unbounded_fields=True):
     credential_ref: CredentialRef | None = None
     output_prefix: str = ""
     output_path: str = ""
-    exclude_filter: str = ""
-    include_filter: str = ""
-    temp_table_regex: str = ""
+    exclude_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
+    include_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
+    temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     source_tag_prefix: str = ""
 
 
