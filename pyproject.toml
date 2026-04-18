@@ -231,6 +231,7 @@ extend-select = [
 ".github/**" = ["G004", "T201"]
 "tests/**" = ["G004"]
 "tools/**" = ["T201"]
+"examples/**" = ["T201"]
 
 [tool.uv]
 default-groups = ["dev", "test"]
