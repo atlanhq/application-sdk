@@ -100,14 +100,15 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Checkout SDK helper scripts
-        # Pull only ``.github/scripts/`` from the SDK at main.
+        # Pull only ``.github/scripts/`` from the SDK.
         # github.workflow_ref and github.workflow_sha both resolve to the *caller's*
-        # ref in a reusable workflow context (GitHub bug) — ref is pinned to main
-        # so it always picks up the latest released version of the scripts.
+        # ref in a reusable workflow context (GitHub bug) — ref is pinned to HYP-488
+        # (branched from refactor-v3) which has parse_atlan_yaml.py.
+        # Revert to main once refactor-v3 is merged to main.
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          ref: HYP-488
           path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
