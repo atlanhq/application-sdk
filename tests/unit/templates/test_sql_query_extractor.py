@@ -81,14 +81,12 @@ class TestSqlQueryExtractorSubclass:
         # Verify the base class itself is a proper App subclass.
         assert issubclass(SqlQueryExtractor, App)
 
-    async def test_get_query_batches_returns_zero_batches_when_no_sql_client(
+    async def test_get_query_batches_raises_when_no_sql_client(
         self,
     ) -> None:
         extractor = SqlQueryExtractor.__new__(SqlQueryExtractor)
-        result = await extractor.get_query_batches(QueryBatchInput())
-        assert result.total_batches == 0
-        assert result.batch_size == 0
-        assert result.total_count == 0
+        with pytest.raises(NotImplementedError, match="must set sql_client_class"):
+            await extractor.get_query_batches(QueryBatchInput())
 
     async def test_fetch_queries_raises_not_implemented_by_default(self) -> None:
         extractor = SqlQueryExtractor.__new__(SqlQueryExtractor)

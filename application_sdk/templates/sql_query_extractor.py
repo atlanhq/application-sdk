@@ -3,10 +3,21 @@
 Subclass to implement connector-specific logic::
 
     class MyQueryExtractor(SqlQueryExtractor):
+        sql_client_class = MySQLClient
+        fetch_queries_sql = "SELECT ..."
+
+        @task(timeout_seconds=3600)
+        async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
+            return await super().get_query_batches(input)
+
         @task(timeout_seconds=3600)
         async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
             # connector-specific query fetching
             return QueryFetchOutput(queries_fetched=100)
+
+See :class:`application_sdk.templates.SqlMetadataExtractor` for the canonical
+example of the SQL-template pattern (``sql_client_class`` + ``fetch_*_sql``
+ClassVars + ``super()`` from the ``@task`` override).
 """
 
 from __future__ import annotations
@@ -43,10 +54,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
     SQL-string pattern: set ``sql_client_class`` and ``fetch_queries_sql``
     on your subclass and implement ``get_query_batches`` / ``fetch_queries``
-    using those attributes.  When ``sql_client_class`` is not set the base
-    ``get_query_batches`` returns zero batches so the workflow completes
-    successfully with no data — suitable for testing the framework without
-    a live database connection.
+    using those attributes.
     """
 
     # Prevent auto-registration of the abstract base template.
@@ -62,18 +70,14 @@ class SqlQueryExtractor(BaseMetadataExtractor):
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
         """Determine how many batches to process and their size.
 
-        Default: returns zero batches when ``sql_client_class`` is not set,
-        causing ``run()`` to complete immediately with no queries fetched.
-
         Override in your subclass (or set ``sql_client_class``) to implement
         connector-specific batch counting.
         """
         if self.sql_client_class is None:
-            logger.info(
-                "sql_client_class not set on %s — returning 0 batches",
-                type(self).__name__,
+            raise NotImplementedError(
+                f"{type(self).__name__} must set sql_client_class, or override "
+                "get_query_batches() to implement batch sizing."
             )
-            return QueryBatchOutput(total_batches=0, batch_size=0, total_count=0)
         raise NotImplementedError(
             f"{type(self).__name__} must implement get_query_batches() "
             "when sql_client_class is set."

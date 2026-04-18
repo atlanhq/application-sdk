@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
@@ -58,8 +58,32 @@ from application_sdk.templates.contracts.sql_metadata import (
 
 if TYPE_CHECKING:
     from application_sdk.clients.sql import BaseSQLClient
+    from application_sdk.credentials.ref import CredentialRef
 
 logger = get_logger(__name__)
+
+_ET = TypeVar("_ET", bound=ExtractionTaskInput)
+
+
+def _task_input(
+    input_cls: type[_ET],
+    src: ExtractionInput,
+    *,
+    cred_ref: "CredentialRef | None",
+) -> _ET:
+    """Build a typed task input from the top-level extraction input."""
+    return input_cls(
+        workflow_id=src.workflow_id,
+        connection=src.connection,
+        credential_guid=src.credential_guid,
+        credential_ref=cred_ref,
+        output_prefix=src.output_prefix,
+        output_path=src.output_path,
+        exclude_filter=src.exclude_filter,
+        include_filter=src.include_filter,
+        temp_table_regex=src.temp_table_regex,
+        source_tag_prefix=src.source_tag_prefix,
+    )
 
 
 class SqlMetadataExtractor(BaseMetadataExtractor):
@@ -359,60 +383,16 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 column_result,
             ) = await asyncio.gather(
                 self.fetch_databases(
-                    FetchDatabasesInput(
-                        workflow_id=workflow_id,
-                        connection=input.connection,
-                        credential_guid=input.credential_guid,
-                        credential_ref=cred_ref,
-                        output_prefix=input.output_prefix,
-                        output_path=input.output_path,
-                        exclude_filter=input.exclude_filter,
-                        include_filter=input.include_filter,
-                        temp_table_regex=input.temp_table_regex,
-                        source_tag_prefix=input.source_tag_prefix,
-                    )
+                    _task_input(FetchDatabasesInput, input, cred_ref=cred_ref)
                 ),
                 self.fetch_schemas(
-                    FetchSchemasInput(
-                        workflow_id=workflow_id,
-                        connection=input.connection,
-                        credential_guid=input.credential_guid,
-                        credential_ref=cred_ref,
-                        output_prefix=input.output_prefix,
-                        output_path=input.output_path,
-                        exclude_filter=input.exclude_filter,
-                        include_filter=input.include_filter,
-                        temp_table_regex=input.temp_table_regex,
-                        source_tag_prefix=input.source_tag_prefix,
-                    )
+                    _task_input(FetchSchemasInput, input, cred_ref=cred_ref)
                 ),
                 self.fetch_tables(
-                    FetchTablesInput(
-                        workflow_id=workflow_id,
-                        connection=input.connection,
-                        credential_guid=input.credential_guid,
-                        credential_ref=cred_ref,
-                        output_prefix=input.output_prefix,
-                        output_path=input.output_path,
-                        exclude_filter=input.exclude_filter,
-                        include_filter=input.include_filter,
-                        temp_table_regex=input.temp_table_regex,
-                        source_tag_prefix=input.source_tag_prefix,
-                    )
+                    _task_input(FetchTablesInput, input, cred_ref=cred_ref)
                 ),
                 self.fetch_columns(
-                    FetchColumnsInput(
-                        workflow_id=workflow_id,
-                        connection=input.connection,
-                        credential_guid=input.credential_guid,
-                        credential_ref=cred_ref,
-                        output_prefix=input.output_prefix,
-                        output_path=input.output_path,
-                        exclude_filter=input.exclude_filter,
-                        include_filter=input.include_filter,
-                        temp_table_regex=input.temp_table_regex,
-                        source_tag_prefix=input.source_tag_prefix,
-                    )
+                    _task_input(FetchColumnsInput, input, cred_ref=cred_ref)
                 ),
             )
 

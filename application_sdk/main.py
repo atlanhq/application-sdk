@@ -67,7 +67,7 @@ if hasattr(signal, "SIGUSR1"):
     signal.signal(signal.SIGUSR1, _debug_dump_handler)
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
     from pathlib import Path
 
     from application_sdk.app.base import App
@@ -530,6 +530,24 @@ def _install_excepthook() -> None:
     sys.excepthook = _hook
 
 
+def _install_graceful_signal_handlers(
+    loop: asyncio.AbstractEventLoop,
+    handler: Callable[[], None],
+) -> None:
+    """Register SIGINT/SIGTERM handlers, with a fallback for platforms that
+    don't support loop.add_signal_handler() (e.g. Windows).
+    """
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, handler)
+        except (NotImplementedError, OSError):
+            logger.warning(
+                "loop.add_signal_handler() not supported on this platform "
+                "(signal=%s); graceful shutdown via signals is unavailable",
+                sig.name,
+            )
+
+
 async def run_worker_mode(config: AppConfig) -> None:
     """Run in worker mode (Temporal workflow execution).
 
@@ -628,15 +646,7 @@ async def run_worker_mode(config: AppConfig) -> None:
 
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, _signal_handler)
-        except (NotImplementedError, OSError):
-            logger.warning(
-                "loop.add_signal_handler() not supported on this platform "
-                "(signal=%s); graceful shutdown via signals is unavailable",
-                sig.name,
-            )
+    _install_graceful_signal_handlers(loop, _signal_handler)
 
     from application_sdk.server.health import WorkerHealthServer
 
@@ -891,15 +901,7 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, _signal_handler)
-        except (NotImplementedError, OSError):
-            logger.warning(
-                "loop.add_signal_handler() not supported on this platform "
-                "(signal=%s); graceful shutdown via signals is unavailable",
-                sig.name,
-            )
+    _install_graceful_signal_handlers(loop, _signal_handler)
 
     from application_sdk.server.health import WorkerHealthServer
 

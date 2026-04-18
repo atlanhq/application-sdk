@@ -15,10 +15,14 @@ Pass ``normalize=False`` to bypass normalisation and use the key exactly as
 supplied (useful for callers that already hold a clean store key and want to
 avoid the constant import overhead, or for tests that need exact key control).
 
-Internal helpers (small payloads)
-----------------------------------
-* ``_put(key, data)``    — write bytes (sidecars, metadata, JSON configs)
+Public helpers (small payloads)
+--------------------------------
+* ``put_json(key, obj)`` — serialise to JSON and write (configs, metadata)
 * ``_get_bytes(key)``    — read bytes (sidecars, metadata, JSON configs)
+
+Internal helpers
+----------------
+* ``_put(key, data)``    — write raw bytes (use ``put_json`` for JSON)
 
 Streaming API (large files)
 ----------------------------
@@ -42,6 +46,8 @@ from typing import TYPE_CHECKING
 import obstore
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from obstore.store import ObjectStore
 
 # stdlib logger: cannot use get_logger here due to circular import
@@ -377,6 +383,35 @@ async def _put(
         from application_sdk.storage.errors import StorageError
 
         raise StorageError(f"Failed to put key '{key}'", key=key, cause=exc) from exc
+
+
+async def put_json(
+    key: str,
+    obj: Any,
+    store: "ObjectStore | None" = None,
+    *,
+    normalize: bool = True,
+) -> None:
+    """Serialise *obj* to JSON and write to *key*.
+
+    Convenience wrapper around :func:`_put` for small JSON payloads such as
+    workflow configs and sidecar metadata.  For large files use
+    :func:`upload_file` instead.
+
+    Args:
+        key: Object key / path.  Normalised by default (see :func:`normalize_key`).
+        obj: A JSON-serialisable object (dict, list, etc.).
+        store: An obstore-compatible store instance, or ``None`` to use the
+            store from the current infrastructure context.
+        normalize: When ``True`` (default), normalise *key* before use.
+
+    Raises:
+        StorageError: If the write fails.
+        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    import orjson
+
+    await _put(key, orjson.dumps(obj), store, normalize=normalize)
 
 
 async def delete(

@@ -10,6 +10,8 @@ This is a major version bump with a clean break from v2. All v2 modules and APIs
 
 **Storage API removals** (`application_sdk.storage`): The backward-compat aliases `delete_file` and `list_files` have been removed. Use `delete` and `list_keys` respectively. See [Upgrading ObjectStore calls](docs/upgrade-guide-v3.md#upgrading-objectstore-calls) in the upgrade guide.
 
+**SQL filter validation** (`application_sdk.templates.contracts.sql_metadata`): `ExtractionInput` and `ExtractionTaskInput` now reject values containing a single quote (`'`) on the `exclude_filter`, `include_filter`, and `temp_table_regex` fields. A `ValidationError` is raised at workflow start if any of these fields contain a `'`. Real-world database name patterns do not require single quotes; this guards against SQL injection via filter substitution.
+
 ### Features
 
 - **Schema-driven contracts** (`application_sdk.contracts`): `Input`/`Output` Pydantic model bases with payload-safety validation at class-definition time. Forbidden: `Any`, `bytes`, unbounded `list`/`dict`. Safe alternatives: `Annotated[list[T], MaxItems(N)]`, `FileReference`.
@@ -30,7 +32,7 @@ This is a major version bump with a clean break from v2. All v2 modules and APIs
 
 - **CLI entry point** (`application_sdk.main`): `application-sdk --mode worker|handler|combined --app module:Class`. `run_dev_combined()` for local development. Auto-discovery of all `App` subclasses in a module.
 
-- **Built-in SQL connector templates** (`application_sdk.templates`): `SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor`, and `SqlQueryExtractor` replace the v2 workflow/activities split with typed contracts and single-class patterns. `IncrementalSqlMetadataExtractor` adds deletion detection: a current-state snapshot is uploaded at extraction time and diffed against the previous run to emit deleted-asset events automatically. `SqlMetadataExtractor` now ships default SQL execution: set `sql_client_class` and `fetch_*_sql` class attributes and call `super()` instead of re-implementing the fetch/query loop in every connector. `SqlQueryExtractor.get_query_batches()` returns `QueryBatchOutput(total_batches=0)` by default (when `sql_client_class` is not set) instead of raising `NotImplementedError` — the workflow completes with no queries fetched, which is useful for testing without a live database.
+- **Built-in SQL connector templates** (`application_sdk.templates`): `SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor`, and `SqlQueryExtractor` replace the v2 workflow/activities split with typed contracts and single-class patterns. `IncrementalSqlMetadataExtractor` adds deletion detection: a current-state snapshot is uploaded at extraction time and diffed against the previous run to emit deleted-asset events automatically. `SqlMetadataExtractor` now ships default SQL execution: set `sql_client_class` and `fetch_*_sql` class attributes and call `super()` instead of re-implementing the fetch/query loop in every connector. `SqlQueryExtractor` follows the same pattern for query extraction; override `get_query_batches()` and `fetch_queries()` to provide connector-specific batch counting and data fetching.
 
 - **External cloud storage** (`application_sdk.storage.cloud`): `CloudStore` provides async `download`, `upload`, `list`, and `get_bytes` against customer-provided S3, GCS, or Azure buckets, constructed via `CloudStore.from_credentials()` using the standard `csa-connectors-objectstore` credential format. Distinct from the tenant's own Dapr-backed store.
 

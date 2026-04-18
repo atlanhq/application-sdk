@@ -27,7 +27,7 @@ class QueryExtractionInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
     """GUID of credentials stored in the secret store."""
 
-    credential_ref: "CredentialRef | None" = None
+    credential_ref: CredentialRef | None = None
     """Typed credential reference — preferred over credential_guid for new apps."""
 
     output_prefix: str = ""

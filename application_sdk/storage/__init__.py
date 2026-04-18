@@ -46,6 +46,7 @@ from application_sdk.storage.ops import (
     download_file,
     exists,
     normalize_key,
+    put_json,
     upload_file,
 )
 
@@ -67,6 +68,7 @@ __all__ = [
     "exists",
     "list_keys",
     "normalize_key",
+    "put_json",
     # Errors
     "StorageError",
     "StorageNotFoundError",

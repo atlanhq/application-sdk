@@ -1168,10 +1168,10 @@ def create_app_handler_service(
         if _storage is None:
             return False
 
-        from application_sdk.storage.ops import _put  # noqa: PLC0415
+        from application_sdk.storage.ops import put_json  # noqa: PLC0415
 
         key = _config_objectstore_key(config_id, config_type)
-        await _put(key, orjson.dumps(body), _storage)
+        await put_json(key, body, _storage)
         return True
 
     @app.get("/workflows/v1/config/{config_id}")

@@ -17,7 +17,10 @@ from application_sdk.credentials.spec import AgentCredentialSpec
 
 # Disallow single quotes in filter/regex fields to prevent SQL injection when
 # values are substituted into SQL templates via _prepare_sql (str.replace).
-# Real-world DB name patterns never require single quotes.
+# Safety invariant: every fetch_*_sql template MUST wrap substituted values in
+# single quotes (e.g. '{normalized_exclude_regex}'). This pattern blocks the only
+# character that would escape that wrapping. Real-world DB name patterns never
+# require single quotes.
 _SAFE_FILTER_PATTERN = r"^[^']*$"
 
 

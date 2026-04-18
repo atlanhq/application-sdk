@@ -280,3 +280,38 @@ class TestAppRegistration:
             class BadOutputApp(App):
                 async def run(self, input: SimpleInput) -> str:  # type: ignore[override]
                     return "bad"
+
+    def test_grandchild_inheriting_run_from_intermediate_parent_registers(self) -> None:
+        """A grandchild that inherits run() from an intermediate parent registers correctly.
+
+        This covers the ``if "run" not in cls.__dict__: … cls.run is App.run`` branch
+        added to ``__init_subclass__``.
+        """
+
+        class Intermediate(App):
+            async def run(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput(result=input.value)
+
+        class Grandchild(Intermediate):
+            pass
+
+        registry = AppRegistry.get_instance()
+        metadata = registry.get("grandchild")
+        assert metadata is not None
+        assert metadata.name == "grandchild"
+        assert Grandchild._input_type is SimpleInput
+        assert Grandchild._output_type is SimpleOutput
+
+    def test_entrypoint_only_subclass_not_registered_as_run_app(self) -> None:
+        """A subclass that only has no run() (inherits the App.run stub) is silently skipped.
+
+        Specifically: cls.run is App.run → skip without raising.
+        This covers the second branch of the new __init_subclass__ registration logic.
+        """
+
+        class NoRunApp(App):
+            pass
+
+        registry = AppRegistry.get_instance()
+        with pytest.raises(Exception):
+            registry.get("no-run-app")
