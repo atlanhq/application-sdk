@@ -14,13 +14,9 @@ Install `atlan-application-sdk` as a dependency in your project:
 uv add atlan-application-sdk
 ```
 
-- Using alternative package managers:
+- Using pip:
 ```bash
-# Using pip
 pip install atlan-application-sdk
-
-# Using Poetry
-poetry add atlan-application-sdk
 ```
 
 > [!TIP]

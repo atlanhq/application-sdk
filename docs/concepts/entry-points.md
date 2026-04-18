@@ -126,21 +126,16 @@ A single `App` can expose multiple independently-triggerable workflows by decora
 ```python
 from application_sdk.app import App, entrypoint, task
 from application_sdk.contracts.base import Input, Output
-from dataclasses import dataclass
 
-@dataclass
 class ExtractionInput(Input):
     connection_qualified_name: str = ""
 
-@dataclass
 class ExtractionOutput(Output):
     count: int = 0
 
-@dataclass
 class MiningInput(Input):
     connection_qualified_name: str = ""
 
-@dataclass
 class MiningOutput(Output):
     count: int = 0
 
@@ -161,7 +156,7 @@ class SnowflakeApp(App):
 **Contract requirements** enforced by the decorator:
 - Exactly one parameter extending `Input` (no `*args`/`**kwargs`)
 - Return type extending `Output`
-- Input/Output dataclasses must be defined at module level — not inside functions or under `from __future__ import annotations`
+- Input/Output Pydantic models must be defined at module level — not inside functions or under `from __future__ import annotations`
 
 ### Workflow naming
 

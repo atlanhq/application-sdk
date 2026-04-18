@@ -102,7 +102,7 @@ Let developers use Temporal and Dapr SDKs directly.
 ## Rationale
 
 1. **Accessibility**: Most developers building data pipelines don't need to become Temporal experts. They need to define inputs, outputs, and processing logic.
-2. **Guardrails**: The framework enforces best practices (single-dataclass contracts, proper timeout defaults) that would be optional with raw SDK usage.
+2. **Guardrails**: The framework enforces best practices (single-Pydantic-model contracts, proper timeout defaults) that would be optional with raw SDK usage.
 3. **Execution mode parity**: The same code must run identically in tests and production. Abstraction makes this natural.
 4. **Progressive disclosure**: Start simple with `App` and `@task`. Power users can configure advanced options (timeouts, retries, `passthrough_modules`) without dropping to raw SDK.
 

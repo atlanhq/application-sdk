@@ -59,7 +59,7 @@ Pass the parent's OTLP endpoint in workflow context; child apps route logs to th
 1. **Service ownership**: Each app owner is responsible for their app's behavior. Having all of an app's logs in one service name — regardless of who called it — supports this model.
 2. **Shared app visibility**: For shared apps like Loader, seeing consolidated usage from all callers is valuable: which callers generate the most load, common failure patterns, optimization opportunities.
 3. **Correlation is standard**: Every major observability platform supports querying by trace ID or correlation ID. This is the expected pattern for distributed systems.
-4. **Simplicity**: The framework propagates correlation context automatically through the `_correlation_id` field on input dataclasses.
+4. **Simplicity**: The framework propagates correlation context automatically through the `_correlation_id` field on input Pydantic models.
 
 ## Consequences
 
@@ -74,7 +74,7 @@ Pass the parent's OTLP endpoint in workflow context; child apps route logs to th
 ## Implementation
 
 - `self.logger` in both `run()` and `@task` automatically includes `app_name`, `run_id`, and `correlation_id` on every entry
-- `correlation_id` propagates from parent to child via the `_correlation_id` field on input dataclasses
+- `correlation_id` propagates from parent to child via the `_correlation_id` field on input Pydantic models
 - OpenTelemetry trace context propagates automatically through Temporal interceptors
 - The Helm chart sets `OTEL_RESOURCE_ATTRIBUTES` with `k8s.cluster.name`, `k8s.pod.name`, `k8s.node.name`, `k8s.namespace.name`, `k8s.workflow.name`, and `k8s.workflow.package.version` on each pod
 - Workers set `OTEL_EXPORTER_OTLP_ENDPOINT` to `$(K8S_NODE_IP):4317` so telemetry flows to the cluster's node-level OTLP collector

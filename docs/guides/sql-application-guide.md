@@ -200,7 +200,7 @@ v3 uses Python mapper functions to transform raw extraction results into pyatlan
 
 ```python
 # app/asset_mapper.py
-from pyatlan.model.assets import Database, Schema, Table, Column
+from pyatlan_v9.model.assets import Database, Schema, Table, Column
 
 
 def map_database(row: dict, connection_qualified_name: str) -> Database:

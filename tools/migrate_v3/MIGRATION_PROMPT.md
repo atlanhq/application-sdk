@@ -536,23 +536,19 @@ class LineageActivities(ActivitiesInterface):
 ### After (v3) — one App, two @entrypoint methods
 
 ```python
-from dataclasses import dataclass, field
+from typing import Any
 
-@dataclass
 class ExtractionInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
-    connection: dict = field(default_factory=dict)
+    connection: dict[str, Any] = {}
 
-@dataclass
 class ExtractionOutput(Output):
     transformed_data_prefix: str = ""
 
-@dataclass
 class LineageInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
-    connection: dict = field(default_factory=dict)
+    connection: dict[str, Any] = {}
 
-@dataclass
 class LineageOutput(Output):
     transformed_data_prefix: str = ""
 

@@ -19,9 +19,9 @@ Three interlocking changes define v3:
 | **Data contracts** | `Dict[str, Any]` everywhere | Typed `Input` / `Output` Pydantic models |
 | **Infrastructure** | Direct Dapr/Temporal SDK calls | Protocol-based interfaces via `self.context` |
 
-All v2 imports still work in **v3.0.x** — they emit `DeprecationWarning` and will be removed in v3.1.0.
+v3.0 is a clean break from v2. All v2 modules and APIs have been removed — there is no deprecation shim or compatibility layer. Update all imports to their v3 equivalents before upgrading.
 
-**Quick import mapping:**
+**Import mapping (v2 → v3):**
 
 | v2 | v3 |
 |----|----|

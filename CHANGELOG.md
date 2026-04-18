@@ -12,7 +12,7 @@ This is a major version bump with a clean break from v2. All v2 modules and APIs
 
 ### Features
 
-- **Schema-driven contracts** (`application_sdk.contracts`): `Input`/`Output` dataclass bases with payload-safety validation at class-definition time. Forbidden: `Any`, `bytes`, unbounded `list`/`dict`. Safe alternatives: `Annotated[list[T], MaxItems(N)]`, `FileReference`.
+- **Schema-driven contracts** (`application_sdk.contracts`): `Input`/`Output` Pydantic model bases with payload-safety validation at class-definition time. Forbidden: `Any`, `bytes`, unbounded `list`/`dict`. Safe alternatives: `Annotated[list[T], MaxItems(N)]`, `FileReference`.
 
 - **Infrastructure abstraction** (`application_sdk.infrastructure`): Protocol-based interfaces for `StateStore`, `SecretStore`, `PubSub`, `InputBinding`, `OutputBinding`, `CapacityPool`, `CredentialVault`, and `Subscription`. Dapr implementations in `_dapr/`, Redis in `_redis/`, mock implementations for testing in `application_sdk.testing` (`MockStateStore`, `MockSecretStore`, `MockPubSub`, etc.).
 
@@ -36,7 +36,7 @@ This is a major version bump with a clean break from v2. All v2 modules and APIs
 
 - **OAuth 2.0 token service** (`application_sdk.credentials`): `OAuthTokenService` wraps an `OAuthClientCredential` and manages the full client-credentials token lifecycle (acquire, cache, refresh before expiry), serialising concurrent requests with an `asyncio.Lock`. Replaces `application_sdk.clients.atlan_auth`.
 
-- **Typed contract reference types** (`application_sdk.contracts.types`): `GitReference` (repo, branch, path), `ConnectionRef` (qualified name, type), and `StorageTier` (`TRANSIENT` / `RETAINED` / `PERSISTENT`) for use in `FileReference.tier`. These replace raw strings for external references in contract dataclasses; `TRANSIENT` files are cleaned up automatically after the workflow completes.
+- **Typed contract reference types** (`application_sdk.contracts.types`): `GitReference` (repo, branch, path), `ConnectionRef` (qualified name, type), and `StorageTier` (`TRANSIENT` / `RETAINED` / `PERSISTENT`) for use in `FileReference.tier`. These replace raw strings for external references in contract models; `TRANSIENT` files are cleaned up automatically after the workflow completes.
 
 - **Credential system** (`application_sdk.credentials`): `CredentialRef` for portable credential handles, `CredentialResolver` for runtime lookup and decryption via the infrastructure's `CredentialVault`, and `CredentialTypeRegistry` for mapping auth-type strings to typed credential classes. `AtlanClientMixin` provides a ready-made async Atlan platform client (`create_async_atlan_client()`) for `App` subclasses that need to call the Atlan API.
 

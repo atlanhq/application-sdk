@@ -68,6 +68,8 @@ async def read_extraction_output(self, path: str) -> list[dict]:
 
 **Expected Performance Impact:** Reading a 500MB JSON file synchronously blocks the event loop for 5-15 seconds. Using `run_in_thread()` moves the blocking work to a thread pool, keeping the event loop responsive.
 
+**Important:** Never use `run_in_thread()` to wrap `AtlanClient` calls — the Atlan client is async-only. Use its native async API directly.
+
 ---
 
 ### PERF-003: `time.sleep()` in Async Code

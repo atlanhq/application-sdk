@@ -121,10 +121,11 @@ Derived from the 11 Architecture Decision Records (ADRs) governing application-s
 
 ## ADR-0010: Async-First Design
 
-**Rule:** Async-first. Blocking operations must use `self.task_context.run_in_thread()`. Blocking code must have internal timeouts (framework cannot kill threads).
+**Rule:** Async-first. Blocking operations must use `self.task_context.run_in_thread()`. Blocking code must have internal timeouts (framework cannot kill threads). Never use `run_in_thread()` to wrap `AtlanClient` calls — the Atlan client is async-only; use its native async API.
 
 **Violations to flag:**
 - Blocking calls (`requests.get`, `open()` for large files, sync DB drivers) without `run_in_thread()`
+- `run_in_thread()` wrapping `AtlanClient` or any other async-native Atlan SDK call
 - `run_in_thread()` calls where the blocking function has no internal timeout parameter
 - `time.sleep()` in async code (use `asyncio.sleep()`)
 - Sync HTTP libraries (`requests`, `urllib3`) when `httpx` async is available

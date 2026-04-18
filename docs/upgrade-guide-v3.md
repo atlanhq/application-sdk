@@ -6,7 +6,7 @@ Application SDK v3.0 introduces three major improvements:
 2. **Infrastructure abstraction** — Protocol-based interfaces decouple services from Dapr
 3. **Temporal abstraction** — `App` + `@task` replace `@workflow.defn` + `@activity.defn`
 
-All v2 imports remain functional in v3.0.x with `DeprecationWarning`. They will be removed in v3.1.0.
+v3.0 is a clean break from v2. All v2 modules and APIs have been removed — there is no deprecation shim or compatibility layer. Update all imports to their v3 equivalents using the quick reference below.
 
 ---
 
@@ -350,23 +350,19 @@ class LineageActivities(ActivitiesInterface):
 # app/connector.py
 from application_sdk.app import App, entrypoint, task
 from application_sdk.contracts.base import Input, Output
-from dataclasses import dataclass, field
+from typing import Any
 
-@dataclass
 class ExtractionInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
-    connection: dict = field(default_factory=dict)
+    connection: dict[str, Any] = {}
 
-@dataclass
 class ExtractionOutput(Output):
     transformed_data_prefix: str = ""
 
-@dataclass
 class LineageInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
-    connection: dict = field(default_factory=dict)
+    connection: dict[str, Any] = {}
 
-@dataclass
 class LineageOutput(Output):
     transformed_data_prefix: str = ""
 
@@ -992,9 +988,9 @@ asyncio.run(run_dev_combined(
 
 ---
 
-## Removed in v3.1.0
+## Removed in v3.0.0
 
-All of the following emit `DeprecationWarning` on import in v3.0.x and will be **removed** in v3.1.0.
+All of the following were removed in v3.0.0. They no longer exist — importing them will raise `ImportError`. Use the v3 replacement listed in each row.
 
 ### Application / Entry Point
 

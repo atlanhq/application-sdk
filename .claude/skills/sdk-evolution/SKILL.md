@@ -372,16 +372,12 @@ mkdir -p "${WORKSPACE}/findings" "${WORKSPACE}/challenged" "${WORKSPACE}/tickets
 
 ### 1.3 Load Reference Rules
 
-Read ALL 8 reference rule files from `skills/sdk-evolution/references/`:
+Read ALL 4 reference rule files from `skills/sdk-evolution/references/`:
 
 1. `v3-architecture-rules.md`
 2. `code-quality-rules.md`
 3. `security-rules.md`
-4. `test-quality-rules.md`
-5. `performance-rules.md`
-6. `docs-quality-rules.md`
-7. `v2-pattern-rules.md`
-8. `bug-hunting-rules.md`
+4. `performance-rules.md`
 
 Store each file's content — you will pass them into agent prompts in Stage 2.
 
@@ -485,7 +481,7 @@ Agent tool call:
     You are a test quality reviewer for the Atlan application-sdk v3.
 
     ## Your Reference Rules
-    {paste full content of references/test-quality-rules.md}
+    No formal test-quality-rules.md exists — apply general test quality principles: typed dataclasses/Pydantic for fixtures, asyncio_mode="auto", clean_app_registry after tests defining App subclasses, no real external calls in unit tests, no redundant @pytest.mark.asyncio decorators, mock infrastructure (MockStateStore/MockSecretStore/MockPubSub), meaningful assertions over `assert result is not None`.
 
     ## Suppression List (SKIP these)
     {suppression list from Stage 0}
@@ -576,7 +572,7 @@ Agent tool call:
     You are a documentation quality reviewer for the Atlan application-sdk v3.
 
     ## Your Reference Rules
-    {paste full content of references/docs-quality-rules.md}
+    No formal docs-quality-rules.md exists — apply general documentation quality principles: code examples must match current API, no v2 import paths (from application_sdk.workflows/activities/handlers), no @dataclass on Input/Output contracts (should be plain Pydantic BaseModel subclass), no bare `pyatlan.` imports (use pyatlan_v9), all referenced module paths must exist in current codebase.
 
     ## Suppression List (SKIP these)
     {suppression list from Stage 0}
@@ -613,7 +609,7 @@ Agent tool call:
     You are a v2 pattern detector for the Atlan application-sdk v3.
 
     ## Your Reference Rules
-    {paste full content of references/v2-pattern-rules.md}
+    No formal v2-pattern-rules.md exists — scan for: imports from application_sdk.workflows/activities/handlers (removed in v3); ActivitiesInterface/WorkflowInterface/HandlerInterface subclasses; direct DaprClient/temporalio usage outside execution/_temporal/_dapr modules; @workflow.defn/@activity.defn decorators; ObjectStore from application_sdk.services; BaseSQLMetadataExtractionActivities; credentials as plain dict (should use CredentialRef); bare pyatlan. imports (should be pyatlan_v9); @dataclass on Input/Output subclasses (should be plain Pydantic BaseModel).
 
     ## Suppression List (SKIP these)
     {suppression list from Stage 0}
@@ -649,7 +645,7 @@ Agent tool call:
     You are a bug hunter for the Atlan application-sdk v3.
 
     ## Your Reference Rules
-    {paste full content of references/bug-hunting-rules.md}
+    No formal bug-hunting-rules.md exists — hunt for: race conditions on shared mutable state across coroutines; Temporal determinism violations (random/time/IO in run()); missing heartbeats in long @task methods; resource leaks (unclosed DB connections, file handles); None/Optional mishandling; swallowed exceptions hiding real failures; blocking calls in async context without run_in_thread(); mutable default arguments; concurrency bugs in asyncio.gather usage.
 
     ## Suppression List (SKIP these)
     {suppression list from Stage 0}
@@ -690,7 +686,7 @@ Agent tool call:
     You are a bug hunter for the Atlan application-sdk v3.
 
     ## Your Reference Rules
-    {paste full content of references/bug-hunting-rules.md}
+    No formal bug-hunting-rules.md exists — hunt for: race conditions on shared mutable state across coroutines; Temporal determinism violations (random/time/IO in run()); missing heartbeats in long @task methods; resource leaks (unclosed DB connections, file handles); None/Optional mishandling; swallowed exceptions hiding real failures; blocking calls in async context without run_in_thread(); mutable default arguments; concurrency bugs in asyncio.gather usage.
 
     ## Suppression List (SKIP these)
     {suppression list from Stage 0}

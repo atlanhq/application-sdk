@@ -309,7 +309,7 @@ After the test suite run, check whether the connector has e2e tests using the v2
    - For **each** test method in the original, generate a corresponding `async def test_xxx(deployed_app)` function. The generated file MUST have at least as many test functions as the original has test methods.
    - Extract actual payload values from the original (hardcoded dicts, `default_payload()` bodies, connection IDs) — do **not** substitute placeholder values like `"test-connection"` if the original has real values.
    - If an assertion checks response fields whose format changed (e.g. `result['authenticationCheck']`), keep the assertion but add `# TODO(upgrade-v3): response format changed — update field names`.
-   - Use the `AppConfig` fixture with real values derived from the connector's `pyproject.toml` (`name`, `tool.poetry.name`, or Helm chart values) — not generic placeholders.
+   - Use the `AppConfig` fixture with real values derived from the connector's `pyproject.toml` (`[project].name` in PEP 621 / uv layout, or Helm chart values) — not generic placeholders.
 4. Place the new file alongside the original, named `tests/e2e/test_<connector_name>_v3.py`.
 5. Add `# TODO(upgrade-v3): human must validate this test is equivalent to the original` at the top of the new file.
 6. Do NOT delete or modify the original test file.
@@ -824,7 +824,7 @@ app/
 
 **Mapper function pattern:**
 ```python
-from pyatlan.model.assets import Table
+from pyatlan_v9.model.assets import Table
 
 def map_table(record: TableRecord, connection_qn: str, workflow_id: str, ...) -> Table:
     asset = Table(
@@ -1083,9 +1083,9 @@ credential_stores = {"default": MockSecretStore(secrets)}
 await run_dev_combined(MyApp, credential_stores=credential_stores)
 ```
 
-### Credential resolution only via credential_guid
+### Credential resolution via CredentialRef
 
-No `credentials` dict fallback. Always resolve from secret store inside `@task` methods:
+v3 uses `CredentialRef` (from `application_sdk.credentials`) as a portable credential handle. Always resolve credentials from the secret store inside `@task` methods via `self.context.get_secret()`. The old `credential_guid: str` field is a v2 pattern — the v3 equivalent is a `CredentialRef`-typed field on the Input model, or look up by the raw GUID if migrating incrementally:
 ```python
 creds_json = await self.context.get_secret(credential_guid)
 creds = json.loads(creds_json) if isinstance(creds_json, str) else creds_json

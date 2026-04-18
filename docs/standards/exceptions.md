@@ -198,7 +198,7 @@ finally:
 - **Log all failures** for debugging
 - **Continue operation** when possible
 
-### **Workflows (`application_sdk/workflows/`)**
+### **Apps (`application_sdk/app/`)**
 - **Critical**: Re-raise exceptions to trigger workflow retry logic
 - **Include workflow context** in error messages
 - **Handle Temporal-specific exceptions** appropriately
