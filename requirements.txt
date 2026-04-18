@@ -247,7 +247,7 @@ lazy-loader==0.4
     # via pyatlan
 loguru==0.7.3
     # via atlan-application-sdk
-lupa==2.6
+lupa==2.7
     # via fakeredis
 markdown-it-py==4.0.0
     # via rich
