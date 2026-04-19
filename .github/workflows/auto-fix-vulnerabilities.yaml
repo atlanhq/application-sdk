@@ -1,0 +1,309 @@
+# Auto-fix Vulnerabilities — reusable workflow triggered by PR comment.
+#
+# When a developer comments "/fix-vulnerabilities" on a PR, this workflow:
+#   1. Downloads the latest scan results from the Vulnerability Scan workflow
+#   2. Identifies fixable Python app dependencies (skips base image CVEs)
+#   3. Pins minimum version in pyproject.toml (prevents regression on future uv lock)
+#   4. Runs `uv lock --upgrade-package` for each
+#   5. Commits updated pyproject.toml + uv.lock to the PR branch
+#   5. Scan re-runs automatically on the new commit
+#
+# Usage in each app repo (.github/workflows/auto-fix.yml):
+#
+#   on:
+#     issue_comment:
+#       types: [created]
+#   jobs:
+#     auto-fix:
+#       if: github.event.issue.pull_request && contains(github.event.comment.body, '/fix-vulnerabilities')
+#       uses: atlanhq/application-sdk/.github/workflows/auto-fix-vulnerabilities.yaml@main
+#       secrets: inherit
+#
+name: Auto-fix Vulnerabilities
+
+on:
+  workflow_call:
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  auto-fix:
+    name: Auto-fix Vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Get PR branch
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            core.setOutput('branch', pr.data.head.ref);
+            core.setOutput('number', context.issue.number);
+
+      - name: React to comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket',
+            });
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Download latest scan artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/scan-artifacts
+
+          # Find the latest vulnerability scan run for this PR
+          RUN_ID=$(gh run list \
+            --workflow="vulnerability-scan.yml" \
+            --branch="${{ steps.pr.outputs.branch }}" \
+            --status=completed \
+            --limit=5 \
+            --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
+
+          if [ -z "$RUN_ID" ]; then
+            echo "No scan runs found for this PR branch"
+            exit 1
+          fi
+
+          echo "Downloading scan results from run $RUN_ID"
+          gh run download "$RUN_ID" --name trivy-results --dir /tmp/scan-artifacts || echo "No trivy results"
+          gh run download "$RUN_ID" --name snyk-results --dir /tmp/scan-artifacts || echo "No snyk results"
+
+      - name: Identify fixable vulnerabilities
+        id: identify
+        run: |
+          python3 - <<'PYEOF'
+          import json, os
+
+          # Load allowlist
+          allowlist = {}
+          if os.path.exists(".security/allowlist.json"):
+              with open(".security/allowlist.json") as f:
+                  allowlist = json.load(f)
+
+          all_vulns = {}
+          go_prefixes = ("github.com/", "golang.org/", "google.golang.org/", "go.opentelemetry.io/", "go.")
+
+          # Parse Trivy
+          try:
+              with open("/tmp/scan-artifacts/trivy_results.json") as f:
+                  trivy = json.load(f)
+              for result in trivy.get("Results", []):
+                  result_type = result.get("Type", "")
+                  is_app = result_type in ("pip", "pipenv", "poetry", "uv", "python-pkg")
+                  for vuln in result.get("Vulnerabilities", []):
+                      vid = vuln.get("VulnerabilityID")
+                      if vid and vid not in all_vulns:
+                          all_vulns[vid] = {
+                              "id": vid,
+                              "package": vuln.get("PkgName", ""),
+                              "installed": vuln.get("InstalledVersion", ""),
+                              "fixed": vuln.get("FixedVersion", ""),
+                              "source_type": "app" if is_app else "base_image",
+                          }
+          except Exception as e:
+              print(f"Trivy: {e}")
+
+          # Parse Snyk
+          try:
+              with open("/tmp/scan-artifacts/snyk_results.json") as f:
+                  snyk = json.load(f)
+              if not snyk.get("error"):
+                  for vuln in snyk.get("vulnerabilities", []):
+                      vid = vuln.get("id")
+                      if vid and vid not in all_vulns:
+                          all_vulns[vid] = {
+                              "id": vid,
+                              "package": vuln.get("packageName") or vuln.get("name", ""),
+                              "installed": vuln.get("version", ""),
+                              "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
+                              "source_type": "base_image",
+                          }
+                  for app in snyk.get("applications", []):
+                      for vuln in app.get("vulnerabilities", []):
+                          vid = vuln.get("id")
+                          if vid and vid not in all_vulns:
+                              all_vulns[vid] = {
+                                  "id": vid,
+                                  "package": vuln.get("packageName") or vuln.get("name", ""),
+                                  "installed": vuln.get("version", ""),
+                                  "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
+                                  "source_type": "app",
+                              }
+          except Exception as e:
+              print(f"Snyk: {e}")
+
+          # Filter: only new (not allowlisted), app-level, Python, with fix available
+          fixable = []
+          for v in all_vulns.values():
+              entry = allowlist.get(v["id"])
+              is_allowlisted = entry and not entry.get("_comment")
+              is_app = v.get("source_type") == "app"
+              has_fix = bool(v.get("fixed"))
+              is_python = not v.get("package", "").startswith(go_prefixes)
+
+              if not is_allowlisted and is_app and has_fix and is_python:
+                  fixable.append(v)
+
+          with open("/tmp/fixable_packages.json", "w") as f:
+              json.dump(fixable, f)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"count={len(fixable)}\n")
+
+          if fixable:
+              print(f"Found {len(fixable)} fixable Python dependencies:")
+              for v in fixable:
+                  print(f"  {v['package']}@{v['installed']} -> {v['fixed']}")
+          else:
+              print("No fixable Python dependencies found")
+          PYEOF
+
+      - name: Install uv
+        if: steps.identify.outputs.count > 0
+        uses: astral-sh/setup-uv@v4
+
+      - name: Fix vulnerable packages
+        if: steps.identify.outputs.count > 0
+        id: fix
+        run: |
+          python3 - <<'PYEOF'
+          import json, subprocess, os
+
+          with open("/tmp/fixable_packages.json") as f:
+              fixable = json.load(f)
+
+          fixed = []
+          failed = []
+
+          import re
+
+          def pin_in_pyproject(pkg, min_version):
+              """Update pyproject.toml to pin minimum version for the package."""
+              try:
+                  with open("pyproject.toml") as f:
+                      content = f.read()
+                  # Match patterns like: "pkg>=1.0.0", "pkg>=1.0", "pkg", "pkg==1.0.0"
+                  patterns = [
+                      (rf'("{pkg})(>=[\d.]+)"', f'"\\1>={min_version}"'),
+                      (rf'("{pkg})(==[\d.]+)"', f'"\\1>={min_version}"'),
+                      (rf'("{pkg})"', f'"\\1>={min_version}"'),
+                  ]
+                  updated = False
+                  for pattern, replacement in patterns:
+                      new_content, count = re.subn(pattern, replacement, content, flags=re.IGNORECASE)
+                      if count > 0:
+                          content = new_content
+                          updated = True
+                          break
+                  if updated:
+                      with open("pyproject.toml", "w") as f:
+                          f.write(content)
+                      return True
+              except Exception as e:
+                  print(f"  Warning: could not update pyproject.toml for {pkg}: {e}")
+              return False
+
+          for v in fixable:
+              pkg = v["package"]
+              target = v["fixed"].split(",")[0].strip()
+              print(f"Updating {pkg} -> {target}...")
+
+              # Step 1: Pin minimum version in pyproject.toml
+              pinned = pin_in_pyproject(pkg, target)
+              if pinned:
+                  print(f"  Pinned {pkg}>={target} in pyproject.toml")
+
+              # Step 2: Update lockfile
+              result = subprocess.run(
+                  ["uv", "lock", "--upgrade-package", pkg],
+                  capture_output=True, text=True
+              )
+
+              if result.returncode == 0:
+                  fixed.append(f"{pkg} -> {target}")
+                  print(f"  Updated {pkg} in uv.lock")
+              else:
+                  failed.append(f"{pkg}: {result.stderr[:200]}")
+                  print(f"  Failed: {result.stderr[:200]}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"fixed_count={len(fixed)}\n")
+
+          summary = ""
+          if fixed:
+              summary = "### 🔧 Auto-fix Vulnerabilities\n\n"
+              summary += "**Updated packages:**\n"
+              summary += "\n".join(f"- {p}" for p in fixed)
+          if failed:
+              summary += "\n\n**Failed to update:**\n"
+              summary += "\n".join(f"- {p}" for p in failed)
+          if not fixed and not failed:
+              summary = "### 🔧 Auto-fix Vulnerabilities\n\nNo fixable Python dependencies found. Remaining vulnerabilities may be from the base image (requires SDK team fix)."
+
+          with open("/tmp/fix_summary.md", "w") as f:
+              f.write(summary)
+
+          print(f"\nDone: {len(fixed)} fixed, {len(failed)} failed")
+          PYEOF
+
+      - name: Commit fixes
+        if: steps.fix.outputs.fixed_count > 0
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add uv.lock pyproject.toml 2>/dev/null || true
+          if ! git diff --staged --quiet; then
+            git commit -m "fix(security): auto-update vulnerable dependencies
+
+          Updated packages with known CRITICAL/HIGH CVEs to their fixed versions.
+          Triggered by /fix-vulnerabilities comment on PR #${{ steps.pr.outputs.number }}."
+            git push
+            echo "Fixes committed and pushed — scan will re-run automatically"
+          else
+            echo "No lockfile changes to commit"
+          fi
+
+      - name: Comment on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body;
+            try {
+              body = fs.readFileSync('/tmp/fix_summary.md', 'utf8');
+            } catch {
+              body = '### 🔧 Auto-fix Vulnerabilities\n\nNo scan results found. Run the vulnerability scan first.';
+            }
+            const time = new Date().toUTCString();
+            body += `\n\n<sub>Run: ${context.runId} | ${time}</sub>`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body,
+            });
