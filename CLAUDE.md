@@ -13,11 +13,11 @@ Non-standard commands used across the repo:
 
 **IMPORTANT**: Always run pre-commit checks before committing. CI will fail if pre-commit checks fail.
 
-**IMPORTANT**: For Dockerfile or dependency changes, run security scans (`trivy`, `grype`) before pushing. See `docs/build-scan-overview.md`.
+**IMPORTANT**: For Dockerfile or dependency changes, run security scans (`trivy`, `grype`) before pushing. See `docs/standards/build-security.md`.
 
 **Commit Rules**:
 - Never add Co-Authored-By lines to commits
-- Follow Conventional Commits format from `.cursor/rules/commits.mdc`
+- Follow Conventional Commits format from `docs/standards/commits.md`
 
 **Path Semantics (ObjectStore)**:
 - Key and prefix params for ObjectStore APIs accept either `./local/tmp/...` workflow paths or object-store keys like `artifacts/...`; the SDK normalizes these internally.
@@ -32,4 +32,4 @@ Where to look next (progressive disclosure):
 - `docs/agents/docs-updates.md` — which conceptual docs to update with code changes.
 - `docs/agents/review.md` — code review checklist.
 - `docs/agents/deepwiki.md` — DeepWiki MCP setup and when to verify SDK details.
-- `docs/build-scan-overview.md` — image hierarchy, security scanning, Dapr setup.
+- `docs/standards/build-security.md` — image hierarchy, security scanning, Dapr setup.

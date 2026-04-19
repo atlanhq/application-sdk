@@ -1,10 +1,14 @@
-import re
-from typing import Any, Dict, Optional
+from __future__ import annotations
 
-import boto3
-from sqlalchemy.engine.url import URL
+import re
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from application_sdk.constants import AWS_SESSION_NAME
+
+if TYPE_CHECKING:
+    import boto3
+    from sqlalchemy.engine.url import URL
+
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -78,7 +82,7 @@ def generate_aws_rds_token_with_iam_role(
         return token
 
     except ClientError as e:
-        raise Exception(f"Failed to assume role: {str(e)}")
+        raise Exception(f"Failed to assume role: {str(e)}") from e
 
 
 def generate_aws_rds_token_with_iam_user(
@@ -116,7 +120,7 @@ def generate_aws_rds_token_with_iam_user(
         )
         return token
     except Exception as e:
-        raise Exception(f"Failed to get user credentials: {str(e)}")
+        raise Exception(f"Failed to get user credentials: {str(e)}") from e
 
 
 def get_cluster_identifier(aws_client) -> Optional[str]:
@@ -153,6 +157,8 @@ def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
     Returns:
         boto3.Session: Configured boto3 session
     """
+    import boto3
+
     aws_access_key_id = credentials.get("aws_access_key_id") or credentials.get(
         "username"
     )
@@ -255,18 +261,24 @@ def create_aws_client(
     if credential_sources > 1:
         raise ValueError("Only one credential source should be provided at a time")
 
+    import boto3
+
     try:
         # Priority 1: Use provided session
         if session is not None:
             logger.debug(
-                f"Creating {service} client using provided session in region {region}"
+                "Creating AWS client using provided session",
+                service=service,
+                region=region,
             )
             return session.client(service, region_name=region)  # type: ignore
 
         # Priority 2: Use temporary credentials
         if temp_credentials is not None:
             logger.debug(
-                f"Creating {service} client using temporary credentials in region {region}"
+                "Creating AWS client using temporary credentials",
+                service=service,
+                region=region,
             )
             return boto3.client(  # type: ignore
                 service,
@@ -279,13 +291,14 @@ def create_aws_client(
         # Priority 3: Use default credentials
         if use_default_credentials:
             logger.debug(
-                f"Creating {service} client using default credentials in region {region}"
+                "Creating AWS client using default credentials",
+                service=service,
+                region=region,
             )
             return boto3.client(service, region_name=region)  # type: ignore
 
     except Exception as e:
-        logger.error(f"Failed to create {service} client in region {region}: {e}")
-        raise Exception(f"Failed to create {service} client: {str(e)}")
+        raise Exception(f"Failed to create {service} client: {str(e)}") from e
 
 
 def create_engine_url(
@@ -304,6 +317,8 @@ def create_engine_url(
     Returns:
         URL: SQLAlchemy engine URL
     """
+    from sqlalchemy.engine.url import URL
+
     host = credentials["host"]
     port = credentials.get("port")
     database = extra["database"]
@@ -327,15 +342,18 @@ def get_all_aws_regions() -> list[str]:
         Exception: If unable to retrieve regions from AWS
     """
     try:
+        import boto3
+
         # Use us-east-1 as the default region for the EC2 client since it's always available
         ec2_client = boto3.client("ec2", region_name="us-east-1")
         response = ec2_client.describe_regions()
         regions = [region["RegionName"] for region in response["Regions"]]
         return sorted(regions)  # Sort for consistent ordering
-    except Exception as e:
+    except Exception:
         # Fallback to a comprehensive hardcoded list if API call fails
         logger.warning(
-            f"Failed to retrieve AWS regions dynamically: {e}. Using fallback list."
+            "Failed to retrieve AWS regions dynamically, using fallback list",
+            exc_info=True,
         )
         return [
             "ap-northeast-1",

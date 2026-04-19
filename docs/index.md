@@ -7,19 +7,14 @@ Application SDK is a Python library for developing applications on the Atlan Pla
 
 Install `atlan-application-sdk` as a dependency in your project:
 
-- Using pip:
+- Using uv (recommended):
 ```bash
-# pip install the latest version from PyPI
-pip install atlan-application-sdk
+uv add atlan-application-sdk
 ```
 
-- Using alternative package managers:
+- Using pip:
 ```bash
-# Using uv to install the latest version from PyPI
-uv add atlan-application-sdk
-
-# OR using Poetry to install the latest version from PyPI
-poetry add atlan-application-sdk
+pip install atlan-application-sdk
 ```
 
 

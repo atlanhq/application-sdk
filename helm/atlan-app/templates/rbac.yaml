@@ -1,0 +1,27 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "atlan-app.appName" . }}-secret-reader
+  namespace: {{ include "atlan-app.namespace" . }}
+  labels:
+    {{- include "atlan-app.commonLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "atlan-app.appName" . }}-secret-reader
+  namespace: {{ include "atlan-app.namespace" . }}
+  labels:
+    {{- include "atlan-app.commonLabels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "atlan-app.serviceAccountName" . }}
+    namespace: {{ include "atlan-app.namespace" . }}
+roleRef:
+  kind: Role
+  name: {{ include "atlan-app.appName" . }}-secret-reader
+  apiGroup: rbac.authorization.k8s.io

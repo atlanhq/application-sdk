@@ -3,19 +3,16 @@ import atexit
 import logging
 import threading
 from time import time
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar, Dict, Optional
 
 from opentelemetry import metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.resources import Resource
 
 from application_sdk.constants import (
-    APP_SDK_VERSION,
-    APP_TYPE,
-    APPLICATION_VERSION,
     ENABLE_OTLP_METRICS,
+    ENABLE_PROMETHEUS_METRICS,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
     METRICS_FILE_NAME,
@@ -24,24 +21,19 @@ from application_sdk.constants import (
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
-    OTEL_RESOURCE_ATTRIBUTES,
-    OTEL_WF_NODE_NAME,
-    PUBLISHED_AT,
-    RELEASE_CHANNEL,
-    RELEASE_ID,
     SEGMENT_API_URL,
     SEGMENT_BATCH_SIZE,
     SEGMENT_BATCH_TIMEOUT_SECONDS,
     SEGMENT_DEFAULT_USER_ID,
     SEGMENT_WRITE_KEY,
     SERVICE_NAME,
-    SERVICE_VERSION,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import MetricRecord, MetricType
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.segment_client import SegmentClient
 from application_sdk.observability.utils import (
+    build_otel_resource,
     get_observability_dir,
     get_workflow_context,
 )
@@ -65,7 +57,12 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     - Parquet file storage
     """
 
-    _flush_task_started = False
+    _flush_task_started: ClassVar[bool] = False
+
+    @classmethod
+    def _reset_for_testing(cls) -> None:
+        """Reset initialization state for test isolation."""
+        cls._flush_task_started = False
 
     def __init__(self):
         """Initialize the metrics adapter with configuration and setup.
@@ -86,8 +83,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             file_name=METRICS_FILE_NAME,
         )
 
-        # Initialize OpenTelemetry metrics if enabled
-        if ENABLE_OTLP_METRICS:
+        # Initialize OpenTelemetry metrics if enabled (OTLP export or Prometheus scraping)
+        if ENABLE_OTLP_METRICS or ENABLE_PROMETHEUS_METRICS:
             self._setup_otel_metrics()
 
         # Initialize Segment client (enabled automatically if write key is present)
@@ -104,16 +101,16 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         # Start periodic flush task if not already started
         if not AtlanMetricsAdapter._flush_task_started:
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
+                try:
+                    loop = asyncio.get_running_loop()
                     loop.create_task(self._periodic_flush())
-                else:
+                except RuntimeError:
                     threading.Thread(
                         target=self._start_asyncio_flush, daemon=True
                     ).start()
                 AtlanMetricsAdapter._flush_task_started = True
-            except Exception as e:
-                logging.error(f"Failed to start metrics flush task: {e}")
+            except Exception:
+                logging.error("Failed to start metrics flush task", exc_info=True)
 
     def _setup_otel_metrics(self):
         """Set up OpenTelemetry metrics exporter and configuration.
@@ -129,57 +126,35 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             Exception: If setup fails, logs error and continues without OTLP
         """
         try:
-            # Get workflow node name for Argo environment
-            workflow_node_name = OTEL_WF_NODE_NAME
-
-            # Parse resource attributes
-            resource_attributes = self._parse_otel_resource_attributes(
-                OTEL_RESOURCE_ATTRIBUTES
-            )
-
-            # Add default service attributes if not present
-            if "service.name" not in resource_attributes:
-                resource_attributes["service.name"] = SERVICE_NAME
-            if "service.version" not in resource_attributes:
-                resource_attributes["service.version"] = SERVICE_VERSION
-
-            # App vitals metadata from Local Marketplace
-            if APPLICATION_VERSION:
-                resource_attributes["app.version"] = APPLICATION_VERSION
-            if RELEASE_ID:
-                resource_attributes["app.release_id"] = RELEASE_ID
-            if RELEASE_CHANNEL:
-                resource_attributes["app.release_channel"] = RELEASE_CHANNEL
-            if APP_SDK_VERSION:
-                resource_attributes["app.sdk_version"] = APP_SDK_VERSION
-            if APP_TYPE:
-                resource_attributes["app.type"] = APP_TYPE
-            if PUBLISHED_AT:
-                resource_attributes["app.published_at"] = PUBLISHED_AT
-
-            # Add workflow node name if running in Argo
-            if workflow_node_name:
-                resource_attributes["k8s.workflow.node.name"] = workflow_node_name
-
             # Create resource
-            resource = Resource.create(resource_attributes)
+            resource = build_otel_resource()
 
-            # Create OTLP exporter
-            exporter = OTLPMetricExporter(
-                endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
-            )
+            metric_readers = []
 
-            # Create metric reader
-            reader = PeriodicExportingMetricReader(
-                exporter,
-                export_interval_millis=OTEL_BATCH_DELAY_MS,
-            )
+            # Add OTLP exporter if enabled
+            if ENABLE_OTLP_METRICS:
+                exporter = OTLPMetricExporter(
+                    endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
+                    timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
+                )
+                reader = PeriodicExportingMetricReader(
+                    exporter,
+                    export_interval_millis=OTEL_BATCH_DELAY_MS,
+                )
+                metric_readers.append(reader)
+
+            # Add Prometheus metric reader if enabled
+            if ENABLE_PROMETHEUS_METRICS:
+                from opentelemetry.exporter.prometheus import PrometheusMetricReader
+
+                self._prometheus_reader = PrometheusMetricReader()
+                metric_readers.append(self._prometheus_reader)
+                logging.info("Prometheus metrics reader enabled")
 
             # Create meter provider
             self.meter_provider = MeterProvider(
                 resource=resource,
-                metric_readers=[reader],
+                metric_readers=metric_readers,
             )
 
             # Set global meter provider
@@ -188,33 +163,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             # Create meter
             self.meter = self.meter_provider.get_meter(SERVICE_NAME)
 
-        except Exception as e:
-            logging.error(f"Failed to setup OTLP metrics: {e}")
-
-    def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
-        """Parse OpenTelemetry resource attributes from environment variable.
-
-        Args:
-            env_var (str): Comma-separated string of key-value pairs
-
-        Returns:
-            dict[str, str]: Dictionary of parsed resource attributes
-
-        Example:
-            Input: "service.name=myapp,service.version=1.0"
-            Output: {"service.name": "myapp", "service.version": "1.0"}
-        """
-        try:
-            if env_var:
-                attributes = env_var.split(",")
-                return {
-                    item.split("=")[0].strip(): item.split("=")[1].strip()
-                    for item in attributes
-                    if "=" in item
-                }
-        except Exception as e:
-            logging.error(f"Failed to parse OTLP resource attributes: {e}")
-        return {}
+        except Exception:
+            logging.error("Failed to setup OTLP metrics", exc_info=True)
 
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic metric flushing.
@@ -265,8 +215,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         if not isinstance(record, MetricRecord):
             return
 
-        # Send to OpenTelemetry if enabled
-        if ENABLE_OTLP_METRICS:
+        # Send to OpenTelemetry if any OTel-based sink is enabled
+        if ENABLE_OTLP_METRICS or ENABLE_PROMETHEUS_METRICS:
             self._send_to_otel(record)
 
         # Send to Segment (client handles enable/disable internally)
@@ -290,15 +240,11 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             Exception: If sending fails, logs error and continues
         """
         try:
-            # OTel attributes only accept primitive types (str, int, float, bool).
-            # Filter out complex values (lists, dicts) that are valid in Segment
-            # but unsupported by the OTel metrics SDK.
             otel_attrs = {
                 k: v
                 for k, v in metric_record.labels.items()
                 if isinstance(v, (str, int, float, bool))
             }
-
             if metric_record.type == MetricType.COUNTER:
                 counter = self.meter.create_counter(
                     name=metric_record.name,
@@ -320,8 +266,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                     unit=metric_record.unit,
                 )
                 histogram.record(metric_record.value, otel_attrs)
-        except Exception as e:
-            logging.error(f"Error sending metric to OpenTelemetry: {e}")
+        except Exception:
+            logging.error("Error sending metric to OpenTelemetry", exc_info=True)
 
     def _log_to_console(self, metric_record: MetricRecord):
         """Log metric to console using the logger.
@@ -351,8 +297,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 log_message += f" Unit: {metric_record.unit}"
             logger = get_logger()
             logger.metric(log_message)
-        except Exception as e:
-            logging.error(f"Error logging metric to console: {e}")
+        except Exception:
+            logging.error("Error logging metric to console", exc_info=True)
 
     def record_metric(
         self,
@@ -381,7 +327,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Raises:
             Exception: If recording fails, logs error and continues
         """
-        labels.update(get_workflow_context().model_dump())
+        labels.update(get_workflow_context())
 
         try:
             # Create metric record
@@ -398,8 +344,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             # Add record using base class method
             self.add_record(metric_record)
 
-        except Exception as e:
-            logging.error(f"Error recording metric: {e}")
+        except Exception:
+            logging.error("Error recording metric", exc_info=True)
 
 
 # Create a singleton instance of the metrics adapter

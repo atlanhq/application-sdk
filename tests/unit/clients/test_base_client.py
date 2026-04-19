@@ -7,7 +7,7 @@ from httpx import Headers
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.base import BaseClient
-from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
+from application_sdk.testing.hypothesis.strategies.clients.sql import (
     sql_credentials_strategy,
 )
 
@@ -324,27 +324,26 @@ class TestBaseClient:
 
     @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_post_request_with_verify_false(
-        self, mock_async_client, base_client
+    @patch("application_sdk.clients.base.get_ssl_context", return_value=True)
+    async def test_execute_http_post_request_always_verifies_ssl(
+        self, mock_get_ssl_context, mock_async_client, base_client
     ):
-        """Test HTTP POST request with SSL verification disabled."""
-        # Mock response
+        """SSL verification is always enforced; get_ssl_context() cannot be bypassed."""
         mock_response = MagicMock()
         mock_response.status_code = 200
 
-        # Mock async context manager
         mock_client_instance = AsyncMock()
         mock_client_instance.post.return_value = mock_response
         mock_async_client.return_value.__aenter__.return_value = mock_client_instance
 
         url = "https://api.example.com/test"
 
-        result = await base_client.execute_http_post_request(url=url, verify=False)
+        result = await base_client.execute_http_post_request(url=url)
 
         assert result == mock_response
-        # Verify that verify=False was passed to AsyncClient
+        mock_get_ssl_context.assert_called_once()
         mock_async_client.assert_called_once_with(
-            timeout=30, transport=base_client.http_retry_transport, verify=False
+            timeout=30, transport=base_client.http_retry_transport, verify=True
         )
 
     @given(credentials=sql_credentials_strategy)

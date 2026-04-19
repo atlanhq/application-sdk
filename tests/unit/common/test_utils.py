@@ -3,8 +3,10 @@ from pathlib import Path
 from typing import Dict, List, Union
 from unittest.mock import mock_open, patch
 
+import pytest
+
 from application_sdk.common.error_codes import CommonError
-from application_sdk.common.utils import (
+from application_sdk.common.sql_filters import (
     extract_database_names_from_regex_common,
     normalize_filters,
     parse_filter_input,
@@ -73,10 +75,12 @@ class TestPrepareQuery:
             }
         }
 
-        with patch("application_sdk.common.utils.logger") as mock_logger:
+        with patch("application_sdk.common.sql_filters.logger") as mock_logger:
             result = prepare_query(query, workflow_args)
             mock_logger.error.assert_called_once_with(
-                "Error preparing query [SELECT * FROM {normalized_include_regex}]:  Expecting value: line 1 column 1 (char 0)",
+                "Error preparing query",
+                query=query,
+                error_message="Expecting value: line 1 column 1 (char 0)",
                 error_code=CommonError.QUERY_PREPARATION_ERROR.code,
             )
             assert result is None
@@ -429,7 +433,7 @@ class TestExtractDatabaseNamesFromIncludeRegex:
 
         assert result == "'.*'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_include_regex_logs_warnings_for_invalid_names(
         self, mock_logger
     ) -> None:
@@ -442,10 +446,12 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         )
 
         # Should log warning for invalid database name
-        mock_logger.warning.assert_called_with("Invalid database name format: 123db")
+        mock_logger.warning.assert_called_with(
+            "Invalid database name format: %s", "123db"
+        )
         assert result == "'^(valid_db)$'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_include_regex_logs_warnings_for_processing_errors(
         self, mock_logger
     ) -> None:
@@ -461,11 +467,11 @@ class TestExtractDatabaseNamesFromIncludeRegex:
 
         # Should log warning for invalid database name format
         mock_logger.warning.assert_called_with(
-            "Invalid database name format: invalid^pattern"
+            "Invalid database name format: %s", "invalid^pattern"
         )
         assert result == "'^(db1|db2)$'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_include_regex_logs_error_for_general_exception(
         self, mock_logger
     ) -> None:
@@ -749,7 +755,7 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         # Should handle incomplete patterns and only extract for wildcard schemas
         assert result == "'^(db2)$'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_exclude_regex_logs_warnings_for_invalid_names(
         self, mock_logger
     ) -> None:
@@ -762,10 +768,12 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         )
 
         # Should log warning for invalid database name
-        mock_logger.warning.assert_called_with("Invalid database name format: 123db")
+        mock_logger.warning.assert_called_with(
+            "Invalid database name format: %s", "123db"
+        )
         assert result == "'^(valid_db)$'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_exclude_regex_logs_warnings_for_processing_errors(
         self, mock_logger
     ) -> None:
@@ -779,11 +787,11 @@ class TestExtractDatabaseNamesFromExcludeRegex:
 
         # Should log warning for invalid database name format
         mock_logger.warning.assert_called_with(
-            "Invalid database name format: invalid-pattern"
+            "Invalid database name format: %s", "invalid-pattern"
         )
         assert result == "'^(db1|db2)$'"
 
-    @patch("application_sdk.common.utils.logger")
+    @patch("application_sdk.common.sql_filters.logger")
     def test_extract_database_names_from_exclude_regex_logs_error_for_general_exception(
         self, mock_logger
     ) -> None:
@@ -816,9 +824,11 @@ def test_read_sql_files_with_multiple_files(tmp_path: Path):
         "VIEWS": "SELECT * FROM views;",
     }
 
-    with patch("glob.glob") as mock_glob, patch(
-        "builtins.open", new_callable=mock_open
-    ) as mock_file_open, patch("os.path.dirname", return_value="/mock/path"):
+    with (
+        patch("glob.glob") as mock_glob,
+        patch("builtins.open", new_callable=mock_open) as mock_file_open,
+        patch("os.path.dirname", return_value="/mock/path"),
+    ):
         # Configure glob to return our mock files
         mock_glob.return_value = [
             os.path.join("/mock/path", file_path) for file_path in mock_files.keys()
@@ -844,8 +854,9 @@ def test_read_sql_files_with_multiple_files(tmp_path: Path):
 
 def test_read_sql_files_with_empty_directory():
     """Test read_sql_files when no SQL files are found."""
-    with patch("glob.glob", return_value=[]), patch(
-        "os.path.dirname", return_value="/mock/path"
+    with (
+        patch("glob.glob", return_value=[]),
+        patch("os.path.dirname", return_value="/mock/path"),
     ):
         result = read_sql_files("/mock/path")
         assert result == {}
@@ -861,9 +872,11 @@ def test_read_sql_files_with_whitespace():
 
     expected_content = "SELECT *\n    FROM tables\n    WHERE id > 0;"
 
-    with patch("glob.glob") as mock_glob, patch(
-        "builtins.open", mock_open(read_data=sql_content)
-    ), patch("os.path.dirname", return_value="/mock/path"):
+    with (
+        patch("glob.glob") as mock_glob,
+        patch("builtins.open", mock_open(read_data=sql_content)),
+        patch("os.path.dirname", return_value="/mock/path"),
+    ):
         mock_glob.return_value = ["/mock/path/queries/test.sql"]
 
         result = read_sql_files("/mock/path")
@@ -884,9 +897,11 @@ def test_read_sql_files_case_sensitivity():
         "MIXED": "mixed case",
     }
 
-    with patch("glob.glob") as mock_glob, patch(
-        "builtins.open", new_callable=mock_open
-    ) as mock_file_open, patch("os.path.dirname", return_value="/mock/path"):
+    with (
+        patch("glob.glob") as mock_glob,
+        patch("builtins.open", new_callable=mock_open) as mock_file_open,
+        patch("os.path.dirname", return_value="/mock/path"),
+    ):
         mock_glob.return_value = [
             os.path.join("/mock/path", file_path) for file_path in mock_files.keys()
         ]
@@ -921,7 +936,6 @@ class TestParseFilterInput:
 
     def test_invalid_json_strings(self) -> None:
         """Test invalid JSON strings raise CommonError."""
-        import pytest
 
         with pytest.raises(CommonError, match="Invalid filter JSON"):
             parse_filter_input("invalid json")

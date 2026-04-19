@@ -11,9 +11,9 @@ from unittest import mock
 import pytest
 from temporalio.api.common.v1 import Payload
 
-from application_sdk.interceptors.activity_failure_logging import (
-    ActivityFailureLoggingActivityInboundInterceptor,
-    ActivityFailureLoggingInterceptor,
+from application_sdk.execution._temporal.interceptors.activity_failure_logging import (
+    TaskFailureLoggingInterceptor,
+    _TaskFailureLoggingActivityInboundInterceptor,
 )
 from application_sdk.observability.context import correlation_context
 
@@ -43,8 +43,8 @@ class MockActivityInfo:
     heartbeat_timeout: timedelta | None = timedelta(seconds=30)
 
 
-class TestActivityFailureLoggingActivityInboundInterceptor:
-    """Tests for ActivityFailureLoggingActivityInboundInterceptor."""
+class Test_TaskFailureLoggingActivityInboundInterceptor:
+    """Tests for _TaskFailureLoggingActivityInboundInterceptor."""
 
     @pytest.fixture
     def mock_next_activity(self):
@@ -56,7 +56,7 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
     @pytest.fixture
     def interceptor(self, mock_next_activity):
         """Create the interceptor instance."""
-        return ActivityFailureLoggingActivityInboundInterceptor(mock_next_activity)
+        return _TaskFailureLoggingActivityInboundInterceptor(mock_next_activity)
 
     @pytest.fixture
     def mock_activity_info(self):
@@ -69,7 +69,7 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
         input_data = MockExecuteActivityInput()
 
         with mock.patch(
-            "application_sdk.interceptors.activity_failure_logging.logger"
+            "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
         ) as mock_logger:
             result = await interceptor.execute_activity(input_data)
 
@@ -91,7 +91,7 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
 
         with mock.patch("temporalio.activity.info", return_value=mock_activity_info):
             with mock.patch(
-                "application_sdk.interceptors.activity_failure_logging.logger"
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
             ) as mock_logger:
                 with pytest.raises(ConnectionRefusedError):
                     await interceptor.execute_activity(input_data)
@@ -121,6 +121,51 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
                 assert kwargs["tenant.id"] == "tenant-abc"
 
     @pytest.mark.asyncio
+    async def test_failure_log_includes_app_vitals_context(
+        self, interceptor, mock_next_activity, mock_activity_info
+    ):
+        """Phase 2: structured failure log includes App Vitals identity + error classification."""
+        input_data = MockExecuteActivityInput()
+        test_error = TimeoutError("connection timed out")
+        mock_next_activity.execute_activity.side_effect = test_error
+
+        correlation_context.set({"atlan-tenant-id": "tenant-av"})
+
+        with (
+            mock.patch("temporalio.activity.info", return_value=mock_activity_info),
+            mock.patch(
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.APPLICATION_NAME",
+                "snowflake",
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.APP_BUILD_ID",
+                "2.4.2",
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
+            ) as mock_logger,
+        ):
+            with pytest.raises(TimeoutError):
+                await interceptor.execute_activity(input_data)
+
+            kwargs = mock_logger.error.call_args[1]
+
+            # App Vitals identity
+            assert kwargs["app_name"] == "snowflake"
+            assert kwargs["app_version"] == "2.4.2"
+            assert kwargs["tenant_id"] == "tenant-av"
+            assert kwargs["status"] == "failed"
+
+            # Error classification
+            assert kwargs["error_type"] == "timeout"
+            assert kwargs["error_class"] == "TimeoutError"
+
+            # App Vitals classification metadata
+            assert kwargs["dimension"] == "reliability"
+            assert kwargs["source"] == "temporal"
+            assert kwargs["metric_name"] == "app_vitals.reliability.activity_completed"
+
+    @pytest.mark.asyncio
     async def test_failure_reraises_original_exception(
         self, interceptor, mock_next_activity, mock_activity_info
     ):
@@ -131,7 +176,7 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
 
         with mock.patch("temporalio.activity.info", return_value=mock_activity_info):
             with mock.patch(
-                "application_sdk.interceptors.activity_failure_logging.logger"
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
             ):
                 with pytest.raises(ValueError) as exc_info:
                     await interceptor.execute_activity(input_data)
@@ -152,7 +197,7 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
 
         with mock.patch("temporalio.activity.info", return_value=mock_activity_info):
             with mock.patch(
-                "application_sdk.interceptors.activity_failure_logging.logger"
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
             ) as mock_logger:
                 with pytest.raises(RuntimeError):
                     await interceptor.execute_activity(input_data)
@@ -179,7 +224,7 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
 
         with mock.patch("temporalio.activity.info", return_value=mock_activity_info):
             with mock.patch(
-                "application_sdk.interceptors.activity_failure_logging.logger"
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
             ) as mock_logger:
                 with pytest.raises(RuntimeError):
                     await interceptor.execute_activity(input_data)
@@ -208,7 +253,7 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
             "temporalio.activity.info", return_value=activity_info_no_timeouts
         ):
             with mock.patch(
-                "application_sdk.interceptors.activity_failure_logging.logger"
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
             ) as mock_logger:
                 with pytest.raises(RuntimeError):
                     await interceptor.execute_activity(input_data)
@@ -242,7 +287,7 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
 
         with mock.patch("temporalio.activity.info", return_value=mock_activity_info):
             with mock.patch(
-                "application_sdk.interceptors.activity_failure_logging.logger"
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
             ) as mock_logger:
                 with pytest.raises(_ActivityCancelled):
                     await interceptor.execute_activity(input_data)
@@ -266,7 +311,7 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
             "temporalio.activity.info", side_effect=RuntimeError("Info failed")
         ):
             with mock.patch(
-                "application_sdk.interceptors.activity_failure_logging.logger"
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
             ) as mock_logger:
                 with pytest.raises(ValueError) as exc_info:
                     await interceptor.execute_activity(input_data)
@@ -289,7 +334,7 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
 
         with mock.patch("temporalio.activity.info", return_value=mock_activity_info):
             with mock.patch(
-                "application_sdk.interceptors.activity_failure_logging.logger"
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
             ) as mock_logger:
                 # Make logger.error raise an exception
                 mock_logger.error.side_effect = RuntimeError("Logger broken")
@@ -303,13 +348,13 @@ class TestActivityFailureLoggingActivityInboundInterceptor:
                 mock_logger.warning.assert_called()
 
 
-class TestActivityFailureLoggingInterceptor:
-    """Tests for the main ActivityFailureLoggingInterceptor class."""
+class TestTaskFailureLoggingInterceptor:
+    """Tests for the main TaskFailureLoggingInterceptor class."""
 
     @pytest.fixture
     def interceptor(self):
         """Create the main interceptor instance."""
-        return ActivityFailureLoggingInterceptor()
+        return TaskFailureLoggingInterceptor()
 
     def test_workflow_interceptor_class_returns_none(self, interceptor):
         """Test that workflow_interceptor_class returns None (activity-only)."""
@@ -325,7 +370,7 @@ class TestActivityFailureLoggingInterceptor:
 
         result = interceptor.intercept_activity(mock_next)
 
-        assert isinstance(result, ActivityFailureLoggingActivityInboundInterceptor)
+        assert isinstance(result, _TaskFailureLoggingActivityInboundInterceptor)
 
 
 class TestCollectTemporalContext:
@@ -340,7 +385,7 @@ class TestCollectTemporalContext:
     @pytest.fixture
     def interceptor(self, mock_next_activity):
         """Create the interceptor instance."""
-        return ActivityFailureLoggingActivityInboundInterceptor(mock_next_activity)
+        return _TaskFailureLoggingActivityInboundInterceptor(mock_next_activity)
 
     def test_collects_all_temporal_attributes(self, interceptor):
         """Test that all Temporal attributes are collected correctly."""
@@ -380,7 +425,7 @@ class TestCollectTemporalContext:
             "temporalio.activity.info", side_effect=RuntimeError("Not in activity")
         ):
             with mock.patch(
-                "application_sdk.interceptors.activity_failure_logging.logger"
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
             ) as mock_logger:
                 attrs = interceptor._collect_temporal_context()
 
@@ -399,11 +444,11 @@ class TestCollectTemporalContext:
 
         with mock.patch("temporalio.activity.info", return_value=activity_info):
             with mock.patch(
-                "application_sdk.interceptors.activity_failure_logging.correlation_context",
+                "application_sdk.execution._temporal.interceptors.activity_failure_logging.correlation_context",
                 mock_corr_ctx,
             ):
                 with mock.patch(
-                    "application_sdk.interceptors.activity_failure_logging.logger"
+                    "application_sdk.execution._temporal.interceptors.activity_failure_logging.logger"
                 ) as mock_logger:
                     attrs = interceptor._collect_temporal_context()
 

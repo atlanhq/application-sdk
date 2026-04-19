@@ -1,17 +1,16 @@
 """Data models for observability metrics.
 
-This module contains Pydantic models and enums used across the observability system.
+This module contains dataclass models and enums used across the observability system.
 Separated from metrics_adaptor.py to avoid circular dependencies.
 """
 
-from enum import Enum
-from time import time as get_current_time
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from application_sdk.contracts.base import SerializableEnum
 
 
-class MetricType(str, Enum):
+class MetricType(SerializableEnum):
     """Enum for metric types."""
 
     COUNTER = "counter"
@@ -19,11 +18,9 @@ class MetricType(str, Enum):
     HISTOGRAM = "histogram"
 
 
-class MetricRecord(BaseModel):
-    """A Pydantic model representing a metric record in the system.
-
-    This model defines the structure for metric data with fields for timestamp,
-    name, value, type, labels, and optional description and unit.
+@dataclass
+class MetricRecord:
+    """A dataclass representing a metric record in the system.
 
     Attributes:
         timestamp (float): Unix timestamp when the metric was recorded
@@ -43,67 +40,33 @@ class MetricRecord(BaseModel):
     description: Optional[str] = None
     unit: Optional[str] = None
 
-    class Config:
-        """Configuration for the MetricRecord Pydantic model.
 
-        Provides custom parsing logic to ensure consistent data types and structure
-        for metric records, including validation and type conversion for all fields.
-        """
+@dataclass
+class TraceRecord:
+    """A dataclass representing a trace record in the system.
 
-        @classmethod
-        def parse_obj(cls, obj):
-            if isinstance(obj, dict):
-                # Ensure labels is a dictionary with consistent structure
-                if "labels" in obj:
-                    # Create a new labels dict with only the expected fields
-                    new_labels = {}
-                    expected_fields = [
-                        "database",
-                        "status",
-                        "type",
-                        "mode",
-                        "workflow_id",
-                        "workflow_type",
-                    ]
+    Attributes:
+        timestamp (float): Unix timestamp when the trace was recorded
+        trace_id (str): Unique identifier for the trace
+        span_id (str): Unique identifier for this span
+        name (str): Name of the trace/span
+        kind (str): Type of span (SERVER, CLIENT, INTERNAL, etc.)
+        status_code (str): Status of the trace (OK, ERROR, etc.)
+        attributes (Dict[str, Any]): Key-value pairs for trace context
+        duration_ms (float): Duration of the trace in milliseconds
+        parent_span_id (Optional[str]): ID of the parent span, if any
+        status_message (Optional[str]): Additional status information
+        events (Optional[list[Dict[str, Any]]]): List of events in the trace
+    """
 
-                    # Copy only the expected fields if they exist
-                    for field in expected_fields:
-                        if field in obj["labels"]:
-                            new_labels[field] = str(obj["labels"][field])
-
-                    obj["labels"] = new_labels
-
-                # Ensure value is float
-                if "value" in obj:
-                    try:
-                        obj["value"] = float(obj["value"])
-                    except (ValueError, TypeError):
-                        obj["value"] = 0.0
-
-                # Ensure timestamp is float
-                if "timestamp" in obj:
-                    try:
-                        obj["timestamp"] = float(obj["timestamp"])
-                    except (ValueError, TypeError):
-                        obj["timestamp"] = get_current_time()
-
-                # Ensure type is MetricType
-                if "type" in obj:
-                    try:
-                        obj["type"] = MetricType(obj["type"])
-                    except ValueError:
-                        obj["type"] = MetricType.COUNTER
-
-                # Ensure name is string
-                if "name" in obj:
-                    obj["name"] = str(obj["name"])
-
-                # Ensure description is string or None
-                if "description" in obj and obj["description"] is not None:
-                    obj["description"] = str(obj["description"])
-
-                # Ensure unit is string or None
-                if "unit" in obj and obj["unit"] is not None:
-                    obj["unit"] = str(obj["unit"])
-
-            return super().parse_obj(obj)
+    timestamp: float
+    trace_id: str
+    span_id: str
+    name: str
+    kind: str  # SERVER, CLIENT, INTERNAL, etc.
+    status_code: str  # OK, ERROR, etc.
+    attributes: Dict[str, Any]
+    duration_ms: float
+    parent_span_id: Optional[str] = None
+    status_message: Optional[str] = None
+    events: Optional[List[Dict[str, Any]]] = None

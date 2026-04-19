@@ -161,25 +161,18 @@ class TestPrepareCurrentStateDirectory:
 class TestPreparePreviousState:
     """Tests for prepare_previous_state (conditional download)."""
 
-    def _make_workflow_args(self, qualified_name="t/c/123"):
-        return {
-            "connection": {"connection_qualified_name": qualified_name},
-            "application_name": "oracle",
-        }
-
-    @pytest.mark.asyncio
     async def test_returns_none_when_not_available(self):
         """Returns None when current_state_available is False."""
         with tempfile.TemporaryDirectory() as temp_dir:
             result = await prepare_previous_state(
-                self._make_workflow_args(),
+                connection_qualified_name="t/c/123",
                 current_state_available=False,
                 current_state_dir=Path(temp_dir) / "state",
+                application_name="oracle",
             )
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_downloads_previous_state(self):
         """Downloads previous state when available."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -192,16 +185,16 @@ class TestPreparePreviousState:
                 new_callable=AsyncMock,
             ):
                 result = await prepare_previous_state(
-                    self._make_workflow_args(),
+                    connection_qualified_name="t/c/123",
                     current_state_available=True,
                     current_state_dir=state_dir,
+                    application_name="oracle",
                 )
 
             assert result is not None
             assert result.exists()
             assert "previous" in result.name
 
-    @pytest.mark.asyncio
     async def test_cleans_up_on_download_failure(self):
         """Cleans up temp directory if S3 download fails."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -214,12 +207,16 @@ class TestPreparePreviousState:
                 new_callable=AsyncMock,
                 side_effect=Exception("S3 failure"),
             ):
-                with pytest.raises(Exception, match="S3 failure"):
+                with pytest.raises(
+                    Exception, match="Failed to download previous state"
+                ) as exc_info:
                     await prepare_previous_state(
-                        self._make_workflow_args(),
+                        connection_qualified_name="t/c/123",
                         current_state_available=True,
                         current_state_dir=state_dir,
+                        application_name="oracle",
                     )
+                assert "S3 failure" in str(exc_info.value.__cause__)
 
             # Temp dir should be cleaned up after failure
             expected_temp = state_dir.parent / f"{state_dir.name}.previous"
@@ -234,34 +231,30 @@ class TestPreparePreviousState:
 class TestDownloadTransformedData:
     """Tests for download_transformed_data (path validation)."""
 
-    @pytest.mark.asyncio
     async def test_empty_output_path_raises(self):
         """Empty output_path raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError, match="No output_path"):
             await download_transformed_data("")
 
-    @pytest.mark.asyncio
     async def test_whitespace_output_path_raises(self):
         """Whitespace-only output_path raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError, match="No output_path"):
             await download_transformed_data("   ")
 
-    @pytest.mark.asyncio
     async def test_downloads_from_s3(self):
         """Downloads transformed data from S3 to local path."""
         with tempfile.TemporaryDirectory() as temp_dir:
             with (
                 patch(
-                    "application_sdk.common.incremental.state.state_writer.ObjectStore"
+                    "application_sdk.common.incremental.state.state_writer.download_prefix",
+                    new_callable=AsyncMock,
                 ) as mock_store,
                 patch(
                     "application_sdk.common.incremental.state.state_writer.get_object_store_prefix",
                     return_value="prefix/transformed",
                 ),
             ):
-                mock_store.download_prefix = AsyncMock()
-
                 result = await download_transformed_data(temp_dir)
 
             assert result == Path(temp_dir) / "transformed"
-            mock_store.download_prefix.assert_awaited_once()
+            mock_store.assert_awaited_once()

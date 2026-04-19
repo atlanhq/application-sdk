@@ -6,31 +6,32 @@ snapshots during incremental metadata extraction workflows.
 The state writer is responsible for:
 1. Downloading transformed data from S3
 2. Preparing current-state directory structure
-3. Copying entity data (tables, schemas, databases)
-4. Merging ancestral column data for unchanged tables
-5. Creating incremental diffs for changed entities
-6. Uploading the final snapshot to S3
+3. Copying entity data (tables, schemas, databases, columns)
+4. Creating incremental diffs with deletion detection
+5. Uploading the final snapshot to S3
+
+Current-state is lightweight — it contains only what was extracted in the
+current run. Publish-cache is the source of truth for complete state.
 
 Example workflow:
     1. download_transformed_data() - Get current run's transformed output
     2. prepare_previous_state() - Download previous state for comparison
-    3. copy_entity_data() - Copy non-column entities to current state
-    4. Merge columns using ancestral_merge module
-    5. Create incremental diff
-    6. upload_current_state() - Upload to S3
+    3. copy_entity_data() - Copy all entities to current state
+    4. Create incremental diff (with deletion detection)
+    5. upload_current_state() - Upload to S3
 
 High-level orchestration:
     Use create_current_state_snapshot() for complete state creation including
-    merge and diff generation in a single call.
+    diff generation in a single call.
 """
 
 import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Callable, Dict, Optional, Set
 
-from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
     count_json_files_recursive,
@@ -39,9 +40,6 @@ from application_sdk.common.incremental.helpers import (
     get_persistent_s3_prefix,
 )
 from application_sdk.common.incremental.models import EntityType
-from application_sdk.common.incremental.state.ancestral_merge import (
-    merge_ancestral_columns,
-)
 from application_sdk.common.incremental.state.incremental_diff import (
     create_incremental_diff,
 )
@@ -49,16 +47,15 @@ from application_sdk.common.incremental.state.table_scope import (
     close_scope,
     get_current_table_scope,
     get_scope_length,
+    get_table_qns_from_columns,
 )
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnectionManager,
 )
-from application_sdk.constants import (
-    INCREMENTAL_DIFF_SUBPATH_TEMPLATE,
-    UPSTREAM_OBJECT_STORE_NAME,
-)
+from application_sdk.constants import INCREMENTAL_DIFF_SUBPATH_TEMPLATE
+from application_sdk.execution import get_object_store_prefix
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.batch import download_prefix, upload_prefix
 
 logger = get_logger(__name__)
 
@@ -110,41 +107,48 @@ async def download_transformed_data(output_path: str) -> Path:
     transformed_local_path = os.path.join(output_path_str, "transformed")
     transformed_s3_prefix = get_object_store_prefix(transformed_local_path)
 
-    logger.info(f"Downloading transformed files from S3: {transformed_s3_prefix}")
+    logger.info(
+        "Downloading transformed files from S3", s3_prefix=transformed_s3_prefix
+    )
 
     # Ensure local directory exists before download
     transformed_dir = Path(transformed_local_path)
     transformed_dir.mkdir(parents=True, exist_ok=True)
 
-    await ObjectStore.download_prefix(
-        source=transformed_s3_prefix,
-        destination=str(transformed_dir),
-        store_name=UPSTREAM_OBJECT_STORE_NAME,
+    await download_prefix(
+        prefix=transformed_s3_prefix,
+        local_dir=str(transformed_dir),
     )
 
     return transformed_dir
 
 
 async def prepare_previous_state(
-    workflow_args: Dict[str, Any],
+    connection_qualified_name: str,
     current_state_available: bool,
     current_state_dir: Path,
+    application_name: str = "",
 ) -> Optional[Path]:
     """Download previous state to a temporary location for comparison.
 
     When previous state exists, downloads it to a temporary directory
-    to support ancestral column merging and incremental diff generation.
+    to support incremental diff generation and deletion detection.
 
     Args:
-        workflow_args: Workflow arguments containing connection info
+        connection_qualified_name: The connection qualified name.
         current_state_available: Whether previous state exists in S3
         current_state_dir: Path to current-state directory
+        application_name: Optional application name override.
 
     Returns:
         Path to temporary previous state directory, or None if no previous state
 
     Example:
-        >>> prev_dir = await prepare_previous_state(args, True, current_state_dir)
+        >>> prev_dir = await prepare_previous_state(
+        ...     connection_qualified_name="default/oracle/1764230875",
+        ...     current_state_available=True,
+        ...     current_state_dir=current_state_dir,
+        ... )
         >>> if prev_dir:
         ...     # Use previous state for comparison
         ...     pass
@@ -152,7 +156,7 @@ async def prepare_previous_state(
     if not current_state_available:
         return None
 
-    s3_prefix = get_persistent_s3_prefix(workflow_args)
+    s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     current_state_s3_prefix = f"{s3_prefix}/current-state"
 
     previous_state_temp_dir = current_state_dir.parent.joinpath(
@@ -165,21 +169,21 @@ async def prepare_previous_state(
     previous_state_temp_dir.mkdir(parents=True, exist_ok=True)
 
     # Download previous state from S3 to temporary location
-    logger.info(f"Downloading previous state from S3: {current_state_s3_prefix}")
+    logger.info("Downloading previous state from S3: %s", current_state_s3_prefix)
     try:
         await download_s3_prefix_with_structure(
             s3_prefix=current_state_s3_prefix,
             local_destination=previous_state_temp_dir,
         )
         logger.info(
-            f"Previous state downloaded to temporary location: {previous_state_temp_dir}"
+            "Previous state downloaded to temporary location",
+            path=str(previous_state_temp_dir),
         )
         return previous_state_temp_dir
     except Exception as e:
-        logger.error(f"Failed to download previous state: {e}")
         if previous_state_temp_dir.exists():
             shutil.rmtree(previous_state_temp_dir)
-        raise
+        raise rewrap(e, "Failed to download previous state") from e
 
 
 def copy_non_column_entities(
@@ -215,14 +219,48 @@ def copy_non_column_entities(
                 entity_dir, dest_dir, max_workers=copy_workers
             )
             copy_counts[entity_type.value] = count
-            logger.info(f"Copied {count} {entity_type.value} files to current state")
+            logger.info(
+                "Copied entity files to current state",
+                entity_type=entity_type.value,
+                count=count,
+            )
 
     return copy_counts
 
 
+def _copy_columns_from_transformed(
+    transformed_dir: Path,
+    current_state_dir: Path,
+    copy_workers: int = 4,
+) -> int:
+    """Copy column files from transformed to current-state (lightweight).
+
+    Unlike the old ancestral merge, this simply copies columns from the
+    current extraction. NO CHANGE table columns are not carried forward.
+    Publish-cache is the source of truth for complete column state.
+
+    Args:
+        transformed_dir: Path to transformed output directory
+        current_state_dir: Path to current-state directory
+        copy_workers: Number of parallel workers for copy operations
+
+    Returns:
+        Number of column files copied
+    """
+    column_dir = transformed_dir.joinpath(EntityType.COLUMN.value)
+    if not column_dir.exists():
+        return 0
+
+    dest_dir = current_state_dir.joinpath(EntityType.COLUMN.value)
+    count = copy_directory_parallel(column_dir, dest_dir, max_workers=copy_workers)
+    logger.info("Copied column files to current state", count=count)
+    return count
+
+
 async def upload_current_state(
     current_state_dir: Path,
-    workflow_args: Dict[str, Any],
+    connection_qualified_name: str,
+    application_name: str = "",
 ) -> str:
     """Upload current-state snapshot to S3.
 
@@ -231,24 +269,27 @@ async def upload_current_state(
 
     Args:
         current_state_dir: Path to local current-state directory
-        workflow_args: Workflow arguments for S3 path resolution
+        connection_qualified_name: The connection qualified name.
+        application_name: Optional application name override.
 
     Returns:
         S3 prefix where current-state was uploaded
 
     Example:
-        >>> s3_prefix = await upload_current_state(state_dir, workflow_args)
+        >>> s3_prefix = await upload_current_state(
+        ...     state_dir,
+        ...     connection_qualified_name="default/oracle/1764230875",
+        ... )
         >>> print(f"Uploaded to: {s3_prefix}")
     """
-    s3_prefix = get_persistent_s3_prefix(workflow_args)
+    s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     current_state_s3_prefix = f"{s3_prefix}/current-state"
 
-    await ObjectStore.upload_prefix(
-        source=str(current_state_dir),
-        destination=current_state_s3_prefix,
-        store_name=UPSTREAM_OBJECT_STORE_NAME,
+    await upload_prefix(
+        local_dir=str(current_state_dir),
+        prefix=current_state_s3_prefix,
     )
-    logger.info(f"Current-state uploaded to S3: {current_state_s3_prefix}")
+    logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)
 
     return current_state_s3_prefix
 
@@ -269,12 +310,13 @@ def cleanup_previous_state(previous_state_dir: Optional[Path]) -> None:
         try:
             shutil.rmtree(previous_state_dir)
             logger.info(
-                f"Cleaned up temporary previous state directory: {previous_state_dir}"
+                "Cleaned up temporary previous state directory",
+                path=str(previous_state_dir),
             )
-        except Exception as e:
+        except Exception:
             # Non-critical cleanup failure - log warning but don't raise
             logger.warning(
-                f"Failed to clean up temporary previous state directory: {e}"
+                "Failed to clean up temporary previous state directory", exc_info=True
             )
 
 
@@ -293,41 +335,40 @@ def prepare_current_state_directory(current_state_dir: Path) -> None:
 
 
 async def create_current_state_snapshot(
-    workflow_args: Dict[str, Any],
+    connection_qualified_name: str,
     transformed_dir: Path,
     previous_state_dir: Optional[Path],
     current_state_dir: Path,
     s3_prefix: str,
     run_id: str,
+    application_name: str = "",
     copy_workers: int = 4,
-    column_chunk_size: int = 10000,
     get_backfill_tables_fn: Optional[
         Callable[[Path, Optional[Path]], Optional[Set[str]]]
     ] = None,
 ) -> CurrentStateResult:
-    """Create complete current-state snapshot with merge and optional diff.
+    """Create lightweight current-state snapshot with diff and deletion detection.
 
     Orchestrates the entire current-state creation process:
     1. Get table scope from transformed data
     2. Clear and prepare current-state directory
     3. Copy non-column entities (tables, schemas, databases)
-    4. Merge columns (current + ancestral for unchanged tables)
-    5. Create incremental diff (if previous state exists)
+    4. Copy columns from transformed (lightweight — no ancestral merge)
+    5. Create incremental diff with deletion detection (if previous state exists)
     6. Upload current-state and diff to S3
 
-    This function encapsulates the complex orchestration logic that was
-    previously in the write_current_state activity, making it reusable
-    and testable independently.
+    Current-state is lightweight — it contains only what was extracted in the
+    current run. Publish-cache is the source of truth for complete state.
 
     Args:
-        workflow_args: Workflow arguments for S3 path resolution
+        connection_qualified_name: The connection qualified name.
         transformed_dir: Path to current run's transformed output
         previous_state_dir: Path to previous state (or None for first run)
         current_state_dir: Path where current state will be created
         s3_prefix: S3 prefix for persistent artifacts
         run_id: Workflow run ID for diff naming
+        application_name: Optional application name override.
         copy_workers: Number of parallel workers for file operations
-        column_chunk_size: Batch size for column processing
         get_backfill_tables_fn: Optional function to detect backfill tables
 
     Returns:
@@ -338,7 +379,7 @@ async def create_current_state_snapshot(
 
     Example:
         >>> result = await create_current_state_snapshot(
-        ...     workflow_args=args,
+        ...     connection_qualified_name="default/oracle/1764230875",
         ...     transformed_dir=Path("./transformed"),
         ...     previous_state_dir=Path("./previous-state"),
         ...     current_state_dir=Path("./current-state"),
@@ -366,7 +407,8 @@ async def create_current_state_snapshot(
                 )
 
             logger.info(
-                f"Creating current-state snapshot with {get_scope_length(table_scope)} tables"
+                "Creating current-state snapshot",
+                table_count=get_scope_length(table_scope),
             )
 
             # Step 2: Clear and prepare current-state directory
@@ -379,30 +421,30 @@ async def create_current_state_snapshot(
                 copy_workers=copy_workers,
             )
 
-            # Step 4: Merge columns (current + ancestral for NO CHANGE tables)
-            merge_result, tables_with_columns = merge_ancestral_columns(
-                current_transformed_dir=transformed_dir,
-                previous_state_dir=previous_state_dir,
-                new_state_dir=current_state_dir,
-                table_scope=table_scope,
-                column_chunk_size=column_chunk_size,
-                conn=conn,
+            # Step 4: Copy columns from transformed (lightweight — no ancestral merge)
+            column_count = _copy_columns_from_transformed(
+                transformed_dir=transformed_dir,
+                current_state_dir=current_state_dir,
+                copy_workers=copy_workers,
             )
 
-            # Update table_scope with extracted columns info
+            # Track which tables have extracted columns
+            tables_with_columns = (
+                get_table_qns_from_columns(
+                    current_state_dir.joinpath(EntityType.COLUMN.value), conn=conn
+                )
+                or set()
+            )
             table_scope.tables_with_extracted_columns = tables_with_columns
 
             total_files = count_json_files_recursive(current_state_dir)
 
             logger.info(
-                f"Current-state merge complete: "
-                f"tables={get_scope_length(table_scope)}, "
-                f"columns={merge_result.columns_total} "
-                f"(current={merge_result.columns_from_current}, "
-                f"ancestral={merge_result.columns_from_ancestral}), "
-                f"excluded="
-                f"{merge_result.excluded_already_extracted + merge_result.excluded_table_removed}, "
-                f"total_files={total_files}"
+                "Current-state snapshot complete (lightweight)",
+                tables=get_scope_length(table_scope),
+                columns_copied=column_count,
+                tables_with_columns=len(tables_with_columns),
+                total_files=total_files,
             )
 
             # Step 5: Create incremental-diff (only changed assets from this run)
@@ -411,7 +453,9 @@ async def create_current_state_snapshot(
                     run_id=run_id
                 )
                 incremental_diff_dir = get_persistent_artifacts_path(
-                    workflow_args, incremental_diff_subpath
+                    connection_qualified_name,
+                    incremental_diff_subpath,
+                    application_name,
                 )
                 incremental_diff_s3_prefix = f"{s3_prefix}/{incremental_diff_subpath}"
 
@@ -430,13 +474,13 @@ async def create_current_state_snapshot(
                 )
 
                 # Upload incremental-diff to S3
-                await ObjectStore.upload_prefix(
-                    source=str(incremental_diff_dir),
-                    destination=incremental_diff_s3_prefix,
-                    store_name=UPSTREAM_OBJECT_STORE_NAME,
+                await upload_prefix(
+                    local_dir=str(incremental_diff_dir),
+                    prefix=incremental_diff_s3_prefix,
                 )
                 logger.info(
-                    f"Incremental-diff uploaded to S3: {incremental_diff_s3_prefix}"
+                    "Incremental-diff uploaded to S3",
+                    s3_prefix=incremental_diff_s3_prefix,
                 )
             else:
                 logger.info(
@@ -450,12 +494,11 @@ async def create_current_state_snapshot(
                 close_scope(table_scope)
 
     # Step 6: Upload current-state to S3
-    await ObjectStore.upload_prefix(
-        source=str(current_state_dir),
-        destination=current_state_s3_prefix,
-        store_name=UPSTREAM_OBJECT_STORE_NAME,
+    await upload_prefix(
+        local_dir=str(current_state_dir),
+        prefix=current_state_s3_prefix,
     )
-    logger.info(f"Current-state uploaded to S3: {current_state_s3_prefix}")
+    logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)
 
     return CurrentStateResult(
         current_state_dir=current_state_dir,

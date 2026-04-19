@@ -261,6 +261,38 @@ def test_send_to_otel_histogram():
             mock_histogram.record.assert_called_once_with(42.0, {"test": "label"})
 
 
+def test_send_to_otel_filters_non_scalar_labels():
+    """Test that _send_to_otel() filters out non-scalar label values before passing to OTel."""
+    with create_metrics_adapter() as metrics_adapter:
+        with mock.patch.object(metrics_adapter.meter, "create_counter") as mock_create:
+            mock_counter = mock.MagicMock()
+            mock_create.return_value = mock_counter
+
+            record = MetricRecord(
+                timestamp=datetime.now().timestamp(),
+                name="test_counter",
+                value=1.0,
+                type=MetricType.COUNTER,
+                labels={
+                    "key": "val",
+                    "count": 42,
+                    "ratio": 0.5,
+                    "flag": True,
+                    "nested": [1, 2, 3],
+                    "mapping": {"a": "b"},
+                    "nothing": None,
+                },
+                description="Test label filtering",
+                unit="count",
+            )
+            metrics_adapter._send_to_otel(record)
+
+            mock_counter.add.assert_called_once_with(
+                1.0,
+                {"key": "val", "count": 42, "ratio": 0.5, "flag": True},
+            )
+
+
 def test_log_to_console():
     """Test _log_to_console() method."""
     with create_metrics_adapter() as metrics_adapter:
@@ -401,3 +433,184 @@ def test_segment_client_disabled_without_write_key():
                         adapter = AtlanMetricsAdapter()
                         assert adapter.segment_client is not None
                         assert adapter.segment_client.enabled is False
+
+
+class TestPython314EventLoopCompat:
+    """Tests for Python 3.14 compatibility where asyncio.get_event_loop()
+    raises RuntimeError when no current event loop exists."""
+
+    def test_flush_task_starts_via_thread_when_no_event_loop(self):
+        """When no running event loop exists (Python 3.14 behavior),
+        the adapter should fall back to starting the flush in a daemon thread."""
+        AtlanMetricsAdapter._flush_task_started = False
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "ENABLE_OTLP_METRICS": "true",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+            },
+        ):
+            with mock.patch("opentelemetry.metrics.set_meter_provider"):
+                with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
+                    with mock.patch(
+                        "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
+                        side_effect=RuntimeError("no running event loop"),
+                    ):
+                        with mock.patch(
+                            "application_sdk.observability.metrics_adaptor.threading.Thread"
+                        ) as mock_thread:
+                            mock_thread_instance = mock.MagicMock()
+                            mock_thread.return_value = mock_thread_instance
+
+                            _ = AtlanMetricsAdapter()
+
+                            mock_thread.assert_called_once()
+                            _, kwargs = mock_thread.call_args
+                            assert kwargs.get("daemon") is True
+                            mock_thread_instance.start.assert_called_once()
+
+    def test_flush_task_uses_running_loop_when_available(self):
+        """When a running event loop exists, the adapter should create
+        a task on it instead of spawning a thread."""
+        AtlanMetricsAdapter._flush_task_started = False
+        mock_loop = mock.MagicMock()
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "ENABLE_OTLP_METRICS": "true",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+            },
+        ):
+            with mock.patch("opentelemetry.metrics.set_meter_provider"):
+                with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
+                    with mock.patch(
+                        "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
+                        return_value=mock_loop,
+                    ):
+                        with mock.patch(
+                            "application_sdk.observability.metrics_adaptor.threading.Thread"
+                        ) as mock_thread:
+                            _ = AtlanMetricsAdapter()
+
+                            mock_loop.create_task.assert_called_once()
+                            mock_thread.assert_not_called()
+
+
+class TestPrometheusMetrics:
+    """Tests for Prometheus metrics integration."""
+
+    def test_prometheus_reader_added_when_enabled(self):
+        """When ENABLE_PROMETHEUS_METRICS is true, a PrometheusMetricReader
+        should be added to the MeterProvider."""
+        AtlanMetricsAdapter._flush_task_started = False
+        mock_prom_reader = mock.MagicMock()
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
+            True,
+        ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                True,
+            ):
+                with mock.patch(
+                    "application_sdk.observability.metrics_adaptor.metrics.set_meter_provider"
+                ):
+                    with mock.patch(
+                        "application_sdk.observability.metrics_adaptor.MeterProvider"
+                    ) as mock_provider:
+                        mock_provider.return_value.get_meter.return_value = (
+                            mock.MagicMock()
+                        )
+                        with mock.patch(
+                            "application_sdk.observability.metrics_adaptor.OTLPMetricExporter"
+                        ):
+                            with mock.patch(
+                                "application_sdk.observability.metrics_adaptor.PeriodicExportingMetricReader"
+                            ):
+                                with mock.patch.dict(
+                                    "sys.modules",
+                                    {
+                                        "opentelemetry.exporter.prometheus": mock.MagicMock(
+                                            PrometheusMetricReader=mock_prom_reader
+                                        )
+                                    },
+                                ):
+                                    AtlanMetricsAdapter()
+                                    call_kwargs = mock_provider.call_args[1]
+                                    assert len(call_kwargs["metric_readers"]) == 2
+
+    def test_prometheus_reader_not_added_when_disabled(self):
+        """When ENABLE_PROMETHEUS_METRICS is false, only the OTLP reader
+        should be in the MeterProvider."""
+        AtlanMetricsAdapter._flush_task_started = False
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
+            True,
+        ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                False,
+            ):
+                with mock.patch(
+                    "application_sdk.observability.metrics_adaptor.metrics.set_meter_provider"
+                ):
+                    with mock.patch(
+                        "application_sdk.observability.metrics_adaptor.MeterProvider"
+                    ) as mock_provider:
+                        mock_provider.return_value.get_meter.return_value = (
+                            mock.MagicMock()
+                        )
+                        with mock.patch(
+                            "application_sdk.observability.metrics_adaptor.OTLPMetricExporter"
+                        ):
+                            with mock.patch(
+                                "application_sdk.observability.metrics_adaptor.PeriodicExportingMetricReader"
+                            ):
+                                AtlanMetricsAdapter()
+                                call_kwargs = mock_provider.call_args[1]
+                                assert len(call_kwargs["metric_readers"]) == 1
+
+    def test_export_record_sends_to_otel_when_prometheus_only(self):
+        """When only Prometheus is enabled (no OTLP), export_record should
+        still send metrics to OTel instruments so they appear in /metrics."""
+        AtlanMetricsAdapter._flush_task_started = False
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS",
+            False,
+        ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                True,
+            ):
+                with mock.patch(
+                    "application_sdk.observability.metrics_adaptor.metrics.set_meter_provider"
+                ):
+                    with mock.patch(
+                        "application_sdk.observability.metrics_adaptor.MeterProvider"
+                    ) as mock_provider:
+                        mock_provider.return_value.get_meter.return_value = (
+                            mock.MagicMock()
+                        )
+                        with mock.patch.dict(
+                            "sys.modules",
+                            {
+                                "opentelemetry.exporter.prometheus": mock.MagicMock(
+                                    PrometheusMetricReader=mock.MagicMock()
+                                )
+                            },
+                        ):
+                            adapter = AtlanMetricsAdapter()
+                            with mock.patch.object(
+                                adapter, "_send_to_otel"
+                            ) as mock_send:
+                                record = MetricRecord(
+                                    timestamp=datetime.now().timestamp(),
+                                    name="test_counter",
+                                    value=1.0,
+                                    type=MetricType.COUNTER,
+                                    labels={"path": "/health"},
+                                    description="Test counter",
+                                    unit="count",
+                                )
+                                adapter.export_record(record)
+                                mock_send.assert_called_once_with(record)

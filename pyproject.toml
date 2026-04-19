@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "2.8.6"
+version = "2.8.7"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -22,41 +22,60 @@ keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
     "aiohttp>=3.10.0,<3.14.0",
     "opentelemetry-exporter-otlp==1.39.1",
+    "opentelemetry-exporter-prometheus==0.60b1",
     "psutil>=7.0.0,<7.3.0",
     "fastapi[standard]==0.127.0",
-    "pyatlan>=8.0.2,<10.0.0",
+    "pyatlan>=9,<10",
+    "httpx-retries>=0.4.0,<0.5.0",
     "pydantic>=2.10.6,<2.13.0",
     "loguru>=0.7.3,<0.8.0",
     "uvloop>=0.21.0,<0.23.0; sys_platform != 'win32'",
     "python-dotenv>=1.1.0,<1.3.0",
-    "duckdb>=1.1.3,<1.5.0",
-    "duckdb-engine>=0.17.0,<0.18.0",
-    "pandas>=2.2.3,<2.4.0",
-    "pyarrow>=20.0.0,<23.0.0",
+    "pyyaml>=6.0.2,<6.1.0",
+    "obstore>=0.9.1,<0.10.0",
+    # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
+    "temporalio>=1.7.1,<1.24.0",
+    "orjson>=3.11.6,<3.12.0",
 ]
+
+[project.scripts]
+application-sdk = "application_sdk.main:main"
 
 [project.urls]
 Repository = "https://github.com/atlanhq/application-sdk"
 Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 "Changelog" = "https://github.com/atlanhq/application-sdk/blob/main/CHANGELOG.md"
 
-# Optional dependencies for specific functionality - Install using: uv sync --extra workflows
+# Optional dependencies for specific functionality
 [project.optional-dependencies]
+# Backwards-compatibility shims (dapr/temporalio/orjson promoted to core in v3.1)
 workflows = [
-    "dapr==1.17.4",
     "temporalio>=1.7.1,<1.24.0",
     "orjson>=3.11.6,<3.12.0",
 ]
-pandas = [
+# SQL connectors: SqlMetadataExtractor, SqlQueryExtractor, and any SQL-based connector
+sql = [
     "pandas>=2.2.3,<2.4.0",
     "pyarrow>=20.0.0,<23.0.0",
+    "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
+    "duckdb>=1.1.3,<1.5.0",
+    "duckdb-engine>=0.17.0,<0.18.0",
 ]
+# Daft transformer engine
 daft = [
     "daft>=0.7.1,<0.8.0",
 ]
-sqlalchemy = [
+# Incremental extraction: sql + daft + RocksDB state store
+incremental = [
+    "pandas>=2.2.3,<2.4.0",
+    "pyarrow>=20.0.0,<23.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
+    "duckdb>=1.1.3,<1.5.0",
+    "duckdb-engine>=0.17.0,<0.18.0",
+    "daft>=0.7.1,<0.8.0",
+    "rocksdict>=0.3.0",
 ]
+# AWS IAM authentication for RDS/Redshift
 iam_auth = [
     "boto3>=1.38.6,<1.43.0",
 ]
@@ -65,26 +84,29 @@ azure = [
     "azure-storage-blob>=12.19.0",
     "azure-storage-file-datalake>=12.19.0",
 ]
-tests = [
-    "pytest-order>=1.3.0,<1.4.0",
-    "pandera[io]>=0.23.1,<0.28.0",
-]
-scale_data_generator = [
-    "pyyaml>=6.0.2,<6.1.0",
-    "faker>=37.1.0,<39.1.0",
-    "numpy>=1.23.5,<2.5.0",
-]
-
 distributed_lock = [
     "redis[hiredis]>=5.2.0,<7.2.0",
 ]
-
 mcp = [
-    "fastmcp>=2.12.3,<2.15.0",
+    "fastmcp>=3.2.0",
 ]
-
-incremental = [
-    "rocksdict>=0.3.0",
+tests = [
+    "pytest-order>=1.3.0,<1.4.0",
+    "pandera[io]>=0.23.1,<0.28.0",
+    "httpx>=0.27.0,<0.29.0",
+]
+scale_data_generator = [
+    "faker>=37.1.0,<39.1.0",
+    "numpy>=1.23.5,<2.5.0",
+]
+# Removed in v3.1 — use sql extra instead
+sqlalchemy = [
+    "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
+]
+# Removed in v3.1 — use sql extra instead
+pandas = [
+    "pandas>=2.2.3,<2.4.0",
+    "pyarrow>=20.0.0,<23.0.0",
 ]
 
 # Development dependencies - Install using: uv sync --group dev
@@ -94,12 +116,14 @@ dev = [
     "isort>=5.13.2,<5.14.0",
     "boto3-stubs>=1.38.6,<1.43.0",
     "poethepoet>=0.34.0,<0.40.0",
+    "libcst>=1.4.0,<1.8.0",
 ]
 test = [
     "mock>=5.1.0,<5.3.0",
     "pytest>=8.3.3,<9.1.0",
     "coverage>=7.6.1,<7.14.0",
     "pytest-asyncio>=0.26.0,<1.4.0",
+    "pytest-timeout>=2.3.0,<3.0.0",
     "hypothesis>=6.114.0,<6.149.0",
     "trustme>=1.2.1,<1.3.0",
 ]
@@ -129,6 +153,7 @@ start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app
 start-temporal = "temporal server start-dev --db-filename ./temporal.db"
 start-deps.shell = "poe start-dapr & poe start-temporal &"
 stop-deps.shell = "lsof -ti:3000,3500,7233,50001 | xargs kill -9 2>/dev/null || true"
+test-integration.shell = "temporal server start-dev --db-filename /tmp/temporal-integ.db &>/tmp/temporal-integ.log & sleep 3 && uv run pytest tests/integration/ -m integration -v --timeout=120; EXIT=$?; kill %1 2>/dev/null; exit $EXIT"
 
 # API docs
 generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api application_sdk --docformat=google"
@@ -149,6 +174,7 @@ venv = ".venv"
 typeCheckingMode = "standard"
 exclude = [
     "application_sdk/test_utils/**",
+    "application_sdk/testing/scale_data_generator/**",
     ".github/**",
     "tests"
 ]
@@ -158,16 +184,23 @@ reportPossiblyUnboundVariable = "information"
 reportFunctionMemberAccess = "warning"
 reportArgumentType = "warning"
 reportGeneralTypeIssues = "warning"
+reportMissingImports = "warning"
 reportInvalidTypeForm = "warning"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not integration and not e2e'"
+markers = [
+    "integration: tests requiring local Temporal server",
+    "e2e: tests requiring a live K8s cluster",
+]
 
 [tool.coverage.run]
 omit = [
     "tests/**",
     "application_sdk/test_utils/**",
+    "application_sdk/testing/scale_data_generator/**",
 ]
 source = ["application_sdk"]
 
@@ -185,10 +218,25 @@ fail_under = 50
 show_missing = true
 precision = 2
 
+[tool.ruff.lint]
+extend-select = [
+    "G001",   # % operator inline in log call (not lazy)
+    "G003",   # string concatenation in log call
+    "G004",   # f-string in log call
+    "T201",   # print() in production code
+]
+
+[tool.ruff.lint.per-file-ignores]
+"application_sdk/main.py" = ["T201"]
+".github/**" = ["G004", "T201"]
+"tests/**" = ["G004"]
+"tools/**" = ["T201"]
+"examples/**" = ["T201"]
+
 [tool.uv]
 default-groups = ["dev", "test"]
 constraint-dependencies = [
-    "python-multipart>=0.0.22",  # CVE-2026-24486
+    "python-multipart>=0.0.26",  # CVE-2026-24486, CVE-2026-40347
     "protobuf>=6.33.5",          # CVE-2026-0994
     "authlib>=1.6.7",            # CVE-2026-28802
     "black>=26.3.1",             # CVE-2026-32274

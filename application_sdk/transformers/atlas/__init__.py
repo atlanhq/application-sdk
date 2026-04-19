@@ -4,11 +4,15 @@ This module provides the Atlas transformer implementation for converting metadat
 into Atlas entities using the pyatlan library.
 """
 
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Type
+from __future__ import annotations
 
-import daft
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Dict, Optional, Type
+
 from pyatlan.model.enums import AtlanConnectorType, EntityStatus
+
+if TYPE_CHECKING:
+    import daft
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
@@ -102,9 +106,13 @@ class AtlasTransformer(TransformerInterface):
                 if transformed_metadata:
                     transformed_metadata_list.append(transformed_metadata)
                 else:
-                    logger.warning(f"Skipped invalid {typename} data: {row}")
-            except Exception as row_error:
-                logger.error(f"Error processing row for {typename}: {row_error}")
+                    logger.warning(
+                        "Skipped invalid data: typename=%s row=%s", typename, row
+                    )
+            except Exception:
+                logger.error("Error processing row: %s", typename, exc_info=True)
+
+        import daft
 
         return daft.from_pylist(transformed_metadata_list)
 
@@ -174,16 +182,11 @@ class AtlasTransformer(TransformerInterface):
                 )
 
                 return entity.dict(by_alias=True, exclude_none=True, exclude_unset=True)
-            except Exception as e:
-                logger.error(
-                    "Error transforming {} entity: {}",
-                    typename,
-                    str(e),
-                    extra={"data": data},
-                )
+            except Exception:
+                logger.error("Error transforming entity: %s", typename, exc_info=True)
                 return None
         else:
-            logger.error(f"Unknown typename: {typename}")
+            logger.error("Unknown typename: %s", typename)
             return None
 
     def _enrich_entity_with_metadata(

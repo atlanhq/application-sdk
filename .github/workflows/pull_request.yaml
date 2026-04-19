@@ -6,12 +6,10 @@ on:
     branches: [main]
 
 permissions:
-  id-token: write
-  contents: write
-  issues: write
+  contents: read
   pull-requests: write
+  issues: write
   security-events: write
-  actions: write
 
 jobs:
   # Detect which files changed
@@ -21,9 +19,10 @@ jobs:
     outputs:
       container: ${{ steps.filter.outputs.container }}
       code: ${{ steps.filter.outputs.code }}
+      helm: ${{ steps.filter.outputs.helm }}
     steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         id: filter
         with:
           filters: |
@@ -36,16 +35,18 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - 'examples/**'
+            helm:
+              - 'helm/**'
 
   # Conventional Commits
   commits:
     name: Conventional Commits
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-      - uses: webiny/action-conventional-commits@v1.3.1
+      - uses: webiny/action-conventional-commits@faccb24fc2550dd15c0390d944379d2d8ed9690e # v1.3.1
         with:
           GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
 
@@ -55,7 +56,7 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/docstring-coverage"
         with:
           module-name: application_sdk
@@ -68,7 +69,7 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/trivy"
         with:
           add-report-comment-to-pr: "true"
@@ -79,7 +80,7 @@ jobs:
     if: needs.changes.outputs.container == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/trivy-container"
         with:
           chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
@@ -94,18 +95,86 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    # Python 3.14 RC may segfault during interpreter shutdown (known CPython issue)
+    continue-on-error: ${{ matrix.python-version == '3.14' }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           fail-under: "50"
           python-version: ${{ matrix.python-version }}
+
+  integration:
+    name: Integration Tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: "./.github/actions/setup-deps"
+
+      - name: Install Temporal CLI
+        run: |
+          TEMPORAL_VERSION="1.3.0"
+          mkdir -p "$HOME/.temporalio/bin"
+          curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_VERSION}/temporal_cli_${TEMPORAL_VERSION}_linux_amd64.tar.gz" \
+            -o /tmp/temporal.tar.gz
+          tar -xzf /tmp/temporal.tar.gz -C /tmp
+          mv /tmp/temporal "$HOME/.temporalio/bin/temporal"
+          chmod +x "$HOME/.temporalio/bin/temporal"
+          echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
+
+      - name: Start Temporal dev server
+        run: temporal server start-dev --db-filename /tmp/temporal-integ.db &
+
+      - name: Wait for Temporal to be ready
+        run: |
+          for i in $(seq 1 20); do
+            if temporal workflow list --namespace default 2>/dev/null; then
+              echo "Temporal is ready"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Install and start Dapr runtime (daprd)
+        run: |
+          DAPR_CLI_VERSION="1.16.2"
+          curl -sSLf "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" \
+            -o /tmp/dapr-cli.tar.gz
+          tar -xzf /tmp/dapr-cli.tar.gz -C /tmp dapr
+          chmod +x /tmp/dapr
+          sudo mv /tmp/dapr /usr/local/bin/dapr
+          dapr init --runtime-version 1.16.0 --slim
+          mkdir -p tests/integration/dapr-data/objectstore
+          # Run daprd directly (no sidecar pattern) for deterministic behavior
+          $HOME/.dapr/bin/daprd \
+            --app-id integ-test \
+            --dapr-http-port 3500 \
+            --resources-path ./tests/integration/dapr-components \
+            --placement-host-address '' \
+            --scheduler-host-address '' \
+            --log-level warn &
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:3500/v1.0/metadata > /dev/null 2>&1; then
+              echo "daprd is ready"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Run integration tests
+        env:
+          TEMPORAL_HOST: "localhost:7233"
+          DAPR_HTTP_PORT: "3500"
+        run: uv run pytest tests/integration/ -m integration -v --timeout=120
 
   matrix-builder:
     name: Build Test Matrix
@@ -114,11 +183,11 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Get PR Labels
         id: get-labels
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -193,7 +262,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/e2e-examples"
         with:
           operating-system: ${{ matrix.os }}
@@ -214,43 +283,82 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: "./.github/actions/e2e-apps"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
 
-  # Documentation
-  docs:
-    name: Docs
+  # Helm Chart Lint (label-gated)
+  helm-lint:
+    name: Helm Lint
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: |
+      needs.changes.outputs.helm == 'true' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'helm-test') ||
+      contains(github.event.pull_request.labels.*.name, 'helm-test')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Helm Lint
+        run: |
+          helm lint helm/atlan-app/ \
+            --values helm/atlan-app/values.yaml \
+            --set appName=test-app \
+            --set appModule=test:App
+
+      - name: Helm Template
+        run: |
+          helm template test helm/atlan-app/ \
+            --set appName=test-app \
+            --set appModule=test:App \
+            --debug
+
+  # K8s E2E Tests (label-gated on 'e2e-k8s')
+  e2e-k8s:
+    name: E2E K8s
+    needs: changes
+    if: |
+      (github.event.action == 'labeled' && github.event.label.name == 'e2e-k8s') ||
+      contains(github.event.pull_request.labels.*.name, 'e2e-k8s')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create kind cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
+
       - uses: "./.github/actions/setup-deps"
-      - name: Install graphviz
-        run: |
-          sudo apt install graphviz
-      - name: Generate Sphinx Docs and UML Diagrams
-        run: |
-          uv run poe generate-apidocs
 
-      - name: Setup AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v5
+      - name: Build app image
+        run: |
+          docker build -t test-app:e2e .
+
+      - name: Load image into kind
+        run: |
+          kind load docker-image test-app:e2e
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Run e2e tests
+        env:
+          E2E_APP_NAME: test-app
+          E2E_APP_MODULE: ${{ vars.E2E_APP_MODULE }}
+          E2E_IMAGE: localhost/test-app:e2e
+          E2E_TIMEOUT: "300"
+        run: |
+          uv run pytest tests/e2e/ -m e2e -v
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          aws-region: ap-south-1
-          # Only usable in atlanhq repositories
-          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
-
-      - name: Upload Docs to Kryptonite Bucket
-        run: |
-          aws s3 sync ./site s3://kryptonite-store/application-sdk/${{ github.head_ref }} --delete
-
-      - name: Comment Kryptonite URL on PR
-        uses: mshick/add-pr-comment@v2
-        with:
-          message-id: "docs"
-          message: |
-            🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}
+          name: e2e-test-logs
+          path: test-logs/

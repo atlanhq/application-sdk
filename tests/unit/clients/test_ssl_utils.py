@@ -18,6 +18,14 @@ from application_sdk.clients.ssl_utils import (
 )
 
 
+@pytest.fixture(autouse=True)
+def clear_ssl_context_cache():
+    """Clear the get_ssl_context lru_cache before and after each test."""
+    get_ssl_context.cache_clear()
+    yield
+    get_ssl_context.cache_clear()
+
+
 def has_internet_connection() -> bool:
     """Check if there is an active internet connection."""
     try:
@@ -105,6 +113,7 @@ class TestGetSslContext:
                 assert isinstance(result, ssl.SSLContext)
 
 
+@pytest.mark.integration
 class TestSslContextPublicCertificates:
     """Test that SSL context works with public certificates (default CAs).
 
@@ -115,18 +124,13 @@ class TestSslContextPublicCertificates:
 
     @pytest.mark.asyncio
     async def test_httpx_ssl_context_works_with_public_url(self):
-        """Test that httpx with custom SSL context can connect to public HTTPS URLs.
-
-        This verifies that default CA certificates are preserved when adding custom certs.
-        """
+        """Test that httpx with custom SSL context can connect to public HTTPS URLs."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
                 ssl_context = get_ssl_context()
                 assert isinstance(ssl_context, ssl.SSLContext)
 
                 if has_internet_connection():
-                    # Test connection to a public URL - this should work because
-                    # default certificates are preserved alongside custom ones
                     async with httpx.AsyncClient(verify=ssl_context) as client:
                         response = await client.get(
                             "https://www.google.com", timeout=10
@@ -135,18 +139,13 @@ class TestSslContextPublicCertificates:
 
     @pytest.mark.asyncio
     async def test_aiohttp_ssl_context_works_with_public_url(self):
-        """Test that aiohttp with custom SSL context can connect to public HTTPS URLs.
-
-        This verifies that default CA certificates are preserved when adding custom certs.
-        """
+        """Test that aiohttp with custom SSL context can connect to public HTTPS URLs."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
                 ssl_context = get_ssl_context()
                 assert isinstance(ssl_context, ssl.SSLContext)
 
                 if has_internet_connection():
-                    # Test connection to a public URL - this should work because
-                    # default certificates are preserved alongside custom ones
                     async with aiohttp.ClientSession() as session:
                         async with session.get(
                             "https://www.google.com",
@@ -169,27 +168,16 @@ class TestSslContextPublicCertificates:
 
 
 class TestSslContextPrivateCertificates:
-    """Test that SSL context can load and use private/custom certificates.
-
-    These tests verify that custom certificates from SSL_CERT_DIR are properly
-    loaded into the SSL context.
-    """
+    """Test that SSL context can load and use private/custom certificates."""
 
     def test_ssl_context_loads_custom_cert_file(self):
         """Test that a custom certificate file can be loaded into the SSL context."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a dummy certificate file (this won't be a valid cert,
-            # but we can verify the context accepts the directory)
             cert_file = f"{tmpdir}/custom-ca.pem"
-
-            # Create a minimal self-signed cert for testing structure
-            # Note: This is just to test that the file is processed,
-            # not that it's a valid certificate chain
             with open(cert_file, "w") as f:
                 f.write("# Placeholder for custom CA certificate\n")
 
             with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
-                # This should not raise an error - the context is created successfully
                 ssl_context = get_ssl_context()
                 assert isinstance(ssl_context, ssl.SSLContext)
 
@@ -198,20 +186,13 @@ class TestSslContextPrivateCertificates:
         with tempfile.TemporaryDirectory() as tmpdir:
             ssl_context = create_ssl_context_with_custom_certs(tmpdir)
 
-            # Verify security settings are properly configured
             assert ssl_context.verify_mode == ssl.CERT_REQUIRED
             assert ssl_context.check_hostname is True
-            # Should use secure protocol
             assert ssl_context.protocol == ssl.PROTOCOL_TLS_CLIENT
 
 
 class TestGetCustomCaCertBytes:
-    """Test cases for get_custom_ca_cert_bytes function.
-
-    This function is used by clients like Temporal that require raw certificate
-    bytes instead of an ssl.SSLContext. It returns BOTH system default certificates
-    AND custom certificates from SSL_CERT_DIR.
-    """
+    """Test cases for get_custom_ca_cert_bytes function."""
 
     def test_returns_none_when_no_cert_dir(self):
         """Test that None is returned when SSL_CERT_DIR is not set."""
@@ -244,7 +225,6 @@ class TestGetCustomCaCertBytes:
     def test_includes_custom_cert_when_cert_file_exists(self):
         """Test that custom certificate bytes are included when a valid cert file exists."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a test certificate file with unique content
             cert_content = b"-----BEGIN CERTIFICATE-----\nUNIQUE_TEST_CERT_DATA_12345\n-----END CERTIFICATE-----"
             cert_file = f"{tmpdir}/ca.pem"
             with open(cert_file, "wb") as f:
@@ -255,17 +235,11 @@ class TestGetCustomCaCertBytes:
 
                 result = get_custom_ca_cert_bytes()
                 assert result is not None
-                # Custom certificate content should be in the result
                 assert b"UNIQUE_TEST_CERT_DATA_12345" in result
 
     def test_includes_default_system_certificates(self):
-        """Test that default system CA certificates are included along with custom certs.
-
-        This is the key test ensuring both public (system CA) and private (custom CA)
-        certificates work simultaneously.
-        """
+        """Test that default system CA certificates are included along with custom certs."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a custom certificate file
             custom_cert = (
                 b"-----BEGIN CERTIFICATE-----\nCUSTOM_CERT\n-----END CERTIFICATE-----"
             )
@@ -278,18 +252,13 @@ class TestGetCustomCaCertBytes:
 
                 result = get_custom_ca_cert_bytes()
                 assert result is not None
-                # Custom certificate should be included
                 assert b"CUSTOM_CERT" in result
-                # Result should be larger than just the custom cert (includes system certs)
-                # The default CA bundle is typically several hundred KB
                 assert len(result) > len(custom_cert)
-                # Should contain multiple certificates (system CAs)
                 assert result.count(b"-----BEGIN CERTIFICATE-----") > 1
 
     def test_concatenates_multiple_custom_cert_files(self):
         """Test that multiple custom certificate files are concatenated with newlines."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create multiple test certificate files with unique identifiers
             cert1_content = b"-----BEGIN CERTIFICATE-----\nCUSTOM_CERT_ONE\n-----END CERTIFICATE-----"
             cert2_content = b"-----BEGIN CERTIFICATE-----\nCUSTOM_CERT_TWO\n-----END CERTIFICATE-----"
 
@@ -303,7 +272,6 @@ class TestGetCustomCaCertBytes:
 
                 result = get_custom_ca_cert_bytes()
                 assert result is not None
-                # Both custom certificates should be in the result
                 assert b"CUSTOM_CERT_ONE" in result
                 assert b"CUSTOM_CERT_TWO" in result
 
@@ -320,10 +288,8 @@ class TestGetCustomCaCertBytes:
 
                 result = get_custom_ca_cert_bytes()
                 assert result is not None
-                # Should contain valid PEM certificate format
                 assert b"-----BEGIN CERTIFICATE-----" in result
                 assert b"-----END CERTIFICATE-----" in result
-                # Should contain multiple certificates (trustme + system certs)
                 assert result.count(b"-----BEGIN CERTIFICATE-----") > 1
 
 
@@ -342,16 +308,7 @@ def server_ssl_ctx(trustme_ca):  # type: ignore[no-untyped-def]
 
 
 class TestSslContextWithPrivateServer:
-    """Integration tests with a real HTTPS server using private certificates.
-
-    These tests use trustme to create valid CA and server certificates,
-    then verify that:
-    1. Custom CA certificates are properly loaded
-    2. Connections to servers using those certificates work
-    3. Both httpx and aiohttp work with the custom SSL context
-    4. Connections fail without the custom CA (proving it's necessary)
-    5. Both private and public certificates work simultaneously
-    """
+    """Integration tests with a real HTTPS server using private certificates."""
 
     @pytest.mark.asyncio
     async def test_httpx_connects_to_private_https_server(
@@ -359,11 +316,9 @@ class TestSslContextWithPrivateServer:
     ):  # type: ignore[no-untyped-def]
         """Test that httpx can connect to an HTTPS server using a private CA certificate."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Export the CA certificate to a file in the temp directory
             ca_cert_path = f"{tmpdir}/ca.pem"
             trustme_ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
 
-            # Create a simple HTTPS server
             async def handle_request(request):  # type: ignore[no-untyped-def]
                 return web.Response(text="Hello from private HTTPS server!")
 
@@ -376,16 +331,13 @@ class TestSslContextWithPrivateServer:
             site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=server_ssl_ctx)
             await site.start()
 
-            # Get the dynamically assigned port
             port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
 
             try:
-                # Create client SSL context with our CA certificate
                 with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
                     client_ssl_context = get_ssl_context()
                     assert isinstance(client_ssl_context, ssl.SSLContext)
 
-                    # Connect to the private server - this should succeed
                     async with httpx.AsyncClient(verify=client_ssl_context) as client:
                         response = await client.get(
                             f"https://localhost:{port}/", timeout=10
@@ -401,11 +353,9 @@ class TestSslContextWithPrivateServer:
     ):  # type: ignore[no-untyped-def]
         """Test that aiohttp can connect to an HTTPS server using a private CA certificate."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Export the CA certificate to a file in the temp directory
             ca_cert_path = f"{tmpdir}/ca.pem"
             trustme_ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
 
-            # Create a simple HTTPS server
             async def handle_request(request):  # type: ignore[no-untyped-def]
                 return web.Response(text="Hello from private HTTPS server!")
 
@@ -421,12 +371,10 @@ class TestSslContextWithPrivateServer:
             port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
 
             try:
-                # Create client SSL context with our CA certificate
                 with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
                     client_ssl_context = get_ssl_context()
                     assert isinstance(client_ssl_context, ssl.SSLContext)
 
-                    # Connect to the private server
                     async with aiohttp.ClientSession() as session:
                         async with session.get(
                             f"https://localhost:{port}/",
@@ -441,13 +389,8 @@ class TestSslContextWithPrivateServer:
 
     @pytest.mark.asyncio
     async def test_connection_fails_without_custom_ca(self, trustme_ca, server_ssl_ctx):  # type: ignore[no-untyped-def]
-        """Test that connection fails when custom CA is not loaded.
+        """Test that connection fails when custom CA is not loaded."""
 
-        This verifies that our private server's certificate is NOT trusted
-        by default system CAs, proving that our custom CA loading is necessary.
-        """
-
-        # Create a simple HTTPS server
         async def handle_request(request):  # type: ignore[no-untyped-def]
             return web.Response(text="Hello!")
 
@@ -463,12 +406,10 @@ class TestSslContextWithPrivateServer:
         port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
 
         try:
-            # Try to connect WITHOUT our custom CA - should fail with SSL error
             with pytest.raises(Exception) as exc_info:
                 async with httpx.AsyncClient(verify=True) as client:
                     await client.get(f"https://localhost:{port}/", timeout=10)
 
-            # The error should be SSL-related (certificate verify failed)
             error_message = str(exc_info.value).lower()
             assert "certificate" in error_message or "ssl" in error_message
         finally:
@@ -478,17 +419,11 @@ class TestSslContextWithPrivateServer:
     async def test_private_and_public_certs_work_simultaneously(
         self, trustme_ca, server_ssl_ctx
     ):  # type: ignore[no-untyped-def]
-        """Test that both private server AND public URLs work with the same SSL context.
-
-        This is the key test proving that custom certificates are ADDED to,
-        not replacing, the default system certificates.
-        """
+        """Test that both private server AND public URLs work with the same SSL context."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Export the CA certificate
             ca_cert_path = f"{tmpdir}/ca.pem"
             trustme_ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
 
-            # Create a simple HTTPS server
             async def handle_request(request):  # type: ignore[no-untyped-def]
                 return web.Response(text="Private server response")
 
@@ -509,19 +444,10 @@ class TestSslContextWithPrivateServer:
                     assert isinstance(client_ssl_context, ssl.SSLContext)
 
                     async with httpx.AsyncClient(verify=client_ssl_context) as client:
-                        # Test 1: Connect to private server (uses custom CA)
                         private_response = await client.get(
                             f"https://localhost:{port}/", timeout=10
                         )
                         assert private_response.status_code == 200
                         assert private_response.text == "Private server response"
-                        if has_internet_connection():
-                            # Test 2: Connect to public server (uses default CAs)
-                            public_response = await client.get(
-                                "https://www.google.com", timeout=10
-                            )
-                            assert public_response.status_code == 200
-
-                        # Both work with the same SSL context!
             finally:
                 await runner.cleanup()

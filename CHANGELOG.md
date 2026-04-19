@@ -1,5 +1,176 @@
 # Changelog
 
+## v3.0.0 (April 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.6.2...v3.0.0
+
+### Breaking Changes
+
+This is a major version bump with a clean break from v2. All v2 modules and APIs have been removed — there is no deprecation shim or compatibility layer. See the [v3 Upgrade Guide](docs/upgrade-guide-v3.md) for migration instructions and the v3 Replacements section below for the canonical v3 equivalents of each removed module.
+
+**Storage API removals** (`application_sdk.storage`): The backward-compat aliases `delete_file` and `list_files` have been removed. Use `delete` and `list_keys` respectively. See [Upgrading ObjectStore calls](docs/upgrade-guide-v3.md#upgrading-objectstore-calls) in the upgrade guide.
+
+**SQL filter validation** (`application_sdk.templates.contracts.sql_metadata`): `ExtractionInput` and `ExtractionTaskInput` now reject values containing a single quote (`'`) on the `exclude_filter`, `include_filter`, and `temp_table_regex` fields. A `ValidationError` is raised at workflow start if any of these fields contain a `'`. Real-world database name patterns do not require single quotes; this guards against SQL injection via filter substitution.
+
+### Features
+
+- **Schema-driven contracts** (`application_sdk.contracts`): `Input`/`Output` Pydantic model bases with payload-safety validation at class-definition time. Forbidden: `Any`, `bytes`, unbounded `list`/`dict`. Safe alternatives: `Annotated[list[T], MaxItems(N)]`, `FileReference`.
+
+- **Infrastructure abstraction** (`application_sdk.infrastructure`): Protocol-based interfaces for `StateStore`, `SecretStore`, `PubSub`, `InputBinding`, `OutputBinding`, `CapacityPool`, `CredentialVault`, and `Subscription`. Dapr implementations in `_dapr/`, Redis in `_redis/`, mock implementations for testing in `application_sdk.testing` (`MockStateStore`, `MockSecretStore`, `MockPubSub`, etc.).
+
+- **App + @task abstractions** (`application_sdk.app`): `App` ABC auto-registers as a Temporal workflow. `@task` decorator auto-registers as a Temporal activity with heartbeating, typed contracts, and configurable timeouts. `AppRegistry` and `TaskRegistry` singletons enable auto-discovery.
+
+- **`@entrypoint` decorator** (`application_sdk.app`): Marks `App` methods as independently-triggerable execution paths. Each `@entrypoint` generates one Temporal workflow at worker startup. Multi-entry-point apps dispatch via `POST /workflows/v1/start?entrypoint=<name>`; single-entry-point apps retain backward-compatible naming. `EntryPointMetadata` carries the kebab-case name, typed input/output, and method name.
+
+- **Built-in storage tasks** (`application_sdk.app`): `App.upload()`, `App.download()`, `App.cleanup_files()`, and `App.cleanup_storage()` are pre-registered `@task` methods on every `App`. Contracts are in `application_sdk.contracts.storage` (`UploadInput`, `DownloadInput`) and `application_sdk.contracts.cleanup` (`CleanupInput`, `CleanupOutput`, `StorageCleanupInput`, `StorageCleanupOutput`).
+
+- **`App.on_complete()` lifecycle hook** (`application_sdk.app`): Override to run teardown logic after a workflow completes (success or failure). Replaces the v2 `CleanupInterceptor` pattern with an explicit, overridable method on the `App` class.
+
+- **Temporal execution layer** (`application_sdk.execution`): `create_worker()` factory auto-discovers all registered `App` subclasses and their `@task` methods. Includes correlation ID propagation, lifecycle event interceptors, and temp-directory cleanup interceptors.
+
+- **Handler framework** (`application_sdk.handler`): Typed `Handler` ABC with `test_auth`, `preflight_check`, `fetch_metadata`. Response contract types (`AuthStatus`, `PreflightStatus`, `ApiMetadataOutput`, `SqlMetadataOutput`) are exported from `application_sdk.handler`. `create_app_handler_service()` FastAPI factory replaces the untyped `HandlerInterface` + `APIServer` pattern.
+
+- **CLI entry point** (`application_sdk.main`): `application-sdk --mode worker|handler|combined --app module:Class`. `run_dev_combined()` for local development. Auto-discovery of all `App` subclasses in a module.
+
+- **Built-in SQL connector templates** (`application_sdk.templates`): `SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor`, and `SqlQueryExtractor` replace the v2 workflow/activities split with typed contracts and single-class patterns. `IncrementalSqlMetadataExtractor` adds deletion detection: a current-state snapshot is uploaded at extraction time and diffed against the previous run to emit deleted-asset events automatically. `SqlMetadataExtractor` now ships default SQL execution: set `sql_client_class` and `fetch_*_sql` class attributes and call `super()` instead of re-implementing the fetch/query loop in every connector. `SqlQueryExtractor` follows the same pattern for query extraction; override `get_query_batches()` and `fetch_queries()` to provide connector-specific batch counting and data fetching.
+
+- **External cloud storage** (`application_sdk.storage.cloud`): `CloudStore` provides async `download`, `upload`, `list`, and `get_bytes` against customer-provided S3, GCS, or Azure buckets, constructed via `CloudStore.from_credentials()` using the standard `csa-connectors-objectstore` credential format. Distinct from the tenant's own Dapr-backed store.
+
+- **OAuth 2.0 token service** (`application_sdk.credentials`): `OAuthTokenService` wraps an `OAuthClientCredential` and manages the full client-credentials token lifecycle (acquire, cache, refresh before expiry), serialising concurrent requests with an `asyncio.Lock`. Replaces `application_sdk.clients.atlan_auth`.
+
+- **Typed contract reference types** (`application_sdk.contracts.types`): `GitReference` (repo, branch, path), `ConnectionRef` (qualified name, type), and `StorageTier` (`TRANSIENT` / `RETAINED` / `PERSISTENT`) for use in `FileReference.tier`. These replace raw strings for external references in contract models; `TRANSIENT` files are cleaned up automatically after the workflow completes.
+
+- **Credential system** (`application_sdk.credentials`): `CredentialRef` for portable credential handles, `CredentialResolver` for runtime lookup and decryption via the infrastructure's `CredentialVault`, and `CredentialTypeRegistry` for mapping auth-type strings to typed credential classes. `AtlanClientMixin` provides a ready-made async Atlan platform client (`create_async_atlan_client()`) for `App` subclasses that need to call the Atlan API.
+
+- **Observability context APIs** (`application_sdk.observability`): `ExecutionContext` (workflow run ID, activity type, attempt, task queue, and related Temporal metadata) and `CorrelationContext` (correlation ID) are propagated automatically by the execution layer. Access via `get_execution_context()` / `set_execution_context()` and `get_correlation_context()` / `set_correlation_context()`.
+
+- **`PublishInputMixin`** (`application_sdk.contracts.base`): Pydantic mixin for apps whose workflow output feeds the Automation Engine Publish App. Auto-derives `publish_state_prefix` and `current_state_prefix` from `connection_qualified_name`; callers only need to set `connection_qualified_name` and `transformed_data_prefix`.
+
+### v3 Replacements
+
+All v2 modules have been removed. Use the following v3 equivalents directly.
+
+**Application**
+
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.application` (`BaseApplication`) | `application_sdk.app.App` + `application_sdk.main.run_dev_combined` |
+| `application_sdk.application.metadata_extraction.sql` (`BaseSQLMetadataExtractionApplication`) | `application_sdk.templates.SqlMetadataExtractor` |
+
+**Worker**
+
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.worker` (`Worker`) | `application_sdk.execution.create_worker` |
+
+**Workflows**
+
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.workflows` (`WorkflowInterface`) | `application_sdk.app.App` with `@task` |
+| `application_sdk.workflows.metadata_extraction` | `application_sdk.templates.SqlMetadataExtractor` |
+| `application_sdk.workflows.metadata_extraction.sql` | `application_sdk.templates.SqlMetadataExtractor` |
+| `application_sdk.workflows.metadata_extraction.incremental_sql` | `application_sdk.templates.IncrementalSqlMetadataExtractor` |
+| `application_sdk.workflows.query_extraction` | `application_sdk.templates.SqlQueryExtractor` |
+| `application_sdk.workflows.query_extraction.sql` | `application_sdk.templates.SqlQueryExtractor` |
+
+**Activities**
+
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.activities` (`ActivitiesInterface`) | `application_sdk.app.App` with `@task` |
+| `application_sdk.activities.common.models` (`ActivityResult`) | `application_sdk.common.models` (`TaskStatistics`, `TaskResult`) |
+| `application_sdk.activities.common.utils` | `application_sdk.execution._temporal.activity_utils` |
+| `application_sdk.activities.common.sql_utils` | `application_sdk.common.sql_utils` |
+| `application_sdk.activities.lock_management` | `application_sdk.execution._temporal.lock_activities` |
+| `application_sdk.activities.metadata_extraction.base` | `application_sdk.templates.BaseMetadataExtractor` |
+| `application_sdk.activities.metadata_extraction.sql` | `application_sdk.templates.SqlMetadataExtractor` |
+| `application_sdk.activities.metadata_extraction.incremental` | `application_sdk.templates.IncrementalSqlMetadataExtractor` |
+| `application_sdk.activities.query_extraction.sql` | `application_sdk.templates.SqlQueryExtractor` |
+
+**Handlers**
+
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.handlers` (`HandlerInterface`) | `application_sdk.handler.base.Handler` |
+| `application_sdk.handlers.base` | `application_sdk.handler.base.DefaultHandler` |
+| `application_sdk.handlers.sql` | `application_sdk.templates` |
+
+**Services**
+
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.services.atlan_storage` | `application_sdk.storage` or `App.upload` / `App.download` |
+| `application_sdk.services.eventstore` | `application_sdk.infrastructure.context.get_infrastructure().event_binding` |
+| `application_sdk.services.objectstore` | `application_sdk.storage` or `App.upload` / `App.download` |
+| `application_sdk.services.secretstore` | `application_sdk.infrastructure.secrets.SecretStore` |
+| `application_sdk.services.statestore` | `application_sdk.infrastructure.state.StateStore` |
+
+**Clients**
+
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.clients.atlan` | `application_sdk.credentials.atlan_client` |
+| `application_sdk.clients.atlan_auth` | `application_sdk.credentials.OAuthTokenService` |
+| `application_sdk.clients.temporal` | `application_sdk.execution._temporal.worker` |
+| `application_sdk.clients.workflow` | `application_sdk.execution._temporal.backend` |
+
+**Interceptors**
+
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.interceptors.models` | `application_sdk.contracts.events` |
+| `application_sdk.interceptors.events` | `application_sdk.execution._temporal.interceptors.events` |
+| `application_sdk.interceptors.cleanup` | `application_sdk.execution._temporal.interceptors.cleanup` |
+| `application_sdk.interceptors.lock` | `application_sdk.execution._temporal.interceptors.lock` |
+| `application_sdk.interceptors.correlation_context` | `application_sdk.execution._temporal.interceptors.correlation_context` |
+| `application_sdk.interceptors.activity_failure_logging` | `application_sdk.execution._temporal.interceptors.activity_failure_logging` |
+| `application_sdk.execution._temporal.interceptors.CleanupInterceptor` | `App.on_complete()` lifecycle hook |
+
+**Test utilities**
+
+| Removed (v2) | Use instead (v3) |
+|---|---|
+| `application_sdk.test_utils` | `application_sdk.testing` |
+| `application_sdk.test_utils.scale_data_generator` | `application_sdk.testing.scale_data_generator` |
+| `application_sdk.test_utils.credentials` | `application_sdk.testing.MockCredentialStore` |
+
+
+
+## v2.8.7 (April 16, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.6...v2.8.7
+
+### Features
+
+- enable @sdk-review on main (#1327) (by @vaibhavatlan in [a71b4d4](https://github.com/atlanhq/application-sdk/commit/a71b4d4))
+- add @sdk-review challenge mode + retrospective learning (#1345) (by @vaibhavatlan in [4b59bba](https://github.com/atlanhq/application-sdk/commit/4b59bba))
+- centralize base allowlist and dashboard template (#1325) (by @mananjain99 in [767936b](https://github.com/atlanhq/application-sdk/commit/767936b))
+- remove inline-QA job (deferred), keep auto-resolve (#1365) (by @vaibhavatlan in [2fd5e08](https://github.com/atlanhq/application-sdk/commit/2fd5e08))
+- gate publish and SDR dispatch on security scan — enforcement enabled (#1332) (by @adityachoudhury-cloud in [0ead801](https://github.com/atlanhq/application-sdk/commit/0ead801))
+
+### Bug Fixes
+
+- resolve auth failure + add instant UX feedback (#1330) (by @vaibhavatlan in [bc52434](https://github.com/atlanhq/application-sdk/commit/bc52434))
+- hotfix — workflow rejected on main due to empty ${{ }} in comments (#1334) (by @vaibhavatlan in [f3a02d7](https://github.com/atlanhq/application-sdk/commit/f3a02d7))
+- parse verdict from PR comment + restore status check (#1337) (by @vaibhavatlan in [6826126](https://github.com/atlanhq/application-sdk/commit/6826126))
+- context-aware approve message (drop 'v2', distinguish review vs re-review) (#1341) (by @vaibhavatlan in [6a0c0c1](https://github.com/atlanhq/application-sdk/commit/6a0c0c1))
+- Re-review verb flows through Claude comment + ack + status (#1343) (by @vaibhavatlan in [5a107b9](https://github.com/atlanhq/application-sdk/commit/5a107b9))
+- demo-prep — inline Q&A, tighter verdict, auto-resolve, clearer CI msg (#1351) (by @vaibhavatlan in [8efaa8b](https://github.com/atlanhq/application-sdk/commit/8efaa8b))
+- hotfix adversarial jq + inline-QA 404 (#1359) (by @vaibhavatlan in [ca8ac91](https://github.com/atlanhq/application-sdk/commit/ca8ac91))
+- correct inline-QA API endpoint (1-line fix) (#1361) (by @vaibhavatlan in [70707e0](https://github.com/atlanhq/application-sdk/commit/70707e0))
+- inline-QA OIDC + ack-before-VPN + ~10min estimate (#1363) (by @vaibhavatlan in [11f3351](https://github.com/atlanhq/application-sdk/commit/11f3351))
+- CI-fix loop (Session C) + branch-keeping (#1367) (by @vaibhavatlan in [0152866](https://github.com/atlanhq/application-sdk/commit/0152866))
+- add missing top-level permissions (actions, workflows) (#1369) (by @vaibhavatlan in [f07e7cf](https://github.com/atlanhq/application-sdk/commit/f07e7cf))
+- remove invalid 'workflows' permission, use git merge fallback (#1371) (by @vaibhavatlan in [28802b6](https://github.com/atlanhq/application-sdk/commit/28802b6))
+- fix branch-update fallback (auth + 422 handling) (#1373) (by @vaibhavatlan in [0d76208](https://github.com/atlanhq/application-sdk/commit/0d76208))
+- remove per-repo allowlist — base-allowlist is single source of truth (#1375) (by @adityachoudhury-cloud in [5151867](https://github.com/atlanhq/application-sdk/commit/5151867))
+
+### Reverts
+
+- revert "fix: resilient thread-based heartbeater for all activities" (#1376) (by @SanilK2108 in [f17993e](https://github.com/atlanhq/application-sdk/commit/f17993e))
+
+
 ## v2.8.6 (April 15, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.5...v2.8.6
@@ -92,6 +263,7 @@ Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.0...v2.8
 - update trivy-action to 0.35.0 to address updated versions (#1142) (by @akshanshjaiswal-atlan in [f458c84](https://github.com/atlanhq/application-sdk/commit/f458c84))
 - use atlan --version flag instead of subcommand (#1146) (by @adityachoudhury-cloud in [7330e6c](https://github.com/atlanhq/application-sdk/commit/7330e6c))
 - suppress single-key secret store log pollution (#1149) (by @Garavitey in [3a5e72b](https://github.com/atlanhq/application-sdk/commit/3a5e72b))
+
 
 
 ## v2.8.0 (March 18, 2026)

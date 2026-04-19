@@ -1,0 +1,61 @@
+name: Publish Helm Chart
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - helm/atlan-app/**
+    tags:
+      - helm/v*
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Package and Push to GHCR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Lint chart
+        run: helm lint helm/atlan-app
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io \
+                --username "${{ github.actor }}" \
+                --password-stdin
+
+      - name: Read chart version
+        id: chart
+        run: |
+          VERSION=$(grep '^version:' helm/atlan-app/Chart.yaml | awk '{print $2}')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Package chart
+        run: helm package helm/atlan-app --destination /tmp/helm-pkg
+
+      - name: Push chart to GHCR
+        run: |
+          helm push \
+            /tmp/helm-pkg/atlan-app-${{ steps.chart.outputs.version }}.tgz \
+            oci://ghcr.io/${{ github.repository_owner }}/charts
+
+      - name: Summary
+        run: |
+          echo "## Helm Chart Published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Chart:** \`atlan-app\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Version:** \`${{ steps.chart.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Registry:** \`oci://ghcr.io/${{ github.repository_owner }}/charts\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Install" >> "$GITHUB_STEP_SUMMARY"
+          echo '```bash' >> "$GITHUB_STEP_SUMMARY"
+          echo "helm install my-app oci://ghcr.io/${{ github.repository_owner }}/charts/atlan-app --version ${{ steps.chart.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

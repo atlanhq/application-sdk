@@ -1,36 +1,26 @@
+import logging
 import os
 
-from pydantic import BaseModel, Field
-from temporalio import activity, workflow
+from opentelemetry.sdk.resources import Resource
 
 from application_sdk.constants import (
+    APP_SDK_VERSION,
+    APP_TYPE,
     APPLICATION_NAME,
+    APPLICATION_VERSION,
     DEPLOYMENT_NAME,
+    DOMAIN_NAME,
     OBSERVABILITY_DIR,
+    OTEL_RESOURCE_ATTRIBUTES,
+    OTEL_WF_NODE_NAME,
+    PUBLISHED_AT,
+    RELEASE_CHANNEL,
+    RELEASE_ID,
+    SERVICE_NAME,
+    SERVICE_VERSION,
     TEMPORARY_PATH,
 )
 from application_sdk.observability.context import correlation_context
-
-
-class WorkflowContext(BaseModel):
-    """Workflow context.
-
-    This model supports dynamic correlation context fields (atlan- prefixed)
-    through Pydantic's extra="allow" configuration.
-    """
-
-    model_config = {"extra": "allow"}
-
-    in_workflow: str = Field(default="false")
-    in_activity: str = Field(default="false")
-    workflow_id: str = Field(init=False, default="")
-    workflow_type: str = Field(init=False, default="")
-    namespace: str = Field(init=False, default="")
-    task_queue: str = Field(init=False, default="")
-    attempt: str = Field(init=False, default="0")
-    activity_id: str = Field(init=False, default="")
-    activity_type: str = Field(init=False, default="")
-    workflow_run_id: str = Field(init=False, default="")
 
 
 def get_observability_dir() -> str:
@@ -47,47 +37,93 @@ def get_observability_dir() -> str:
     )
 
 
-def get_workflow_context() -> WorkflowContext:
-    """Get the workflow context.
+def get_workflow_context() -> dict[str, str]:
+    """Get the workflow context as a plain dict.
+
+    Reads from the ``ExecutionContext`` ContextVar set by
+    ``ExecutionContextInterceptor`` — no Temporal imports required.
+    Outside Temporal (tests, CLI) the default context returns
+    ``in_workflow="false"`` and ``in_activity="false"``.
 
     Returns:
-        WorkflowContext: The workflow context.
+        dict[str, str]: The workflow context fields.
     """
+    from application_sdk.observability.context import get_execution_context
 
-    context = WorkflowContext(in_workflow="false", in_activity="false")
+    ctx = get_execution_context()
+    context: dict[str, str] = {
+        "in_workflow": str(ctx.execution_type == "workflow").lower(),
+        "in_activity": str(ctx.execution_type == "activity").lower(),
+        "workflow_id": ctx.workflow_id,
+        "workflow_run_id": ctx.workflow_run_id,
+        "workflow_type": ctx.workflow_type,
+        "namespace": ctx.namespace,
+        "task_queue": ctx.task_queue,
+        "attempt": str(ctx.attempt),
+        "activity_id": ctx.activity_id,
+        "activity_type": ctx.activity_type,
+    }
 
-    try:
-        workflow_info = workflow.info()
-        if workflow_info:
-            context.workflow_id = workflow_info.workflow_id or ""
-            context.workflow_run_id = workflow_info.run_id or ""
-            context.workflow_type = workflow_info.workflow_type or ""
-            context.namespace = workflow_info.namespace or ""
-            context.task_queue = workflow_info.task_queue or ""
-            context.attempt = str(workflow_info.attempt or 0)
-            context.in_workflow = "true"
-    except Exception:
-        pass
-
-    try:
-        activity_info = activity.info()
-        if activity_info:
-            context.in_activity = "true"
-            context.workflow_id = activity_info.workflow_id or ""
-            context.workflow_run_id = activity_info.workflow_run_id or ""
-            context.activity_id = activity_info.activity_id or ""
-            context.activity_type = activity_info.activity_type or ""
-            context.task_queue = activity_info.task_queue or ""
-            context.attempt = str(activity_info.attempt or 0)
-    except Exception:
-        pass
-
-    # Get correlation context from context variable (atlan- prefixed headers)
+    # Merge correlation context (atlan- prefixed headers for distributed tracing)
     corr_ctx = correlation_context.get()
     if corr_ctx:
-        # Add all correlation context fields as extra attributes
         for key, value in corr_ctx.items():
             if key.startswith("atlan-") and value:
-                setattr(context, key, str(value))
+                context[key] = str(value)
 
     return context
+
+
+def parse_otel_resource_attributes(env_var: str) -> dict[str, str]:
+    """Parse 'key=val,key=val' OTEL_RESOURCE_ATTRIBUTES into a dict."""
+    try:
+        if env_var:
+            attributes = env_var.split(",")
+            return {
+                item.split("=")[0].strip(): item.split("=")[1].strip()
+                for item in attributes
+                if "=" in item
+            }
+    except Exception:
+        logging.error("Failed to parse OTLP resource attributes", exc_info=True)
+    return {}
+
+
+def build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource:
+    """Build an OTel Resource with standard Atlan service attributes."""
+    resource_attributes: dict[str, str] = {}
+    if OTEL_RESOURCE_ATTRIBUTES:
+        resource_attributes = parse_otel_resource_attributes(OTEL_RESOURCE_ATTRIBUTES)
+    if "service.name" not in resource_attributes:
+        resource_attributes["service.name"] = SERVICE_NAME
+    if "service.version" not in resource_attributes:
+        resource_attributes["service.version"] = SERVICE_VERSION
+    if OTEL_WF_NODE_NAME:
+        resource_attributes["k8s.workflow.node.name"] = OTEL_WF_NODE_NAME
+    # Deployment-level attributes — constant per pod, don't duplicate in log attrs.
+    # tenant.id is intentionally omitted: k8s.cluster.name (injected by the
+    # central OTel collector's resource processor) identifies the tenant at
+    # the deployment level.
+    # NOTE: app.name is intentionally NOT a resource attribute — a deployment
+    # can host multiple apps; app_name stays in log attrs per-event.
+    # app.build_id is also omitted — app.version carries the same signal.
+    if APPLICATION_VERSION:
+        resource_attributes["app.version"] = APPLICATION_VERSION
+    if RELEASE_ID:
+        resource_attributes["app.release_id"] = RELEASE_ID
+    if RELEASE_CHANNEL:
+        resource_attributes["app.release_channel"] = RELEASE_CHANNEL
+    if APP_SDK_VERSION:
+        resource_attributes["app.sdk_version"] = APP_SDK_VERSION
+    if APP_TYPE:
+        resource_attributes["app.type"] = APP_TYPE
+    if PUBLISHED_AT:
+        resource_attributes["app.published_at"] = PUBLISHED_AT
+    if DOMAIN_NAME:
+        resource_attributes["k8s.domain.name"] = DOMAIN_NAME
+    pod_name = os.environ.get("K8S_POD_NAME") or os.environ.get("HOSTNAME", "")
+    if pod_name:
+        resource_attributes["k8s.pod.name"] = pod_name
+    if extra_attrs:
+        resource_attributes.update(extra_attrs)
+    return Resource.create(resource_attributes)

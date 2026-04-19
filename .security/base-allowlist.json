@@ -1,0 +1,174 @@
+{
+  "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
+  "_base_image": "application-sdk-main",
+  "_updated": "2026-04-18",
+  "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 60 days. HIGH: 90 days. Review before expiry.",
+  "SNYK-GOLANG-GOOGLEGOLANGORGGRPC-15691172": {
+    "package": "google.golang.org/grpc",
+    "severity": "CRITICAL",
+    "reason": "Base image \u2014 Dapr runtime dependency",
+    "expires": "2026-06-15",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-33186": {
+    "package": "google.golang.org/grpc",
+    "severity": "CRITICAL",
+    "reason": "Base image \u2014 Dapr runtime dependency",
+    "expires": "2026-06-15",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GITHUBCOMGOJOSEGOJOSEV4-15875221": {
+    "package": "github.com/go-jose/go-jose/v4",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Dapr runtime dependency",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GITHUBCOMJACKCPGXV5PGPROTO3-15923570": {
+    "package": "github.com/jackc/pgx/v5/pgproto3",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Dapr runtime dependency",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GITHUBCOMJACKCPGXV5PGPROTO3-15923580": {
+    "package": "github.com/jackc/pgx/v5/pgproto3",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Dapr runtime dependency",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-34986": {
+    "package": "dapr-daprd-1.17",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Dapr runtime package",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-4519": {
+    "package": "python-3.10-base",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Python runtime",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-31812": {
+    "package": "quinn-proto",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Dapr Rust dependency",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-34040": {
+    "package": "github.com/docker/docker",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Docker Go dependency",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-25679": {
+    "package": "stdlib (Go)",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Go stdlib",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GOOPENTELEMETRYIOOTELBAGGAGE-15928416": {
+    "package": "go.opentelemetry.io/otel/baggage",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GOOPENTELEMETRYIOOTELINTERNALGLOBAL-15928418": {
+    "package": "go.opentelemetry.io/otel/internal/global",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GOOPENTELEMETRYIOOTELPROPAGATION-15928420": {
+    "package": "go.opentelemetry.io/otel/propagation",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-39883": {
+    "package": "go.opentelemetry.io/otel/sdk",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-32280": {
+    "package": "stdlib (Go)",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Go stdlib",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-32282": {
+    "package": "stdlib (Go)",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Go stdlib",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GOOPENTELEMETRYIOOTELEXPORTERSOTLPOTLPTRACEOTLPTRACEHTTP-15954196": {
+    "package": "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "SNYK-GOLANG-GOOPENTELEMETRYIOOTELSDKRESOURCE-15954212": {
+    "package": "go.opentelemetry.io/otel/sdk/resource",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 OpenTelemetry Go dependency",
+    "expires": "2026-07-15",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-27137": {
+    "package": "stdlib (Go)",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Go stdlib in daprd 1.17.4-r0 (Wolfi dapr-daprd-1.17). Fixed in Go 1.26.1; awaiting Wolfi rebuild of dapr-1.17 on newer Go toolchain.",
+    "expires": "2026-07-15",
+    "added_by": "louisnow"
+  },
+  "CVE-2026-33810": {
+    "package": "stdlib (Go)",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Go stdlib in daprd 1.17.4-r0 (Wolfi dapr-daprd-1.17). Fixed in Go 1.26.2; awaiting Wolfi rebuild of dapr-1.17 on newer Go toolchain.",
+    "expires": "2026-07-15",
+    "added_by": "louisnow"
+  },
+  "CVE-2024-35515": {
+    "package": "sqlitedict==2.1.0",
+    "severity": "HIGH",
+    "reason": "No patched version of sqlitedict available \u2014 upstream has not released a fix as of 2026-04-16",
+    "expires": "2026-07-16",
+    "added_by": "TechyMT"
+  },
+  "CVE-2026-23949": {
+    "package": "jaraco.context",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Chainguard Wolfi system Python package",
+    "expires": "2026-07-16",
+    "added_by": "anuj-atlan"
+  },
+  "CVE-2026-24049": {
+    "package": "wheel",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Chainguard Wolfi system Python package",
+    "expires": "2026-07-16",
+    "added_by": "anuj-atlan"
+  },
+  "SNYK-JS-NEXT-15954202": {
+    "package": "next",
+    "severity": "HIGH",
+    "reason": "Next.js pinned to ~16.1.6 due to router.replace static export regression in 16.2.x. Upgrade blocked until Next.js fixes the regression.",
+    "expires": "2026-07-18",
+    "added_by": "bichitra.sahoo"
+  }
+}

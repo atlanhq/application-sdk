@@ -1,45 +1,9 @@
-"""Global test configuration and fixtures."""
+"""Global test configuration."""
 
-from unittest.mock import Mock, patch
+import os
 
-import pytest
-
-
-@pytest.fixture(autouse=True)
-def mock_secret_store():
-    """Automatically mock SecretStore.get_deployment_secret for all tests."""
-
-    def mock_get_deployment_secret(key: str):
-        """Default mock that returns None for all keys."""
-        return None
-
-    with patch(
-        "application_sdk.services.secretstore.SecretStore.get_deployment_secret",
-        side_effect=mock_get_deployment_secret,
-    ):
-        yield
-
-
-@pytest.fixture(autouse=True)
-def mock_dapr_client():
-    """Automatically mock DaprClient for all tests to prevent Dapr health check timeouts."""
-    with patch(
-        "application_sdk.services.eventstore.clients.DaprClient",
-        autospec=True,
-    ) as mock_dapr:
-        # Create a mock instance that can be used as a context manager
-        mock_instance = Mock()
-        mock_dapr.return_value.__enter__.return_value = mock_instance
-        mock_dapr.return_value.__exit__.return_value = None
-
-        # Mock the publish_event method to avoid actual Dapr calls
-        mock_instance.publish_event = Mock()
-        mock_instance.invoke_binding = Mock()
-
-        # Configure get_metadata() so is_component_registered() can iterate
-        # registered_components without TypeError ("Mock is not iterable").
-        mock_metadata = Mock()
-        mock_metadata.registered_components = []
-        mock_instance.get_metadata.return_value = mock_metadata
-
-        yield mock_dapr
+# Disable the Dapr observability sink globally for all unit tests.
+# Without this, metrics flushing tries to connect to the Dapr sidecar
+# (http://127.0.0.1:3500), which isn't running in unit test environments
+# and causes 60-second timeouts per test.
+os.environ.setdefault("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false")

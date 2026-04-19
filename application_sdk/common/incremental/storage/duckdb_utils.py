@@ -77,7 +77,9 @@ class DuckDBConnectionManager:
         os.makedirs(self._instance_path, exist_ok=True)
         os.makedirs(self._temp_dir, exist_ok=True)
 
-        logger.info(f"Creating DuckDB: {self._db_file} (memory_limit={memory_limit})")
+        logger.info(
+            "Creating DuckDB: file=%s memory_limit=%s", self._db_file, memory_limit
+        )
         self._connection = duckdb.connect(
             self._db_file,
             config={
@@ -105,8 +107,8 @@ class DuckDBConnectionManager:
         try:
             self._connection.close()
             logger.info("DuckDB connection closed")
-        except Exception as e:
-            logger.warning(f"Error closing DuckDB: {e}")
+        except Exception:
+            logger.warning("Error closing DuckDB", exc_info=True)
         finally:
             self._is_closed = True
             if self._auto_cleanup:

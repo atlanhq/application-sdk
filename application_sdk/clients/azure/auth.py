@@ -66,7 +66,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.common.error_codes import CommonError
-from application_sdk.common.utils import run_sync
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -145,7 +145,7 @@ class AzureAuthProvider:
             ClientAuthenticationError: If credential creation fails.
         """
         try:
-            logger.debug(f"Creating Azure credential with auth type: {auth_type}")
+            logger.debug("Creating Azure credential: %s", auth_type)
 
             if auth_type.lower() != "service_principal":
                 raise CommonError(
@@ -163,23 +163,19 @@ class AzureAuthProvider:
             return await self._create_service_principal_credential(credentials)
 
         except ClientAuthenticationError as e:
-            logger.error(f"Azure authentication failed: {str(e)}")
-            raise CommonError(f"{CommonError.AZURE_CREDENTIAL_ERROR}: {str(e)}")
+            raise CommonError(f"{CommonError.AZURE_CREDENTIAL_ERROR}: {str(e)}") from e
         except ValueError as e:
-            logger.error(f"Invalid Azure credential parameters: {str(e)}")
             raise CommonError(
                 f"{CommonError.CREDENTIALS_PARSE_ERROR}: Invalid credential parameters - {str(e)}"
-            )
+            ) from e
         except TypeError as e:
-            logger.error(f"Wrong Azure credential parameter types: {str(e)}")
             raise CommonError(
                 f"{CommonError.CREDENTIALS_PARSE_ERROR}: Invalid credential parameter types - {str(e)}"
-            )
+            ) from e
         except Exception as e:
-            logger.error(f"Unexpected error creating Azure credential: {str(e)}")
             raise CommonError(
                 f"{CommonError.CREDENTIALS_PARSE_ERROR}: Unexpected error - {str(e)}"
-            )
+            ) from e
 
     async def _create_service_principal_credential(
         self, credentials: Dict[str, Any]
@@ -216,37 +212,36 @@ class AzureAuthProvider:
                 ]
             )
             error_message = f"Invalid credential parameters: {error_details}"
-            logger.error(f"Azure credential validation failed: {error_message}")
-            raise CommonError(f"{CommonError.CREDENTIALS_PARSE_ERROR}: {error_message}")
+            raise CommonError(
+                f"{CommonError.CREDENTIALS_PARSE_ERROR}: {error_message}"
+            ) from e
 
         logger.debug(
-            f"Creating service principal credential for tenant: {validated_credentials.tenant_id}"
+            "Creating service principal credential: tenant_id=%s",
+            validated_credentials.tenant_id,
         )
 
         try:
-            return await run_sync(ClientSecretCredential)(
+            return await run_in_thread(
+                ClientSecretCredential,
                 validated_credentials.tenant_id,
                 validated_credentials.client_id,
                 validated_credentials.client_secret,
             )
         except ValueError as e:
-            logger.error(f"Invalid Azure credential parameters: {str(e)}")
             raise CommonError(
                 f"{CommonError.CREDENTIALS_PARSE_ERROR}: Invalid credential parameters - {str(e)}"
-            )
+            ) from e
         except TypeError as e:
-            logger.error(f"Wrong Azure credential parameter types: {str(e)}")
             raise CommonError(
                 f"{CommonError.CREDENTIALS_PARSE_ERROR}: Invalid credential parameter types - {str(e)}"
-            )
+            ) from e
         except ClientAuthenticationError as e:
-            logger.error(f"Azure authentication failed: {str(e)}")
-            raise CommonError(f"{CommonError.AZURE_CREDENTIAL_ERROR}: {str(e)}")
+            raise CommonError(f"{CommonError.AZURE_CREDENTIAL_ERROR}: {str(e)}") from e
         except Exception as e:
-            logger.error(f"Unexpected error creating Azure credential: {str(e)}")
             raise CommonError(
                 f"{CommonError.CREDENTIALS_PARSE_ERROR}: Unexpected error - {str(e)}"
-            )
+            ) from e
 
     async def validate_credential(self, credential: TokenCredential) -> bool:
         """
@@ -262,7 +257,9 @@ class AzureAuthProvider:
             logger.debug("Validating Azure credential")
 
             # Try to get a token for Azure Management API
-            token = await run_sync(credential.get_token)(AZURE_MANAGEMENT_API_ENDPOINT)
+            token = await run_in_thread(
+                credential.get_token, AZURE_MANAGEMENT_API_ENDPOINT
+            )
 
             if token and hasattr(token, "token"):
                 logger.debug("Azure credential validation successful")
@@ -271,18 +268,19 @@ class AzureAuthProvider:
                 logger.warning("Azure credential validation failed: No token received")
                 return False
 
-        except ClientAuthenticationError as e:
+        except ClientAuthenticationError:
             logger.error(
-                f"Azure credential validation failed - authentication error: {str(e)}"
+                "Azure credential validation failed - authentication error",
+                exc_info=True,
             )
             return False
-        except ValueError as e:
+        except ValueError:
             logger.error(
-                f"Azure credential validation failed - invalid parameters: {str(e)}"
+                "Azure credential validation failed - invalid parameters", exc_info=True
             )
             return False
-        except Exception as e:
+        except Exception:
             logger.error(
-                f"Azure credential validation failed - unexpected error: {str(e)}"
+                "Azure credential validation failed - unexpected error", exc_info=True
             )
             return False

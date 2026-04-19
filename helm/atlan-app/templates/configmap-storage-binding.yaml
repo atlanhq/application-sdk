@@ -1,0 +1,80 @@
+{{- if .Values.storage.type }}
+{{- /* --- A. Read atlan-defaults once; extract cloud provider (default: aws) --- */}}
+{{- $cm := (lookup "v1" "ConfigMap" "default" "atlan-defaults") }}
+{{- $cloud := "aws" }}
+{{- if and $cm $cm.data (index $cm.data "cloud") }}
+  {{- $cloud = index $cm.data "cloud" }}
+{{- end }}
+{{- /* --- B. Resolve effective storage type --- */}}
+{{- $storageType := .Values.storage.type }}
+{{- if eq $storageType "auto" }}
+  {{- if eq $cloud "gcp" }}
+    {{- $storageType = "bindings.gcp.bucket" }}
+  {{- else if eq $cloud "azure" }}
+    {{- $storageType = "bindings.azure.blobstorage" }}
+  {{- else }}
+    {{- $storageType = "bindings.aws.s3" }}
+  {{- end }}
+{{- end }}
+{{- /* --- C. Auto-fill provider-specific metadata (user-supplied keys always win) --- */}}
+{{- $metadata := .Values.storage.metadata | default dict }}
+{{- if eq $storageType "bindings.aws.s3" }}
+  {{- if not (hasKey $metadata "bucket") }}
+    {{- if and $cm $cm.data (index $cm.data "bucket") }}
+      {{- $_ := set $metadata "bucket" (index $cm.data "bucket") }}
+    {{- end }}
+  {{- end }}
+  {{- if not (hasKey $metadata "region") }}
+    {{- if and $cm $cm.data (index $cm.data "region") }}
+      {{- $_ := set $metadata "region" (index $cm.data "region") }}
+    {{- end }}
+  {{- end }}
+{{- else if eq $storageType "bindings.gcp.bucket" }}
+  {{- if not (hasKey $metadata "bucket") }}
+    {{- if and $cm $cm.data (index $cm.data "bucket") }}
+      {{- $_ := set $metadata "bucket" (index $cm.data "bucket") }}
+    {{- end }}
+  {{- end }}
+{{- else if eq $storageType "bindings.azure.blobstorage" }}
+  {{- if not (hasKey $metadata "container") }}
+    {{- if and $cm $cm.data (index $cm.data "bucket") }}
+      {{- $_ := set $metadata "container" (index $cm.data "bucket") }}
+    {{- end }}
+  {{- end }}
+  {{- $azSecret := (lookup "v1" "Secret" "default" "azurestorage") }}
+  {{- if $azSecret }}
+    {{- if not (hasKey $metadata "storageAccount") }}
+      {{- if index $azSecret.data "AZURE_STORAGE_ACCOUNT" }}
+        {{- $_ := set $metadata "storageAccount" (index $azSecret.data "AZURE_STORAGE_ACCOUNT" | b64dec) }}
+      {{- end }}
+    {{- end }}
+    {{- if not (hasKey $metadata "storageAccessKey") }}
+      {{- if index $azSecret.data "AZURE_STORAGE_ACCESS_KEY" }}
+        {{- $_ := set $metadata "storageAccessKey" (index $azSecret.data "AZURE_STORAGE_ACCESS_KEY" | b64dec) }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- /* --- D. Emit ConfigMap with resolved type and merged metadata --- */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-storage-binding
+  namespace: {{ include "atlan-app.namespace" . }}
+  labels:
+    {{- include "atlan-app.commonLabels" . | nindent 4 }}
+data:
+  objectstore.yaml: |
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: objectstore
+    spec:
+      type: {{ $storageType }}
+      version: v1
+      metadata:
+      {{- range $key, $value := $metadata }}
+      - name: {{ $key }}
+        value: {{ $value | quote }}
+      {{- end }}
+{{- end }}
