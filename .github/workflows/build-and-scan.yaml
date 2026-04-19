@@ -264,7 +264,7 @@ jobs:
       - name: Check against allowlist
         env:
           FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
-        run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json
+        run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json --write-comment
 
       - name: Report Snyk findings (informational)
         if: always()
@@ -289,3 +289,25 @@ jobs:
           else
             echo "No Snyk results available"
           fi
+
+      - name: Comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body;
+            try {
+              body = fs.readFileSync('/tmp/scan_comment.md', 'utf8');
+            } catch {
+              return;
+            }
+            if (!body || !body.trim()) return;
+            const time = new Date().toUTCString();
+            body += `\n\n<sub>Run: ${context.runId} | ${time}</sub>`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body,
+            });
