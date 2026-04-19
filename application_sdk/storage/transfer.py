@@ -18,12 +18,15 @@ identically for single files and directories.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from application_sdk.contracts.types import FileReference, StorageTier
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -249,16 +252,45 @@ async def upload(
         else:
             prefix = src.name
 
+        import asyncio
+
         files = [p for p in src.rglob("*") if p.is_file()]
         transferred_count = 0
+
+        sem = asyncio.Semaphore(5)
+
+        async def _upload_bounded(file_path: Path, key: str) -> bool:
+            async with sem:
+                ok, _ = await _upload_one(
+                    resolved, file_path, key, skip_if_exists=skip_if_exists
+                )
+                return ok
+
+        upload_tasks = []
         for file_path in files:
             relative = str(file_path.relative_to(src)).replace(os.sep, "/")
             key = f"{prefix}/{relative}" if prefix else relative
-            ok, _ = await _upload_one(
-                resolved, file_path, key, skip_if_exists=skip_if_exists
-            )
-            if ok:
+            upload_tasks.append(_upload_bounded(file_path, key))
+
+        results = await asyncio.gather(*upload_tasks, return_exceptions=True)
+        errors = []
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                errors.append((str(files[i]), r))
+            elif r is True:
                 transferred_count += 1
+        if errors:
+            from application_sdk.storage.errors import StorageError
+
+            logger.warning(
+                "upload: %d/%d uploads failed under %s",
+                len(errors),
+                len(files),
+                prefix,
+            )
+            raise StorageError(
+                f"{len(errors)} upload(s) failed under prefix '{prefix}'"
+            ) from errors[0][1]
 
         store_prefix = (prefix.rstrip("/") + "/") if prefix else ""
         reason = "uploaded" if transferred_count > 0 else "skipped:hash_match"
@@ -353,18 +385,46 @@ async def download(
         else:
             dest_dir = Path(tempfile.mkdtemp())
 
+        import asyncio
+
         dest_dir.mkdir(parents=True, exist_ok=True)
         strip = prefix
 
+        sem = asyncio.Semaphore(5)
+
+        async def _download_bounded(key: str, local_file: Path) -> bool:
+            async with sem:
+                ok, _ = await _download_one(
+                    resolved, key, local_file, skip_if_exists=skip_if_exists
+                )
+                return ok
+
         transferred_count = 0
+        download_tasks = []
         for key in data_keys:
             rel = key[len(strip) :] if key.startswith(strip) else key
             local_file = dest_dir / rel
-            ok, _ = await _download_one(
-                resolved, key, local_file, skip_if_exists=skip_if_exists
-            )
-            if ok:
+            download_tasks.append(_download_bounded(key, local_file))
+
+        results = await asyncio.gather(*download_tasks, return_exceptions=True)
+        errors = []
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                errors.append((data_keys[i], r))
+            elif r is True:
                 transferred_count += 1
+        if errors:
+            from application_sdk.storage.errors import StorageError
+
+            logger.warning(
+                "download: %d/%d downloads failed under %s",
+                len(errors),
+                len(data_keys),
+                prefix,
+            )
+            raise StorageError(
+                f"{len(errors)} download(s) failed under prefix '{prefix}'"
+            ) from errors[0][1]
 
         reason = "downloaded" if transferred_count > 0 else "skipped:hash_match"
         ref = FileReference(

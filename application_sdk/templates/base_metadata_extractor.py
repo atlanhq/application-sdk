@@ -82,23 +82,35 @@ class BaseMetadataExtractor(App):
         deployment_store = create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
         upstream_store = create_store_from_binding(UPSTREAM_OBJECT_STORE_NAME)
 
+        import asyncio
+
         files_to_migrate = await list_keys(input.output_path, store=deployment_store)
         total_files = len(files_to_migrate)
         migrated_files = 0
         failures = []
 
-        for file_path in files_to_migrate:
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp_path = tmp.name
-            try:
-                await download_file(file_path, tmp_path, store=deployment_store)
-                await upload_file(file_path, tmp_path, store=upstream_store)
+        semaphore = asyncio.Semaphore(5)
+
+        async def _migrate_one(file_path: str) -> None:
+            async with semaphore:
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp_path = tmp.name
+                try:
+                    await download_file(file_path, tmp_path, store=deployment_store)
+                    await upload_file(file_path, tmp_path, store=upstream_store)
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+
+        results = await asyncio.gather(
+            *[_migrate_one(fp) for fp in files_to_migrate],
+            return_exceptions=True,
+        )
+        for fp, result in zip(files_to_migrate, results):
+            if isinstance(result, Exception):
+                failures.append({"file": fp, "error": str(result)})
+            else:
                 migrated_files += 1
-            except Exception as e:
-                failures.append({"file": file_path, "error": str(e)})
-            finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
 
         if failures:
             from application_sdk.common.error_codes import ActivityError
