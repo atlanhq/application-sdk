@@ -1,0 +1,41 @@
+{{- if and .Values.keda.enabled (.Capabilities.APIVersions.Has "keda.sh/v1alpha1") }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "atlan-app.appName" . }}-worker-scaler
+  namespace: {{ include "atlan-app.namespace" . }}
+  labels:
+    {{- include "atlan-app.commonLabels" . | nindent 4 }}
+    component: worker
+    app.kubernetes.io/component: worker-scaler
+spec:
+  scaleTargetRef:
+    name: {{ include "atlan-app.workerName" . }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  minReplicaCount: {{ .Values.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
+  advanced:
+    restoreToOriginalReplicaCount: false
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: {{ .Values.keda.scaleDown.stabilizationWindowSeconds }}
+          policies:
+            - type: {{ .Values.keda.scaleDown.policy.type }}
+              value: {{ .Values.keda.scaleDown.policy.value }}
+              periodSeconds: {{ .Values.keda.scaleDown.policy.periodSeconds }}
+        scaleUp:
+          stabilizationWindowSeconds: {{ .Values.keda.scaleUp.stabilizationWindowSeconds }}
+          policies:
+            - type: {{ .Values.keda.scaleUp.policy.type }}
+              value: {{ .Values.keda.scaleUp.policy.value }}
+              periodSeconds: {{ .Values.keda.scaleUp.policy.periodSeconds }}
+  triggers:
+    - type: temporal
+      metadata:
+        endpoint: {{ .Values.temporal.host | quote }}
+        namespace: {{ .Values.temporal.namespace | quote }}
+        taskQueue: {{ include "atlan-app.taskQueue" . | quote }}
+        targetTasksPerWorker: {{ .Values.keda.targetTasksPerWorker | quote }}
+{{- end }}

@@ -2,8 +2,6 @@ from collections import namedtuple
 from enum import Enum
 from typing import List, Optional
 
-import pandas as pd
-
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -74,14 +72,16 @@ async def convert_data_files(
 def convert_json_to_parquet(file_path: str) -> Optional[str]:
     """Convert the downloaded files from json to parquet"""
     try:
-        logger.info(f"Converting {file_path} to parquet")
+        import pandas as pd  # lazy import: heavy dependency
+
+        logger.info("Converting file to parquet: %s", file_path)
         df = pd.read_json(file_path, orient="records", lines=True)
         df = df.loc[:, ~df.where(df.astype(bool)).isna().all(axis=0)]
         parquet_file_path = file_path.replace(".json", ".parquet")
         df.to_parquet(parquet_file_path)
         return parquet_file_path
-    except Exception as e:
-        logger.error(f"Error converting {file_path} to parquet: {e}")
+    except Exception:
+        logger.error("Error converting file to parquet: %s", file_path, exc_info=True)
         return None
 
 
@@ -89,11 +89,15 @@ def convert_json_to_parquet(file_path: str) -> Optional[str]:
 def convert_parquet_to_json(file_path: str) -> Optional[str]:
     """Convert the downloaded files from parquet to json"""
     try:
-        logger.info(f"Converting {file_path} to json")
+        import pandas as pd  # lazy import: heavy dependency
+
+        logger.info("Converting file to json: %s", file_path)
         df = pd.read_parquet(file_path)
         json_file_path = file_path.replace(".parquet", ".json")
         df.to_json(json_file_path, orient="records", lines=True)
         return json_file_path
-    except Exception as e:
-        logger.error(f"Error converting {file_path} to json: {e}")
+    except Exception:
+        logger.error(
+            "Error converting file to json", file_path=file_path, exc_info=True
+        )
         return None

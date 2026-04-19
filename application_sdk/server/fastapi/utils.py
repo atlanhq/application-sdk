@@ -14,19 +14,8 @@ from typing import Optional
 from fastapi import UploadFile, status
 from fastapi.responses import JSONResponse
 
-from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.server.fastapi.models import FileUploadResponse
-from application_sdk.services.objectstore import ObjectStore
-
-# Paths to exclude from logging and metrics (health checks and event ingress)
-EXCLUDED_LOG_PATHS: frozenset[str] = frozenset(
-    {
-        "/server/health",
-        "/server/ready",
-        "/api/eventingress/",
-        "/api/eventingress",
-    }
-)
+from application_sdk.storage.batch import upload_file_from_bytes
 
 
 def internal_server_error_handler(_, exc: Exception) -> JSONResponse:
@@ -106,10 +95,9 @@ async def upload_file_to_object_store(
     stored_filename = f"{file_id}{extension}"
     object_store_key = _build_object_store_key(stored_filename, prefix)
 
-    await ObjectStore.upload_file_from_bytes(
-        file_content=content_bytes,
-        destination=object_store_key,
-        store_name=UPSTREAM_OBJECT_STORE_NAME,
+    await upload_file_from_bytes(
+        content=content_bytes,
+        key=object_store_key,
     )
 
     now_ms = int(time.time() * 1000)

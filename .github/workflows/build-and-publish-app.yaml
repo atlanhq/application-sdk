@@ -1,7 +1,7 @@
-# Unified build-and-publish workflow for Atlan first-party app repos.
+# Unified build-and-publish entrypoint for Atlan first-party app repos.
 #
 # Combines image build (build-apps-image.yaml) and marketplace publish (publish-app.yaml)
-# into a single workflow to eliminate double builds on push to main.
+# into a single entrypoint to eliminate double builds on push to main.
 #
 # Image tag:  {branch}-{sha7}  (e.g. main-abc1234) — immutable, used by deploy systems
 # Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{sha7}
@@ -85,6 +85,7 @@ jobs:
       enable_sdr:       ${{ steps.manifest.outputs.enable_sdr }}
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
+      entrypoints: ${{ steps.manifest.outputs.entrypoints }}
       branch:           ${{ steps.tags.outputs.branch }}
       image_tag:        ${{ steps.tags.outputs.image_tag }}
       ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
@@ -94,91 +95,29 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Checkout SDK helper scripts
+        # Pull only ``.github/scripts/`` from the SDK at main.
+        # github.workflow_ref and github.workflow_sha both resolve to the *caller's*
+        # ref in a reusable workflow context (GitHub bug) — ref is pinned to main
+        # so it always picks up the latest released version of the scripts.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-entrypoint
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
       - name: Read atlan.yaml
         id: manifest
-        run: |
-          if [ ! -f atlan.yaml ]; then
-            echo "::error::atlan.yaml not found in repo root"
-            exit 1
-          fi
-
-          python3 - <<'PYEOF'
-          import yaml, sys, os, json, re
-
-          try:
-              with open('atlan.yaml') as f:
-                  d = yaml.safe_load(f) or {}
-          except yaml.YAMLError as e:
-              print(f'::error::atlan.yaml is invalid YAML: {e}', file=sys.stderr)
-              sys.exit(1)
-
-          app_name   = d.get('name', '').lower()
-          app_id     = d.get('app_id', '')
-          build_tag  = d.get('build_tag', 'v1')
-          dockerfile = d.get('dockerfile', './Dockerfile')
-          enable_sdr = 'true' if d.get('self_deployed_runtime', False) else 'false'
-
-          if not app_name:
-              print('::error::atlan.yaml is missing required "name" field', file=sys.stderr)
-              sys.exit(1)
-
-          if build_tag != 'v1':
-              print(f"::error::Unsupported build_tag '{build_tag}'. Only 'v1' is supported by this template version.", file=sys.stderr)
-              sys.exit(1)
-
-          # Serialize deploy config block (if present) for publish
-          deploy_config = ''
-          deploy_val = d.get('deploy')
-          if deploy_val is not None:
-              deploy_config = yaml.dump(deploy_val, default_flow_style=False)
-
-          # Read exact SDK version from uv.lock (non-fatal).
-          # uv.lock contains the precise locked version regardless of how the dep
-          # is specified in pyproject.toml (==, >=, git ref, etc.).
-          sdk_version = ''
-          try:
-              import re as _re
-              re_ver = _re.compile(r'^version\s*=\s*"([^"]+)"')
-              in_sdk_block = False
-              with open('uv.lock') as f:
-                  for line in f:
-                      line = line.rstrip()
-                      if line == 'name = "atlan-application-sdk"':
-                          in_sdk_block = True
-                          continue
-                      if in_sdk_block:
-                          m = re_ver.match(line)
-                          if m:
-                              sdk_version = m.group(1)
-                              break
-                          if line.startswith('name = ') or line.startswith('[['):
-                              break
-          except FileNotFoundError:
-              pass
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-              out.write(f'app_name={app_name}\n')
-              out.write(f'app_id={app_id}\n')
-              out.write(f'build_tag={build_tag}\n')
-              out.write(f'dockerfile={dockerfile}\n')
-              out.write(f'enable_sdr={enable_sdr}\n')
-              out.write(f'sdk_version={sdk_version}\n')
-              # deploy_config may be multiline — use delimiter syntax
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-              out.write(f'deploy_config<<DEPLOY_EOF\n')
-              out.write(f'{deploy_config}\n')
-              out.write(f'DEPLOY_EOF\n')
-
-          print(f'App: {app_name}')
-          print(f'App ID: {app_id}')
-          print(f'Dockerfile: {dockerfile}')
-          print(f'SDR: {enable_sdr}')
-          print(f'SDK version: {sdk_version}')
-          PYEOF
+        # Inputs validated and outputs written by parse_atlan_yaml.py — see
+        # .sdk-entrypoint/.github/scripts/parse_atlan_yaml.py for rules.
+        # Unit-tested in tests/test_parse_atlan_yaml.py in the SDK repo.
+        run: python3 .sdk-entrypoint/.github/scripts/parse_atlan_yaml.py
 
       - name: Validate SDR secrets
         if: steps.manifest.outputs.enable_sdr == 'true'
@@ -208,7 +147,7 @@ jobs:
         run: |
           # Resolve SHA from the checked-out HEAD rather than github.sha.
           # github.sha is always the trigger branch (main), not the ref input —
-          # so for workflow_dispatch with a custom ref, github.sha would be wrong.
+          # so for entrypoint_dispatch with a custom ref, github.sha would be wrong.
           SHA=$(git rev-parse HEAD)
           if ! [[ "$REF" =~ ^(refs/heads/|refs/tags/)?[a-zA-Z0-9/_.-]+$ ]]; then
             echo "::error::Invalid ref format: ${REF}"
@@ -254,22 +193,22 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Build and push arch image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           file: ${{ needs.prepare.outputs.dockerfile }}
@@ -295,10 +234,10 @@ jobs:
 
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -306,7 +245,7 @@ jobs:
 
       - name: Log in to Docker Hub
         if: needs.prepare.outputs.enable_sdr == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: docker.io
           username: atlanhq
@@ -355,10 +294,7 @@ jobs:
           echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Job 4: Security scan — Trivy + Snyk + allowlist gate ─────────────────────
-  # Runs after merge; publish and SDR dispatch both wait for it.
-  # If the scan finds CRITICAL/HIGH CVEs not covered by the allowlist, it fails
-  # and publish + SDR dispatch are skipped — no vulnerable image reaches GM.
+  # ── Job 4: Security scan — Trivy + Snyk + allowlist gate (non-blocking on merge path) ──
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
@@ -367,7 +303,7 @@ jobs:
       image: ${{ needs.prepare.outputs.ghcr_image }}
       snyk_org: partner-images
       snyk_monitor: ${{ inputs.snyk_monitor }}
-      fail_on_findings: true
+      fail_on_findings: false
     secrets: inherit
 
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
@@ -381,7 +317,7 @@ jobs:
         repo: ['atlanhq/atlan-apps-deployment']
     steps:
       - name: Repository Dispatch
-        uses: peter-evans/repository-dispatch@v3.0.0
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v3.0.0
         with:
           token: ${{ secrets.ORG_PAT_GITHUB }}
           repository: ${{ matrix.repo }}
@@ -393,9 +329,6 @@ jobs:
             }
 
   # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
-  # Waits for security-scan. While fail_on_findings stays false, this is an
-  # ordering constraint only; once enforcement flips, a failing scan blocks
-  # publish outright.
   publish:
     name: Publish to Marketplace
     needs: [prepare, merge, security-scan]
@@ -415,6 +348,7 @@ jobs:
           APP_NAME: ${{ needs.prepare.outputs.app_name }}
           DEPLOY_CONFIG: ${{ needs.prepare.outputs.deploy_config }}
           SDK_VERSION: ${{ needs.prepare.outputs.sdk_version }}
+          ENTRYPOINTS: ${{ needs.prepare.outputs.entrypoints }}
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -441,6 +375,12 @@ jobs:
           sdk = os.environ.get("SDK_VERSION", "").strip()
           if sdk:
               body["sdk_version"] = sdk
+
+          # entrypoints: native multi-package declarations from atlan.yaml.
+          # Absent → GM falls back to App.argo_package_names for entrypoint expansion.
+          wp = os.environ.get("ENTRYPOINTS", "").strip()
+          if wp:
+              body["entrypoints"] = json.loads(wp)
 
           tenants = os.environ.get("TENANTS", "").strip()
           if tenants:

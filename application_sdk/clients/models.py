@@ -38,9 +38,8 @@ class DatabaseConfig(BaseModel):
         description="Additional connection arguments to be passed to SQLAlchemy. ex: {'sslmode': 'require'}",
     )
 
-    class Config:
-        """Pydantic configuration for the DatabaseConfig model."""
-
-        extra = "forbid"  # Prevent additional fields
-        validate_assignment = True  # Validate on assignment
-        use_enum_values = True  # Use enum values instead of enum objects
+    model_config = {
+        "extra": "forbid",
+        "validate_assignment": True,
+        "use_enum_values": True,
+    }

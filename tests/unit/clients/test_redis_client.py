@@ -69,28 +69,31 @@ class TestRedisClientConnection:
     @pytest.fixture
     def sync_redis_client(self):
         """Create a configured sync RedisClient for testing."""
-        with patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False), patch(
-            "application_sdk.clients.redis.REDIS_PASSWORD", "password"
-        ), patch("application_sdk.clients.redis.REDIS_HOST", "localhost"), patch(
-            "application_sdk.clients.redis.REDIS_PORT", "6379"
+        with (
+            patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False),
+            patch("application_sdk.clients.redis.REDIS_PASSWORD", "password"),
+            patch("application_sdk.clients.redis.REDIS_HOST", "localhost"),
+            patch("application_sdk.clients.redis.REDIS_PORT", "6379"),
         ):
             return RedisClient()
 
     @pytest.fixture
     def async_redis_client(self):
         """Create a configured async RedisClientAsync for testing."""
-        with patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False), patch(
-            "application_sdk.clients.redis.REDIS_PASSWORD", "password"
-        ), patch("application_sdk.clients.redis.REDIS_HOST", "localhost"), patch(
-            "application_sdk.clients.redis.REDIS_PORT", "6379"
+        with (
+            patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False),
+            patch("application_sdk.clients.redis.REDIS_PASSWORD", "password"),
+            patch("application_sdk.clients.redis.REDIS_HOST", "localhost"),
+            patch("application_sdk.clients.redis.REDIS_PORT", "6379"),
         ):
             return RedisClientAsync()
 
     def test_sync_context_manager(self, sync_redis_client):
         """Test sync context manager functionality."""
-        with patch.object(sync_redis_client, "_connect") as mock_connect, patch.object(
-            sync_redis_client, "close"
-        ) as mock_close:
+        with (
+            patch.object(sync_redis_client, "_connect") as mock_connect,
+            patch.object(sync_redis_client, "close") as mock_close,
+        ):
             with sync_redis_client as client:
                 assert client == sync_redis_client
                 mock_connect.assert_called_once()
@@ -98,9 +101,10 @@ class TestRedisClientConnection:
 
     async def test_async_context_manager(self, async_redis_client):
         """Test async context manager functionality."""
-        with patch.object(async_redis_client, "_connect") as mock_connect, patch.object(
-            async_redis_client, "close"
-        ) as mock_close:
+        with (
+            patch.object(async_redis_client, "_connect") as mock_connect,
+            patch.object(async_redis_client, "close") as mock_close,
+        ):
             async with async_redis_client as client:
                 assert client == async_redis_client
                 mock_connect.assert_called_once()
@@ -113,10 +117,11 @@ class TestSyncRedisClientLockOperations:
     @pytest.fixture
     def redis_client(self):
         """Create a connected sync RedisClient for testing."""
-        with patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False), patch(
-            "application_sdk.clients.redis.REDIS_PASSWORD", "password"
-        ), patch("application_sdk.clients.redis.REDIS_HOST", "localhost"), patch(
-            "application_sdk.clients.redis.REDIS_PORT", "6379"
+        with (
+            patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False),
+            patch("application_sdk.clients.redis.REDIS_PASSWORD", "password"),
+            patch("application_sdk.clients.redis.REDIS_HOST", "localhost"),
+            patch("application_sdk.clients.redis.REDIS_PORT", "6379"),
         ):
             client = RedisClient()
             client.redis_client = Mock()  # Mock the underlying sync Redis client
@@ -206,10 +211,11 @@ class TestAsyncRedisClientLockOperations:
     @pytest.fixture
     def redis_client(self):
         """Create a connected async RedisClientAsync for testing."""
-        with patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False), patch(
-            "application_sdk.clients.redis.REDIS_PASSWORD", "password"
-        ), patch("application_sdk.clients.redis.REDIS_HOST", "localhost"), patch(
-            "application_sdk.clients.redis.REDIS_PORT", "6379"
+        with (
+            patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False),
+            patch("application_sdk.clients.redis.REDIS_PASSWORD", "password"),
+            patch("application_sdk.clients.redis.REDIS_HOST", "localhost"),
+            patch("application_sdk.clients.redis.REDIS_PORT", "6379"),
         ):
             client = RedisClientAsync()
             client.redis_client = AsyncMock()  # Mock the underlying Redis client

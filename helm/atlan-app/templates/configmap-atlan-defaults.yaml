@@ -1,0 +1,17 @@
+{{- /*
+Copy the cluster-wide atlan-defaults ConfigMap from the default namespace into
+the app namespace so that pod containers can reference it by name (required by
+vcluster, which rewrites ConfigMap refs as {name}-x-{namespace}-x-{instance}).
+*/ -}}
+{{- $src := (lookup "v1" "ConfigMap" "default" "atlan-defaults") }}
+{{- if $src }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: atlan-defaults
+  namespace: {{ include "atlan-app.namespace" . }}
+  labels:
+    {{- include "atlan-app.commonLabels" . | nindent 4 }}
+data:
+  {{- toYaml $src.data | nindent 2 }}
+{{- end }}

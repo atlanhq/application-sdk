@@ -8,12 +8,12 @@ their incremental state (CREATED, UPDATED, or BACKFILL).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Set, Tuple
 
-import daft
-from daft import DataFrame
-from daft.functions import format as daft_format
+from application_sdk.common.exc_utils import rewrap
 
+if TYPE_CHECKING:
+    from daft import DataFrame
 from application_sdk.common.incremental.models import EntityType
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -51,7 +51,7 @@ def get_transformed_dir(workflow_args: Dict[str, Any]) -> Path:
             f"Ensure files are downloaded from S3 first."
         )
 
-    logger.info(f"Found transformed directory: {transformed_dir}")
+    logger.info("Found transformed directory: %s", transformed_dir)
     return transformed_dir
 
 
@@ -76,6 +76,10 @@ def get_tables_needing_column_extraction(
         - no_change_count: Number of unchanged tables
     """
     try:
+        # lazy import: heavy optional dependency (installed via [sql] extra)
+        import daft
+        from daft.functions import format as daft_format
+
         backfill_qns = backfill_qualified_names or set()
 
         table_dir = transformed_dir.joinpath(EntityType.TABLE.value)
@@ -123,9 +127,12 @@ def get_tables_needing_column_extraction(
         total_count = sum(state_map.values())
 
         logger.info(
-            f"Analyzed {total_count} table records from {len(json_files)} files. "
-            f"States: CREATED={created_count}, UPDATED={updated_count}, "
-            f"NO CHANGE={no_change_count}"
+            "Analyzed %d table records from %d files (created=%d updated=%d no_change=%d)",
+            total_count,
+            len(json_files),
+            created_count,
+            updated_count,
+            no_change_count,
         )
 
         # Mark changed/backfill rows in Daft
@@ -165,8 +172,10 @@ def get_tables_needing_column_extraction(
         backfill_count = int(counts_row["backfill_count"] or 0)
 
         logger.info(
-            f"Tables needing column extraction: {changed_count + backfill_count} "
-            f"({changed_count} changed, {backfill_count} backfill)"
+            "Tables needing column extraction: total=%d changed=%d backfill=%d",
+            changed_count + backfill_count,
+            changed_count,
+            backfill_count,
         )
 
         # Return only the columns needed for query generation
@@ -175,5 +184,4 @@ def get_tables_needing_column_extraction(
         return filtered_df, changed_count, backfill_count, no_change_count
 
     except Exception as e:
-        logger.error(f"Daft table analysis failed: {e}")
-        raise
+        raise rewrap(e, "Daft table analysis failed") from e

@@ -2,19 +2,24 @@ import functools
 import inspect
 import time
 import uuid
-from typing import Any, Callable, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Callable, TypeVar, cast
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.observability.traces_adaptor import get_traces
 
+if TYPE_CHECKING:
+    from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter
+    from application_sdk.observability.metrics_adaptor import AtlanMetricsAdapter
+    from application_sdk.observability.traces_adaptor import AtlanTracesAdapter
+
 T = TypeVar("T")
 
 
 def _record_success_observability(
-    logger: Any,
-    metrics: Any,
-    traces: Any,
+    logger: "AtlanLoggerAdapter",
+    metrics: "AtlanMetricsAdapter",
+    traces: "AtlanTracesAdapter",
     func_name: str,
     func_doc: str,
     func_module: str,
@@ -27,7 +32,10 @@ def _record_success_observability(
 
     # Debug logging before recording trace
     logger.debug(
-        f"Recording success trace for {func_name} with trace_id={trace_id}, span_id={span_id}"
+        "Recording success trace",
+        func_name=func_name,
+        trace_id=trace_id,
+        span_id=span_id,
     )
 
     try:
@@ -46,12 +54,12 @@ def _record_success_observability(
             events=[{"name": f"{func_name}_success", "timestamp": time.time()}],
             duration_ms=duration_ms,
         )
-        logger.debug(f"Successfully recorded trace for {func_name}")
-    except Exception as trace_error:
-        logger.error(f"Failed to record trace for {func_name}: {str(trace_error)}")
+        logger.debug("Successfully recorded trace: %s", func_name)
+    except Exception:
+        logger.error("Failed to record trace: %s", func_name, exc_info=True)
 
     # Debug logging before recording metric
-    logger.debug(f"Recording success metric for {func_name}")
+    logger.debug("Recording success metric: %s", func_name)
 
     try:
         # Record success metric
@@ -63,18 +71,18 @@ def _record_success_observability(
             description=f"Successful {func_name}",
             unit="count",
         )
-        logger.debug(f"Successfully recorded metric for {func_name}")
-    except Exception as metric_error:
-        logger.error(f"Failed to record metric for {func_name}: {str(metric_error)}")
+        logger.debug("Successfully recorded metric: %s", func_name)
+    except Exception:
+        logger.error("Failed to record metric: %s", func_name, exc_info=True)
 
     # Log completion
-    logger.debug(f"Completed function {func_name} in {duration_ms:.2f}ms")
+    logger.debug("Completed function: %s in %.2fms", func_name, round(duration_ms, 2))
 
 
 def _record_error_observability(
-    logger: Any,
-    metrics: Any,
-    traces: Any,
+    logger: "AtlanLoggerAdapter",
+    metrics: "AtlanMetricsAdapter",
+    traces: "AtlanTracesAdapter",
     func_name: str,
     func_doc: str,
     func_module: str,
@@ -87,7 +95,7 @@ def _record_error_observability(
     duration_ms = (time.time() - start_time) * 1000
 
     # Debug logging for error case
-    logger.error(f"Error in function {func_name}: {str(error)}", exc_info=error)
+    logger.error("Error in function: %s", func_name, exc_info=True)
 
     try:
         # Record failure trace
@@ -111,11 +119,9 @@ def _record_error_observability(
             ],
             duration_ms=duration_ms,
         )
-        logger.debug(f"Successfully recorded error trace for {func_name}")
-    except Exception as trace_error:
-        logger.error(
-            f"Failed to record error trace for {func_name}: {str(trace_error)}"
-        )
+        logger.debug("Successfully recorded error trace: %s", func_name)
+    except Exception:
+        logger.error("Failed to record error trace: %s", func_name, exc_info=True)
 
     try:
         # Record failure metric
@@ -127,20 +133,18 @@ def _record_error_observability(
             description=f"Failed {func_name}",
             unit="count",
         )
-        logger.debug(f"Successfully recorded error metric for {func_name}")
-    except Exception as metric_error:
-        logger.error(
-            f"Failed to record error metric for {func_name}: {str(metric_error)}"
-        )
+        logger.debug("Successfully recorded error metric: %s", func_name)
+    except Exception:
+        logger.error("Failed to record error metric: %s", func_name, exc_info=True)
 
     # Log error
-    logger.error(f"Error in {func_name}: {str(error)}", exc_info=error)
+    logger.error("Error in function: %s", func_name, exc_info=True)
 
 
 def observability(
-    logger: Any = None,
-    metrics: Any = None,
-    traces: Any = None,
+    logger: "AtlanLoggerAdapter | None" = None,
+    metrics: "AtlanMetricsAdapter | None" = None,
+    traces: "AtlanTracesAdapter | None" = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator for adding observability to functions.
 
@@ -184,7 +188,9 @@ def observability(
         is_async = inspect.iscoroutinefunction(func)
 
         # Debug logging for function decoration
-        actual_logger.debug(f"Decorating function {func_name} (async={is_async})")
+        actual_logger.debug(
+            "Decorating function", func_name=func_name, is_async=is_async
+        )
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> T:
@@ -195,7 +201,7 @@ def observability(
 
             try:
                 # Log start of operation
-                actual_logger.debug(f"Starting async function {func_name}")
+                actual_logger.debug("Starting async function: %s", func_name)
 
                 # Execute the function
                 result = await func(*args, **kwargs)
@@ -240,7 +246,7 @@ def observability(
 
             try:
                 # Log start of operation
-                actual_logger.debug(f"Starting sync function {func_name}")
+                actual_logger.debug("Starting sync function: %s", func_name)
 
                 # Execute the function
                 result = func(*args, **kwargs)

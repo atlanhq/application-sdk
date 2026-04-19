@@ -1,0 +1,207 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "atlan-app.handlerName" . }}
+  namespace: {{ include "atlan-app.namespace" . }}
+  labels:
+    {{- include "atlan-app.commonLabels" . | nindent 4 }}
+    component: handler
+    app.kubernetes.io/component: handler
+spec:
+  replicas: {{ .Values.handler.replicas }}
+  selector:
+    matchLabels:
+      {{- include "atlan-app.handlerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "atlan-app.handlerSelectorLabels" . | nindent 8 }}
+        app.kubernetes.io/name: {{ include "atlan-app.appName" . }}
+        app.kubernetes.io/component: handler
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.handler.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- with .Values.handler.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "atlan-app.serviceAccountName" . }}
+      {{- if .Values.imagePullSecret.name }}
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret.name }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+
+      volumes:
+        - name: dapr-components
+          projected:
+            sources:
+              - configMap:
+                  name: {{ include "atlan-app.appName" . }}-dapr-secretstore
+              {{- if .Values.storage.type }}
+              - configMap:
+                  name: app-storage-binding
+              {{- end }}
+              - configMap:
+                  name: {{ include "atlan-app.appName" . }}-dapr-eventstore
+        {{- if and .Values.temporal.tls.enabled .Values.temporal.tls.secretName }}
+        - name: tls-certs
+          secret:
+            secretName: {{ .Values.temporal.tls.secretName }}
+        {{- end }}
+        # uv requires a writable /tmp to create temp files at startup
+        - name: handler-tmp
+          emptyDir: {}
+
+      containers:
+        # Handler Container - FastAPI application server
+        - name: handler
+          image: {{ include "atlan-app.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--mode"
+            - "handler"
+          env:
+            - name: ATLAN_APP_MODULE
+              value: {{ include "atlan-app.appModule" . | quote }}
+            - name: ATLAN_HANDLER_HOST
+              value: "0.0.0.0"
+            - name: ATLAN_HANDLER_PORT
+              value: {{ .Values.handler.port | quote }}
+            - name: ATLAN_SERVICE_NAME
+              value: {{ include "atlan-app.appName" . | quote }}
+            - name: ATLAN_LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "atlan-app.configMapName" . }}
+                  key: log_level
+            - name: ATLAN_TEMPORAL_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "atlan-app.configMapName" . }}
+                  key: temporal_host
+            - name: ATLAN_TEMPORAL_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "atlan-app.configMapName" . }}
+                  key: temporal_namespace
+            - name: ATLAN_TASK_QUEUE
+              value: {{ include "atlan-app.taskQueue" . | quote }}
+            - name: K8S_NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(K8S_NODE_IP):4317"
+            - name: OTEL_SERVICE_NAME
+              value: "{{ include "atlan-app.appName" . }}-handler"
+            {{- if .Values.otel.exporter.enabled }}
+            - name: ENABLE_OTLP_LOGS
+              value: "true"
+            - name: K8S_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: K8S_CLUSTER_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: atlan-defaults
+                  key: instance
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "k8s.cluster.name=$(K8S_CLUSTER_NAME),k8s.pod.name=$(K8S_POD_NAME),k8s.node.name=$(K8S_NODE_NAME),k8s.namespace.name={{ include "atlan-app.namespace" . }},k8s.log.type=service-logs,k8s.container.name=handler,k8s.workflow.name={{ include "atlan-app.appName" . }},k8s.workflow.node.name=handler,k8s.workflow.node.id=$(K8S_POD_NAME),k8s.workflow.package.name={{ include "atlan-app.appName" . }},k8s.workflow.package.version={{ .Values.image.tag }}"
+            {{- end }}
+            # TLS configuration
+            - name: ATLAN_TEMPORAL_TLS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "atlan-app.configMapName" . }}
+                  key: temporal_tls_enabled
+            - name: ATLAN_TEMPORAL_TLS_CA_CERT_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "atlan-app.configMapName" . }}
+                  key: temporal_tls_ca_cert_path
+            - name: ATLAN_TEMPORAL_TLS_CLIENT_CERT_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "atlan-app.configMapName" . }}
+                  key: temporal_tls_client_cert_path
+            - name: ATLAN_TEMPORAL_TLS_CLIENT_KEY_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "atlan-app.configMapName" . }}
+                  key: temporal_tls_client_key_path
+            - name: ATLAN_TEMPORAL_TLS_DOMAIN
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "atlan-app.configMapName" . }}
+                  key: temporal_tls_domain
+            # Auth configuration
+            - name: ATLAN_AUTH_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "atlan-app.configMapName" . }}
+                  key: auth_enabled
+            # DAPR configuration (runs in-process via entrypoint.sh)
+            - name: DAPR_APP_ID
+              value: "{{ include "atlan-app.appName" . }}-handler"
+            - name: DAPR_APP_PORT
+              value: {{ .Values.handler.port | quote }}
+            - name: DAPR_COMPONENTS_PATH
+              value: "/app/components"
+            - name: DAPR_LOG_LEVEL
+              value: {{ .Values.dapr.logLevel | quote }}
+            {{- with .Values.handler.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.handler.port }}
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.handler.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.handler.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.handler.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.handler.startupProbe.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.handler.resources | nindent 12 }}
+          volumeMounts:
+            - name: dapr-components
+              mountPath: /app/components
+              readOnly: true
+            - name: handler-tmp
+              mountPath: /tmp
+            {{- if and .Values.temporal.tls.enabled .Values.temporal.tls.secretName }}
+            - name: tls-certs
+              mountPath: /etc/temporal/tls
+              readOnly: true
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+
+      terminationGracePeriodSeconds: 30

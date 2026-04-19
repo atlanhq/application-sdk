@@ -43,7 +43,7 @@ from application_sdk.clients import ClientInterface
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.clients.azure.auth import AzureAuthProvider
 from application_sdk.common.error_codes import ClientError
-from application_sdk.common.utils import run_sync
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -137,12 +137,19 @@ class AzureClient(ClientInterface):
 
             # Handle credential resolution
             if "credential_guid" in self.credentials:
-                # If we have a credential_guid, use the async get_credentials function
-                from application_sdk.services.secretstore import SecretStore
-
-                self.resolved_credentials = await SecretStore.get_credentials(
-                    self.credentials["credential_guid"]
+                from application_sdk.infrastructure import (
+                    AsyncDaprClient,
+                    DaprCredentialVault,
                 )
+
+                dapr_client = AsyncDaprClient()
+                try:
+                    vault = DaprCredentialVault(dapr_client)
+                    self.resolved_credentials = await vault.get_credentials(
+                        self.credentials["credential_guid"]
+                    )
+                finally:
+                    await dapr_client.close()
             else:
                 # If credentials are already resolved (direct format), use them as-is
                 # Check if credentials appear to need resolution but no credential_guid provided
@@ -168,26 +175,21 @@ class AzureClient(ClientInterface):
             logger.info("Azure client loaded successfully")
 
         except ClientAuthenticationError as e:
-            logger.error(f"Azure authentication failed: {str(e)}")
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
         except AzureError as e:
-            logger.error(f"Azure connection error: {str(e)}")
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
         except ValueError as e:
-            logger.error(f"Invalid Azure client parameters: {str(e)}")
             raise ClientError(
                 f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {str(e)}"
-            )
+            ) from e
         except TypeError as e:
-            logger.error(f"Wrong Azure client parameter types: {str(e)}")
             raise ClientError(
                 f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameter types - {str(e)}"
-            )
+            ) from e
         except Exception as e:
-            logger.error(f"Unexpected error loading Azure client: {str(e)}")
             raise ClientError(
                 f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {str(e)}"
-            )
+            ) from e
 
     async def close(self) -> None:
         """Close Azure connections and clean up resources."""
@@ -201,8 +203,12 @@ class AzureClient(ClientInterface):
                         await service_client.close()
                     elif hasattr(service_client, "disconnect"):
                         await service_client.disconnect()
-                except Exception as e:
-                    logger.warning(f"Error closing {service_name} client: {str(e)}")
+                except Exception:
+                    logger.warning(
+                        "Error closing service client",
+                        service_name=service_name,
+                        exc_info=True,
+                    )
 
             # Clear service cache
             self._services.clear()
@@ -215,8 +221,8 @@ class AzureClient(ClientInterface):
 
             logger.info("Azure client closed successfully")
 
-        except Exception as e:
-            logger.error(f"Error closing Azure client: {str(e)}")
+        except Exception:
+            logger.error("Error closing Azure client", exc_info=True)
 
     async def health_check(self) -> HealthStatus:
         """
@@ -285,25 +291,21 @@ class AzureClient(ClientInterface):
 
         try:
             # Test the credential by getting a token
-            await run_sync(self.credential.get_token)(AZURE_MANAGEMENT_API_ENDPOINT)
-        except ClientAuthenticationError as e:
-            logger.error(
-                f"Azure connection test failed - authentication error: {str(e)}"
+            await run_in_thread(
+                self.credential.get_token, AZURE_MANAGEMENT_API_ENDPOINT
             )
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+        except ClientAuthenticationError as e:
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
         except AzureError as e:
-            logger.error(f"Azure connection test failed - service error: {str(e)}")
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}") from e
         except ValueError as e:
-            logger.error(f"Azure connection test failed - invalid parameters: {str(e)}")
             raise ClientError(
                 f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {str(e)}"
-            )
+            ) from e
         except Exception as e:
-            logger.error(f"Azure connection test failed - unexpected error: {str(e)}")
             raise ClientError(
                 f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {str(e)}"
-            )
+            ) from e
 
     def __enter__(self):
         """Context manager entry."""
@@ -320,9 +322,8 @@ class AzureClient(ClientInterface):
         )
         # Schedule cleanup but don't wait for it
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self.close())
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.close())
         except RuntimeError:
             # No event loop running, can't schedule async cleanup
             logger.warning("No event loop running, async cleanup not possible")

@@ -170,3 +170,9 @@ docstring-cov.md
 # local
 local/
 temporal.db
+
+# Claude Code worktrees
+.claude/worktrees/
+
+# Claude Code plans (local working files, not for version control)
+.claude/plans/

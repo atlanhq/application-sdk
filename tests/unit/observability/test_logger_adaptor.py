@@ -10,12 +10,16 @@ from hypothesis import given
 from hypothesis import strategies as st
 from loguru import logger
 
+from application_sdk.observability.context import (
+    ExecutionContext,
+    set_execution_context,
+)
 from application_sdk.observability.logger_adaptor import (
     AtlanLoggerAdapter,
-    LogRecordModel,
+    _make_log_record_dict,
     get_logger,
 )
-from application_sdk.test_utils.hypothesis.strategies.common.logger import (
+from application_sdk.testing.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
 )
@@ -102,18 +106,19 @@ def test_process_with_various_kwargs(extra_kwargs: Dict[str, str]):
 
 def test_process_with_workflow_context():
     """Test process() method when workflow information is present."""
-    with create_logger_adapter() as logger_adapter:
-        with mock.patch("temporalio.workflow.info") as mock_workflow_info:
-            workflow_info = mock.Mock(
-                workflow_id="test_workflow_id",
-                run_id="test_run_id",
-                workflow_type="test_workflow_type",
-                namespace="test_namespace",
-                task_queue="test_queue",
-                attempt=1,
-            )
-            mock_workflow_info.return_value = workflow_info
-
+    set_execution_context(
+        ExecutionContext(
+            execution_type="workflow",
+            workflow_id="test_workflow_id",
+            workflow_run_id="test_run_id",
+            workflow_type="test_workflow_type",
+            namespace="test_namespace",
+            task_queue="test_queue",
+            attempt=1,
+        )
+    )
+    try:
+        with create_logger_adapter() as logger_adapter:
             msg, kwargs = logger_adapter.process("Test message", {})
 
             assert kwargs["workflow_id"] == "test_workflow_id"
@@ -122,48 +127,55 @@ def test_process_with_workflow_context():
             assert kwargs["namespace"] == "test_namespace"
             assert kwargs["task_queue"] == "test_queue"
             assert kwargs["attempt"] == "1"
-            expected_msg = f"Test message Workflow Context: Workflow ID: {workflow_info.workflow_id} Run ID: {workflow_info.run_id} Type: {workflow_info.workflow_type}"
-            assert msg == expected_msg
+            assert msg == "Test message"
+    finally:
+        set_execution_context(ExecutionContext())
 
 
 @given(workflow_info_strategy())  # type: ignore
-@pytest.mark.skip(
-    reason="Failing due to AssertionError: assert 'Test message...orkflow_type}' == 'Test message...n ID:  Type: '"
-)
 def test_process_with_generated_workflow_context(workflow_info: mock.Mock):
     """Test process() method with generated workflow information."""
-    with create_logger_adapter() as logger_adapter:
-        with mock.patch("temporalio.workflow.info") as mock_workflow_info:
-            mock_workflow_info.return_value = workflow_info
-
+    set_execution_context(
+        ExecutionContext(
+            execution_type="workflow",
+            workflow_id=workflow_info.workflow_id or "",
+            workflow_run_id=workflow_info.run_id or "",
+            workflow_type=workflow_info.workflow_type or "",
+            namespace=workflow_info.namespace or "",
+            task_queue=workflow_info.task_queue or "",
+            attempt=workflow_info.attempt or 0,
+        )
+    )
+    try:
+        with create_logger_adapter() as logger_adapter:
             msg, kwargs = logger_adapter.process("Test message", {})
 
-            assert kwargs["workflow_id"] == workflow_info.workflow_id
-            assert kwargs["workflow_run_id"] == workflow_info.run_id
-            assert kwargs["workflow_type"] == workflow_info.workflow_type
-            assert kwargs["namespace"] == workflow_info.namespace
-            assert kwargs["task_queue"] == workflow_info.task_queue
-            assert kwargs["attempt"] == str(workflow_info.attempt)
-            expected_msg = f"Test message Workflow Context: Workflow ID: {workflow_info.workflow_id} Run ID: {workflow_info.run_id} Type: {workflow_info.workflow_type}"
-            assert msg == expected_msg
+            assert kwargs["workflow_id"] == (workflow_info.workflow_id or "")
+            assert kwargs["workflow_run_id"] == (workflow_info.run_id or "")
+            assert kwargs["workflow_type"] == (workflow_info.workflow_type or "")
+            assert kwargs["namespace"] == (workflow_info.namespace or "")
+            assert kwargs["task_queue"] == (workflow_info.task_queue or "")
+            assert kwargs["attempt"] == str(workflow_info.attempt or 0)
+            assert msg == "Test message"
+    finally:
+        set_execution_context(ExecutionContext())
 
 
 def test_process_with_activity_context():
     """Test process() method when activity information is present."""
-    with create_logger_adapter() as logger_adapter:
-        with mock.patch("temporalio.activity.info") as mock_activity_info:
-            activity_info = mock.Mock(
-                workflow_id="test_workflow_id",
-                workflow_run_id="test_run_id",
-                activity_id="test_activity_id",
-                activity_type="test_activity_type",
-                task_queue="test_queue",
-                attempt=1,
-                schedule_to_close_timeout="30s",
-                start_to_close_timeout="25s",
-            )
-            mock_activity_info.return_value = activity_info
-
+    set_execution_context(
+        ExecutionContext(
+            execution_type="activity",
+            workflow_id="test_workflow_id",
+            workflow_run_id="test_run_id",
+            activity_id="test_activity_id",
+            activity_type="test_activity_type",
+            task_queue="test_queue",
+            attempt=1,
+        )
+    )
+    try:
+        with create_logger_adapter() as logger_adapter:
             msg, kwargs = logger_adapter.process("Test message", {})
 
             assert kwargs["workflow_id"] == "test_workflow_id"
@@ -172,29 +184,38 @@ def test_process_with_activity_context():
             assert kwargs["activity_type"] == "test_activity_type"
             assert kwargs["task_queue"] == "test_queue"
             assert kwargs["attempt"] == "1"
-
-            expected_msg = f"Test message Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: {activity_info.workflow_id} Run ID: {activity_info.workflow_run_id} Type: {activity_info.activity_type}"
-            assert msg == expected_msg
+            assert msg == "Test message"
+    finally:
+        set_execution_context(ExecutionContext())
 
 
 @given(activity_info_strategy())  # type: ignore
 def test_process_with_generated_activity_context(activity_info: mock.Mock):
     """Test process() method with generated activity information."""
-    with create_logger_adapter() as logger_adapter:
-        with mock.patch("temporalio.activity.info") as mock_activity_info:
-            mock_activity_info.return_value = activity_info
-
+    set_execution_context(
+        ExecutionContext(
+            execution_type="activity",
+            workflow_id=activity_info.workflow_id or "",
+            workflow_run_id=activity_info.workflow_run_id or "",
+            activity_id=activity_info.activity_id or "",
+            activity_type=activity_info.activity_type or "",
+            task_queue=activity_info.task_queue or "",
+            attempt=activity_info.attempt or 0,
+        )
+    )
+    try:
+        with create_logger_adapter() as logger_adapter:
             msg, kwargs = logger_adapter.process("Test message", {})
 
-            assert kwargs["workflow_id"] == activity_info.workflow_id
-            assert kwargs["workflow_run_id"] == activity_info.workflow_run_id
-            assert kwargs["activity_id"] == activity_info.activity_id
-            assert kwargs["activity_type"] == activity_info.activity_type
-            assert kwargs["task_queue"] == activity_info.task_queue
-            assert kwargs["attempt"] == str(activity_info.attempt)
-
-            expected_msg = f"Test message Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: {activity_info.workflow_id} Run ID: {activity_info.workflow_run_id} Type: {activity_info.activity_type}"
-            assert msg == expected_msg
+            assert kwargs["workflow_id"] == (activity_info.workflow_id or "")
+            assert kwargs["workflow_run_id"] == (activity_info.workflow_run_id or "")
+            assert kwargs["activity_id"] == (activity_info.activity_id or "")
+            assert kwargs["activity_type"] == (activity_info.activity_type or "")
+            assert kwargs["task_queue"] == (activity_info.task_queue or "")
+            assert kwargs["attempt"] == str(activity_info.attempt or 0)
+            assert msg == "Test message"
+    finally:
+        set_execution_context(ExecutionContext())
 
 
 @given(st.text(min_size=1))
@@ -536,20 +557,22 @@ class TestCorrelationContextIntegration:
 
     def test_correlation_context_with_workflow_context(self):
         """Correlation context should work alongside workflow context."""
-        with create_logger_adapter() as logger_adapter:
-            with mock.patch("temporalio.workflow.info") as mock_workflow_info:
+        set_execution_context(
+            ExecutionContext(
+                execution_type="workflow",
+                workflow_id=self.WORKFLOW_ID,
+                workflow_run_id="019b04bd-ac10-7989-87d7-06427dc0616c",
+                workflow_type="RedshiftMetadataExtractionWorkflow",
+                namespace="default",
+                task_queue="atlan-redshift-local",
+                attempt=1,
+            )
+        )
+        try:
+            with create_logger_adapter() as logger_adapter:
                 with mock.patch(
                     "application_sdk.observability.logger_adaptor.correlation_context"
                 ) as mock_corr_context:
-                    workflow_info = mock.Mock(
-                        workflow_id=self.WORKFLOW_ID,
-                        run_id="019b04bd-ac10-7989-87d7-06427dc0616c",
-                        workflow_type="RedshiftMetadataExtractionWorkflow",
-                        namespace="default",
-                        task_queue="atlan-redshift-local",
-                        attempt=1,
-                    )
-                    mock_workflow_info.return_value = workflow_info
                     mock_corr_context.get.return_value = {
                         self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
                         self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
@@ -564,23 +587,27 @@ class TestCorrelationContextIntegration:
                     )
                     assert self.WORKFLOW_NAME_HEADER in kwargs
                     assert self.WORKFLOW_NODE_HEADER in kwargs
+        finally:
+            set_execution_context(ExecutionContext())
 
     def test_correlation_context_with_activity_context(self):
         """Correlation context should work alongside activity context."""
-        with create_logger_adapter() as logger_adapter:
-            with mock.patch("temporalio.activity.info") as mock_activity_info:
+        set_execution_context(
+            ExecutionContext(
+                execution_type="activity",
+                workflow_id=self.WORKFLOW_ID,
+                workflow_run_id="019b04bd-ac10-7989-87d7-06427dc0616c",
+                activity_id="fetch_databases",
+                activity_type="fetch_databases",
+                task_queue="atlan-redshift-local",
+                attempt=1,
+            )
+        )
+        try:
+            with create_logger_adapter() as logger_adapter:
                 with mock.patch(
                     "application_sdk.observability.logger_adaptor.correlation_context"
                 ) as mock_corr_context:
-                    activity_info = mock.Mock(
-                        workflow_id=self.WORKFLOW_ID,
-                        workflow_run_id="019b04bd-ac10-7989-87d7-06427dc0616c",
-                        activity_id="fetch_databases",
-                        activity_type="fetch_databases",
-                        task_queue="atlan-redshift-local",
-                        attempt=1,
-                    )
-                    mock_activity_info.return_value = activity_info
                     mock_corr_context.get.return_value = {
                         self.WORKFLOW_NAME_HEADER: self.WORKFLOW_NAME,
                         self.WORKFLOW_NODE_HEADER: self.WORKFLOW_NODE,
@@ -592,6 +619,8 @@ class TestCorrelationContextIntegration:
                     assert kwargs["workflow_id"] == self.WORKFLOW_ID
                     assert self.WORKFLOW_NAME_HEADER in kwargs
                     assert self.WORKFLOW_NODE_HEADER in kwargs
+        finally:
+            set_execution_context(ExecutionContext())
 
 
 def test_warning_inlines_exc_info_in_message(logger_adapter: AtlanLoggerAdapter):
@@ -668,7 +697,7 @@ def test_log_record_model_extracts_exception_attrs_from_loguru_record():
         "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
     }
 
-    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    model = _make_log_record_dict(test_message)
     assert model["message"] == "Completing activity as failed"
     assert "Traceback" not in model["message"]
     assert model["extra"]["exception.type"] == "builtins.ValueError"
@@ -697,7 +726,7 @@ def test_log_record_model_serializes_attempt_without_warning(attempt_value):
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        model = LogRecordModel.from_loguru_message(test_message).model_dump()
+        model = _make_log_record_dict(test_message)
 
     assert model["extra"]["attempt"] == "1"
     assert caught == []
@@ -729,7 +758,7 @@ def test_log_record_model_extracts_nested_exception_type():
         "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
     }
 
-    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    model = _make_log_record_dict(test_message)
     assert model["message"] == "failed"
     assert "Traceback" not in model["message"]
     assert model["extra"]["exception.type"].endswith(".OuterError.InnerError")
@@ -762,7 +791,7 @@ def test_otel_stacktrace_in_attributes_not_body_from_loguru_record(
         "exception": mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb),
     }
 
-    model = LogRecordModel.from_loguru_message(test_message).model_dump()
+    model = _make_log_record_dict(test_message)
     otel_record = logger_adapter._create_log_record(model)
 
     assert otel_record.body == "Query failed"
@@ -925,7 +954,7 @@ class TestTemporalAttributePassthrough:
         assert otel_record.attributes["exception.message"] == "Connection refused"
         assert "Traceback" in otel_record.attributes["exception.stacktrace"]
 
-    def test_log_record_model_extracts_temporal_attributes_from_loguru(self):
+    def test_log_record_dict_extracts_temporal_attributes_from_loguru(self):
         """LogRecordModel should extract temporal.* attributes from loguru records."""
         test_message = mock.MagicMock()
         level_mock = mock.MagicMock()
@@ -946,7 +975,7 @@ class TestTemporalAttributePassthrough:
             "exception": None,
         }
 
-        model = LogRecordModel.from_loguru_message(test_message).model_dump()
+        model = _make_log_record_dict(test_message)
 
         assert model["extra"]["temporal.activity.type"] == "fetch_databases"
         assert model["extra"]["temporal.activity.attempt"] == 1  # Preserved as int
@@ -975,3 +1004,76 @@ class TestTemporalAttributePassthrough:
         tenant_keys = [k for k in otel_record.attributes if k.startswith("tenant.")]
         assert len(temporal_keys) == 0
         assert len(tenant_keys) == 0
+
+
+class TestPython314EventLoopCompat:
+    """Tests for Python 3.14 compatibility where asyncio.get_event_loop()
+    raises RuntimeError when no current event loop exists.
+
+    These tests simulate the Python 3.14 behavior by patching
+    asyncio.get_event_loop to raise RuntimeError, verifying that the
+    logger adapter falls back to a threading-based flush instead.
+    """
+
+    def test_flush_task_starts_via_thread_when_no_event_loop(self):
+        """When no running event loop exists (Python 3.14 behavior),
+        the adapter should fall back to starting the flush in a daemon thread."""
+        AtlanLoggerAdapter._reset_for_testing()
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "LOG_LEVEL": "INFO",
+                "ENABLE_OTLP_LOGS": "false",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+            },
+        ):
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+                True,
+            ):
+                with mock.patch(
+                    "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
+                    side_effect=RuntimeError("no running event loop"),
+                ):
+                    with mock.patch(
+                        "application_sdk.observability.logger_adaptor.threading.Thread"
+                    ) as mock_thread:
+                        mock_thread_instance = mock.MagicMock()
+                        mock_thread.return_value = mock_thread_instance
+
+                        _ = AtlanLoggerAdapter("test_py314")
+
+                        mock_thread.assert_called_once()
+                        _, kwargs = mock_thread.call_args
+                        assert kwargs.get("daemon") is True
+                        mock_thread_instance.start.assert_called_once()
+
+    def test_flush_task_uses_running_loop_when_available(self):
+        """When a running event loop exists, the adapter should create
+        a task on it instead of spawning a thread."""
+        AtlanLoggerAdapter._reset_for_testing()
+        AtlanLoggerAdapter._flush_task_started = False
+        mock_loop = mock.MagicMock()
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "LOG_LEVEL": "INFO",
+                "ENABLE_OTLP_LOGS": "false",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+            },
+        ):
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+                True,
+            ):
+                with mock.patch(
+                    "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
+                    return_value=mock_loop,
+                ):
+                    with mock.patch(
+                        "application_sdk.observability.logger_adaptor.threading.Thread"
+                    ) as mock_thread:
+                        _ = AtlanLoggerAdapter("test_py314_loop")
+
+                        mock_loop.create_task.assert_called_once()
+                        mock_thread.assert_not_called()

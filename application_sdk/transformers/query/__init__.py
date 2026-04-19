@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import textwrap
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 
-import daft
 import yaml
-from daft.functions import to_struct, when
 from pyatlan.model.enums import AtlanConnectorType
+
+if TYPE_CHECKING:
+    import daft
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
@@ -169,30 +172,26 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             str: The generated SQL query
         """
-        try:
-            # Load the YAML template from the path
-            with open(yaml_path, "r") as f:
-                sql_template = yaml.safe_load(f)
+        # Load the YAML template from the path
+        with open(yaml_path, "r") as f:
+            sql_template = yaml.safe_load(f)
 
-            # Flatten the columns dictionary
-            sql_template["columns"] = flatten_yaml_columns(sql_template["columns"])
+        # Flatten the columns dictionary
+        sql_template["columns"] = flatten_yaml_columns(sql_template["columns"])
 
-            # Get the SQL columns expressions for the SQL query
-            columns, literal_columns = self.get_sql_column_expressions(
-                sql_template, dataframe, default_attributes
-            )
+        # Get the SQL columns expressions for the SQL query
+        columns, literal_columns = self.get_sql_column_expressions(
+            sql_template, dataframe, default_attributes
+        )
 
-            # Join all the SQL column expressions to create the full SELECT statement for the SQL query
-            # This will be used for transforming the dataframe
-            sql_query = textwrap.dedent(f"""
-            SELECT
-                {','.join(columns)}
-            FROM dataframe
-            """)
-            return sql_query, literal_columns or None
-        except Exception as e:
-            logger.error(f"Error generating query: {e}")
-            raise e
+        # Join all the SQL column expressions to create the full SELECT statement for the SQL query
+        # This will be used for transforming the dataframe
+        sql_query = textwrap.dedent(f"""
+        SELECT
+            {",".join(columns)}
+        FROM dataframe
+        """)
+        return sql_query, literal_columns or None
 
     def _build_struct(self, level: dict, prefix: str = "") -> Optional[daft.Expression]:
         """
@@ -208,22 +207,25 @@ class QueryBasedTransformer(TransformerInterface):
 
         # Check if level is None
         if level is None:
-            logger.error("ERROR: level is None in _build_struct!")
             raise ValueError("level cannot be None in _build_struct")
 
         # Check if prefix is None
         if prefix is None:
-            logger.error("ERROR: prefix is None in _build_struct!")
             raise ValueError("prefix cannot be None in _build_struct")
+
+        import daft
+        from daft.functions import to_struct, when
 
         struct_fields = []
         non_null_fields = []
 
         # Handle columns at this level
         if "columns" in level:
-            logger.debug(f"Processing columns at level: {level['columns']}")
+            logger.debug("Processing columns at level: %s", level["columns"])
             for full_col, suffix in level["columns"]:
-                logger.debug(f"Processing column: {full_col} -> {suffix}")
+                logger.debug(
+                    "Processing column: full_col=%s suffix=%s", full_col, suffix
+                )
                 field = daft.col(full_col).alias(suffix)
                 struct_fields.append(field)
                 # Add to non_null check by negating is_null()
@@ -232,7 +234,7 @@ class QueryBasedTransformer(TransformerInterface):
         # Handle nested levels
         for component, sub_level in level.items():
             if component != "columns":  # Skip the columns key
-                logger.debug(f"Processing nested component: {component}")
+                logger.debug("Processing nested component: %s", component)
                 nested_struct = self._build_struct(sub_level, component)
                 if nested_struct is not None:
                     struct_fields.append(nested_struct)
@@ -241,7 +243,7 @@ class QueryBasedTransformer(TransformerInterface):
 
         # Only create a struct if we have fields
         if struct_fields:
-            logger.debug(f"Creating struct with {len(struct_fields)} fields")
+            logger.debug("Creating struct with %d fields", len(struct_fields))
             # Create the struct first
             struct = to_struct(*struct_fields)
 
@@ -257,7 +259,7 @@ class QueryBasedTransformer(TransformerInterface):
 
             return struct.alias(prefix)
 
-        logger.warning(f"No fields found for level {level}")
+        logger.warning("No fields found for level: %s", level)
         return None
 
     def get_grouped_dataframe_by_prefix(
@@ -295,59 +297,57 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             daft.DataFrame: DataFrame with columns grouped into structs
         """
-        try:
-            # Get all column names
-            columns = dataframe.column_names
-            logger.debug("=== DEBUG: get_grouped_dataframe_by_prefix ===")
-            logger.debug(f"Input DataFrame columns: {columns}")
+        import daft
 
-            # Group columns by their path components
-            path_groups = {}
-            standalone_columns = []
+        # Get all column names
+        columns = dataframe.column_names
+        logger.debug("=== DEBUG: get_grouped_dataframe_by_prefix ===")
+        logger.debug("Input DataFrame columns: %s", columns)
 
-            for col in columns:
-                if col is None:
-                    logger.error(f"Found None column in DataFrame columns: {columns}")
-                    continue
+        # Group columns by their path components
+        path_groups = {}
+        standalone_columns = []
 
-                if "." in col:
-                    # Split the full path into components
-                    path_components = col.split(".")
-                    current_level = path_groups
+        for col in columns:
+            if col is None:
+                logger.error("Found None column in DataFrame columns: %s", columns)
+                continue
 
-                    # Traverse the path, creating nested dictionaries as needed
-                    for component in path_components[:-1]:
-                        if component not in current_level:
-                            current_level[component] = {}
-                        current_level = current_level[component]
+            if "." in col:
+                # Split the full path into components
+                path_components = col.split(".")
+                current_level = path_groups
 
-                    # Store the column name and its final component at the leaf level
-                    if "columns" not in current_level:
-                        current_level["columns"] = []
-                    current_level["columns"].append((col, path_components[-1]))
-                else:
-                    standalone_columns.append(col)
+                # Traverse the path, creating nested dictionaries as needed
+                for component in path_components[:-1]:
+                    if component not in current_level:
+                        current_level[component] = {}
+                    current_level = current_level[component]
 
-            # Create new DataFrame with restructured columns
-            new_columns = []
+                # Store the column name and its final component at the leaf level
+                if "columns" not in current_level:
+                    current_level["columns"] = []
+                current_level["columns"].append((col, path_components[-1]))
+            else:
+                standalone_columns.append(col)
 
-            # Add standalone columns as is
-            for col in standalone_columns:
-                new_columns.append(daft.col(col))
+        # Create new DataFrame with restructured columns
+        new_columns = []
 
-            logger.debug(f"path_groups: {path_groups}")
-            logger.debug(f"standalone_columns: {standalone_columns}")
+        # Add standalone columns as is
+        for col in standalone_columns:
+            new_columns.append(daft.col(col))
 
-            # Build nested structs starting from the root level
-            for prefix, level in path_groups.items():
-                logger.debug(f"Building struct for prefix: {prefix}, level: {level}")
-                struct_expr = self._build_struct(level, prefix)
-                new_columns.append(struct_expr)
+        logger.debug("path_groups: %s", path_groups)
+        logger.debug("standalone_columns: %s", standalone_columns)
 
-            return dataframe.select(*new_columns)
-        except Exception as e:
-            logger.error(f"Error grouping columns by prefix: {e}")
-            raise e
+        # Build nested structs starting from the root level
+        for prefix, level in path_groups.items():
+            logger.debug("Building struct for prefix=%s level=%s", prefix, level)
+            struct_expr = self._build_struct(level, prefix)
+            new_columns.append(struct_expr)
+
+        return dataframe.select(*new_columns)
 
     def prepare_template_and_attributes(
         self,
@@ -371,6 +371,8 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             Tuple[daft.DataFrame, str]: DataFrame with default attributes added and the entity SQL template
         """
+        import daft
+
         # prepare default attributes
         default_attributes = {
             "connection_qualified_name": daft.lit(connection_qualified_name),
@@ -418,38 +420,38 @@ class QueryBasedTransformer(TransformerInterface):
         **kwargs: Any,
     ) -> Optional[daft.DataFrame]:
         """Transform records using SQL executed through Daft"""
-        try:
-            if dataframe.count_rows() == 0:
-                return None
+        if dataframe.count_rows() == 0:
+            return None
 
-            # Load the YAML template for the given typename
-            typename = typename.upper()
-            self.entity_class_definitions = (
-                entity_class_definitions or self.entity_class_definitions
-            )
-            entity_sql_template_path = self.entity_class_definitions.get(typename)
-            if not entity_sql_template_path:
-                raise ValueError(f"No SQL transformation registered for {typename}")
+        # Load the YAML template for the given typename
+        typename = typename.upper()
+        self.entity_class_definitions = (
+            entity_class_definitions or self.entity_class_definitions
+        )
+        entity_sql_template_path = self.entity_class_definitions.get(typename)
+        if not entity_sql_template_path:
+            raise ValueError(f"No SQL transformation registered for {typename}")
 
-            # prepare the SQL to run on the dataframe and the default attributes
-            dataframe, entity_sql_template = self.prepare_template_and_attributes(
-                dataframe,
-                workflow_id,
-                workflow_run_id,
-                connection_qualified_name=kwargs.get("connection_qualified_name"),
-                connection_name=kwargs.get("connection_name"),
-                entity_sql_template_path=entity_sql_template_path,
-            )
+        # prepare the SQL to run on the dataframe and the default attributes
+        dataframe, entity_sql_template = self.prepare_template_and_attributes(
+            dataframe,
+            workflow_id,
+            workflow_run_id,
+            connection_qualified_name=kwargs.get("connection_qualified_name"),
+            connection_name=kwargs.get("connection_name"),
+            entity_sql_template_path=entity_sql_template_path,
+        )
 
-            # run the SQL on the dataframe
-            logger.debug(
-                f"Running transformer for asset [{typename}] with SQL:\n {entity_sql_template}"
-            )
-            transformed_df = daft.sql(entity_sql_template)
+        # run the SQL on the dataframe
+        import daft
 
-            # We have a flat structured dataframe with columns that have dot notation
-            # for their path. We want to group the columns with the same prefix into structs.
-            return self.get_grouped_dataframe_by_prefix(transformed_df)
-        except Exception as e:
-            logger.error(f"Error transforming {typename}: {e}")
-            raise e
+        logger.debug(
+            "Running transformer for asset",
+            typename=typename,
+            sql=entity_sql_template,
+        )
+        transformed_df = daft.sql(entity_sql_template)
+
+        # We have a flat structured dataframe with columns that have dot notation
+        # for their path. We want to group the columns with the same prefix into structs.
+        return self.get_grouped_dataframe_by_prefix(transformed_df)

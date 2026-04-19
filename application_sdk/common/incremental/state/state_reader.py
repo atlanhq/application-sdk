@@ -12,22 +12,22 @@ connection, used for:
 
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Tuple
 
 from application_sdk.common.incremental.helpers import (
     count_json_files_recursive,
     get_persistent_artifacts_path,
     get_persistent_s3_prefix,
 )
-from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.storage.batch import download_prefix
 
 logger = get_logger(__name__)
 
 
 async def download_current_state(
-    workflow_args: Dict[str, Any],
+    connection_qualified_name: str,
+    application_name: str = "",
 ) -> Tuple[Path, str, bool, int]:
     """Download current-state folder from S3 to local storage.
 
@@ -39,9 +39,8 @@ async def download_current_state(
     S3 Path: persistent-artifacts/apps/{app}/connection/{connection_id}/current-state/
 
     Args:
-        workflow_args: Dictionary containing workflow configuration with:
-            - connection.connection_qualified_name: Connection identifier
-            - Other workflow metadata
+        connection_qualified_name: The connection qualified name.
+        application_name: Optional application name override.
 
     Returns:
         Tuple containing:
@@ -51,44 +50,47 @@ async def download_current_state(
             - json_count: Number of JSON files in the current state
 
     Example:
-        >>> dir, prefix, exists, count = await download_current_state(workflow_args)
+        >>> dir, prefix, exists, count = await download_current_state(
+        ...     connection_qualified_name="default/oracle/1764230875"
+        ... )
         >>> if exists:
         ...     print(f"Downloaded {count} files to {dir}")
         ... else:
         ...     print("First run - no previous state")
     """
-    s3_prefix = get_persistent_s3_prefix(workflow_args)
+    s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     current_state_s3_prefix = f"{s3_prefix}/current-state"
-    current_state_dir = get_persistent_artifacts_path(workflow_args, "current-state")
+    current_state_dir = get_persistent_artifacts_path(
+        connection_qualified_name, "current-state", application_name
+    )
 
     # Clear and recreate local directory to prevent stale data from prior runs
     if current_state_dir.exists():
         shutil.rmtree(current_state_dir)
     current_state_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Downloading current-state folder from S3: {current_state_s3_prefix}")
+    logger.info("Downloading current-state folder from S3: %s", current_state_s3_prefix)
 
     exists = False
     json_count = 0
 
     try:
-        await ObjectStore.download_prefix(
-            source=current_state_s3_prefix,
-            destination=str(current_state_dir),
-            store_name=UPSTREAM_OBJECT_STORE_NAME,
+        await download_prefix(
+            prefix=current_state_s3_prefix,
+            local_dir=str(current_state_dir),
         )
 
         json_count = count_json_files_recursive(current_state_dir)
         exists = json_count > 0
 
         if exists:
-            logger.info(f"Current-state downloaded with {json_count} JSON files")
+            logger.info("Current-state downloaded (%d JSON files)", json_count)
         else:
             logger.info("Current-state downloaded but empty (no JSON files)")
-    except Exception as e:
+    except Exception:
         # First run - current-state doesn't exist in S3 yet
         # This is expected behavior, not an error
-        logger.info(f"Current-state not found in S3 (first run): {e}")
+        logger.info("Current-state not found in S3 (first run)")
 
     if not exists:
         logger.info("Current-state not available (first run or empty)")

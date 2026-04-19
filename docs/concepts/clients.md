@@ -1,6 +1,6 @@
 # Clients
 
-This module provides the necessary abstractions (clients) for interacting with various external systems required by the application workflows, such as databases and workflow orchestration engines (Temporal).
+This module provides the necessary abstractions (clients) for interacting with various external systems required by applications, such as databases and HTTP-based services.
 
 ## Core Concepts
 
@@ -11,7 +11,6 @@ This module provides the necessary abstractions (clients) for interacting with v
 2.  **Specialized Clients:** The SDK provides concrete client implementations for specific services:
     *   **SQL Databases (`sql.py`):** For connecting to and querying SQL databases.
     *   **Non-SQL Systems (`base.py`):** For connecting to non-SQL data sources like REST APIs, or other services.
-    *   **Temporal (`temporal.py`, `workflow.py`):** For connecting to the Temporal service and managing workflow executions.
 
 ## SQL Client (`sql.py`)
 
@@ -20,7 +19,7 @@ Provides classes for interacting with SQL databases using SQLAlchemy.
 ### Key Classes
 
 *   **`BaseSQLClient(ClientInterface)`**:
-    *   **Purpose:** Handles synchronous connections and query execution using SQLAlchemy's standard engine and connection pool. Good for activities or setup steps that don't require high concurrency within the client itself.
+    *   **Purpose:** Handles synchronous connections and query execution using SQLAlchemy's standard engine and connection pool. Good for `@task` methods or setup steps that don't require high concurrency within the client itself.
     *   **Query Execution:** Uses `ThreadPoolExecutor` internally for `run_query` to avoid blocking the asyncio event loop during potentially long-running synchronous database operations.
 *   **`AsyncBaseSQLClient(BaseSQLClient)`**:
     *   **Purpose:** Handles asynchronous connections and query execution using SQLAlchemy's async features (`create_async_engine`, `AsyncConnection`). Suitable for scenarios requiring non-blocking database I/O.
@@ -66,19 +65,19 @@ class SnowflakeClient(BaseSQLClient):
     )
 ```
 
-### Interaction with Activities
+### Interaction with Tasks
 
-`BaseSQLClient` establishes the connection and holds the SQLAlchemy engine, which is used directly by activities to execute queries.
+`BaseSQLClient` establishes the connection and holds the SQLAlchemy engine, which is used by `@task` methods to execute queries.
 
-*   **Role of `SQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine and the `run_query` method to other components.
-*   **Role of Activities:**
-    *   Activities (e.g., `fetch_tables`, `fetch_columns` in `BaseSQLMetadataExtractionActivities`) orchestrate the process.
-    *   They retrieve the initialized `SQLClient` from the shared activity state.
-    *   They call methods on the `SQLClient` (like `run_query`) to execute queries and get the data.
-    *   They process the resulting data (e.g., save it to Parquet, transform it).
+*   **Role of `SQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine and the `run_query` / `execute_query` methods to other components.
+*   **Role of `@task` methods:**
+    *   Tasks (e.g., `fetch_tables`, `fetch_columns` in your `SqlMetadataExtractor` subclass) orchestrate the extraction process.
+    *   They create a client instance and call `load()` with credentials.
+    *   They call methods on the client (like `execute_query`) to run queries and get data.
+    *   They process the resulting data (e.g., pass to asset mappers for transformation).
 
 **Simplified Flow:**
-`Activity` -> gets `SQLClient` from state -> calls `sql_client.run_query(query=...)` -> receives data -> processes data.
+`@task method` -> creates `SQLClient` -> calls `client.load(credential_ref=...)` -> calls `client.execute_query(query=...)` -> receives data -> maps via asset mapper.
 
 ## Base Client (`base.py`)
 
@@ -176,104 +175,12 @@ class MyApiClient(BaseClient):
         # The RetryTransport can be overridden with a custom transport from libraries like `httpx-retries` through methods like `_retry_operation_async`. Check the library for more details.
 ```
 
-## Temporal / Workflow Client (`temporal.py`, `workflow.py`, `utils.py`)
-
-Provides clients for interacting with the Temporal workflow orchestration service.
-
-### Key Classes
-
-*   **`TemporalClient` (`temporal.py`)**:
-    *   **Purpose:** Manages the low-level connection to the Temporal server frontend service.
-    *   **Usage:** Typically instantiated *internally* by `TemporalWorkflowClient`.
-*   **`WorkflowClient` (`workflow.py`)**:
-    *   **Purpose:** An *abstract base class* defining the interface for interacting with *any* workflow engine (`start_workflow`, `stop_workflow`, etc.).
-*   **`TemporalWorkflowClient(WorkflowClient)` (`temporal.py`)**:
-    *   **Purpose:** The concrete *Temporal implementation* of `WorkflowClient`. Primary client for applications.
-    *   **Connection:** Internally creates and uses a `TemporalClient` instance.
-    *   **Configuration:** Initialized with `host`, `port`, `application_name`, `namespace`. Defaults read from environment variables.
-    *   **Key Methods:** `load()`, `close()`, `start_workflow()`, `stop_workflow()`, `get_workflow_run_status()`, `create_worker()`.
-
-### Prometheus Metrics
-
-`TemporalWorkflowClient` automatically exposes ~40 built-in Temporal SDK metrics via a Prometheus endpoint on every worker. No code changes are required — metrics become available as soon as `load()` is called.
-
-**Endpoint:** `0.0.0.0:9464` by default (OpenTelemetry Prometheus convention).
-
-**Override:** Set `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS=<host>:<port>` to change the bind address.
-
-**Sample metrics exposed:**
-
-| Metric | Description |
-|--------|-------------|
-| `temporal_activity_execution_latency` | Activity execution duration |
-| `temporal_activity_schedule_to_start_latency` | Time from schedule to start for activities |
-| `temporal_workflow_completed` | Total completed workflows |
-| `temporal_workflow_endtoend_latency` | End-to-end workflow duration |
-| `temporal_request_latency` | gRPC request latency to Temporal server |
-| `temporal_request_failure` | gRPC request failures |
-| `temporal_worker_task_slots_available` | Available worker task slots |
-| `temporal_worker_task_slots_used` | In-use worker task slots |
-| `temporal_sticky_cache_hit` | Sticky cache hit count |
-| `temporal_sticky_cache_size` | Current sticky cache size |
-
-The Temporal `Runtime` that binds the metrics port is a process-level singleton (`TemporalWorkflowClient._prometheus_runtime`). Creating multiple client instances or calling `load()` more than once within the same process reuses the same `Runtime` and does not attempt to rebind the port.
-
-### Configuration and Usage
-
-The common pattern is to use the `get_workflow_client` utility function.
-
-1.  **Getting a Client (`utils.py`)**:
-    *   `get_workflow_client(engine_type=WorkflowEngineType.TEMPORAL, application_name=APPLICATION_NAME)` returns an instance of `TemporalWorkflowClient`.
-    *   `application_name` determines the default Temporal `task_queue`.
-
-2.  **Connecting (`load` method):** Must be called after instantiation.
-
-3.  **Starting Workflows (`start_workflow` method):**
-    *   Takes `workflow_args` (dict) and the `workflow_class`.
-    *   Handles storing configuration/credentials securely (StateStore/SecretStore).
-    *   Initiates the workflow execution on Temporal.
-
-### Example (Getting and Using `TemporalWorkflowClient`)
-
-```python
-# In your application setup (e.g., examples/application_fastapi.py)
-import asyncio
-# Absolute imports
-from application_sdk.clients.utils import get_workflow_client
-from application_sdk.server.fastapi import Application, HttpWorkflowTrigger
-# Assuming your custom classes are defined
-from my_connector.handlers import MyConnectorHandler
-from my_connector.workflows import MyConnectorWorkflow
-
-async def run_app():
-    # Get the workflow client using the utility function
-    workflow_client = get_workflow_client(application_name="my-connector-queue")
-    await workflow_client.load() # Connect to Temporal
-
-    # Instantiate the FastAPI application, passing the connected client
-    fast_api_app = APIServer(
-        handler=MyConnectorHandler(),
-        workflow_client=workflow_client
-    )
-
-    # Register workflow triggers
-    fast_api_app.register_workflow(
-        MyConnectorWorkflow,
-        [HttpWorkflowTrigger(endpoint="/start", methods=["POST"])]
-    )
-
-    # Start the application server
-    await fast_api_app.start()
-    # await workflow_client.close() # Handle on shutdown
-
-if __name__ == "__main__":
-    asyncio.run(run_app())
-```
-
 ## Summary
 
 The `clients` module abstracts interactions with external services.
 
-`SQLClient` subclasses (configured via `DB_CONFIG`) provide the database engine and query execution methods, which are used by activities to fetch data. `TemporalWorkflowClient` (obtained via `get_workflow_client`) manages interactions with the Temporal service for workflow lifecycle management.
+`SQLClient` subclasses (configured via `DB_CONFIG`) provide the database engine and query execution methods used by `@task` methods to fetch data. See [`docs/concepts/apps.md`](apps.md) for how `App` + `@task` orchestrate extraction and [`docs/concepts/tasks.md`](tasks.md) for the task contract pattern.
+
+Temporal worker lifecycle (startup, shutdown, workflow dispatch) is managed by `application_sdk.execution` — see the execution layer documentation in `docs/concepts/apps.md`.
 
 `BaseClient` provides a foundation for non-SQL data sources with HTTP request support through the `execute_http_get_request` and `execute_http_post_request` methods. The class also allows for custom retry logic to be configured through the `http_retry_transport` attribute which can be set to a `httpx.AsyncBaseTransport` instance, either through the `httpx` default transport or a custom transport from libraries like `httpx-retries`.

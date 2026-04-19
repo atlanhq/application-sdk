@@ -10,12 +10,12 @@ from unittest import mock
 
 import pytest
 
-from application_sdk.interceptors.outputs import (
+from application_sdk.execution._temporal.interceptors.outputs import (
     OutputActivityInboundInterceptor,
     OutputInterceptor,
     OutputWorkflowInboundInterceptor,
 )
-from application_sdk.workflows.outputs import (
+from application_sdk.outputs import (
     Metric,
     OutputCollector,
     _collected_outputs,
@@ -107,7 +107,7 @@ class TestOutputActivityInboundInterceptor:
         input_data = MockExecuteActivityInput()
 
         with mock.patch(
-            "application_sdk.interceptors.outputs.activity"
+            "application_sdk.execution._temporal.interceptors.outputs.activity"
         ) as mock_activity:
             mock_activity.info.return_value = MockActivityInfo()
             await interceptor.execute_activity(input_data)
@@ -129,7 +129,7 @@ class TestOutputActivityInboundInterceptor:
         input_data = MockExecuteActivityInput()
 
         with mock.patch(
-            "application_sdk.interceptors.outputs.activity"
+            "application_sdk.execution._temporal.interceptors.outputs.activity"
         ) as mock_activity:
             mock_activity.info.return_value = MockActivityInfo()
             result = await interceptor.execute_activity(input_data)
@@ -152,7 +152,7 @@ class TestOutputActivityInboundInterceptor:
         input_data = MockExecuteActivityInput()
 
         with mock.patch(
-            "application_sdk.interceptors.outputs.activity"
+            "application_sdk.execution._temporal.interceptors.outputs.activity"
         ) as mock_activity:
             mock_activity.info.return_value = MockActivityInfo(
                 workflow_run_id=workflow_run_id
@@ -170,7 +170,7 @@ class TestOutputActivityInboundInterceptor:
         workflow_run_id = "test-run-id-empty"
 
         with mock.patch(
-            "application_sdk.interceptors.outputs.activity"
+            "application_sdk.execution._temporal.interceptors.outputs.activity"
         ) as mock_activity:
             mock_activity.info.return_value = MockActivityInfo(
                 workflow_run_id=workflow_run_id
@@ -219,7 +219,9 @@ class TestOutputWorkflowInboundInterceptor:
         mock_next_inbound.execute_workflow.return_value = expected_result
         input_data = MockExecuteWorkflowInput()
 
-        with mock.patch("application_sdk.interceptors.outputs.workflow") as mock_wf:
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.outputs.workflow"
+        ) as mock_wf:
             mock_wf.info.return_value = MockWorkflowInfo()
             result = await interceptor.execute_workflow(input_data)
 
@@ -242,7 +244,9 @@ class TestOutputWorkflowInboundInterceptor:
         }
         input_data = MockExecuteWorkflowInput()
 
-        with mock.patch("application_sdk.interceptors.outputs.workflow") as mock_wf:
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.outputs.workflow"
+        ) as mock_wf:
             mock_wf.info.return_value = MockWorkflowInfo(run_id=workflow_run_id)
             result = await interceptor.execute_workflow(input_data)
 
@@ -269,7 +273,9 @@ class TestOutputWorkflowInboundInterceptor:
         mock_next_inbound.execute_workflow.return_value = {"base": "data"}
         input_data = MockExecuteWorkflowInput()
 
-        with mock.patch("application_sdk.interceptors.outputs.workflow") as mock_wf:
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.outputs.workflow"
+        ) as mock_wf:
             mock_wf.info.return_value = MockWorkflowInfo(run_id=workflow_run_id)
             result = await interceptor.execute_workflow(input_data)
 
@@ -291,7 +297,9 @@ class TestOutputWorkflowInboundInterceptor:
 
         input_data = MockExecuteWorkflowInput()
 
-        with mock.patch("application_sdk.interceptors.outputs.workflow") as mock_wf:
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.outputs.workflow"
+        ) as mock_wf:
             mock_wf.info.return_value = MockWorkflowInfo(run_id=workflow_run_id)
             await interceptor.execute_workflow(input_data)
 
@@ -314,7 +322,9 @@ class TestOutputWorkflowInboundInterceptor:
         mock_next_inbound.execute_workflow.return_value = "not a dict"
         input_data = MockExecuteWorkflowInput()
 
-        with mock.patch("application_sdk.interceptors.outputs.workflow") as mock_wf:
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.outputs.workflow"
+        ) as mock_wf:
             mock_wf.info.return_value = MockWorkflowInfo(run_id=workflow_run_id)
             result = await interceptor.execute_workflow(input_data)
 
@@ -334,7 +344,9 @@ class TestOutputWorkflowInboundInterceptor:
         mock_next_inbound.execute_workflow.side_effect = workflow_with_outputs
         input_data = MockExecuteWorkflowInput()
 
-        with mock.patch("application_sdk.interceptors.outputs.workflow") as mock_wf:
+        with mock.patch(
+            "application_sdk.execution._temporal.interceptors.outputs.workflow"
+        ) as mock_wf:
             mock_wf.info.return_value = MockWorkflowInfo()
             result = await interceptor.execute_workflow(input_data)
 

@@ -37,13 +37,32 @@ APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
 DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
 #: Host address for the application's HTTP server
-APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0"))
+APP_HOST = str(
+    os.getenv("ATLAN_HANDLER_HOST") or os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0")
+)
 #: Port number for the application's HTTP server
-APP_PORT = int(os.getenv("ATLAN_APP_HTTP_PORT", "8000"))
+APP_PORT = int(
+    os.getenv("ATLAN_HANDLER_PORT") or os.getenv("ATLAN_APP_HTTP_PORT", "8000")
+)
 #: Tenant ID for multi-tenant applications
 APP_TENANT_ID = os.getenv("ATLAN_TENANT_ID", "default")
 # Domain Name of the tenant
 DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
+
+# App Vitals / Release metadata (injected by Local Marketplace into HelmRelease).
+# Naming aligned with Anuj's LM-integration PR so they merge cleanly.
+#: Semantic version of the app release (e.g., "1.2.3")
+APPLICATION_VERSION = os.getenv("ATLAN_APPLICATION_VERSION", "")
+#: Release UUID from Global Marketplace
+RELEASE_ID = os.getenv("ATLAN_RELEASE_ID", "")
+#: Release channel (all, beta, staging, specific)
+RELEASE_CHANNEL = os.getenv("ATLAN_RELEASE_CHANNEL", "")
+#: SDK version used to build this app image
+APP_SDK_VERSION = os.getenv("ATLAN_SDK_VERSION", "")
+#: App type from Global Marketplace (connector, system, etc.)
+APP_TYPE = os.getenv("ATLAN_APP_TYPE", "")
+#: Release publication timestamp from Global Marketplace (ISO 8601)
+PUBLISHED_AT = os.getenv("ATLAN_PUBLISHED_AT", "")
 #: Host address for the application's dashboard
 APP_DASHBOARD_HOST = str(os.getenv("ATLAN_APP_DASHBOARD_HOST", "localhost"))
 #: Port number for the application's dashboard
@@ -64,6 +83,11 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
+# Directory where contract-toolkit generated files (configmaps, manifest, Python types) live.
+# Convention: app/generated/ inside the repo (importable as app.generated).
+# In Docker (WORKDIR=/app, app code at /app/app/) this resolves to /app/app/generated.
+CONTRACT_GENERATED_DIR = os.environ.get("ATLAN_CONTRACT_GENERATED_DIR", "app/generated")
+
 # Cleanup Paths (custom paths for cleanup operations, supports multiple paths separated by comma)
 # If empty, cleanup activities will default to workflow-specific paths at runtime
 CLEANUP_BASE_PATHS = [
@@ -71,6 +95,13 @@ CLEANUP_BASE_PATHS = [
     for path in os.getenv("ATLAN_CLEANUP_BASE_PATHS", "").split(",")
     if path.strip()
 ]
+
+# Key used to store tracked FileReference objects in _app_state during a workflow run
+TRACKED_FILE_REFS_KEY = "_tracked_file_refs"
+
+# Object-store prefixes that must never be deleted by cleanup_storage.
+# These store cross-run persistent state (connection configs, incremental markers, etc.)
+PROTECTED_STORAGE_PREFIXES = ("persistent-artifacts/",)
 
 # State Store Constants
 #: Path template for state store files.
@@ -97,12 +128,25 @@ ENABLE_TEMPORAL_ACTIVITY_FAILURE_LOGGING: bool = (
 )
 
 # Workflow Client Constants
+# v2-compat: remove ATLAN_WORKFLOW_HOST/PORT/NAMESPACE fallbacks when all deployments
+# use ATLAN_TEMPORAL_HOST and ATLAN_TEMPORAL_NAMESPACE.
 #: Host address for the Temporal server
-WORKFLOW_HOST = os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
+#: Prefers ATLAN_TEMPORAL_HOST (v3 combined host:port) then ATLAN_WORKFLOW_HOST (v2).
+_temporal_host_parts = os.getenv("ATLAN_TEMPORAL_HOST", "").split(":")
+WORKFLOW_HOST = (
+    _temporal_host_parts[0] if _temporal_host_parts[0] else None
+) or os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
 #: Port number for the Temporal server
-WORKFLOW_PORT = os.getenv("ATLAN_WORKFLOW_PORT", "7233")
+#: Extracted from ATLAN_TEMPORAL_HOST if set, else falls back to ATLAN_WORKFLOW_PORT (v2).
+WORKFLOW_PORT = (
+    _temporal_host_parts[1]
+    if len(_temporal_host_parts) == 2 and _temporal_host_parts[1]
+    else None
+) or os.getenv("ATLAN_WORKFLOW_PORT", "7233")
 #: Namespace for Temporal workflows
-WORKFLOW_NAMESPACE = os.getenv("ATLAN_WORKFLOW_NAMESPACE", "default")
+WORKFLOW_NAMESPACE = os.getenv("ATLAN_TEMPORAL_NAMESPACE") or os.getenv(
+    "ATLAN_WORKFLOW_NAMESPACE", "default"
+)
 #: Host address for the Temporal UI
 WORKFLOW_UI_HOST = os.getenv("ATLAN_WORKFLOW_UI_HOST", "localhost")
 #: Port number for the Temporal UI
@@ -115,15 +159,17 @@ WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
 #: Maximum number of activities that can run concurrently
 MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
 
-#: Temporal build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
+#: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
 #: route tasks to the correct version during versioned deployments.
-TEMPORAL_BUILD_ID = os.getenv("TEMPORAL_BUILD_ID", "")
+APP_BUILD_ID = os.getenv("ATLAN_APP_BUILD_ID") or os.getenv("TEMPORAL_BUILD_ID", "")
 
-#: Temporal Worker Deployment name (injected by TWD controller).
-#: Format: "<namespace>/<twd-name>". When set together with TEMPORAL_BUILD_ID,
+#: Worker Deployment name (injected by TWD controller).
+#: Format: "<namespace>/<twd-name>". When set together with APP_BUILD_ID,
 #: workers register as a Worker Deployment version instead of using legacy Build ID versioning.
-TEMPORAL_DEPLOYMENT_NAME = os.getenv("TEMPORAL_DEPLOYMENT_NAME", "")
+APP_DEPLOYMENT_NAME = os.getenv("ATLAN_APP_DEPLOYMENT_NAME") or os.getenv(
+    "TEMPORAL_DEPLOYMENT_NAME", ""
+)
 
 
 #: Name of the deployment secrets in the secret store
@@ -219,7 +265,7 @@ DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
 
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = (os.getenv("ATLAN_LOG_LEVEL") or os.getenv("LOG_LEVEL", "INFO")).upper()
 #: Service name for OpenTelemetry
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "atlan-application-sdk")
 #: Service version for OpenTelemetry
@@ -238,6 +284,10 @@ ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true
 ENABLE_OTLP_WORKFLOW_LOGS: bool = (
     os.getenv("ENABLE_OTLP_WORKFLOW_LOGS", "false").lower() == "true"
 )
+
+# App Vitals
+#: Enable App Vitals interceptor for automatic lifecycle metrics
+ENABLE_APP_VITALS: bool = os.getenv("ATLAN_ENABLE_APP_VITALS", "true").lower() == "true"
 
 # OTEL Constants
 #: Node name for workflow telemetry
@@ -281,6 +331,9 @@ METRICS_CLEANUP_ENABLED = (
     os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
 )
 METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
+ENABLE_PROMETHEUS_METRICS = (
+    os.getenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "false").lower() == "true"
+)
 
 # Segment Configuration
 #: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
@@ -308,9 +361,13 @@ TRACES_CLEANUP_ENABLED = (
 )
 TRACES_FILE_NAME = "traces.parquet"
 
-# Dapr Sink Configuration
-ENABLE_OBSERVABILITY_DAPR_SINK = (
-    os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true").lower() == "true"
+# Store Sink Configuration (defaults to enabled)
+ENABLE_OBSERVABILITY_STORE_SINK: bool = (
+    os.getenv(
+        "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK",
+        os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "true"),
+    ).lower()
+    == "true"
 )
 
 # atlan_client configuration (non ATLAN_ prefix are rooted in pyatlan SDK, to be revisited)
@@ -401,6 +458,13 @@ DUCKDB_COMMON_TEMP_FOLDER = "/tmp/incremental_duckdb"
 
 #: Default memory limit for DuckDB (fixed for K8s pods)
 DUCKDB_DEFAULT_MEMORY_LIMIT = "2GB"
+
+SSL_CERT_DIR = os.getenv("SSL_CERT_DIR", "")
+"""Custom SSL/TLS certificate directory for corporate/private CAs.
+
+If set and points to a directory, all .pem/.crt/.cer/.ca-bundle files
+in that directory are trusted in addition to system CAs.
+"""
 
 # Daft analytics are disabled via ENV vars in the Dockerfile (DO_NOT_TRACK,
 # SCARF_NO_ANALYTICS, DAFT_ANALYTICS_ENABLED). They must NOT be set here at
