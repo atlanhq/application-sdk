@@ -3,8 +3,9 @@
 # When a developer comments "/fix-vulnerabilities" on a PR, this workflow:
 #   1. Downloads the latest scan results from the Vulnerability Scan workflow
 #   2. Identifies fixable Python app dependencies (skips base image CVEs)
-#   3. Runs `uv lock --upgrade-package` for each
-#   4. Commits the updated uv.lock to the PR branch
+#   3. Pins minimum version in pyproject.toml (prevents regression on future uv lock)
+#   4. Runs `uv lock --upgrade-package` for each
+#   5. Commits updated pyproject.toml + uv.lock to the PR branch
 #   5. Scan re-runs automatically on the new commit
 #
 # Usage in each app repo (.github/workflows/auto-fix.yml):
@@ -198,11 +199,45 @@ jobs:
           fixed = []
           failed = []
 
+          import re
+
+          def pin_in_pyproject(pkg, min_version):
+              """Update pyproject.toml to pin minimum version for the package."""
+              try:
+                  with open("pyproject.toml") as f:
+                      content = f.read()
+                  # Match patterns like: "pkg>=1.0.0", "pkg>=1.0", "pkg", "pkg==1.0.0"
+                  patterns = [
+                      (rf'("{pkg})(>=[\d.]+)"', f'"\\1>={min_version}"'),
+                      (rf'("{pkg})(==[\d.]+)"', f'"\\1>={min_version}"'),
+                      (rf'("{pkg})"', f'"\\1>={min_version}"'),
+                  ]
+                  updated = False
+                  for pattern, replacement in patterns:
+                      new_content, count = re.subn(pattern, replacement, content, flags=re.IGNORECASE)
+                      if count > 0:
+                          content = new_content
+                          updated = True
+                          break
+                  if updated:
+                      with open("pyproject.toml", "w") as f:
+                          f.write(content)
+                      return True
+              except Exception as e:
+                  print(f"  Warning: could not update pyproject.toml for {pkg}: {e}")
+              return False
+
           for v in fixable:
               pkg = v["package"]
               target = v["fixed"].split(",")[0].strip()
               print(f"Updating {pkg} -> {target}...")
 
+              # Step 1: Pin minimum version in pyproject.toml
+              pinned = pin_in_pyproject(pkg, target)
+              if pinned:
+                  print(f"  Pinned {pkg}>={target} in pyproject.toml")
+
+              # Step 2: Update lockfile
               result = subprocess.run(
                   ["uv", "lock", "--upgrade-package", pkg],
                   capture_output=True, text=True
@@ -210,7 +245,7 @@ jobs:
 
               if result.returncode == 0:
                   fixed.append(f"{pkg} -> {target}")
-                  print(f"  Updated {pkg}")
+                  print(f"  Updated {pkg} in uv.lock")
               else:
                   failed.append(f"{pkg}: {result.stderr[:200]}")
                   print(f"  Failed: {result.stderr[:200]}")
