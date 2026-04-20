@@ -9,7 +9,6 @@ on:
       - 'docs/**'
       - '**.md'
       - 'mkdocs.yml'
-      - '.github/**'
 
 permissions:
   contents: read
