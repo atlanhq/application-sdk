@@ -253,7 +253,7 @@ jobs:
                               prev -= 1
                           if prev >= 0 and lines[prev].strip().endswith('"') and not lines[prev].strip().endswith(','):
                               lines[prev] = lines[prev].rstrip() + ','
-                          lines.insert(insert_idx, f'    "{pkg}>={min_version}",')
+                          lines.insert(insert_idx, f'    "{pkg}>={min_version}",  # pinned: transitive dep, security fix')
                           with open("pyproject.toml", "w") as f:
                               f.write("\n".join(lines))
                           return True
