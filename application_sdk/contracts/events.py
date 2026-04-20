@@ -9,7 +9,11 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from application_sdk.constants import APPLICATION_NAME, WORKER_START_EVENT_VERSION
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    RELEASE_ID,
+    WORKER_START_EVENT_VERSION,
+)
 
 
 class EventTypes(Enum):
@@ -46,6 +50,7 @@ class EventMetadata(BaseModel):
 
     Attributes:
         application_name: Name of the application the event belongs to.
+        release_id: Release UUID from Global Marketplace (empty if not injected).
         created_timestamp: Timestamp when the event was created.
         workflow_type: Type of the workflow.
         workflow_id: ID of the workflow.
@@ -58,6 +63,7 @@ class EventMetadata(BaseModel):
     """
 
     application_name: str = Field(init=True, default=APPLICATION_NAME)
+    release_id: str = Field(init=True, default=RELEASE_ID)
     created_timestamp: int = Field(init=True, default=0)
 
     # Workflow information
