@@ -162,9 +162,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["application_sdk"]
 
-[tool.hatch.version]
-path = "application_sdk/__init__.py"
-
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
