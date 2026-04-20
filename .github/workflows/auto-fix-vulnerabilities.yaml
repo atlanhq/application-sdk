@@ -201,44 +201,56 @@ jobs:
 
           import re
 
+          # Track packages already pinned to avoid duplicates (e.g. authlib has 4 CVEs)
+          pinned_packages = set()
+
           def pin_in_pyproject(pkg, min_version):
               """Update or add minimum version pin in pyproject.toml.
 
               If the package exists in dependencies, update its version constraint.
               If it's a transitive dep not listed, add it with >=min_version.
+              Skips if already pinned in this run (multiple CVEs for same package).
               """
+              pkg_lower = pkg.lower()
+              if pkg_lower in pinned_packages:
+                  return True  # already handled
+              pinned_packages.add(pkg_lower)
+
               try:
                   with open("pyproject.toml") as f:
                       content = f.read()
 
-                  # Try to update existing entry
-                  patterns = [
-                      (rf'("{pkg})(>=[\d.]+)"', f'"\\1>={min_version}"'),
-                      (rf'("{pkg})(==[\d.]+)"', f'"\\1>={min_version}"'),
-                      (rf'("{pkg})"', f'"\\1>={min_version}"'),
-                  ]
-                  updated = False
-                  for pattern, replacement in patterns:
-                      new_content, count = re.subn(pattern, replacement, content, flags=re.IGNORECASE)
-                      if count > 0:
-                          content = new_content
-                          updated = True
-                          break
-
-                  # If not found, add as new dependency (transitive dep)
-                  if not updated:
-                      dep_line = f'    "{pkg}>={min_version}",'
-                      # Find the end of the dependencies list and insert before the closing ]
-                      dep_match = re.search(r'(dependencies\s*=\s*\[.*?)(^\])', content, re.MULTILINE | re.DOTALL)
-                      if dep_match:
-                          insert_pos = dep_match.start(2)
-                          content = content[:insert_pos] + dep_line + "\n" + content[insert_pos:]
-                          updated = True
-
-                  if updated:
-                      with open("pyproject.toml", "w") as f:
-                          f.write(content)
-                      return True
+                  # Check if package already exists (case-insensitive)
+                  existing = re.search(rf'"{pkg}[><=!]', content, re.IGNORECASE)
+                  if existing:
+                      # Update existing entry
+                      patterns = [
+                          (rf'("{pkg})(>=[\d.]+)"', f'"\\1>={min_version}"'),
+                          (rf'("{pkg})(==[\d.]+)"', f'"\\1>={min_version}"'),
+                          (rf'("{pkg})"', f'"\\1>={min_version}"'),
+                      ]
+                      for pattern, replacement in patterns:
+                          new_content, count = re.subn(pattern, replacement, content, flags=re.IGNORECASE)
+                          if count > 0:
+                              with open("pyproject.toml", "w") as f:
+                                  f.write(new_content)
+                              return True
+                  else:
+                      # Add as new dependency — find last line before ] in dependencies
+                      lines = content.split("\n")
+                      in_deps = False
+                      insert_idx = None
+                      for i, line in enumerate(lines):
+                          if re.match(r'^dependencies\s*=\s*\[', line):
+                              in_deps = True
+                          if in_deps and line.strip() == ']':
+                              insert_idx = i
+                              break
+                      if insert_idx is not None:
+                          lines.insert(insert_idx, f'    "{pkg}>={min_version}",')
+                          with open("pyproject.toml", "w") as f:
+                              f.write("\n".join(lines))
+                          return True
               except Exception as e:
                   print(f"  Warning: could not update pyproject.toml for {pkg}: {e}")
               return False
