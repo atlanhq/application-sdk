@@ -1509,17 +1509,15 @@ class TestPairsToFlat:
         assert restored["host"] == "db.example.com"  # str stays str
 
 
-class TestStartCredentialPersistence:
-    """Tests for inline credential save in /start handler.
+class TestStartCredentialStripping:
+    """Tests for credential stripping in /start handler.
 
-    The /start endpoint needs Temporal, so we test the normalization +
-    MockStateStore interaction directly to verify the contract.
+    The /start endpoint strips credentials from the body before dispatching
+    to Temporal. No state store save or credential_guid injection occurs.
     """
 
-    async def test_normalize_then_store_v2_dict_credentials(self) -> None:
-        """V2 dict credentials are normalized to v3 list before storage."""
-        from application_sdk.testing.mocks import MockStateStore
-
+    def test_normalize_v2_dict_credentials(self) -> None:
+        """V2 dict credentials are normalized to v3 list format."""
         body = {
             "credentials": {
                 "host": "db.example.com",
@@ -1536,24 +1534,11 @@ class TestStartCredentialPersistence:
         keys = {item["key"] for item in body["credentials"]}
         assert "host" in keys
         assert "port" in keys
-
-        store = MockStateStore()
-        guid = "test-guid-123"
-        flat_creds = _pairs_to_flat(body["credentials"])
-        await store.save(f"cred:{guid}", flat_creds)
-
-        result = await store.load(f"cred:{guid}")
-        assert result is not None
-        assert result["host"] == "db.example.com"
-
-        # Verify other fields preserved
+        # Other fields preserved
         assert body["other_field"] == "kept"
-        assert "credentials" in body
 
-    async def test_normalize_then_store_v3_list_credentials(self) -> None:
+    def test_normalize_v3_list_credentials(self) -> None:
         """V3 list credentials pass through normalization unchanged."""
-        from application_sdk.testing.mocks import MockStateStore
-
         body = {
             "credentials": [
                 {"key": "host", "value": "db.example.com"},
@@ -1566,42 +1551,11 @@ class TestStartCredentialPersistence:
         assert isinstance(body["credentials"], list)
         assert len(body["credentials"]) == 2
 
-        store = MockStateStore()
-        guid = "test-guid-456"
-        flat_creds = _pairs_to_flat(body["credentials"])
-        await store.save(f"cred:{guid}", flat_creds)
-
-        result = await store.load(f"cred:{guid}")
-        assert result is not None
-        assert result["host"] == "db.example.com"
-
-    def test_no_credentials_skips_store(self) -> None:
-        """Body without credentials is not stored."""
+    def test_no_credentials_passthrough(self) -> None:
+        """Body without credentials passes through unchanged."""
         body = {"name": "test-workflow"}
         body = _normalize_credentials(body)
         assert "credentials" not in body or not body.get("credentials")
-
-    async def test_credential_resolver_reads_from_secret_store(self) -> None:
-        """CredentialResolver reads credentials from secret store."""
-        from application_sdk.credentials.ref import CredentialRef
-        from application_sdk.credentials.resolver import CredentialResolver
-        from application_sdk.testing.mocks import MockSecretStore
-
-        store = MockSecretStore()
-        creds = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "port", "value": "5432"},
-        ]
-        store.set("my-guid", json.dumps(creds))
-
-        resolver = CredentialResolver(secret_store=store)
-        ref = CredentialRef(name="my-guid", credential_type="basic")
-
-        result = await resolver.resolve_raw(ref)
-
-        assert isinstance(result, list)
-        assert result[0]["key"] == "host"
-        assert result[0]["value"] == "db.example.com"
 
 
 # ---------------------------------------------------------------------------

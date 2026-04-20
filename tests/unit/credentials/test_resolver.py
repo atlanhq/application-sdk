@@ -116,22 +116,22 @@ def _make_vault_patches(vault_return=None, vault_side_effect=None):
 class TestGuidResolutionPath:
     """Tests for the GUID-based resolution path.
 
-    The resolver checks the local secret store first (in-process inline
-    credentials), then falls back to DaprCredentialVault for platform GUIDs.
+    The resolver always goes to DaprCredentialVault.get_credentials() for
+    GUID-based credential resolution.
     """
 
-    async def test_local_store_takes_precedence_over_vault(self, store, resolver):
-        """Inline credentials stored in the local secret store are resolved
-        directly — DaprCredentialVault is never called."""
-        import json
+    async def test_guid_resolution_uses_vault(self, store, resolver):
+        """GUID resolution always goes to DaprCredentialVault."""
+        p_vault, p_dapr, mock_vault = _make_vault_patches(
+            vault_return={"host": "vault.example.com", "port": 5432}
+        )
+        with p_vault, p_dapr:
+            ref = legacy_credential_ref("guid-abc")
+            raw = await resolver.resolve_raw(ref)
 
-        store.set("guid-abc", json.dumps({"host": "local.example.com", "port": 5432}))
-        ref = legacy_credential_ref("guid-abc")
-        # No Dapr mock needed — local store should return before Dapr is reached.
-        raw = await resolver.resolve_raw(ref)
-
-        assert raw["host"] == "local.example.com"
+        assert raw["host"] == "vault.example.com"
         assert raw["port"] == 5432
+        mock_vault.get_credentials.assert_called_once_with("guid-abc")
 
     async def test_get_credentials_receives_string_not_dict(self, store, resolver):
         """Regression: resolver must pass the GUID as a plain string, not a dict."""

@@ -178,7 +178,6 @@ if TYPE_CHECKING:
 
     from application_sdk.app.base import App
     from application_sdk.infrastructure.secrets import SecretStore
-    from application_sdk.infrastructure.state import StateStore
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +270,6 @@ class WorkflowClientConfig:
 _temporal_client: Client | None = None
 _workflow_config: WorkflowClientConfig = WorkflowClientConfig()
 _handler_auth_manager: Any | None = None
-_state_store: StateStore | None = None
 _secret_store: SecretStore | None = None
 _storage: ObjectStore | None = None
 
@@ -385,7 +383,6 @@ def create_app_handler_service(
     auth_token_url: str = "",
     auth_base_url: str = "",
     auth_scopes: str = "",
-    state_store: StateStore | None = None,
     secret_store: SecretStore | None = None,
     storage: ObjectStore | None = None,
     event_triggers: list[EventTriggerConfig] | None = None,
@@ -406,12 +403,7 @@ def create_app_handler_service(
         temporal_namespace: Temporal namespace.
         task_queue: Task queue name (default: "{app_name}-queue").
         data_converter: Optional custom Temporal DataConverter.
-        state_store: Optional state store for workflow config persistence.
-        secret_store: Optional secret store for credential interception.
-            When provided, the ``/start`` handler stores inline credentials
-            here and replaces them with a ``credential_guid`` so secrets
-            never travel over Temporal.  Passed directly to avoid ContextVar
-            propagation issues with uvicorn ASGI request handlers.
+        secret_store: Optional secret store for credential resolution.
         storage: Optional obstore store for file uploads.
         title: OpenAPI title.
         description: OpenAPI description.
@@ -423,9 +415,8 @@ def create_app_handler_service(
     Returns:
         Configured FastAPI application.
     """
-    global _workflow_config, _state_store, _secret_store, _storage
+    global _workflow_config, _secret_store, _storage
 
-    _state_store = state_store
     _secret_store = secret_store
     _storage = storage
     _workflow_config = WorkflowClientConfig(
@@ -485,7 +476,6 @@ def create_app_handler_service(
             started_at=datetime.now(UTC),
             _credentials=credentials,
             _secret_store=_secret_store,
-            _state_store=_state_store,
         )
 
     # ------------------------------------------------------------------
@@ -766,48 +756,12 @@ def create_app_handler_service(
                     detail=f"App class {app_cls.__name__} entry point has no input type.",
                 )
 
-            # Save inline credentials to the secret store and replace with a
-            # credential_guid so raw secrets never travel over Temporal.
-            # Uses the closure-captured _secret_store (passed directly to
-            # create_app_handler_service) instead of get_infrastructure()
-            # because ContextVar does not propagate to uvicorn ASGI request
-            # handlers.
             body = _normalize_credentials(body)
-            if "credentials" in body and body["credentials"]:
-                # Credential interception: store inline credentials in state
-                # store and replace with a credential_guid. This path is
-                # guarded to local-dev only — in production, credentials are
-                # pre-provisioned in Dapr secret store by the platform.
-                is_local_dev = os.environ.get(
-                    "ATLAN_LOCAL_DEVELOPMENT", ""
-                ).lower() in (
-                    "true",
-                    "1",
-                )
-                if is_local_dev and _state_store is not None:
-                    credential_guid = str(uuid4())
-                    flat_creds = _pairs_to_flat(body["credentials"])
-                    await _state_store.save(f"cred:{credential_guid}", flat_creds)
-                    body["credential_guid"] = credential_guid
-                    del body["credentials"]
-                    logger.debug(
-                        "Saved inline credentials to state store: guid=%s",
-                        credential_guid,
-                    )
-                else:
-                    # Always strip raw credentials — never pass through to
-                    # Temporal history, regardless of mode or store availability.
-                    del body["credentials"]
-                    if not is_local_dev:
-                        logger.warning(
-                            "Inline credentials stripped in non-local mode; "
-                            "use credential_guid for production workflows."
-                        )
-                    else:
-                        logger.warning(
-                            "State store not available; inline credentials stripped "
-                            "to prevent exposure in Temporal history."
-                        )
+            if "credentials" in body:
+                # Always strip raw credentials — never pass through to
+                # Temporal history. Credentials are resolved at runtime
+                # via DaprCredentialVault using credential_guid.
+                del body["credentials"]
 
             input_data = input_type.model_validate(body)
 
@@ -863,20 +817,6 @@ def create_app_handler_service(
                 handle.result_run_id,
                 correlation_id,
             )
-
-            if _state_store is not None:
-                try:
-                    config_to_store = {
-                        k: v for k, v in body.items() if k != "credentials"
-                    }
-                    config_to_store["workflow_id"] = handle.id
-                    await _state_store.save(f"workflows/{handle.id}", config_to_store)
-                except Exception:
-                    logger.warning(
-                        "Failed to save workflow config to state store for workflow %s",
-                        handle.id,
-                        exc_info=True,
-                    )
 
             return JSONResponse(
                 content={
@@ -1179,28 +1119,13 @@ def create_app_handler_service(
         config_id: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
         type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
     ) -> JSONResponse:
-        """Fetch workflow config — tries statestore first, falls back to object store."""
-        config = None
+        """Fetch workflow config from object store."""
+        config = await _config_load_from_objectstore(config_id, config_type=type)
 
-        # Try statestore
-        if _state_store is not None:
-            try:
-                config = await _state_store.load(f"workflows/{config_id}")
-            except Exception:
-                logger.warning(
-                    "State store load failed for config %s (type=%s), trying object store",
-                    config_id,
-                    type,
-                )
-
-        # Fallback to object store (S3)
-        if config is None:
-            config = await _config_load_from_objectstore(config_id, config_type=type)
-
-        if config is None and _state_store is None and _storage is None:
+        if config is None and _storage is None:
             raise HTTPException(
                 status_code=503,
-                detail="No state store or object store configured",
+                detail="No object store configured",
             )
         if config is None:
             raise HTTPException(
@@ -1219,36 +1144,23 @@ def create_app_handler_service(
         request: Request,
         type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
     ) -> JSONResponse:
-        """Save workflow config — tries statestore first, falls back to object store.
-
-        Object store fallback is only used for non-credential config types
-        to avoid persisting sensitive credential data to S3.
-        """
+        """Save workflow config to object store."""
         body = await request.json()
-        saved = False
 
-        # Try statestore
-        if _state_store is not None:
-            try:
-                await _state_store.save(f"workflows/{config_id}", body)
-                saved = True
-            except Exception:
-                logger.warning(
-                    "State store save failed for config %s (type=%s), trying object store",
-                    config_id,
-                    type,
-                )
+        if type == "workflows":
+            warnings.warn(
+                "Saving config with type='workflows' is deprecated; "
+                "use a specific config type instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
-        # Fallback to object store (S3) for all config types.
-        # Credential configs only contain non-sensitive metadata (host, port,
-        # authType, extra) — actual secrets are managed by Heracles/Vault.
-        if not saved:
-            saved = await _config_save_to_objectstore(config_id, body, config_type=type)
+        saved = await _config_save_to_objectstore(config_id, body, config_type=type)
 
         if not saved:
             raise HTTPException(
                 status_code=503,
-                detail="No state store or object store configured",
+                detail="No object store configured",
             )
         return JSONResponse(
             content=_wrap_response(
