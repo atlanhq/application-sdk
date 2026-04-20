@@ -20,10 +20,7 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      branch: ${{ steps.get_branch.outputs.branch }}
-      version: ${{ steps.get_version.outputs.version }}
       lowercase_branch: ${{ steps.get_lowercase_branch.outputs.lowercase_branch }}
-      repository_name: ${{ steps.get_repo_name.outputs.repository_name }}
       sha: ${{ steps.get_sha.outputs.sha }}
     steps:
       - uses: actions/checkout@v6.0.2
@@ -31,25 +28,17 @@ jobs:
           fetch-depth: 0
 
       - name: Get branch name
-        run: echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+        run: echo "branch=${GITHUB_REF#refs/heads/}" >> "$GITHUB_OUTPUT"
         id: get_branch
 
-      - name: Get repository name
-        run: echo "repository_name=`echo "$GITHUB_REPOSITORY" | awk -F / '{print $2}' | sed -e "s/:refs//"`" >> $GITHUB_OUTPUT
-        id: get_repo_name
-        shell: bash
-
-      - name: Get version from pyproject.toml
-        run: echo "version=$(awk -F'"' '/^version = / {print $2}' pyproject.toml)" >> $GITHUB_OUTPUT
-        id: get_version
-
       - name: Lowercase branch name
-        run: echo "lowercase_branch=$(echo '${{ steps.get_branch.outputs.branch }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+        run: echo "lowercase_branch=$(echo '${{ steps.get_branch.outputs.branch }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
         id: get_lowercase_branch
 
       - name: Get short SHA
         id: get_sha
-        run: echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+        shell: bash
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
   push-to-ghcr:
     runs-on: ubuntu-latest
