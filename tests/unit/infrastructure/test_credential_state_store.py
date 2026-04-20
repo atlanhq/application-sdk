@@ -86,14 +86,16 @@ class TestCredentialStateStoreRoundtrip:
 
         assert result["source"] == "state_store"
 
-    async def test_fallback_to_secret_store(self):
-        """Falls back to secret store when not in state store."""
+    async def test_fallback_to_secret_store(self, monkeypatch):
+        """In local-dev, falls back to secret store when not in state store."""
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver
         from application_sdk.infrastructure.context import (
             InfrastructureContext,
             set_infrastructure,
         )
+
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "true")
 
         state_store = MockStateStore()
         secret_store = MockSecretStore()
@@ -110,8 +112,14 @@ class TestCredentialStateStoreRoundtrip:
 
         assert result["host"] == "from-secret"
 
-    async def test_resolver_skips_state_store_in_prod(self, monkeypatch):
-        """In non-local mode, resolver skips state store even if cred: key exists."""
+    async def test_resolver_skips_local_stores_in_prod(self, monkeypatch):
+        """In non-local mode, resolver skips BOTH state_store and secret_store
+        and goes straight to DaprCredentialVault, which merges S3 config +
+        Vault secrets. This prevents the bug where Vault-backed secret_store
+        returns only the secret-only blob (missing host/port).
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver
         from application_sdk.infrastructure.context import (
@@ -127,18 +135,46 @@ class TestCredentialStateStoreRoundtrip:
         guid = "prod-guid"
         # Cred exists in state store but should NOT be read in prod
         await state_store.save(f"cred:{guid}", {"source": "state_store"})
-        # Secret store has the "real" credential
-        secret_store.set(guid, json.dumps({"source": "secret_store"}))
+        # Secret-only blob in secret_store (what Dapr/Vault would actually
+        # return) — must NOT be read either.
+        secret_store.set(guid, json.dumps({"username": "u", "password": "p"}))
 
         ctx = InfrastructureContext(state_store=state_store, secret_store=secret_store)
         set_infrastructure(ctx)
 
+        # Spy to assert secret_store.get is never awaited in prod.
+        secret_store.get = AsyncMock(wraps=secret_store.get)  # type: ignore[method-assign]
+
+        # Mock DaprCredentialVault — this is what actually serves prod GUIDs.
+        full_merged = {
+            "host": "h.example.com",
+            "port": 443,
+            "username": "u",
+            "password": "p",
+        }
+        mock_vault = MagicMock()
+        mock_vault.get_credentials = AsyncMock(return_value=full_merged)
+        mock_dapr = MagicMock()
+        mock_dapr.close = AsyncMock()
+
         resolver = CredentialResolver(secret_store=secret_store)
         ref = CredentialRef(name=guid, credential_type="unknown", credential_guid=guid)
-        result = await resolver.resolve_raw(ref)
 
-        # Secret store should win in prod — state store skipped
-        assert result["source"] == "secret_store"
+        with (
+            patch(
+                "application_sdk.infrastructure.DaprCredentialVault",
+                MagicMock(return_value=mock_vault),
+            ),
+            patch(
+                "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+                MagicMock(return_value=mock_dapr),
+            ),
+        ):
+            result = await resolver.resolve_raw(ref)
+
+        secret_store.get.assert_not_called()
+        mock_vault.get_credentials.assert_awaited_once_with(guid)
+        assert result == full_merged
 
 
 class TestLocalDevGuard:

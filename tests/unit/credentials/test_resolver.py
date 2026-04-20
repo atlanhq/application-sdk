@@ -120,11 +120,14 @@ class TestGuidResolutionPath:
     credentials), then falls back to DaprCredentialVault for platform GUIDs.
     """
 
-    async def test_local_store_takes_precedence_over_vault(self, store, resolver):
-        """Inline credentials stored in the local secret store are resolved
-        directly — DaprCredentialVault is never called."""
+    async def test_local_store_takes_precedence_over_vault(
+        self, store, resolver, monkeypatch
+    ):
+        """In local-dev, inline credentials stored in the local secret store
+        are resolved directly — DaprCredentialVault is never called."""
         import json
 
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "true")
         store.set("guid-abc", json.dumps({"host": "local.example.com", "port": 5432}))
         ref = legacy_credential_ref("guid-abc")
         # No Dapr mock needed — local store should return before Dapr is reached.
@@ -132,6 +135,61 @@ class TestGuidResolutionPath:
 
         assert raw["host"] == "local.example.com"
         assert raw["port"] == 5432
+
+    async def test_prod_bypasses_secret_store_and_uses_vault(
+        self, store, resolver, monkeypatch
+    ):
+        """In prod (no ATLAN_LOCAL_DEVELOPMENT) the resolver MUST NOT call
+        secret_store.get — it goes straight to DaprCredentialVault so the
+        S3+Vault merge runs. Regression test for the partial-creds bug where
+        Vault returns only secrets and the resolver short-circuited, missing
+        host/port from the S3 config.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        monkeypatch.delenv("ATLAN_LOCAL_DEVELOPMENT", raising=False)
+
+        # Seed the secret store with a "partial" blob (what Dapr/Vault would
+        # actually return) — if the resolver reads this it'll lose host/port.
+        store.set(
+            "prod-guid",
+            json.dumps({"username": "u", "password": "p", "extra": {}}),
+        )
+        store_get_spy = AsyncMock(wraps=store.get)
+        store.get = store_get_spy  # type: ignore[method-assign]
+
+        full_merged = {
+            "host": "h.example.com",
+            "port": 443,
+            "username": "u",
+            "password": "p",
+            "extra": {},
+        }
+        p_vault, p_dapr, mock_vault = _make_vault_patches(vault_return=full_merged)
+        with p_vault, p_dapr:
+            ref = legacy_credential_ref("prod-guid")
+            raw = await resolver.resolve_raw(ref)
+
+        store_get_spy.assert_not_called()
+        mock_vault.get_credentials.assert_awaited_once_with("prod-guid")
+        assert raw["host"] == "h.example.com"
+        assert raw["port"] == 443
+
+    async def test_local_falls_through_to_vault_on_secret_store_miss(
+        self, store, resolver, monkeypatch
+    ):
+        """In local-dev, if the secret store has no entry for the GUID, the
+        resolver falls through to DaprCredentialVault."""
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "true")
+
+        expected = {"host": "vault.example.com", "port": 5432}
+        p_vault, p_dapr, mock_vault = _make_vault_patches(vault_return=expected)
+        with p_vault, p_dapr:
+            ref = legacy_credential_ref("missing-guid")
+            raw = await resolver.resolve_raw(ref)
+
+        assert raw == expected
+        mock_vault.get_credentials.assert_awaited_once_with("missing-guid")
 
     async def test_get_credentials_receives_string_not_dict(self, store, resolver):
         """Regression: resolver must pass the GUID as a plain string, not a dict."""

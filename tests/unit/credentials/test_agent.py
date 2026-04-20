@@ -690,13 +690,17 @@ class TestCredentialResolverAgentBranch:
         }
         assert resolved["extra"]["database"] == "real_pg_db"
 
-    async def test_resolve_raw_legacy_guid_ref_still_works(self) -> None:
+    async def test_resolve_raw_legacy_guid_ref_still_works(
+        self, monkeypatch
+    ) -> None:
         """Legacy GUID refs continue to resolve via the local secret
-        store path — agent branch is additive, not a replacement.
+        store path (local-dev only) — agent branch is additive, not a
+        replacement.
         """
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver
 
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "true")
         store = _store_with(**{"my-guid-123": _bundle(username="real_user", host="h")})
         ref = CredentialRef.from_workflow_args(
             {"extraction_method": "direct", "credential_guid": "my-guid-123"}

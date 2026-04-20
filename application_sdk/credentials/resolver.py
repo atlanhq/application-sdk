@@ -178,15 +178,19 @@ class CredentialResolver:
     async def _resolve_by_guid(self, ref: "CredentialRef") -> dict[str, Any]:
         """Resolve credentials by GUID.
 
-        Checks the local secret store first (covers in-process credential
-        injection from handler/service.py in combined-mode and local dev), then
-        falls back to DaprCredentialVault for production platform-issued GUIDs.
-        """
+        In local-dev only, checks two in-process stores first (state_store
+        under ``cred:{guid}`` — where handler/service.py writes today — and
+        secret_store under ``{guid}`` — where older SDK versions wrote).
+        Falls back to :class:`DaprCredentialVault` for platform-issued GUIDs,
+        which merges the S3 non-secret config with the Vault secret blob.
 
-        # State store check — handler/service.py stores inline credentials here
-        # under the "cred:" prefix + UUID that becomes ref.name / ref.credential_guid.
-        # Guarded to local-dev only (symmetric with the write guard in handler/service.py)
-        # to avoid unnecessary state store round-trips in production.
+        Both in-process checks MUST remain local-only: in production the
+        secret_store is Dapr/Vault-backed and returns the *secret-only*
+        portion of the credential (``username``/``password``/``extra``).
+        Short-circuiting on that bypasses the DaprCredentialVault merge and
+        produces a credential dict missing non-secret fields such as ``host``
+        and ``port`` — breaking downstream clients.
+        """
 
         from application_sdk.infrastructure.context import get_infrastructure
 
@@ -195,41 +199,47 @@ class CredentialResolver:
             "1",
         )
         infra = get_infrastructure()
-        if is_local_dev and infra and infra.state_store:
+
+        if is_local_dev:
+            # 1. State store — current SDK handler write path. Credentials
+            # written by POST /workflows/v1/start when local dev is enabled.
+            if infra and infra.state_store:
+                try:
+                    data = await infra.state_store.load(f"cred:{ref.name}")
+                    if data is not None:
+                        return data
+                except Exception:
+                    logger.debug(
+                        "State store lookup failed for GUID %r; trying secret store",
+                        ref.name,
+                        exc_info=True,
+                    )
+
+            # 2. Secret store — legacy SDK handler write path / explicit
+            # InMemorySecretStore injection in combined-mode tests. Local-only
+            # to avoid hitting Dapr/Vault in production (see docstring).
+            from application_sdk.infrastructure.secrets import SecretNotFoundError
+
             try:
-                data = await infra.state_store.load(f"cred:{ref.name}")
-                if data is not None:
-                    return data
+                raw = await self._secret_store.get(ref.name)
+                data_parsed: dict[str, Any] = json.loads(raw)
+                return data_parsed
+            except SecretNotFoundError:
+                pass
+            except json.JSONDecodeError:
+                logger.debug(
+                    "Local secret_store value for GUID %r is not valid JSON; trying Dapr",
+                    ref.name,
+                )
             except Exception:
                 logger.debug(
-                    "State store lookup failed for GUID %r; trying secret store",
+                    "Local secret_store lookup failed for GUID %r; trying Dapr",
                     ref.name,
                     exc_info=True,
                 )
 
-        # Secret store check (backward compat) — handler/service.py previously
-        # stored inline credentials here under the same UUID.
-        from application_sdk.infrastructure.secrets import SecretNotFoundError
-
-        try:
-            raw = await self._secret_store.get(ref.name)
-            data_parsed: dict[str, Any] = json.loads(raw)
-            return data_parsed
-        except SecretNotFoundError:
-            pass
-        except json.JSONDecodeError:
-            logger.debug(
-                "Local store value for GUID %r is not valid JSON; trying Dapr",
-                ref.name,
-            )
-        except Exception:
-            logger.debug(
-                "Local store lookup failed for GUID %r; trying Dapr",
-                ref.name,
-                exc_info=True,
-            )
-
-        # Fall back to DaprCredentialVault for platform-issued GUIDs.
+        # Fall back to DaprCredentialVault for platform-issued GUIDs. This
+        # always runs in production and as the final fallback in local-dev.
         from application_sdk.credentials.errors import CredentialNotFoundError
         from application_sdk.infrastructure import AsyncDaprClient, DaprCredentialVault
 
