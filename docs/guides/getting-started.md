@@ -58,6 +58,11 @@ After setting up your development environment, you can create your first applica
    uv run pre-commit install
    ```
 
+3. Verify Dapr components are present:
+   ```bash
+   uv run poe download-components
+   ```
+
 ### Running the Example
 
 1. Start the dependencies (in a separate terminal):
