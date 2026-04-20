@@ -75,29 +75,19 @@ jobs:
               "registry.atlan.com/public/app-runtime-base:${VERSION}" \
               "registry.atlan.com/public/app-runtime-base:${MINOR}" \
               "registry.atlan.com/public/app-runtime-base:${MAJOR}" \
-              "registry.atlan.com/public/app-runtime-base:sha-${SHA}" \
-              "registry.atlan.com/public/application-sdk:latest" \
-              "registry.atlan.com/public/application-sdk:${VERSION}" \
-              "registry.atlan.com/public/application-sdk:${MINOR}" \
-              "registry.atlan.com/public/application-sdk:${MAJOR}" \
-              "registry.atlan.com/public/application-sdk:sha-${SHA}" > /tmp/tags.txt
+              "registry.atlan.com/public/app-runtime-base:sha-${SHA}" > /tmp/tags.txt
           elif [ "$EVENT_NAME" = "release" ]; then
             # Pre-release (rc/alpha/beta): exact version + sha only — no aliases that could
             # cause :latest or major/minor tags to point at a non-stable image
             printf '%s\n' \
               "registry.atlan.com/public/app-runtime-base:${VERSION}" \
-              "registry.atlan.com/public/app-runtime-base:sha-${SHA}" \
-              "registry.atlan.com/public/application-sdk:${VERSION}" \
-              "registry.atlan.com/public/application-sdk:sha-${SHA}" > /tmp/tags.txt
+              "registry.atlan.com/public/app-runtime-base:sha-${SHA}" > /tmp/tags.txt
           else
             # workflow_dispatch: prefix-scoped tags for branch/dev builds
             printf '%s\n' \
               "registry.atlan.com/public/app-runtime-base:${PREFIX}-latest" \
               "registry.atlan.com/public/app-runtime-base:${PREFIX}-${VERSION}" \
-              "registry.atlan.com/public/app-runtime-base:sha-${SHA}" \
-              "registry.atlan.com/public/application-sdk:${PREFIX}-latest" \
-              "registry.atlan.com/public/application-sdk:${PREFIX}-${VERSION}" \
-              "registry.atlan.com/public/application-sdk:sha-${SHA}" > /tmp/tags.txt
+              "registry.atlan.com/public/app-runtime-base:sha-${SHA}" > /tmp/tags.txt
           fi
           DELIM=$(openssl rand -hex 8)
           { echo "value<<${DELIM}"; cat /tmp/tags.txt; echo "${DELIM}"; } >> "$GITHUB_OUTPUT"
