@@ -99,8 +99,9 @@ jobs:
               base_entries = {k: v for k, v in base.items() if not k.startswith("_")}
               base_ids = set(base_entries.keys())
               allowlist.update(base_entries)
+              print(f"Base allowlist loaded: {len(base_ids)} IDs")
           except FileNotFoundError:
-              print("Warning: base allowlist not found")
+              print("WARNING: base allowlist NOT found at _sdk/.security/base-allowlist.json")
           except json.JSONDecodeError as e:
               print(f"Warning: base allowlist invalid JSON: {e}")
 
@@ -208,7 +209,7 @@ jobs:
                                   "installed": vuln.get("version", ""),
                                   "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
                                   "scanner": "snyk",
-                                  "source_type": "app",
+                                  "source_type": "base_image" if vid in base_ids else "app",
                                   "status": status,
                               })
           except FileNotFoundError:
@@ -249,9 +250,13 @@ jobs:
               import shutil
               shutil.copy(html_src, "/tmp/dashboard-deploy/index.html")
 
+          app_count = sum(1 for v in unique if v['source_type'] == 'app')
+          base_count = sum(1 for v in unique if v['source_type'] == 'base_image')
           print(f"Dashboard data generated: {len(unique)} vulnerabilities for {repo_name}")
           print(f"  CRITICAL: {repo_data['critical']}")
           print(f"  HIGH: {repo_data['high']}")
+          print(f"  Base image: {base_count}")
+          print(f"  App dep: {app_count}")
           print(f"  Allowlisted: {repo_data['allowlisted']}")
           print(f"  New: {repo_data['new']}")
           PYEOF
