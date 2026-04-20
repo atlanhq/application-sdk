@@ -1,0 +1,126 @@
+# Merge Queue — auto-update and auto-merge approved PRs
+#
+# When a PR merges to main, this workflow finds the next eligible PR
+# (approved + auto-merge enabled or labeled), updates its branch, and
+# lets GitHub's native auto-merge handle the final squash once CI passes.
+#
+# Processes one PR at a time (FIFO) to avoid conflicts.
+# Replaces the old branch-keeper workflow.
+
+name: Merge Queue
+
+on:
+  push:
+    branches: [main]
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: merge-queue
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  process-queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Process merge queue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Find all open PRs targeting main, oldest first
+            const { data: prs } = await github.rest.pulls.list({
+              owner, repo,
+              state: 'open',
+              base: 'main',
+              sort: 'created',
+              direction: 'asc',
+            });
+
+            for (const pr of prs) {
+              // Check eligibility: auto-merge enabled OR approved + labeled
+              const autoMergeEnabled = pr.auto_merge !== null;
+              const hasAutoMergeLabel = pr.labels.some(l =>
+                l.name === 'auto-merge' || l.name === 'sdk-review-approved'
+              );
+
+              // Check for approval
+              const { data: reviews } = await github.rest.pulls.listReviews({
+                owner, repo, pull_number: pr.number,
+              });
+              const approved = reviews.some(r => r.state === 'APPROVED');
+
+              const eligible = approved && (autoMergeEnabled || hasAutoMergeLabel);
+              if (!eligible) continue;
+
+              console.log(`PR #${pr.number}: eligible for merge queue`);
+
+              // Get fresh PR data for mergeable state
+              const { data: prData } = await github.rest.pulls.get({
+                owner, repo, pull_number: pr.number,
+              });
+
+              if (prData.mergeable_state === 'behind') {
+                try {
+                  await github.rest.pulls.updateBranch({
+                    owner, repo, pull_number: pr.number,
+                  });
+                  console.log(`PR #${pr.number}: branch updated, waiting for CI`);
+                  // Stop here — CI needs to run. GitHub native auto-merge
+                  // (if enabled) will merge once CI passes. The next push
+                  // to main re-triggers this workflow for the next PR.
+                  return;
+                } catch (e) {
+                  if (e.status === 422) {
+                    // Conflicts — label and skip
+                    try {
+                      await github.rest.issues.addLabels({
+                        owner, repo, issue_number: pr.number,
+                        labels: ['needs-rebase'],
+                      });
+                    } catch (_) {}
+                    await github.rest.issues.createComment({
+                      owner, repo, issue_number: pr.number,
+                      body: 'Merge queue: branch has conflicts after base update. Manual rebase needed, or comment `@sdk-review` to re-trigger review with conflict resolution.',
+                    });
+                    console.log(`PR #${pr.number}: conflicts, labeled needs-rebase`);
+                    continue;
+                  }
+                  throw e;
+                }
+              }
+
+              if (prData.mergeable_state === 'clean') {
+                // If auto-merge is enabled, GitHub handles it.
+                // If only labeled (no native auto-merge), merge now.
+                if (!autoMergeEnabled) {
+                  try {
+                    await github.rest.pulls.merge({
+                      owner, repo, pull_number: pr.number,
+                      merge_method: 'squash',
+                    });
+                    console.log(`PR #${pr.number}: merged via merge queue`);
+                  } catch (e) {
+                    console.log(`PR #${pr.number}: merge failed: ${e.message}`);
+                    continue;
+                  }
+                } else {
+                  console.log(`PR #${pr.number}: clean + auto-merge enabled, GitHub will merge`);
+                }
+                return;
+              }
+
+              if (prData.mergeable_state === 'blocked' || prData.mergeable_state === 'unstable') {
+                console.log(`PR #${pr.number}: ${prData.mergeable_state}, skipping`);
+                continue;
+              }
+            }
+
+            console.log('No eligible PRs to process');
