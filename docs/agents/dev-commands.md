@@ -32,6 +32,53 @@ uv run pre-commit install
 - `F541`: Remove `f` prefix from strings without placeholders
 - Unicode characters (emojis like `✓`, `❌`) fail on Windows - use ASCII alternatives
 
+## Starting a Workflow Locally (curl)
+
+Local dev uses the same credential flow as production. Credentials are split
+into non-sensitive config (stored in object storage) and sensitive secrets
+(stored in Dapr secret store). The workflow receives only a `credential_guid`
+pointer and resolves the full credential at runtime via `DaprCredentialVault`.
+
+**Step 1: Write non-sensitive credential config to object storage**
+
+```bash
+CREDENTIAL_GUID="my-test-guid-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+
+curl -X POST "http://localhost:8000/workflows/v1/config/${CREDENTIAL_GUID}?type=credentials" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "host": "your-database-host.example.com",
+    "port": "5432",
+    "authType": "basic",
+    "connectorConfigName": "postgres",
+    "credentialSource": "direct"
+  }'
+```
+
+**Step 2: Start the workflow with credential_guid + workflow params**
+
+```bash
+curl -X POST "http://localhost:8000/workflows/v1/start" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"credential_guid\": \"${CREDENTIAL_GUID}\",
+    \"connection\": {
+      \"connection_name\": \"test-connection\",
+      \"connection_qualified_name\": \"default/postgres/$(date +%s)\"
+    },
+    \"include_filter\": \"\",
+    \"exclude_filter\": \"\"
+  }"
+```
+
+Do **not** send raw credentials (username, password) in the `/start` body.
+They will be stripped and ignored. Secrets must be provisioned in the Dapr
+secret store (Kubernetes secrets in prod, local Dapr components in dev).
+
+For Claude Code agents invoking apps locally: always use this two-step flow.
+Generate a UUID for `credential_guid`, POST the non-sensitive config to
+`/config`, then POST `/start` with the guid.
+
 ## Testing
 
 ```bash

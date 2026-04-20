@@ -105,29 +105,6 @@ def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
     return pairs
 
 
-def _pairs_to_flat(pairs: list[dict[str, str]]) -> dict[str, Any]:
-    """Convert v3 [{key, value}] pairs to a flat credential dict.
-
-    Reverse of ``_flatten_to_pairs``.  ``extra.*`` keys are nested under
-    an ``extra`` dict so ``parse_credentials_extra()`` works correctly.
-
-    Note: all values remain strings — no type coercion is performed.
-    A round-trip through ``_flatten_to_pairs`` then ``_pairs_to_flat``
-    will stringify non-string values (e.g. ``int 5432`` → ``str "5432"``).
-    """
-    flat: dict[str, Any] = {}
-    extra: dict[str, Any] = {}
-    for p in pairs:
-        key, value = p["key"], p["value"]
-        if key.startswith("extra."):
-            extra[key[len("extra.") :]] = value
-        else:
-            flat[key] = value
-    if extra:
-        flat["extra"] = extra
-    return flat
-
-
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
 def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize v2 credential formats to v3 list[{key, value}] format.
@@ -392,6 +369,10 @@ def create_app_handler_service(
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
     frontend_assets_path: str = "app/generated/frontend/static",
+    # Deprecated: state_store is no longer used. Credential resolution now
+    # goes through DaprCredentialVault exclusively. Passing this parameter
+    # emits a DeprecationWarning. Will be removed in v3.2.0.
+    **kwargs: Any,
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
 
@@ -416,6 +397,15 @@ def create_app_handler_service(
         Configured FastAPI application.
     """
     global _workflow_config, _secret_store, _storage
+
+    if "state_store" in kwargs:
+        warnings.warn(
+            "state_store parameter is deprecated and ignored. "
+            "Credential resolution now uses DaprCredentialVault exclusively. "
+            "Will be removed in v3.2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     _secret_store = secret_store
     _storage = storage
@@ -762,6 +752,7 @@ def create_app_handler_service(
                 # Temporal history. Credentials are resolved at runtime
                 # via DaprCredentialVault using credential_guid.
                 del body["credentials"]
+                logger.debug("Stripped inline credentials from /start request body")
 
             input_data = input_type.model_validate(body)
 
