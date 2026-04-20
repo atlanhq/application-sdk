@@ -283,14 +283,11 @@ async def upload(
             from application_sdk.storage.errors import StorageError
 
             logger.warning(
-                "upload: %d/%d uploads failed under %s",
+                "upload: %d/%d uploads failed",
                 len(errors),
                 len(files),
-                prefix,
             )
-            raise StorageError(
-                f"{len(errors)} upload(s) failed under prefix '{prefix}'"
-            ) from errors[0][1]
+            raise StorageError(f"{len(errors)} upload(s) failed") from errors[0][1]
 
         store_prefix = (prefix.rstrip("/") + "/") if prefix else ""
         reason = "uploaded" if transferred_count > 0 else "skipped:hash_match"
@@ -417,14 +414,11 @@ async def download(
             from application_sdk.storage.errors import StorageError
 
             logger.warning(
-                "download: %d/%d downloads failed under %s",
+                "download: %d/%d downloads failed",
                 len(errors),
                 len(data_keys),
-                prefix,
             )
-            raise StorageError(
-                f"{len(errors)} download(s) failed under prefix '{prefix}'"
-            ) from errors[0][1]
+            raise StorageError(f"{len(errors)} download(s) failed") from errors[0][1]
 
         reason = "downloaded" if transferred_count > 0 else "skipped:hash_match"
         ref = FileReference(
