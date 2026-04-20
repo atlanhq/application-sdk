@@ -18,7 +18,9 @@ class PolarisCatalogClient:
 
     def __init__(self, catalog: "Catalog", namespace: str, table_name: str) -> None:
         self._catalog = catalog
-        self._identifier = (namespace, table_name)
+        # Support nested namespaces like "apps.databricks" → ("apps", "databricks", table)
+        ns_parts = tuple(namespace.split("."))
+        self._identifier = (*ns_parts, table_name)
 
     def load_table(self) -> "Table":
         return self._catalog.load_table(self._identifier)
