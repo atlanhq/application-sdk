@@ -121,16 +121,17 @@ nav:
       - DeepWiki MCP: standards/deepwiki.md
       - Review Checklist: standards/review-checklist.md
   - Architecture Decisions:
-      - Per-App Handlers: adr/0001-per-app-handlers.md
-      - Per-App Workers: adr/0002-per-app-workers.md
-      - Per-App Observability: adr/0003-per-app-observability.md
-      - Build-Time Type Safety: adr/0004-build-time-type-safety.md
-      - Infrastructure Abstraction: adr/0005-infrastructure-abstraction.md
-      - Schema-Driven Contracts: adr/0006-schema-driven-contracts.md
-      - Apps as Coordination Unit: adr/0007-apps-as-coordination-unit.md
-      - Payload-Safe Bounded Types: adr/0008-payload-safe-bounded-types.md
-      - Separate Handler/Worker Deployments: adr/0009-separate-handler-worker-deployments.md
-      - Async-First Blocking Code: adr/0010-async-first-blocking-code.md
-      - Logging Level Guidelines: adr/0011-logging-level-guidelines.md
+      - adr/index.md
+      - adr/0001-per-app-handlers.md
+      - adr/0002-per-app-workers.md
+      - adr/0003-per-app-observability.md
+      - adr/0004-build-time-type-safety.md
+      - adr/0005-infrastructure-abstraction.md
+      - adr/0006-schema-driven-contracts.md
+      - adr/0007-apps-as-coordination-unit.md
+      - adr/0008-payload-safe-bounded-types.md
+      - adr/0009-separate-handler-worker-deployments.md
+      - adr/0010-async-first-blocking-code.md
+      - adr/0011-logging-level-guidelines.md
   - Configuration Reference: configuration.md
   - API Reference: https://k.atlan.dev/application-sdk/main/api
