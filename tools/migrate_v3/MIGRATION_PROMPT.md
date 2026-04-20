@@ -3,14 +3,16 @@
 > **Scope**: This document guides an AI coding agent through the *structural*
 > parts of the v2 → v3 upgrade (Categories B and C).
 >
-> **Pre-condition — SDK dependency**: Until v3 is published to PyPI, the
-> connector must depend on `atlan-application-sdk` from the `main`
-> branch.  If the connector's `pyproject.toml` still references a v2 PyPI
-> release, update it before doing anything else:
+> **Pre-condition — SDK dependency**: `atlan-application-sdk` v3.0.0 is on
+> PyPI. The connector's `pyproject.toml` should pin it via a normal version
+> range, and any leftover `[tool.uv.sources]` git override from v3
+> development should be removed:
 >
 > ```toml
-> [tool.uv.sources]
-> atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "main" }
+> [project]
+> dependencies = [
+>     "atlan-application-sdk>=3.0.0,<4.0.0",
+> ]
 > ```
 >
 > **Pre-condition — import rewriter**: Run the import rewriter first.  All
