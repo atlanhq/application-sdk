@@ -108,7 +108,20 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
         max_locks: int,
         ttl_seconds: int,
     ) -> workflow.ActivityHandle[Any]:
-        """Execute activity with distributed lock orchestration."""
+        """Execute activity with distributed lock orchestration.
+
+        Return-type contract: This method intentionally awaits the activity handle
+        and returns the raw result rather than the handle itself. This is necessary
+        because the lock must be held for the full duration of the activity — if we
+        returned the handle immediately, the ``finally`` block would release the lock
+        before the activity finishes, defeating mutual exclusion.
+
+        This is safe because the lock interceptor is the outermost interceptor in
+        the chain. No downstream interceptor or workflow code depends on receiving
+        an ``ActivityHandle`` back from this method; callers always ``await`` the
+        return value, so they observe no difference between an awaited result and
+        an unawaited handle.
+        """
         owner_id = f"{APPLICATION_NAME}:{workflow.info().run_id}"
         lock_result = None
 
