@@ -12,6 +12,6 @@ jobs:
     # This 'name' is what appears in the pull request's check list.
     name: Snyk Scan Results
     # Calls the reusable workflow from your central .github repository.
-    uses: atlanhq/.github/.github/workflows/reusable-verify-snyk-scans.yml@main
+    uses: atlanhq/.github/.github/workflows/reusable-verify-snyk-scans.yml@679a881895053cd1083eeb1fc847fc0887084fab # pin to SHA instead of @main
     # Allows the reusable workflow to use the GITHUB_TOKEN from this repository.
     secrets: inherit
