@@ -209,7 +209,7 @@ jobs:
                                   "installed": vuln.get("version", ""),
                                   "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
                                   "scanner": "snyk",
-                                  "source_type": "app",
+                                  "source_type": "base_image" if vid in base_ids else "app",
                                   "status": status,
                               })
           except FileNotFoundError:
