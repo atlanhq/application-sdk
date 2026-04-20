@@ -140,9 +140,6 @@ docs = [
 ]
 
 [tool.poe.tasks]
-# Contract generation
-generate.shell = "cd contract && pkl eval -m generated app.pkl && mkdir -p ../app/contracts && mv generated/input.py ../app/contracts/_input.py"
-
 download-components.shell = "ls -l components/*.yaml"
 # Dapr and Temporal service tasks
 start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
@@ -152,7 +149,7 @@ start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app
 
 start-temporal = "temporal server start-dev --db-filename ./temporal.db"
 start-deps.shell = "poe start-dapr & poe start-temporal &"
-stop-deps.shell = "lsof -ti:3000,3500,7233,50001 | xargs kill -9 2>/dev/null || true"
+stop-deps.shell = "lsof -ti:3000,3500,7233,8233,50001 | xargs kill -9 2>/dev/null || true"
 test-integration.shell = "temporal server start-dev --db-filename /tmp/temporal-integ.db &>/tmp/temporal-integ.log & sleep 3 && uv run pytest tests/integration/ -m integration -v --timeout=120; EXIT=$?; kill %1 2>/dev/null; exit $EXIT"
 
 # API docs
