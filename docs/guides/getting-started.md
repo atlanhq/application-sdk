@@ -58,11 +58,6 @@ After setting up your development environment, you can create your first applica
    uv run pre-commit install
    ```
 
-3. Download required components:
-   ```bash
-   uv run poe download-components
-   ```
-
 ### Running the Example
 
 1. Start the dependencies (in a separate terminal):
@@ -117,4 +112,4 @@ After successfully running your first application, explore these resources to le
 - Explore our [SQL Application Guide](./sql-application-guide.md) for building data applications
 - Learn about our [Architecture](./architecture.md)
 - Review our [Best Practices](./best-practices.md)
-- Check out our [Test Framework](./test-framework.md) for testing your applications
+- Check out our [Integration Testing Guide](./integration-testing.md) for testing your applications
