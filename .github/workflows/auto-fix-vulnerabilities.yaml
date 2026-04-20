@@ -247,6 +247,12 @@ jobs:
                               insert_idx = i
                               break
                       if insert_idx is not None:
+                          # Add trailing comma to the last dep if missing
+                          prev = insert_idx - 1
+                          while prev >= 0 and not lines[prev].strip():
+                              prev -= 1
+                          if prev >= 0 and lines[prev].strip().endswith('"') and not lines[prev].strip().endswith(','):
+                              lines[prev] = lines[prev].rstrip() + ','
                           lines.insert(insert_idx, f'    "{pkg}>={min_version}",')
                           with open("pyproject.toml", "w") as f:
                               f.write("\n".join(lines))
