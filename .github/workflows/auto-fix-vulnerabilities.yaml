@@ -202,11 +202,16 @@ jobs:
           import re
 
           def pin_in_pyproject(pkg, min_version):
-              """Update pyproject.toml to pin minimum version for the package."""
+              """Update or add minimum version pin in pyproject.toml.
+
+              If the package exists in dependencies, update its version constraint.
+              If it's a transitive dep not listed, add it with >=min_version.
+              """
               try:
                   with open("pyproject.toml") as f:
                       content = f.read()
-                  # Match patterns like: "pkg>=1.0.0", "pkg>=1.0", "pkg", "pkg==1.0.0"
+
+                  # Try to update existing entry
                   patterns = [
                       (rf'("{pkg})(>=[\d.]+)"', f'"\\1>={min_version}"'),
                       (rf'("{pkg})(==[\d.]+)"', f'"\\1>={min_version}"'),
@@ -219,6 +224,17 @@ jobs:
                           content = new_content
                           updated = True
                           break
+
+                  # If not found, add as new dependency (transitive dep)
+                  if not updated:
+                      dep_line = f'    "{pkg}>={min_version}",'
+                      # Find the end of the dependencies list and insert before the closing ]
+                      dep_match = re.search(r'(dependencies\s*=\s*\[.*?)(^\])', content, re.MULTILINE | re.DOTALL)
+                      if dep_match:
+                          insert_pos = dep_match.start(2)
+                          content = content[:insert_pos] + dep_line + "\n" + content[insert_pos:]
+                          updated = True
+
                   if updated:
                       with open("pyproject.toml", "w") as f:
                           f.write(content)
