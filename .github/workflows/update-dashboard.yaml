@@ -90,12 +90,15 @@ jobs:
 
           repo_name = os.environ.get("GITHUB_REPOSITORY", "unknown")
 
-          # Merge base + repo allowlists
+          # Load base allowlist IDs (to determine source_type)
+          base_ids = set()
           allowlist = {}
           try:
               with open("_sdk/.security/base-allowlist.json") as f:
                   base = json.load(f)
-              allowlist.update({k: v for k, v in base.items() if not k.startswith("_")})
+              base_entries = {k: v for k, v in base.items() if not k.startswith("_")}
+              base_ids = set(base_entries.keys())
+              allowlist.update(base_entries)
           except FileNotFoundError:
               print("Warning: base allowlist not found")
           except json.JSONDecodeError as e:
@@ -131,6 +134,11 @@ jobs:
                               status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
                           else:
                               status = "new"
+                          # If CVE is in base allowlist, it's always base_image
+                          if vid in base_ids:
+                              src = "base_image"
+                          else:
+                              src = "app" if is_app else "base_image"
                           all_vulns.append({
                               "id": vid,
                               "severity": vuln.get("Severity", ""),
@@ -138,7 +146,7 @@ jobs:
                               "installed": vuln.get("InstalledVersion", ""),
                               "fixed": vuln.get("FixedVersion", ""),
                               "scanner": "trivy",
-                              "source_type": "app" if is_app else "base_image",
+                              "source_type": src,
                               "status": status,
                           })
           except FileNotFoundError:
@@ -168,6 +176,10 @@ jobs:
                               status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
                           else:
                               status = "new"
+                          if vid in base_ids:
+                              src = "base_image"
+                          else:
+                              src = "app" if is_app else "base_image"
                           all_vulns.append({
                               "id": vid,
                               "severity": vuln.get("severity", "").upper(),
@@ -175,7 +187,7 @@ jobs:
                               "installed": vuln.get("version", ""),
                               "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
                               "scanner": "snyk",
-                              "source_type": "app" if is_app else "base_image",
+                              "source_type": src,
                               "status": status,
                           })
 
