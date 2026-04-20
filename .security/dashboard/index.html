@@ -201,7 +201,7 @@ async function load(){
     }catch(e){document.getElementById('empty').style.display='block';document.getElementById('empty').textContent='No data yet.';}
 }
 
-function buildVM(){VM={};Object.keys(D.repos).forEach(repo=>{(D.repos[repo].vulnerabilities||[]).forEach(v=>{if(!VM[v.id])VM[v.id]={...v,repos:[repo],statuses:{}};else if(!VM[v.id].repos.includes(repo))VM[v.id].repos.push(repo);VM[v.id].statuses[repo]=v.status||'new';});});}
+function buildVM(){VM={};Object.keys(D.repos).forEach(repo=>{(D.repos[repo].vulnerabilities||[]).forEach(v=>{if(!VM[v.id]){VM[v.id]={...v,repos:[repo],statuses:{}};}else{if(!VM[v.id].repos.includes(repo))VM[v.id].repos.push(repo);if(v.source_type==='base_image')VM[v.id].source_type='base_image';}VM[v.id].statuses[repo]=v.status||'new';});});}
 
 function renderAll(){renderStats();renderOverview();renderRepos();renderTable();
     document.getElementById('lastUpdated').textContent='Updated '+(D.generated_at?new Date(D.generated_at).toLocaleString():'N/A');}
