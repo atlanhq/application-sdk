@@ -5,11 +5,11 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'Dockerfile'
-      - 'pyproject.toml'
-      - 'uv.lock'
-      - 'entrypoint.sh'
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'mkdocs.yml'
+      - '.github/**'
 
 permissions:
   contents: read
