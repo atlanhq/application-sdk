@@ -7,9 +7,10 @@ Most functions previously in this module have been moved to more logical homes:
 - CPU/threading → ``common.concurrency``
 """
 
+import base64
 import json
 import os
-from typing import Union
+from typing import Optional, Union
 
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
@@ -62,3 +63,69 @@ async def download_file_from_upload_response(
     )
 
     return local_path
+
+
+async def resolve_credential_file(
+    value: Optional[str],
+    filename: str,
+    dest_dir: str = "/tmp/credential_files",
+) -> Optional[str]:
+    """Resolve a credential file field value to a local file path.
+
+    Handles two input formats transparently, allowing customers to choose
+    how they provide sensitive files based on their organisation's security policy:
+
+    1. **Object-store reference** (file uploaded via UI):
+       ``{"key": "some/path", "rawName": "hiveadmin.keytab", "extension": ".keytab"}``
+       Downloads the binary from the Dapr-backed object store.
+
+    2. **Base64-encoded file content** (stored in customer's own secret store):
+       ``"BQIAAAABAAoASElWRS5MT0NBTA..."``
+       Decodes the binary and writes it directly to disk.
+       Used when the customer base64-encodes the file, stores it in their secret
+       store (AWS / Azure / GCP / K8s), and the SDK resolves the value via
+       ``SecretStore.get_credentials()`` + Dapr at activity runtime.
+
+    Args:
+        value:    Raw credential field value — either a JSON object-store reference
+                  or a raw base64-encoded string. Returns ``None`` if empty.
+        filename: Destination filename used for the base64 path
+                  (e.g. ``"keytab.keytab"``, ``"krb5.conf"``, ``"ca_cert.pem"``).
+                  Ignored for the object-store path (filename is derived from the key).
+        dest_dir: Directory to write or download the file into.
+
+    Returns:
+        Absolute path to the resolved file on disk, or ``None`` if ``value`` is
+        empty or resolution fails.
+    """
+    if not value:
+        return None
+
+    # Detect format: JSON object-store reference vs raw base64 string
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, dict) and ("key" in parsed or "fileKey" in parsed):
+            # Object-store reference — delegate to existing download utility
+            return await download_file_from_upload_response(value)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Base64-encoded file content — decode and write to disk
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        file_path = os.path.join(dest_dir, filename)
+        decoded_bytes = base64.b64decode(value.strip())
+        with open(file_path, "wb") as f:
+            f.write(decoded_bytes)
+        logger.info(
+            "Resolved credential file from base64 content",
+            extra={"path": file_path, "filename": filename},
+        )
+        return file_path
+    except Exception:
+        logger.error(
+            "Failed to resolve credential file from base64 content",
+            extra={"filename": filename},
+            exc_info=True,
+        )
+        return None
