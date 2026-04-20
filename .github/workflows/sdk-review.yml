@@ -1,0 +1,127 @@
+# SDK Review — dispatches to mothership rover-native sandbox
+#
+# Parses @sdk-review comments on PRs and POSTs to mothership's
+# pr-review dispatch endpoint with the sdk-reviewer snapshot.
+#
+# Commands:
+#   @sdk-review                       → Review only
+#   @sdk-review auto-complete         → Review + auto-fix loop
+#   @sdk-review challenge: <reason>   → Re-evaluate disputed findings
+#   @sdk-review override: <reason>    → Admin force-pass
+#   @sdk-review stop / cancel         → Cancel in-progress review
+
+name: SDK Review
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dispatch:
+    if: >-
+      github.event.issue.pull_request
+      && contains(github.event.comment.body, '@sdk-review')
+      && (
+        github.event.comment.author_association == 'OWNER'
+        || github.event.comment.author_association == 'MEMBER'
+        || github.event.comment.author_association == 'COLLABORATOR'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Parse command
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.comment.body.trim();
+            const commenter = context.payload.comment.user.login;
+            const prNumber = context.payload.issue.number;
+
+            let command = 'review';
+            let commandContext = '';
+
+            if (/\bstop\b/i.test(body) || /\bcancel\b/i.test(body)) {
+              command = 'stop';
+            } else if (/\bauto-complete\b/i.test(body) || /\bresolve all\b/i.test(body)) {
+              command = 'auto-complete';
+              const after = body.replace(/@sdk-review\s*(auto-complete|resolve all\s*issues?)\s*/i, '').trim();
+              if (after) commandContext = after;
+            } else if (/\bchallenge:\s*/i.test(body)) {
+              command = 'challenge';
+              commandContext = body.replace(/.*challenge:\s*/i, '').trim();
+            } else if (/\boverride:\s*/i.test(body)) {
+              command = 'override';
+              commandContext = body.replace(/.*override:\s*/i, '').trim();
+            } else {
+              const after = body.replace(/@sdk-review\s*/i, '').trim();
+              if (after) commandContext = after;
+            }
+
+            core.setOutput('command', command);
+            core.setOutput('context', commandContext);
+            core.setOutput('commenter', commenter);
+            core.setOutput('pr_number', String(prNumber));
+
+      - name: React to comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+
+      - name: Connect to VPN
+        uses: atlanhq/github-actions/globalprotect-connect-action@main
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Dispatch to mothership
+        env:
+          MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
+          HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          COMMAND: ${{ steps.parse.outputs.command }}
+          COMMAND_CONTEXT: ${{ steps.parse.outputs.context }}
+          COMMENTER: ${{ steps.parse.outputs.commenter }}
+        run: |
+          # Build JSON payload safely using jq
+          PAYLOAD=$(jq -n \
+            --arg pr_url "https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" \
+            --arg review_mode "standard" \
+            --arg snapshot "sdk-reviewer" \
+            --arg command "${COMMAND}" \
+            --arg command_context "${COMMAND_CONTEXT}" \
+            --arg commenter "${COMMENTER}" \
+            '{
+              pr_url: $pr_url,
+              review_mode: $review_mode,
+              pipeline: "rover",
+              snapshot: $snapshot,
+              command: $command,
+              command_context: $command_context,
+              commenter: $commenter
+            }')
+
+          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            -X POST "${MOTHERSHIP_URL}/api/pr-review/dispatch" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${HARNESS_TOKEN}" \
+            -d "$PAYLOAD")
+
+          echo "Dispatch status: $STATUS"
+          cat /tmp/response.json
+
+          if [ "$STATUS" -ge 400 ]; then
+            echo "::error::Dispatch failed with status $STATUS"
+            exit 1
+          fi
