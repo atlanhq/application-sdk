@@ -52,61 +52,71 @@ uv run poe download-components
 uv run poe start-deps
 ```
 
-### Step 4: Start the app
+### Step 4: Run the app with `run_dev_combined`
+
+Create a `run_dev.py` script (or add to your existing one):
+
+```python
+import asyncio
+from application_sdk.main import run_dev_combined
+from app.my_app import MyApp
+
+asyncio.run(
+    run_dev_combined(
+        MyApp,
+        credentials={
+            "host": "your-database-host.example.com",
+            "port": "5432",
+            "authType": "basic",
+            "username": "myuser",
+            "password": "mypassword",
+            "connectorConfigName": "my-connector",
+            "extra": {"database": "mydb"},
+        },
+        example_input={
+            "connection": {
+                "connection_name": "test-connection",
+                "connection_qualified_name": "default/my-app/1234",
+            },
+        },
+    )
+)
+```
+
+Then run:
 
 ```bash
+uv run python run_dev.py
+```
+
+This does everything automatically:
+1. Starts the handler + worker on port 8000
+2. Provisions credentials (splits sensitive/non-sensitive, same as prod)
+3. Starts the workflow with the provisioned `credential_guid`
+
+### Manual curl approach
+
+If you prefer to control each step, start the app without credentials
+and use curl:
+
+```bash
+# Start the app
 uv run python main.py
-```
 
-The app starts in combined mode (handler + worker). Handler listens on
-port 8000. At this point the app is running but no credentials are loaded
-yet — those are resolved lazily when a workflow runs.
-
-### Step 5: Provision credentials
-
-With the app running, provision your credentials. The utility sends
-them to the app, which splits sensitive from non-sensitive internally
-and stores them for runtime resolution.
-
-```bash
-uv run poe provision-credentials --body '{
-  "host": "your-database-host.example.com",
-  "port": "5432",
-  "authType": "basic",
-  "username": "myuser",
-  "password": "mypassword",
-  "connectorConfigName": "postgres",
-  "extra": {
-    "database": "mydb"
-  }
-}'
-# Returns: {"credential_guid": "a1b2c3d4..."}
-```
-
-Or from a file:
-
-```bash
-uv run poe provision-credentials --from-file creds.json
-```
-
-### Step 6: Start the workflow
-
-```bash
-curl -X POST "http://localhost:8000/workflows/v1/start" \
+# Provision credentials (app must be running)
+curl -s -X POST http://localhost:8000/dev/local-vault \
   -H "Content-Type: application/json" \
-  -d "{
-    \"credential_guid\": \"<GUID_FROM_STEP_5>\",
-    \"connection\": {
-      \"connection_name\": \"test-connection\",
-      \"connection_qualified_name\": \"default/postgres/$(date +%s)\"
-    },
-    \"include_filter\": \"\",
-    \"exclude_filter\": \"\"
-  }"
-```
+  -d '{"host": "localhost", "port": "5432", "authType": "basic",
+       "username": "myuser", "password": "mypassword",
+       "extra": {"database": "mydb"}}'
+# Returns: {"credential_guid": "..."}
 
-Do **not** send raw credentials in the `/start` body — they will be stripped.
-Credentials are resolved at runtime using the `credential_guid`.
+# Start the workflow
+curl -s -X POST http://localhost:8000/workflows/v1/start \
+  -H "Content-Type: application/json" \
+  -d '{"credential_guid": "<GUID_FROM_ABOVE>",
+       "connection": {"connection_name": "test", "connection_qualified_name": "default/app/1234"}}'
+```
 
 ## Testing
 
