@@ -356,6 +356,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Resolve triggering actor to email; fall back to GitHub username
+          GH_EMAIL=$(gh api "users/${GITHUB_ACTOR}" --jq '.email // empty' 2>/dev/null || true)
+          CREATED_BY="${GH_EMAIL:-${GITHUB_ACTOR}}"
+
           # Build JSON payload matching the CLI's registerInMarketplace format
           BODY=$(python3 - <<'PYEOF'
           import json, os
@@ -389,9 +393,9 @@ jobs:
           else:
               body["target_channel"] = os.environ.get("CHANNEL", "all") or "all"
 
-          actor = os.environ.get("GITHUB_ACTOR", "").strip()
-          if actor:
-              body["created_by"] = actor
+          created_by = os.environ.get("CREATED_BY", "").strip()
+          if created_by:
+              body["created_by"] = created_by
 
           print(json.dumps(body))
           PYEOF
