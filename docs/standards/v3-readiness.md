@@ -16,14 +16,14 @@ An app is **v3-ready** when every item below is either ✅ (done) or ➖ (not ap
 
 Each item corresponds to a `FAIL`/`WARN` rule in `tools/migrate_v3/check_migration.py`. Run the checker (see §5) and fix every `FAIL` before continuing.
 
-- [ ] **SDK version `3.0.0` or newer** — `pyproject.toml` must declare
+- [ ] **SDK pinned to `==3.0.0`** — `pyproject.toml` must pin the exact version (optionally with extras):
   ```toml
   [project]
   dependencies = [
-      "atlan-application-sdk>=3.0.0,<4.0.0",
+      "atlan-application-sdk[workflows]==3.0.0",
   ]
   ```
-  Resolved from PyPI — **no** `[tool.uv.sources]` git override pointing at a branch (e.g. `main`, `refactor-v3`). Verify with `uv tree | grep atlan-application-sdk` and confirm the resolved version is `3.0.0+`.
+  `[tool.uv.sources]` overrides **are allowed** (e.g. to resolve from a git ref or an internal mirror) — the constraint is on the resolved version, not the source. Verify with `uv tree | grep atlan-application-sdk` and confirm the resolved version is exactly `3.0.0`.
 - [ ] **No deprecated imports** — no `application_sdk.{application,worker,workflows,activities,handlers,services,interceptors,test_utils}` or `application_sdk.clients.{atlan,temporal,workflow}` anywhere (including tests). Rewrite with `python -m tools.migrate_v3.rewrite_imports`.
 - [ ] **App subclass** — exactly one class inherits from `App` (or a template: `SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor`, `SqlQueryExtractor`, `BaseMetadataExtractor`). Class-level `name: ClassVar[str]` is set.
 - [ ] **`@task` only** — no `@workflow.defn`, `@activity.defn`, `@auto_heartbeater` decorators. No `workflow.execute_activity_method()` calls. No `from temporalio import workflow / activity` in app code.
@@ -146,7 +146,7 @@ Paste this into the description of the PR that declares an app v3-ready. Reviewe
 ## v3-readiness sign-off (docs/standards/v3-readiness.md)
 
 ### App shape (§1)
-- [ ] `pyproject.toml` resolves `atlan-application-sdk>=3.0.0,<4.0.0` from PyPI, no git override (`uv tree` shows a 3.x resolution)
+- [ ] `pyproject.toml` pins `atlan-application-sdk[...]==3.0.0` (exact version); `uv tree` confirms the resolved version is `3.0.0` (any source allowed — `[tool.uv.sources]` OK)
 - [ ] `python -m tools.migrate_v3.check_migration` reports zero FAILs
 - [ ] One `App` subclass, `@task`-only, typed Input/Output at every boundary
 
