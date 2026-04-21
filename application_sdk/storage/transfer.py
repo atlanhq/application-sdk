@@ -249,16 +249,29 @@ async def upload(
         else:
             prefix = src.name
 
+        import asyncio
+
+        MAX_CONCURRENT_UPLOADS = 20
+        sem = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
+
         files = [p for p in src.rglob("*") if p.is_file()]
-        transferred_count = 0
+
+        async def _bounded_upload(file_path: Path, key: str) -> bool:
+            async with sem:
+                ok, _ = await _upload_one(
+                    resolved, file_path, key, skip_if_exists=skip_if_exists
+                )
+                return ok
+
+        keys = []
         for file_path in files:
             relative = str(file_path.relative_to(src)).replace(os.sep, "/")
-            key = f"{prefix}/{relative}" if prefix else relative
-            ok, _ = await _upload_one(
-                resolved, file_path, key, skip_if_exists=skip_if_exists
-            )
-            if ok:
-                transferred_count += 1
+            keys.append(f"{prefix}/{relative}" if prefix else relative)
+
+        results = await asyncio.gather(
+            *[_bounded_upload(fp, k) for fp, k in zip(files, keys)]
+        )
+        transferred_count = sum(1 for ok in results if ok)
 
         store_prefix = (prefix.rstrip("/") + "/") if prefix else ""
         reason = "uploaded" if transferred_count > 0 else "skipped:hash_match"
