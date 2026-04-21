@@ -753,44 +753,6 @@ jobs:
                  -f side="RIGHT"
                Max 15 inline comments, prioritize Critical > Important > Minor.
 
-            7b. AUTO-RESOLVE previously-flagged findings that are now fixed.
-
-                On a re-review (when verb is "Re-review"), fetch prior
-                inline review threads authored by github-actions[bot]:
-
-                  gh api graphql -f query='
-                    query($owner:String!,$name:String!,$num:Int!) {
-                      repository(owner:$owner, name:$name) {
-                        pullRequest(number:$num) {
-                          reviewThreads(first:100) {
-                            nodes { id isResolved
-                              comments(first:1) {
-                                nodes { author{login} path line body }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }' -F owner=atlanhq -F name=application-sdk -F num=${{ steps.pr.outputs.number }}
-
-                For each un-resolved thread whose comment author is
-                github-actions[bot], check whether the finding STILL
-                applies to the current code (read the file at that path
-                and line). If the finding has been addressed (code no
-                longer has the issue, or the line/file is gone), resolve
-                the thread:
-
-                  gh api graphql -f query='
-                    mutation($id:ID!) {
-                      resolveReviewThread(input:{threadId:$id}) {
-                        thread { id isResolved }
-                      }
-                    }' -F id=<thread id>
-
-                Do NOT resolve threads the author has explicitly
-                responded to arguing the finding is wrong — those go
-                through the `@sdk-review challenge:` flow.
-
             8. Severity rules (IMPORTANT — read carefully):
 
                Any finding that would FAIL a standard linter or pre-commit
@@ -1149,11 +1111,6 @@ jobs:
           # Clean up lingering labels
           gh pr edit "$PR" --remove-label "needs-human-review" 2>/dev/null || true
           gh pr edit "$PR" --remove-label "needs-rebase" 2>/dev/null || true
-
-          # Auto-resolve bot inline threads is disabled until
-          # ORG_PAT_GITHUB gets read:org scope. The GraphQL query
-          # for author.login requires it. Threads remain open on
-          # approval — cosmetic only, doesn't affect merge.
 
           # Final status on the (possibly updated) HEAD SHA
           NEW_SHA=$(gh pr view "$PR" --json headRefOid -q .headRefOid)
