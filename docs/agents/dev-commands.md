@@ -32,12 +32,41 @@ uv run pre-commit install
 - `F541`: Remove `f` prefix from strings without placeholders
 - Unicode characters (emojis like `✓`, `❌`) fail on Windows - use ASCII alternatives
 
-## Starting a Workflow Locally
+## Running Locally
 
-### Step 1: Provision credentials
+### Step 1: Install dependencies
 
-Give the utility your full credentials as JSON — it handles the rest and
-returns a `credential_guid` to use when starting the workflow.
+```bash
+uv sync
+```
+
+### Step 2: Download Dapr components (one-time)
+
+```bash
+uv run poe download-components
+```
+
+### Step 3: Start Dapr + Temporal
+
+```bash
+uv run poe start-deps
+```
+
+### Step 4: Start the app
+
+```bash
+uv run python main.py
+```
+
+The app starts in combined mode (handler + worker). Handler listens on
+port 8000. At this point the app is running but no credentials are loaded
+yet — those are resolved lazily when a workflow runs.
+
+### Step 5: Provision credentials
+
+With the app running, provision your credentials. The utility sends
+them to the app, which splits sensitive from non-sensitive internally
+and stores them for runtime resolution.
 
 ```bash
 uv run poe provision-credentials --body '{
@@ -60,13 +89,13 @@ Or from a file:
 uv run poe provision-credentials --from-file creds.json
 ```
 
-### Step 2: Start the workflow
+### Step 6: Start the workflow
 
 ```bash
 curl -X POST "http://localhost:8000/workflows/v1/start" \
   -H "Content-Type: application/json" \
   -d "{
-    \"credential_guid\": \"<GUID_FROM_STEP_1>\",
+    \"credential_guid\": \"<GUID_FROM_STEP_5>\",
     \"connection\": {
       \"connection_name\": \"test-connection\",
       \"connection_qualified_name\": \"default/postgres/$(date +%s)\"
