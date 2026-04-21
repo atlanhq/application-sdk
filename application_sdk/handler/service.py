@@ -1557,15 +1557,6 @@ def create_app_handler_service(
             )
         )
 
-    @app.post("/dev/local-vault/{guid}")
-    async def provision_local_vault_with_guid(
-        guid: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
-        request: Request,
-    ) -> JSONResponse:
-        """Provision credentials for local development with an explicit GUID."""
-        body: dict[str, Any] = await request.json()
-        return await _provision_local_vault(guid, body)
-
     @app.post("/dev/local-vault")
     async def provision_local_vault(request: Request) -> JSONResponse:
         """Provision credentials for local development (auto-generates GUID)."""
