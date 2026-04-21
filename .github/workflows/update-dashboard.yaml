@@ -283,4 +283,7 @@ jobs:
               "s3://kryptonite-store/${{ inputs.dashboard_path }}/index.html"
           fi
 
+          # Remove stale legacy data.json (replaced by per-repo files in repos/)
+          aws s3 rm "s3://kryptonite-store/${{ inputs.dashboard_path }}/data.json" 2>/dev/null || true
+
           echo "Dashboard updated at https://k.atlan.dev/${{ inputs.dashboard_path }}/"
