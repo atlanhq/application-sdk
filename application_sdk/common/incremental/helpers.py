@@ -237,26 +237,29 @@ async def download_s3_prefix_with_structure(
     # Normalize source prefix for path stripping
     source_prefix = s3_prefix.rstrip("/")
 
-    # Download each file with correct relative path
-    for file_path in file_list:
+    import asyncio
+
+    MAX_CONCURRENT_DOWNLOADS = 20
+    sem = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+
+    async def _download_one(file_path: str) -> None:
         # Strip source prefix to get relative path
         if file_path.startswith(source_prefix):
             relative_path = file_path[len(source_prefix) :].lstrip("/")
         else:
-            # If path doesn't start with prefix, use it as-is
             relative_path = file_path
 
-        # Build local destination path
         local_file_path = local_destination.joinpath(relative_path)
-
-        # Ensure parent directory exists
         local_file_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Download file from Object Store to local
-        await download_file(
-            key=file_path,
-            local_path=str(local_file_path),
-        )
+        async with sem:
+            await download_file(
+                key=file_path,
+                local_path=str(local_file_path),
+            )
+
+    # Download all files concurrently with bounded parallelism
+    await asyncio.gather(*[_download_one(fp) for fp in file_list])
 
 
 # =============================================================================
