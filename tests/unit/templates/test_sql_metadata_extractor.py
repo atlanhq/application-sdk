@@ -152,6 +152,65 @@ class TestTypedTaskInputs:
         assert inp.output_path == ""
 
 
+class TestExtractionInputAgentJsonValidation:
+    """Tests for _skip_agent_json_for_direct model validator."""
+
+    def test_direct_mode_nulls_invalid_agent_json(self) -> None:
+        """agent_json with placeholder values (port='port') is accepted in direct mode."""
+        import json
+
+        inp = ExtractionInput.model_validate(
+            {
+                "extraction_method": "direct",
+                "agent_json": json.dumps(
+                    {"host": "host", "port": "port", "agent-name": "test"}
+                ),
+                "credential_guid": "test-guid",
+            }
+        )
+        assert inp.agent_json is None
+        assert inp.credential_guid == "test-guid"
+
+    def test_agent_mode_validates_agent_json(self) -> None:
+        """agent_json is validated normally when extraction_method is agent."""
+        import json
+
+        inp = ExtractionInput.model_validate(
+            {
+                "extraction_method": "agent",
+                "agent_json": json.dumps(
+                    {
+                        "host": "db.example.com",
+                        "port": 5432,
+                        "agent-name": "my-agent",
+                        "secret-manager": "awssecretmanager",
+                        "auth-type": "basic",
+                    }
+                ),
+            }
+        )
+        assert inp.agent_json is not None
+        assert inp.agent_json.port == 5432
+
+    def test_empty_extraction_method_nulls_agent_json(self) -> None:
+        """Empty extraction_method (defaults to direct) also nulls agent_json."""
+        inp = ExtractionInput.model_validate(
+            {
+                "extraction_method": "",
+                "agent_json": '{"host": "host", "port": "port"}',
+                "credential_guid": "test-guid",
+            }
+        )
+        assert inp.agent_json is None
+
+    def test_no_agent_json_still_works(self) -> None:
+        """ExtractionInput without agent_json works for both direct and agent."""
+        inp = ExtractionInput.model_validate(
+            {"extraction_method": "direct", "credential_guid": "test-guid"}
+        )
+        assert inp.agent_json is None
+
+
 class TestSqlMetadataExtractorSubclass:
     """Tests for subclassing SqlMetadataExtractor."""
 

@@ -157,12 +157,19 @@ if __name__ == "__main__":
     asyncio.run(
         run_dev_combined(
             PostgresExtractor,
+            credentials={
+                "host": "localhost",
+                "port": "5432",
+                "authType": "basic",
+                "username": "your-username",
+                "password": "your-password",
+                "extra": {"database": "your-database"},
+            },
             example_input={
                 "connection": {
                     "connection_name": "test-connection",
                     "connection_qualified_name": "default/postgres/1728518400",
                 },
-                "credential_guid": "your-credential-guid",
             },
         )
     )

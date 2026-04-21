@@ -32,7 +32,6 @@ from application_sdk.handler.contracts import (
 from application_sdk.handler.service import (
     _flatten_to_pairs,
     _normalize_credentials,
-    _pairs_to_flat,
     _wrap_response,
     create_app_handler_service,
 )
@@ -1429,97 +1428,15 @@ class TestFlattenToPairs:
         assert "extra" not in creds
 
 
-class TestPairsToFlat:
-    """Tests for _pairs_to_flat (v3 list → flat dict)."""
+class TestStartCredentialStripping:
+    """Tests for credential stripping in /start handler.
 
-    def test_simple_keys(self) -> None:
-        pairs = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "username", "value": "admin"},
-        ]
-        result = _pairs_to_flat(pairs)
-        assert result == {"host": "db.example.com", "username": "admin"}
-
-    def test_extra_keys_nested(self) -> None:
-        pairs = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "extra.role", "value": "ACCOUNTADMIN"},
-            {"key": "extra.warehouse", "value": "MINER_WH"},
-        ]
-        result = _pairs_to_flat(pairs)
-        assert result["host"] == "db.example.com"
-        assert result["extra"] == {"role": "ACCOUNTADMIN", "warehouse": "MINER_WH"}
-        assert "extra.role" not in result
-        assert "extra.warehouse" not in result
-
-    def test_no_extra_keys(self) -> None:
-        pairs = [{"key": "host", "value": "db.example.com"}]
-        result = _pairs_to_flat(pairs)
-        assert "extra" not in result
-        assert result == {"host": "db.example.com"}
-
-    def test_empty_list(self) -> None:
-        assert _pairs_to_flat([]) == {}
-
-    def test_single_extra_key(self) -> None:
-        """A single extra.* key still produces a nested extra dict."""
-        pairs = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "extra.role", "value": "ADMIN"},
-        ]
-        result = _pairs_to_flat(pairs)
-        assert result == {"host": "db.example.com", "extra": {"role": "ADMIN"}}
-
-    def test_malformed_pair_raises_key_error(self) -> None:
-        """Pairs missing 'key' or 'value' raise KeyError."""
-        import pytest
-
-        with pytest.raises(KeyError):
-            _pairs_to_flat([{"key": "host"}])  # missing "value"
-        with pytest.raises(KeyError):
-            _pairs_to_flat([{"value": "db.example.com"}])  # missing "key"
-
-    def test_round_trip_with_flatten_to_pairs(self) -> None:
-        """_pairs_to_flat reverses _flatten_to_pairs for string values."""
-        original = {
-            "host": "snow.example.com",
-            "authType": "basic",
-            "username": "admin",
-            "password": "secret",
-            "extra": {
-                "role": "ACCOUNTADMIN",
-                "warehouse": "COMPUTE_WH",
-                "database": "PROD",
-            },
-        }
-        pairs = _flatten_to_pairs(
-            dict(original)
-        )  # dict() because _flatten_to_pairs pops extra
-        restored = _pairs_to_flat(pairs)
-        assert restored == original
-
-    def test_round_trip_lossy_for_non_string_values(self) -> None:
-        """Non-string values are stringified by _flatten_to_pairs and stay strings."""
-        original = {"host": "db.example.com", "port": 5432, "ssl": True}
-        pairs = _flatten_to_pairs(dict(original))
-        restored = _pairs_to_flat(pairs)
-        # Values are stringified — not equal to original types
-        assert restored["port"] == "5432"  # int → str
-        assert restored["ssl"] == "true"  # bool → str (json.dumps)
-        assert restored["host"] == "db.example.com"  # str stays str
-
-
-class TestStartCredentialPersistence:
-    """Tests for inline credential save in /start handler.
-
-    The /start endpoint needs Temporal, so we test the normalization +
-    MockStateStore interaction directly to verify the contract.
+    The /start endpoint strips credentials from the body before dispatching
+    to Temporal. No state store save or credential_guid injection occurs.
     """
 
-    async def test_normalize_then_store_v2_dict_credentials(self) -> None:
-        """V2 dict credentials are normalized to v3 list before storage."""
-        from application_sdk.testing.mocks import MockStateStore
-
+    def test_normalize_v2_dict_credentials(self) -> None:
+        """V2 dict credentials are normalized to v3 list format."""
         body = {
             "credentials": {
                 "host": "db.example.com",
@@ -1536,24 +1453,11 @@ class TestStartCredentialPersistence:
         keys = {item["key"] for item in body["credentials"]}
         assert "host" in keys
         assert "port" in keys
-
-        store = MockStateStore()
-        guid = "test-guid-123"
-        flat_creds = _pairs_to_flat(body["credentials"])
-        await store.save(f"cred:{guid}", flat_creds)
-
-        result = await store.load(f"cred:{guid}")
-        assert result is not None
-        assert result["host"] == "db.example.com"
-
-        # Verify other fields preserved
+        # Other fields preserved
         assert body["other_field"] == "kept"
-        assert "credentials" in body
 
-    async def test_normalize_then_store_v3_list_credentials(self) -> None:
+    def test_normalize_v3_list_credentials(self) -> None:
         """V3 list credentials pass through normalization unchanged."""
-        from application_sdk.testing.mocks import MockStateStore
-
         body = {
             "credentials": [
                 {"key": "host", "value": "db.example.com"},
@@ -1566,42 +1470,11 @@ class TestStartCredentialPersistence:
         assert isinstance(body["credentials"], list)
         assert len(body["credentials"]) == 2
 
-        store = MockStateStore()
-        guid = "test-guid-456"
-        flat_creds = _pairs_to_flat(body["credentials"])
-        await store.save(f"cred:{guid}", flat_creds)
-
-        result = await store.load(f"cred:{guid}")
-        assert result is not None
-        assert result["host"] == "db.example.com"
-
-    def test_no_credentials_skips_store(self) -> None:
-        """Body without credentials is not stored."""
+    def test_no_credentials_passthrough(self) -> None:
+        """Body without credentials passes through unchanged."""
         body = {"name": "test-workflow"}
         body = _normalize_credentials(body)
         assert "credentials" not in body or not body.get("credentials")
-
-    async def test_credential_resolver_reads_from_secret_store(self) -> None:
-        """CredentialResolver reads credentials from secret store."""
-        from application_sdk.credentials.ref import CredentialRef
-        from application_sdk.credentials.resolver import CredentialResolver
-        from application_sdk.testing.mocks import MockSecretStore
-
-        store = MockSecretStore()
-        creds = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "port", "value": "5432"},
-        ]
-        store.set("my-guid", json.dumps(creds))
-
-        resolver = CredentialResolver(secret_store=store)
-        ref = CredentialRef(name="my-guid", credential_type="basic")
-
-        result = await resolver.resolve_raw(ref)
-
-        assert isinstance(result, list)
-        assert result[0]["key"] == "host"
-        assert result[0]["value"] == "db.example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -1864,3 +1737,258 @@ class TestConfigMapsDeduplication:
             assert "real-config" in configmaps
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+
+# ---------------------------------------------------------------------------
+# Local vault credential provisioning tests
+# ---------------------------------------------------------------------------
+
+
+class TestProvisionLocalVault:
+    """Tests for POST /workflows/v1/dev/local-vault credential provisioning endpoint."""
+
+    def _make_local_vault_client(
+        self,
+        *,
+        deployment_name: str = "local",
+        local_environment: str = "local",
+        storage: object | None = None,
+    ) -> tuple[TestClient, dict[str, object]]:
+        """Create a TestClient with DEPLOYMENT_NAME and storage patched.
+
+        Returns (client, restore_dict) so the caller can restore module state.
+        """
+        from application_sdk.handler import service as svc_module
+
+        handler = _TestHandler()
+        app = create_app_handler_service(
+            handler, app_name="vault-test", storage=storage
+        )
+
+        original_dep = svc_module.DEPLOYMENT_NAME
+        original_local = svc_module.LOCAL_ENVIRONMENT
+        svc_module.DEPLOYMENT_NAME = deployment_name
+        svc_module.LOCAL_ENVIRONMENT = local_environment
+        client = TestClient(app, raise_server_exceptions=False)
+        restore = {
+            "dep": original_dep,
+            "local": original_local,
+            "module": svc_module,
+        }
+        return client, restore
+
+    def _restore(self, restore: dict[str, object]) -> None:
+        svc_module = restore["module"]
+        svc_module.DEPLOYMENT_NAME = restore["dep"]  # type: ignore[attr-defined]
+        svc_module.LOCAL_ENVIRONMENT = restore["local"]  # type: ignore[attr-defined]
+
+    def test_happy_path_returns_200_with_credential_guid(self, tmp_path: Path) -> None:
+        """POST full credential body returns 200 with credential_guid, writes secrets.json."""
+        import os
+
+        # storage=None means objectstore save is a no-op (returns False)
+        client, restore = self._make_local_vault_client(storage=None)
+
+        body = {
+            "username": "admin",
+            "password": "secret123",
+            "host": "db.example.com",
+            "port": 5432,
+            "extra": {"ssl": True},
+            "url": "jdbc:postgresql://db.example.com:5432",
+        }
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post("/workflows/v1/dev/local-vault", json=body)
+            finally:
+                os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            resp_body = response.json()
+            assert resp_body["success"] is True
+            guid = resp_body["data"]["credential_guid"]
+            # Verify it's a valid hex string (uuid4().hex)
+            assert len(guid) == 32
+            int(guid, 16)  # raises ValueError if not valid hex
+
+            # Verify secrets.json was written with sensitive fields
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            assert secrets_file.exists()
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            assert guid in all_secrets
+            stored_sensitive = all_secrets[guid]
+            assert stored_sensitive["username"] == "admin"
+            assert stored_sensitive["password"] == "secret123"
+            assert stored_sensitive["extra"] == {"ssl": True}
+            assert stored_sensitive["url"] == "jdbc:postgresql://db.example.com:5432"
+            # Non-sensitive fields should NOT be in secrets
+            assert "host" not in stored_sensitive
+            assert "port" not in stored_sensitive
+        finally:
+            self._restore(restore)
+
+    def test_dev_only_gate_rejects_non_local(self) -> None:
+        """When DEPLOYMENT_NAME != LOCAL_ENVIRONMENT, returns 403."""
+        client, restore = self._make_local_vault_client(
+            deployment_name="production", local_environment="local"
+        )
+        try:
+            response = client.post(
+                "/workflows/v1/dev/local-vault", json={"host": "db.example.com"}
+            )
+            assert response.status_code == 403
+            assert "Dev-only" in response.json()["detail"]
+        finally:
+            self._restore(restore)
+
+    def test_sensitive_nonsensitive_split(self, tmp_path: Path) -> None:
+        """Verify SENSITIVE_FIELDS go to secrets.json, everything else to object storage."""
+        import os
+        from unittest.mock import MagicMock, patch
+
+        mock_storage = MagicMock()  # non-None so objectstore save runs
+        client, restore = self._make_local_vault_client(storage=mock_storage)
+
+        body = {
+            "username": "user1",
+            "password": "pass1",
+            "extra": {"key": "val"},
+            "url": "jdbc://host",
+            "driverProperties": {"prop": "val"},
+            "sodaConnection": "soda://conn",
+            "host": "db.example.com",
+            "port": 5432,
+            "authType": "basic",
+        }
+
+        captured_config: dict = {}
+
+        async def capture_put_json(key, body_arg, store):
+            captured_config.update(body_arg)
+
+        try:
+            with patch(
+                "application_sdk.storage.ops.put_json",
+                side_effect=capture_put_json,
+            ):
+                original_cwd = os.getcwd()
+                os.chdir(tmp_path)
+                try:
+                    response = client.post("/workflows/v1/dev/local-vault", json=body)
+                finally:
+                    os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+
+            # Check secrets.json for sensitive fields
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            sensitive = all_secrets[guid]
+            assert set(sensitive.keys()) == {
+                "username",
+                "password",
+                "extra",
+                "url",
+                "driverProperties",
+                "sodaConnection",
+            }
+
+            # Non-sensitive fields should be in the captured config
+            assert "host" in captured_config
+            assert "port" in captured_config
+            assert "authType" in captured_config
+            assert captured_config["credentialSource"] == "direct"
+            # Sensitive fields should NOT be in config
+            assert "username" not in captured_config
+            assert "password" not in captured_config
+        finally:
+            self._restore(restore)
+
+    def test_auto_generates_uuid_hex(self, tmp_path: Path) -> None:
+        """Verify the returned guid is a valid 32-char hex string."""
+        import os
+
+        client, restore = self._make_local_vault_client(storage=None)
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post(
+                    "/workflows/v1/dev/local-vault", json={"host": "example.com"}
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+            assert isinstance(guid, str)
+            assert len(guid) == 32
+            # Must be valid hex
+            int(guid, 16)
+        finally:
+            self._restore(restore)
+
+    def test_empty_body_succeeds(self, tmp_path: Path) -> None:
+        """Empty body should still work — empty secrets + empty config."""
+        import os
+
+        client, restore = self._make_local_vault_client(storage=None)
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post("/workflows/v1/dev/local-vault", json={})
+            finally:
+                os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+
+            # secrets.json should exist with empty sensitive dict
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            assert all_secrets[guid] == {}
+        finally:
+            self._restore(restore)
+
+    def test_no_storage_still_writes_secrets(self, tmp_path: Path) -> None:
+        """When storage is None, secrets are written but objectstore save is a no-op."""
+        import os
+
+        client, restore = self._make_local_vault_client(storage=None)
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post(
+                    "/workflows/v1/dev/local-vault",
+                    json={"username": "u", "host": "h"},
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            # The endpoint still succeeds because _config_save_to_objectstore
+            # returns False (no-op) when storage is None, but doesn't raise.
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            assert all_secrets[guid] == {"username": "u"}
+        finally:
+            self._restore(restore)
