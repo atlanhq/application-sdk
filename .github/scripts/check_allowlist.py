@@ -93,12 +93,9 @@ def main() -> None:
                             all_vulns[vid] = {
                                 "id": vid,
                                 "severity": vuln.get("severity", "").upper(),
-                                "package": vuln.get("packageName")
-                                or vuln.get("name", ""),
+                                "package": vuln.get("packageName") or vuln.get("name", ""),
                                 "installed": vuln.get("version", ""),
-                                "fixed": ", ".join(vuln.get("fixedIn", []))
-                                if vuln.get("fixedIn")
-                                else "",
+                                "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
                                 "source": "snyk",
                             }
                             snyk_count += 1
@@ -109,12 +106,9 @@ def main() -> None:
                             all_vulns[vid] = {
                                 "id": vid,
                                 "severity": vuln.get("severity", "").upper(),
-                                "package": vuln.get("packageName")
-                                or vuln.get("name", ""),
+                                "package": vuln.get("packageName") or vuln.get("name", ""),
                                 "installed": vuln.get("version", ""),
-                                "fixed": ", ".join(vuln.get("fixedIn", []))
-                                if vuln.get("fixedIn")
-                                else "",
+                                "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
                                 "source": "snyk",
                             }
                             snyk_count += 1
@@ -136,9 +130,7 @@ def main() -> None:
         for v in sorted(
             unique, key=lambda x: {"CRITICAL": 0, "HIGH": 1}.get(x["severity"], 9)
         ):
-            print(
-                f"  {v['severity']:8s} [{v['source']:5s}] {v['id']} {v['package']}@{v['installed']}"
-            )
+            print(f"  {v['severity']:8s} [{v['source']:5s}] {v['id']} {v['package']}@{v['installed']}")
         _write_summary(summary, args.write_comment)
         sys.exit(0)
 
