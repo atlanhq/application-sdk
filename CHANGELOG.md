@@ -34,6 +34,7 @@ Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.0.0...v3.0
 - add 6 newly disclosed base image CVEs to allowlist (#1499) (by @mananjain99 in [ac236dd](https://github.com/atlanhq/application-sdk/commit/ac236dd))
 - dashboard — wrap repos column for long lists (#1501) (by @mananjain99 in [43b206b](https://github.com/atlanhq/application-sdk/commit/43b206b))
 - remove GraphQL auto-resolve logic from sdk-review (#1506) (by @vaibhavatlan in [65219d2](https://github.com/atlanhq/application-sdk/commit/65219d2))
+- align credential resolution with production AE flow [BLDX-1077] (#1480) (by @vaibhavatlan in [0a55371](https://github.com/atlanhq/application-sdk/commit/0a55371d2a2e14c21e8c4b8779670a6c7342052f))
 
 
 ## v3.0.0 (April 19, 2026)
