@@ -565,3 +565,69 @@ class TestHyphenatedKeyNormalization:
         )
         assert obj.credential_guid == "abc"
         assert obj.metadata == {"key": "val"}
+
+
+# =============================================================================
+# AE filter coercion (dict/list → JSON string)
+# =============================================================================
+
+
+class TestAEFilterCoercion:
+    """Test that Input coerces dict/list values back to JSON strings for
+    str-typed fields.  The Automation Engine parses JSON strings in the
+    payload into Python objects before dispatching."""
+
+    def test_dict_coerced_to_json_string(self) -> None:
+        class MyInput(Input):
+            include_filter: str = ""
+
+        obj = MyInput.model_validate({"include_filter": {"^qa_test_db$": ["^public$"]}})
+        assert obj.include_filter == '{"^qa_test_db$": ["^public$"]}'
+
+    def test_list_coerced_to_json_string(self) -> None:
+        class MyInput(Input):
+            include_filter: str = ""
+
+        obj = MyInput.model_validate({"include_filter": ["db1", "db2"]})
+        assert obj.include_filter == '["db1", "db2"]'
+
+    def test_annotated_str_field_coerced(self) -> None:
+        from typing import Annotated
+
+        from pydantic import Field
+
+        class MyInput(Input):
+            include_filter: Annotated[str, Field(description="filter")] = ""
+
+        obj = MyInput.model_validate({"include_filter": {"^db$": ["^schema$"]}})
+        assert obj.include_filter == '{"^db$": ["^schema$"]}'
+
+    def test_non_str_dict_field_not_coerced(self) -> None:
+        class MyInput(Input, allow_unbounded_fields=True):
+            metadata: dict[str, Any] = {}
+
+        obj = MyInput.model_validate({"metadata": {"key": "val"}})
+        assert obj.metadata == {"key": "val"}  # stays as dict
+
+    def test_string_value_not_double_encoded(self) -> None:
+        class MyInput(Input):
+            include_filter: str = ""
+
+        obj = MyInput.model_validate({"include_filter": '{"^db$": ["^schema$"]}'})
+        assert obj.include_filter == '{"^db$": ["^schema$"]}'
+
+    def test_combined_hyphen_and_coercion(self) -> None:
+        """Both normalizations work together: hyphen → underscore, then dict → JSON."""
+
+        class MyInput(Input):
+            include_filter: str = ""
+            exclude_filter: str = ""
+
+        obj = MyInput.model_validate(
+            {
+                "include-filter": {"^db$": ["^public$"]},
+                "exclude-filter": {},
+            }
+        )
+        assert obj.include_filter == '{"^db$": ["^public$"]}'
+        assert obj.exclude_filter == "{}"

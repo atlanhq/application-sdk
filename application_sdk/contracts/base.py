@@ -163,15 +163,21 @@ class Input(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _normalize_hyphenated_keys(cls, data: Any) -> Any:
-        """Map hyphenated keys to underscored field names.
+    def _normalize_ae_payload(cls, data: Any) -> Any:
+        """Normalize Automation Engine payloads before Pydantic validation.
 
-        The Automation Engine sends payload keys with hyphens
-        (e.g. ``credential-guid``, ``include-filter``) but Pydantic
-        models define fields with underscores.  This validator runs
-        before field assignment and copies hyphenated values into the
-        corresponding underscored key when the underscored key is
-        absent or empty.
+        Handles two AE quirks:
+
+        1. **Hyphenated keys**: AE dispatches payload keys with hyphens
+           (e.g. ``credential-guid``, ``include-filter``) but Pydantic
+           models use underscored field names.  Hyphenated values are
+           mapped to their underscored equivalents when absent or empty.
+
+        2. **JSON string coercion**: AE parses JSON strings in the payload
+           into dicts/lists before dispatching.  Fields typed as ``str``
+           (e.g. ``include_filter``, ``exclude_filter``) receive parsed
+           objects instead of the original JSON string.  This validator
+           re-serializes them back to JSON strings.
         """
         if not isinstance(data, dict):
             return data
@@ -179,6 +185,7 @@ class Input(BaseModel):
         field_names = set(cls.model_fields)
         updates: dict[str, Any] = {}
 
+        # 1. Map hyphenated keys to underscored field names
         for key, value in data.items():
             if "-" not in key:
                 continue
@@ -192,6 +199,30 @@ class Input(BaseModel):
 
         if updates:
             data = {**data, **updates}
+
+        # 2. Coerce dict/list values back to JSON strings for str-typed fields
+        import json
+
+        for field_name, field_info in cls.model_fields.items():
+            val = data.get(field_name)
+            if val is None or not isinstance(val, (dict, list)):
+                continue
+            # Only coerce if the field's annotation is str (or Annotated[str, ...])
+            annotation = field_info.annotation
+            # Unwrap Annotated types
+            origin = getattr(annotation, "__origin__", None)
+            if origin is not None:
+                # typing.Annotated has __args__[0] as the base type
+                import typing
+
+                if origin is typing.Annotated or (
+                    hasattr(typing, "get_origin")
+                    and typing.get_origin(annotation) is typing.Annotated
+                ):
+                    annotation = typing.get_args(annotation)[0]
+            if annotation is str:
+                data[field_name] = json.dumps(val)
+
         return data
 
     workflow_id: str = ""
