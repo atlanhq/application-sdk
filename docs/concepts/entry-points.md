@@ -69,7 +69,7 @@ from application_sdk.main import run_dev_combined
 from my_package.apps import MyExtractor
 from my_package.handlers import MyHandler
 
-asyncio.run(run_dev_combined(MyExtractor, handler_class=MyHandler))
+asyncio.run(run_dev_combined(MyExtractor))
 ```
 
 This starts both the Temporal worker and the HTTP handler service in a single process. It derives the module path automatically from the class.
