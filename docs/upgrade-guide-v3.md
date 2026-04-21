@@ -8,6 +8,8 @@ Application SDK v3.0 introduces three major improvements:
 
 v3.0 is a clean break from v2. All v2 modules and APIs have been removed — there is no deprecation shim or compatibility layer. Update all imports to their v3 equivalents using the quick reference below.
 
+> **Shipping an app?** Run through [`standards/v3-readiness.md`](standards/v3-readiness.md) before declaring the upgrade complete — it's the sign-off checklist for app owners and reviewers.
+
 ---
 
 ## Quick Reference
