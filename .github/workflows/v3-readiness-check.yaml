@@ -1,0 +1,213 @@
+name: v3 Readiness Check
+
+# Runs docs/standards/v3-readiness.md against an external app repo.
+#
+# Usage (manual):
+#   GitHub UI → Actions → "v3 Readiness Check" → Run workflow, supply:
+#     app_repo = atlanhq/atlan-openapi-app   (or full https://github.com/... URL)
+#     branch   = main                        (any ref — branch, tag, or SHA)
+#
+# Usage (from another workflow):
+#   jobs:
+#     check:
+#       uses: atlanhq/application-sdk/.github/workflows/v3-readiness-check.yaml@main
+#       with:
+#         app_repo: atlanhq/atlan-openapi-app
+#         branch: main
+#       secrets:
+#         app_repo_token: ${{ secrets.APP_REPO_READ_TOKEN }}
+#
+# Secret requirements:
+#   APP_REPO_READ_TOKEN — PAT (or GitHub App installation token) with
+#   `contents: read` access to the target app repo. Required for private
+#   repos; public repos can pass GITHUB_TOKEN instead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_repo:
+        description: "App repo (e.g. atlanhq/atlan-openapi-app or full github.com URL)"
+        required: true
+        type: string
+      branch:
+        description: "Branch, tag, or SHA to check"
+        required: true
+        type: string
+        default: main
+  workflow_call:
+    inputs:
+      app_repo:
+        required: true
+        type: string
+      branch:
+        required: true
+        type: string
+    secrets:
+      app_repo_token:
+        description: "Token with contents:read on the target repo"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v3-readiness-${{ inputs.app_repo }}-${{ inputs.branch }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ inputs.app_repo }}@${{ inputs.branch }}
+    runs-on: ubuntu-latest
+    steps:
+      # --------------------------------------------------------------------
+      # Normalize inputs — accept "owner/repo", "https://github.com/owner/repo",
+      # or "...owner/repo.git" and reduce to canonical "owner/repo".
+      # --------------------------------------------------------------------
+      - name: Parse app_repo
+        id: parse
+        env:
+          RAW_APP_REPO: ${{ inputs.app_repo }}
+        run: |
+          set -euo pipefail
+          raw="$RAW_APP_REPO"
+          repo="${raw#https://github.com/}"
+          repo="${repo#http://github.com/}"
+          repo="${repo%.git}"
+          repo="${repo%/}"
+          if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::app_repo must be 'owner/repo' or a github.com URL; got '$raw'"
+            exit 1
+          fi
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "Checking v3 readiness for $repo @ ${{ inputs.branch }}"
+
+      - name: Checkout application-sdk (this repo)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: sdk
+
+      - name: Checkout target app
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ steps.parse.outputs.repo }}
+          ref: ${{ inputs.branch }}
+          token: ${{ secrets.app_repo_token || secrets.GITHUB_TOKEN }}
+          path: app
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install application-sdk
+        working-directory: sdk
+        run: uv sync --all-extras --all-groups
+
+      # --------------------------------------------------------------------
+      # §1 — static check
+      # --------------------------------------------------------------------
+      - name: "§1 Static check — tools.migrate_v3.check_migration"
+        id: static
+        working-directory: sdk
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/report"
+          report="$RUNNER_TEMP/report/check_migration.txt"
+          if uv run python -m tools.migrate_v3.check_migration --no-color ../app | tee "$report"; then
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "::error::check_migration reported FAILs — see the uploaded report artifact"
+            exit 1
+          fi
+
+      # --------------------------------------------------------------------
+      # §1 — SDK pin must be ==3.0.0 (extras OK; [tool.uv.sources] OK)
+      # --------------------------------------------------------------------
+      - name: "§1 SDK pin — atlan-application-sdk[...]==3.0.0"
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [[ ! -f pyproject.toml ]]; then
+            echo "::error::app repo has no pyproject.toml at root"
+            exit 1
+          fi
+          if ! grep -E '^[^#]*\batlan-application-sdk[^"'\'' ]*==[[:space:]]*3\.0\.0\b' pyproject.toml; then
+            echo "::error::pyproject.toml must pin atlan-application-sdk[...]==3.0.0 (exact version)"
+            echo "Found atlan-application-sdk entries:"
+            grep -n atlan-application-sdk pyproject.toml || true
+            exit 1
+          fi
+
+      # --------------------------------------------------------------------
+      # §3 — Dockerfile base image must be app-runtime-base:3.0.0 (when present)
+      # --------------------------------------------------------------------
+      - name: "§3 Dockerfile base — app-runtime-base:3.0.0"
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [[ ! -f Dockerfile ]]; then
+            echo "No Dockerfile — skipping §3 check"
+            exit 0
+          fi
+          if ! grep -E '^FROM[[:space:]]+registry\.atlan\.com/public/app-runtime-base:3\.0\.0[[:space:]]*$' Dockerfile; then
+            echo "::error::Dockerfile must 'FROM registry.atlan.com/public/app-runtime-base:3.0.0' (exact tag)"
+            grep -n '^FROM' Dockerfile || true
+            exit 1
+          fi
+
+      # --------------------------------------------------------------------
+      # §2 — contract drift (only when the app ships a PKL contract)
+      # --------------------------------------------------------------------
+      - name: "§2 Contract drift — poe generate must be a no-op"
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [[ ! -f contract/app.pkl ]]; then
+            echo "No contract/app.pkl — skipping §2 check"
+            exit 0
+          fi
+          if ! uv run --project . poe --help >/dev/null 2>&1; then
+            echo "::warning::'poe' task runner not available in app — cannot run drift check"
+            exit 0
+          fi
+          uv run --project . poe generate || {
+            echo "::error::'poe generate' failed"
+            exit 1
+          }
+          if ! git -C . diff --exit-code -- contract/generated/ app/contracts/_input.py; then
+            echo "::error::contract/generated artifacts are stale — run 'poe generate' locally and commit"
+            exit 1
+          fi
+
+      # --------------------------------------------------------------------
+      # Step summary + artifact upload
+      # --------------------------------------------------------------------
+      - name: Write step summary
+        if: always()
+        working-directory: sdk
+        run: |
+          {
+            echo "# v3 Readiness — ${{ steps.parse.outputs.repo }}@${{ inputs.branch }}"
+            echo ""
+            echo "Checklist: [docs/standards/v3-readiness.md](./docs/standards/v3-readiness.md)"
+            echo ""
+            echo "## check_migration output"
+            echo ""
+            echo '```'
+            cat "$RUNNER_TEMP/report/check_migration.txt" 2>/dev/null || echo "(no report)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v3-readiness-report
+          path: ${{ runner.temp }}/report/
+          if-no-files-found: ignore
+          retention-days: 14
