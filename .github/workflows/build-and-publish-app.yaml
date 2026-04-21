@@ -352,6 +352,7 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          GITHUB_ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
 
@@ -387,6 +388,10 @@ jobs:
               body["allowed_tenants"] = [t.strip() for t in tenants.split(",") if t.strip()]
           else:
               body["target_channel"] = os.environ.get("CHANNEL", "all") or "all"
+
+          actor = os.environ.get("GITHUB_ACTOR", "").strip()
+          if actor:
+              body["created_by"] = actor
 
           print(json.dumps(body))
           PYEOF
