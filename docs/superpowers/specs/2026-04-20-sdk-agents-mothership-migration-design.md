@@ -617,32 +617,32 @@ The dispatcher resolves the snapshot, writes the SDK-specific files, and launche
 @router.post("/api/sdk-evolution/dispatch")
 async def dispatch_sdk_evolution(request: EvolutionRequest, background_tasks: BackgroundTasks):
     """Dispatch nightly SDK evolution run."""
-    
+
     # 1. Load snapshot
     snapshot = load_snapshot("sdk-evolution")
-    
+
     # 2. Load codebase index from R2
     index = await load_index_from_r2("sdk-evolution/index.json")
-    
+
     # 3. Build suppression list from Linear
     suppression = await build_suppression_list()
-    
+
     # 4. Create sandbox
     sandbox = await create_sandbox(
         thread_id=f"sdk-evolution-{request.run_date}-{unique_suffix()}",
         snapshot=snapshot,
     )
-    
+
     # 5. Write session files
     await write_session_files(sandbox, {
         "session/INDEX.md": format_index(index),
         "session/SUPPRESSION.md": format_suppression(suppression),
         "session/SCAN_MODE": request.scan_mode or ("full" if is_sunday() else "incremental"),
     })
-    
+
     # 6. Write snapshot files (ORCHESTRATION, agents, references, scripts)
     await write_snapshot_files(sandbox, snapshot)
-    
+
     # 7. Launch Claude Code CLI (fire-and-forget)
     background_tasks.add_task(
         run_claude_in_sandbox,
@@ -650,7 +650,7 @@ async def dispatch_sdk_evolution(request: EvolutionRequest, background_tasks: Ba
         prompt="Read .mothership/ORCHESTRATION.md and follow the pipeline exactly.",
         model="claude-opus-4-6",
     )
-    
+
     return {"dispatch_id": sandbox.sandbox_id, "status": "accepted"}
 ```
 
@@ -1013,36 +1013,36 @@ jobs:
           script: |
             const owner = 'atlanhq';
             const repo = 'application-sdk';
-            
+
             // Find all open PRs that are merge-eligible
             const { data: prs } = await github.rest.pulls.list({
               owner, repo, state: 'open', base: 'main',
               sort: 'created', direction: 'asc',  // oldest first
             });
-            
+
             for (const pr of prs) {
               // Check eligibility: auto-merge enabled OR (approved + labeled)
               const autoMergeEnabled = pr.auto_merge !== null;
-              const hasLabel = pr.labels.some(l => 
+              const hasLabel = pr.labels.some(l =>
                 l.name === 'auto-merge' || l.name === 'sdk-review-approved'
               );
-              
+
               // Need BOTH approval and auto-merge intent
               const { data: reviews } = await github.rest.pulls.listReviews({
                 owner, repo, pull_number: pr.number,
               });
               const approved = reviews.some(r => r.state === 'APPROVED');
-              
+
               const eligible = approved && (autoMergeEnabled || hasLabel);
               if (!eligible) continue;
-              
+
               console.log(`PR #${pr.number}: eligible for merge queue`);
-              
+
               // Check if branch is behind
               const { data: prData } = await github.rest.pulls.get({
                 owner, repo, pull_number: pr.number,
               });
-              
+
               if (prData.mergeable_state === 'behind') {
                 // Update branch
                 try {
@@ -1071,7 +1071,7 @@ jobs:
                   throw e;
                 }
               }
-              
+
               if (prData.mergeable_state === 'clean') {
                 // All checks passing + up to date → merge
                 try {
@@ -1088,20 +1088,20 @@ jobs:
                   continue;
                 }
               }
-              
+
               if (prData.mergeable_state === 'blocked') {
                 // CI still running or checks failing — skip for now
                 console.log(`PR #${pr.number}: blocked (CI running or failing), skip`);
                 continue;
               }
-              
+
               if (prData.mergeable_state === 'unstable') {
                 // Some checks failing but not required — can still merge
                 // Check if REQUIRED checks pass
                 const { data: checks } = await github.rest.checks.listForRef({
                   owner, repo, ref: prData.head.sha,
                 });
-                const requiredFailing = checks.check_runs.some(c => 
+                const requiredFailing = checks.check_runs.some(c =>
                   c.conclusion === 'failure' && c.name === 'sdk-review'
                 );
                 if (!requiredFailing) {
@@ -1116,7 +1116,7 @@ jobs:
                 continue;
               }
             }
-            
+
             console.log('No eligible PRs to process');
 ```
 
@@ -1135,7 +1135,7 @@ PR #41 and #42 are both approved + auto-merge enabled
      ↓
 5. CI starts on #42's updated branch
      ↓
-6. CI passes → push event to main... wait no, 
+6. CI passes → push event to main... wait no,
    CI completion doesn't trigger push-to-main.
    But #42 has auto-merge enabled (GitHub native) →
    GitHub merges automatically once CI passes.

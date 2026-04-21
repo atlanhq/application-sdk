@@ -24,7 +24,11 @@ class TestProvisionCredentialsBodyFlag:
             patch("requests.post", return_value=mock_response) as mock_post,
             patch(
                 "sys.argv",
-                ["provision-credentials", "--body", '{"host": "localhost", "port": 5432}'],
+                [
+                    "provision-credentials",
+                    "--body",
+                    '{"host": "localhost", "port": 5432}',
+                ],
             ),
             patch("builtins.print"),
         ):
@@ -35,7 +39,7 @@ class TestProvisionCredentialsBodyFlag:
         mock_post.assert_called_once()
         call_kwargs = mock_post.call_args
         assert call_kwargs[1]["json"] == {"host": "localhost", "port": 5432}
-        assert "/dev/local-vault" in call_kwargs[0][0]
+        assert "/workflows/v1/dev/local-vault" in call_kwargs[0][0]
 
     def test_body_flag_with_nested_json(self) -> None:
         """--body with nested extra field works correctly."""

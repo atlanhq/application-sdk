@@ -26,7 +26,9 @@ def main() -> None:
             body = json.load(f)
 
     base_url = f"http://localhost:{args.port}"
-    resp = requests.post(f"{base_url}/dev/local-vault", json=body, timeout=10)
+    resp = requests.post(
+        f"{base_url}/workflows/v1/dev/local-vault", json=body, timeout=10
+    )
     resp.raise_for_status()
     result = resp.json()
 

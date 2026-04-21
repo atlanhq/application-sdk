@@ -104,7 +104,7 @@ and use curl:
 uv run python main.py
 
 # Provision credentials (app must be running)
-curl -s -X POST http://localhost:8000/dev/local-vault \
+curl -s -X POST http://localhost:8000/workflows/v1/dev/local-vault \
   -H "Content-Type: application/json" \
   -d '{"host": "localhost", "port": "5432", "authType": "basic",
        "username": "myuser", "password": "mypassword",

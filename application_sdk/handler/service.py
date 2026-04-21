@@ -1557,7 +1557,7 @@ def create_app_handler_service(
             )
         )
 
-    @app.post("/dev/local-vault")
+    @app.post("/workflows/v1/dev/local-vault")
     async def provision_local_vault(request: Request) -> JSONResponse:
         """Provision credentials for local development (auto-generates GUID)."""
         body: dict[str, Any] = await request.json()

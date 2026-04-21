@@ -1745,7 +1745,7 @@ class TestConfigMapsDeduplication:
 
 
 class TestProvisionLocalVault:
-    """Tests for POST /dev/local-vault credential provisioning endpoint."""
+    """Tests for POST /workflows/v1/dev/local-vault credential provisioning endpoint."""
 
     def _make_local_vault_client(
         self,
@@ -1802,7 +1802,7 @@ class TestProvisionLocalVault:
             original_cwd = os.getcwd()
             os.chdir(tmp_path)
             try:
-                response = client.post("/dev/local-vault", json=body)
+                response = client.post("/workflows/v1/dev/local-vault", json=body)
             finally:
                 os.chdir(original_cwd)
 
@@ -1838,7 +1838,9 @@ class TestProvisionLocalVault:
             deployment_name="production", local_environment="local"
         )
         try:
-            response = client.post("/dev/local-vault", json={"host": "db.example.com"})
+            response = client.post(
+                "/workflows/v1/dev/local-vault", json={"host": "db.example.com"}
+            )
             assert response.status_code == 403
             assert "Dev-only" in response.json()["detail"]
         finally:
@@ -1877,7 +1879,7 @@ class TestProvisionLocalVault:
                 original_cwd = os.getcwd()
                 os.chdir(tmp_path)
                 try:
-                    response = client.post("/dev/local-vault", json=body)
+                    response = client.post("/workflows/v1/dev/local-vault", json=body)
                 finally:
                     os.chdir(original_cwd)
 
@@ -1920,7 +1922,9 @@ class TestProvisionLocalVault:
             original_cwd = os.getcwd()
             os.chdir(tmp_path)
             try:
-                response = client.post("/dev/local-vault", json={"host": "example.com"})
+                response = client.post(
+                    "/workflows/v1/dev/local-vault", json={"host": "example.com"}
+                )
             finally:
                 os.chdir(original_cwd)
 
@@ -1943,7 +1947,7 @@ class TestProvisionLocalVault:
             original_cwd = os.getcwd()
             os.chdir(tmp_path)
             try:
-                response = client.post("/dev/local-vault", json={})
+                response = client.post("/workflows/v1/dev/local-vault", json={})
             finally:
                 os.chdir(original_cwd)
 
@@ -1970,7 +1974,7 @@ class TestProvisionLocalVault:
             os.chdir(tmp_path)
             try:
                 response = client.post(
-                    "/dev/local-vault",
+                    "/workflows/v1/dev/local-vault",
                     json={"username": "u", "host": "h"},
                 )
             finally:

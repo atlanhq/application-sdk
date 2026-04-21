@@ -953,7 +953,7 @@ async def run_dev_combined(
         credential_stores: Optional mapping of store name → SecretStore.
         credentials: Optional credential dict (host, port, username, password,
             authType, extra, etc.). If provided, credentials are auto-provisioned
-            via ``POST /dev/local-vault`` once the handler is ready, and the
+            via ``POST /workflows/v1/dev/local-vault`` once the handler is ready, and the
             returned ``credential_guid`` is injected into ``example_input``.
             This mimics the production flow where Heracles provisions credentials
             before starting a workflow.
@@ -1012,7 +1012,7 @@ async def run_dev_combined(
     set_infrastructure(infra)
 
     # Auto-provision credentials if provided (mimics Heracles writing to
-    # /dev/local-vault before starting the workflow). This writes non-sensitive
+    # /workflows/v1/dev/local-vault before starting the workflow). This writes non-sensitive
     # config to object storage and sensitive secrets to the local secrets file.
     if credentials is not None:
         import httpx
@@ -1033,7 +1033,7 @@ async def run_dev_combined(
 
                 # Step 1: Provision credentials (mimics Heracles)
                 resp = await client.post(
-                    f"{base}/dev/local-vault",
+                    f"{base}/workflows/v1/dev/local-vault",
                     json=credentials,
                     timeout=10,
                 )
@@ -1070,7 +1070,7 @@ async def run_dev_combined(
     else:
         print(f"\nDev server running at http://{host}:{port}")
         print(
-            "  POST /dev/local-vault                            - Provision credentials"
+            "  POST /workflows/v1/dev/local-vault                            - Provision credentials"
         )
         print("  POST /workflows/v1/start                         - Start workflow")
         print("  POST /workflows/v1/stop/{workflow_id}/{run_id}   - Stop workflow")
