@@ -691,20 +691,41 @@ class TestCredentialResolverAgentBranch:
         assert resolved["extra"]["database"] == "real_pg_db"
 
     async def test_resolve_raw_legacy_guid_ref_still_works(self) -> None:
-        """Legacy GUID refs continue to resolve via the local secret
-        store path — agent branch is additive, not a replacement.
+        """Legacy GUID refs resolve via DaprCredentialVault — agent branch
+        is additive, not a replacement.
         """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver
 
-        store = _store_with(**{"my-guid-123": _bundle(username="real_user", host="h")})
+        store = _store_with()  # empty — vault handles GUID resolution
         ref = CredentialRef.from_workflow_args(
             {"extraction_method": "direct", "credential_guid": "my-guid-123"}
         )
         resolver = CredentialResolver(store)
 
-        resolved = await resolver.resolve_raw(ref)
+        mock_vault = MagicMock()
+        mock_vault.get_credentials = AsyncMock(
+            return_value={"username": "real_user", "host": "h"}
+        )
+        mock_dapr = MagicMock()
+        mock_dapr.close = AsyncMock()
+
+        with (
+            patch(
+                "application_sdk.infrastructure.DaprCredentialVault",
+                MagicMock(return_value=mock_vault),
+            ),
+            patch(
+                "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+                MagicMock(return_value=mock_dapr),
+            ),
+        ):
+            resolved = await resolver.resolve_raw(ref)
+
         assert resolved == {"username": "real_user", "host": "h"}
+        mock_vault.get_credentials.assert_called_once_with("my-guid-123")
 
     async def test_resolve_typed_agent_ref_uses_auth_type_for_parser(self) -> None:
         """When ``credential_type`` is empty on an agent ref (which is

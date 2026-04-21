@@ -24,12 +24,13 @@ Performs a complete v2 → v3 upgrade of an application-sdk connector.
 1. Parse `$ARGUMENTS` to get the target path. If no argument is given, stop and ask the user for one.
 2. Confirm the target path exists. If it does not, stop and report the error.
 3. Confirm you are running from within the application-sdk repo by checking that `tools/migrate_v3/rewrite_imports.py` exists. If it does not, stop and tell the user to run this skill from the application-sdk repo root.
-4. **Check the connector's SDK dependency.** Read the connector's `pyproject.toml` and look for `atlan-application-sdk` in the dependencies. Until v3 is released on PyPI the connector must use the git source:
+4. **Check the connector's SDK dependency.** Read the connector's `pyproject.toml` and look for `atlan-application-sdk`. v3.0.0 is published on PyPI, so the dependency should be:
    ```toml
-   [tool.uv.sources]
-   atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "main" }
+   atlan-application-sdk>=3.0.0,<4.0.0
    ```
-   If it still points to a v2 PyPI release (e.g. `atlan-application-sdk>=2.x`), add the `[tool.uv.sources]` block above and run `uv sync` in the connector repo before continuing. If it already has this source override or references a v3+ PyPI release, proceed.
+   - If it points to a v2 release (e.g. `atlan-application-sdk>=2.x`), update the pin to `>=3.0.0,<4.0.0` and run `uv sync`.
+   - If the `pyproject.toml` still contains a `[tool.uv.sources]` git override pointing at `main` or `refactor-v3` (a pattern used during v3 development), **remove it** — it's no longer needed now that v3.0.0 is on PyPI, and leaving it in pins the connector to an unstable ref.
+   - If it already depends on `atlan-application-sdk>=3.0.0` from PyPI with no git override, proceed.
 
 4b. **Check temporalio version.** The v3 SDK requires `temporalio` with `VersioningBehavior`. Run in the connector repo root (where `pyproject.toml` is):
    ```bash
@@ -319,7 +320,7 @@ If the connector has no v2-style e2e tests, skip this step.
 
 ### Phase 4c — Contract generation
 
-After tests pass and e2e tests are generated, the app needs a PKL contract that generates workflow config, credential config, AE manifest, and typed Input class. Use the **`/contract` skill** from [`atlanhq/connector-os`](https://github.com/atlanhq/connector-os/blob/main/skills/contract/SKILL.md) to create or migrate the contract.
+After tests pass and e2e tests are generated, the app needs a PKL contract that generates workflow config, credential config, AE manifest, and typed Input class. Use the **`/contract` skill** (located in this repo at `.claude/skills/contract/SKILL.md`) to create or migrate the contract.
 
 1. Check if the connector already has a `contract/` directory with `app.pkl`:
    ```bash

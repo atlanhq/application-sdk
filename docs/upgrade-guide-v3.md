@@ -8,6 +8,8 @@ Application SDK v3.0 introduces three major improvements:
 
 v3.0 is a clean break from v2. All v2 modules and APIs have been removed — there is no deprecation shim or compatibility layer. Update all imports to their v3 equivalents using the quick reference below.
 
+> **Shipping an app?** Run through [`standards/v3-readiness.md`](standards/v3-readiness.md) before declaring the upgrade complete — it's the sign-off checklist for app owners and reviewers.
+
 ---
 
 ## Quick Reference
@@ -198,6 +200,108 @@ class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
 4. Finalize by persisting the new state to object storage
 
 Override `run()` if you need to customise this sequence. The incremental state files are managed by the framework and cleaned up automatically via the cleanup lifecycle.
+
+---
+
+## Step 3b: Upgrade REST/API Extraction (Asset-Mapper Pattern)
+
+If your connector talks to a REST/API backend (rather than a SQL engine), v3 replaces the v2 `TransformerInterface` + Daft + YAML-query pipeline with a simpler pattern: **typed records → pure mapper functions → `pyatlan` Asset instances**. Reference implementations: `atlan-openapi-app`, `atlan-azure-event-hub-app`.
+
+### When to use this pattern
+
+Use the asset-mapper pattern when:
+
+- Your source is a REST API, SaaS service, or any non-SQL backend.
+- You don't have SQL queries to templatize in YAML.
+- You want typed intermediate records instead of untyped DataFrames.
+
+SQL connectors should continue to use `SqlMetadataExtractor` (Step 1) and the templated-query pattern.
+
+### v2
+
+```python
+# app/transformer.py
+from application_sdk.transformers.atlas import AtlasTransformer
+
+class MyConnectorTransformer(AtlasTransformer):
+    # YAML query files under app/sql/ define the per-entity shape
+    # Daft DataFrames flow through transform → atlas entity emission
+    ...
+```
+
+### v3
+
+Two files replace the transformer subclass:
+
+```python
+# app/api_types.py — typed intermediate records
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class TopicRecord:
+    name: str
+    partition_count: int
+    retention_ms: int
+```
+
+```python
+# app/asset_mapper.py — pure functions, one per entity type
+from pyatlan.model.assets import KafkaTopic
+from app.api_types import TopicRecord
+
+def map_topic(
+    record: TopicRecord,
+    connection_qn: str,
+    connection_name: str,
+) -> KafkaTopic:
+    """Pure function: no I/O, no side effects, deterministic."""
+    return KafkaTopic(
+        qualified_name=f"{connection_qn}/topic/{record.name}",
+        name=record.name,
+        connection_qualified_name=connection_qn,
+        connection_name=connection_name,
+        kafka_partitions=record.partition_count,
+        kafka_topic_retention_time_ms=record.retention_ms,
+    )
+```
+
+Wire them into extract/transform tasks on your `App` subclass:
+
+```python
+# app/app.py
+from application_sdk.app import App, task
+from application_sdk.contracts import FileReference
+from app.api_types import TopicRecord
+from app.asset_mapper import map_topic
+
+class MyConnector(App):
+    @task
+    async def extract_topics(self, input: MyInput) -> FileReference:
+        records = [TopicRecord(**row) async for row in self.client.list_topics()]
+        return await self.task_context.write_jsonl("topics.jsonl", records)
+
+    @task
+    async def transform_topics(self, input: FileReference) -> FileReference:
+        records = await self.task_context.read_jsonl(input, TopicRecord)
+        assets = [map_topic(r, self.connection_qn, self.connection_name) for r in records]
+        return await self.task_context.write_assets("topics_assets.jsonl", assets)
+```
+
+### Rules for mapper functions
+
+- **Pure functions only** — no I/O, no side effects, deterministic output for the same input. Temporal may replay these during retries.
+- **One function per entity type** — `map_topic`, `map_consumer_group`, `map_process`, etc.
+- **Take a record + context, return an `Asset`** — context (connection QN, tenant ID, workflow IDs) is passed as parameters, not read from globals.
+- **Stamp sync metadata in a helper** — a `_apply_sync_metadata(asset, workflow_id, run_id, tenant_id)` helper keeps sync-stamp logic in one place (see `atlan-azure-event-hub-app/app/asset_mapper.py`).
+
+### What to remove from v2
+
+- `TransformerInterface` subclasses (`AtlasTransformer`, `QueryBasedTransformer`)
+- Daft DataFrame pipelines for REST/API sources
+- `app/sql/*.yaml` query files (these are SQL-only)
+- Custom `transform` methods on Activities classes
+
+The import rewriter (`tools/migrate_v3/rewrite_imports.py`) cannot auto-convert transformer code — it will leave `# TODO(upgrade-v3)` markers so you know where to apply this pattern manually.
 
 ---
 
@@ -575,7 +679,7 @@ You do not need to create `DaprClient` instances in your code.
 | v2 | v3 (`self.context` in handler methods) |
 |----|----------------------------------------|
 | `services.secretstore.SecretStore.get_credentials(...)` | `await self.context.get_secret(name)` |
-| `/workflows/v1/config/{id}` (503 error) | Works automatically (state store wired) |
+| `/workflows/v1/config/{id}` (503 error) | Works automatically (object store wired) |
 | `/workflows/v1/file` (503 error) | Works automatically (storage binding wired) |
 
 ### Upgrading ObjectStore calls

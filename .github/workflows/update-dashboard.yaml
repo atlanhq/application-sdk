@@ -45,6 +45,7 @@ permissions:
 jobs:
   update:
     name: Update Dashboard
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == github.event.repository.default_branch
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -90,14 +91,18 @@ jobs:
 
           repo_name = os.environ.get("GITHUB_REPOSITORY", "unknown")
 
-          # Merge base + repo allowlists
+          # Load base allowlist IDs (to determine source_type)
+          base_ids = set()
           allowlist = {}
           try:
               with open("_sdk/.security/base-allowlist.json") as f:
                   base = json.load(f)
-              allowlist.update({k: v for k, v in base.items() if not k.startswith("_")})
+              base_entries = {k: v for k, v in base.items() if not k.startswith("_")}
+              base_ids = set(base_entries.keys())
+              allowlist.update(base_entries)
+              print(f"Base allowlist loaded: {len(base_ids)} IDs")
           except FileNotFoundError:
-              print("Warning: base allowlist not found")
+              print("WARNING: base allowlist NOT found at _sdk/.security/base-allowlist.json")
           except json.JSONDecodeError as e:
               print(f"Warning: base allowlist invalid JSON: {e}")
 
@@ -131,6 +136,11 @@ jobs:
                               status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
                           else:
                               status = "new"
+                          # If CVE is in base allowlist, it's always base_image
+                          if vid in base_ids:
+                              src = "base_image"
+                          else:
+                              src = "app" if is_app else "base_image"
                           all_vulns.append({
                               "id": vid,
                               "severity": vuln.get("Severity", ""),
@@ -138,7 +148,7 @@ jobs:
                               "installed": vuln.get("InstalledVersion", ""),
                               "fixed": vuln.get("FixedVersion", ""),
                               "scanner": "trivy",
-                              "source_type": "app" if is_app else "base_image",
+                              "source_type": src,
                               "status": status,
                           })
           except FileNotFoundError:
@@ -168,6 +178,10 @@ jobs:
                               status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
                           else:
                               status = "new"
+                          if vid in base_ids:
+                              src = "base_image"
+                          else:
+                              src = "app" if is_app else "base_image"
                           all_vulns.append({
                               "id": vid,
                               "severity": vuln.get("severity", "").upper(),
@@ -175,7 +189,7 @@ jobs:
                               "installed": vuln.get("version", ""),
                               "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
                               "scanner": "snyk",
-                              "source_type": "app" if is_app else "base_image",
+                              "source_type": src,
                               "status": status,
                           })
 
@@ -196,7 +210,7 @@ jobs:
                                   "installed": vuln.get("version", ""),
                                   "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
                                   "scanner": "snyk",
-                                  "source_type": "app",
+                                  "source_type": "base_image" if vid in base_ids else "app",
                                   "status": status,
                               })
           except FileNotFoundError:
@@ -237,9 +251,13 @@ jobs:
               import shutil
               shutil.copy(html_src, "/tmp/dashboard-deploy/index.html")
 
+          app_count = sum(1 for v in unique if v['source_type'] == 'app')
+          base_count = sum(1 for v in unique if v['source_type'] == 'base_image')
           print(f"Dashboard data generated: {len(unique)} vulnerabilities for {repo_name}")
           print(f"  CRITICAL: {repo_data['critical']}")
           print(f"  HIGH: {repo_data['high']}")
+          print(f"  Base image: {base_count}")
+          print(f"  App dep: {app_count}")
           print(f"  Allowlisted: {repo_data['allowlisted']}")
           print(f"  New: {repo_data['new']}")
           PYEOF
@@ -256,14 +274,25 @@ jobs:
         run: |
           SLUG=$(echo "$REPO_SLUG" | tr '/' '_')
 
-          # Upload per-repo data (no --delete, doesn't clobber other repos)
+          # Upload per-repo data
           aws s3 cp "/tmp/dashboard-deploy/repos/${SLUG}.json" \
             "s3://kryptonite-store/${{ inputs.dashboard_path }}/repos/${SLUG}.json"
 
-          # Upload dashboard HTML (shared, idempotent)
+          # Generate manifest of all repo files in S3
+          aws s3 ls "s3://kryptonite-store/${{ inputs.dashboard_path }}/repos/" \
+            | grep '\.json$' | awk '{print $4}' \
+            | python3 -c "import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))" \
+            > /tmp/dashboard-deploy/repos.json
+          aws s3 cp /tmp/dashboard-deploy/repos.json \
+            "s3://kryptonite-store/${{ inputs.dashboard_path }}/repos.json"
+
+          # Upload dashboard HTML
           if [ -f /tmp/dashboard-deploy/index.html ]; then
             aws s3 cp /tmp/dashboard-deploy/index.html \
               "s3://kryptonite-store/${{ inputs.dashboard_path }}/index.html"
           fi
+
+          # Remove stale legacy data.json
+          aws s3 rm "s3://kryptonite-store/${{ inputs.dashboard_path }}/data.json" 2>/dev/null || true
 
           echo "Dashboard updated at https://k.atlan.dev/${{ inputs.dashboard_path }}/"
