@@ -1,0 +1,32 @@
+# Autonomous SDK Evolution — Pipeline Configuration
+# Referenced by SKILL.md stages throughout the pipeline.
+
+pipeline:
+  max_prs_per_run: 10
+
+models:
+  primary: opus      # Claude Opus 4.6 — used for discovery agents 1,3,5,7,8
+  secondary: sonnet  # Claude Sonnet 4.6 (or GPT-5 via LiteLLM when available) — agents 2,4,6,9,10
+
+linear:
+  project: "App SDK v3.0"
+  milestone: "Autonomous SDK Evolution"
+  team: "Builder Experience"
+
+priority_map:
+  critical: 1   # Urgent
+  high: 2       # High
+  medium: 3     # Normal
+  low: 4        # Low
+
+pr_strategy:
+  individual:
+    - bug
+    - architecture
+    - security
+    - performance
+  grouped:
+    - code-quality
+    - test-quality
+    - documentation
+    - v2-patterns
