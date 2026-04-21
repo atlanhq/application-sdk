@@ -16,7 +16,14 @@ An app is **v3-ready** when every item below is either ✅ (done) or ➖ (not ap
 
 Each item corresponds to a `FAIL`/`WARN` rule in `tools/migrate_v3/check_migration.py`. Run the checker (see §5) and fix every `FAIL` before continuing.
 
-- [ ] **SDK pin** — `pyproject.toml` depends on `atlan-application-sdk>=3.0.0,<4.0.0` from PyPI. No `[tool.uv.sources]` git override to a dev branch (e.g. `refactor-v3`, `main`).
+- [ ] **SDK version `3.0.0` or newer** — `pyproject.toml` must declare
+  ```toml
+  [project]
+  dependencies = [
+      "atlan-application-sdk>=3.0.0,<4.0.0",
+  ]
+  ```
+  Resolved from PyPI — **no** `[tool.uv.sources]` git override pointing at a branch (e.g. `main`, `refactor-v3`). Verify with `uv tree | grep atlan-application-sdk` and confirm the resolved version is `3.0.0+`.
 - [ ] **No deprecated imports** — no `application_sdk.{application,worker,workflows,activities,handlers,services,interceptors,test_utils}` or `application_sdk.clients.{atlan,temporal,workflow}` anywhere (including tests). Rewrite with `python -m tools.migrate_v3.rewrite_imports`.
 - [ ] **App subclass** — exactly one class inherits from `App` (or a template: `SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor`, `SqlQueryExtractor`, `BaseMetadataExtractor`). Class-level `name: ClassVar[str]` is set.
 - [ ] **`@task` only** — no `@workflow.defn`, `@activity.defn`, `@auto_heartbeater` decorators. No `workflow.execute_activity_method()` calls. No `from temporalio import workflow / activity` in app code.
@@ -60,14 +67,23 @@ The SDK ships test doubles in `application_sdk.testing.mocks` (`MockSecretStore`
 - [ ] **Credential registration** — import the app's credentials module and assert `CredentialTypeRegistry().get_class("<type>")` is not None.
 - [ ] **Deterministic `run()`** — verify the orchestrator is free of non-determinism (no `datetime.now`, `uuid4`, `random`, direct I/O). This is enforced by Temporal at runtime; a unit test that imports the module under Temporal's sandbox (`WorkflowEnvironment`) catches regressions.
 
-### Integration / E2E tests (at least one must pass in CI)
+### Integration / E2E tests (must cover every supported scenario)
+
+E2E coverage is **not** limited to the happy path. Every user-observable scenario the app supports must have a dedicated end-to-end test that drives it through `run_dev_combined` (or a full container) and asserts the final artifact / HTTP response — not just intermediate function returns. A scenario is "supported" if it appears in the workflow form, the handler's `test_auth`/`preflight_check` surface, the Dockerfile, or any branch of `run()`.
 
 - [ ] **Boot probe** — start the app via `run_dev_combined` in-process (or as a subprocess) and confirm:
   - `GET /health` returns 200
   - `GET /manifest` returns the committed `contract/generated/manifest.json` verbatim
   - `GET /workflows/v1/configmap/{name}` returns the committed workflow config
 - [ ] **Golden contract drift** — re-run `poe generate` in CI and `git diff --exit-code contract/generated/ app/contracts/_input.py` must be clean.
-- [ ] **Happy-path workflow** — `POST /workflows/v1/start` with a minimal valid payload drives the workflow to completion against a fake/mock source; assert the NDJSON artifact uploaded to `MockObjectStore` matches the expected schema.
+- [ ] **Scenario matrix** — one E2E test per supported scenario. Each drives `POST /workflows/v1/start` with a realistic payload and asserts the final outcome (NDJSON artifacts, uploaded object-store keys, publish-app state, response codes). Cover at minimum:
+  - Happy path for every `import_type` / extraction mode the app exposes (e.g. URL vs CLOUD, full vs incremental, agent vs GUID credentials).
+  - Each credential / auth flow the `Handler.test_auth` accepts (success and failure).
+  - Each entry in `preflight_check` (success and each failure mode the UI can render).
+  - Every explicit branch in `run()` — e.g. `connection_usage=CREATE` vs `REUSE`, `load_to_atlan=True` vs `False`, empty-result short-circuit, retryable vs non-retryable task failures.
+  - Error / edge cases the app is expected to handle: invalid spec, empty source, network timeout, missing credential, downstream publish-app failure. Each must produce a deterministic, user-facing outcome (workflow fails cleanly, error propagates, logs include correlation ID).
+  - Multi-tenant isolation (if applicable): two tenants running concurrently never see each other's artifacts or state.
+- [ ] **Scenario coverage matrix in the repo** — `tests/e2e/README.md` (or equivalent) lists each scenario above and the test that covers it. Reviewers use this table to confirm coverage is complete; missing rows block v3-readiness.
 - [ ] **Replay test** — at least one workflow uses `TestWorkflowEnvironment` + a pinned history JSON to prove determinism across SDK upgrades.
 
 ## 5 — SDK-triggered validation
@@ -130,7 +146,7 @@ Paste this into the description of the PR that declares an app v3-ready. Reviewe
 ## v3-readiness sign-off (docs/standards/v3-readiness.md)
 
 ### App shape (§1)
-- [ ] SDK pin is `atlan-application-sdk>=3.0.0,<4.0.0` from PyPI, no git override
+- [ ] `pyproject.toml` resolves `atlan-application-sdk>=3.0.0,<4.0.0` from PyPI, no git override (`uv tree` shows a 3.x resolution)
 - [ ] `python -m tools.migrate_v3.check_migration` reports zero FAILs
 - [ ] One `App` subclass, `@task`-only, typed Input/Output at every boundary
 
@@ -144,7 +160,8 @@ Paste this into the description of the PR that declares an app v3-ready. Reviewe
 
 ### Tests (§4)
 - [ ] Unit tests cover App instantiation, every `@task`, and contract round-trips
-- [ ] At least one integration test boots the app and verifies `/health`, `/manifest`, happy-path workflow
+- [ ] E2E scenario matrix documented (`tests/e2e/README.md`) and **every listed scenario has a passing E2E test** — happy path + each branch of `run()` + each `Handler` flow + error/edge cases + multi-tenant isolation
+- [ ] Boot probe verifies `/health`, `/manifest`, and `/workflows/v1/configmap/{name}` match committed artifacts
 - [ ] Replay test pinned for every workflow that runs in production
 
 ### SDK-triggered checks (§5)
