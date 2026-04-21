@@ -12,6 +12,8 @@ import json
 import os
 from typing import Optional, Union
 
+import orjson
+
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
@@ -103,11 +105,11 @@ async def resolve_credential_file(
 
     # Detect format: JSON object-store reference vs raw base64 string
     try:
-        parsed = json.loads(value)
+        parsed = orjson.loads(value)
         if isinstance(parsed, dict) and ("key" in parsed or "fileKey" in parsed):
             # Object-store reference — delegate to existing download utility
             return await download_file_from_upload_response(value)
-    except (json.JSONDecodeError, TypeError):
+    except (orjson.JSONDecodeError, TypeError):
         pass
 
     # Base64-encoded file content — decode and write to disk
