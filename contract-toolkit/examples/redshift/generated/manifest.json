@@ -1,0 +1,64 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Redshift Metadata",
+      "app_name": "{app_name}",
+      "inputs": {
+        "workflow_type": "RedshiftMetadataExtractionWorkflow",
+        "app_name": "{app_name}",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-redshift-{deployment_name}",
+        "args": {
+          "credential": "{{credential}}",
+          "credential_guid": "{{credential-guid}}",
+          "connection": "{{connection}}",
+          "metadata": {
+            "extraction-method": "{{extraction-method}}",
+            "include-filter": "{{include-filter}}",
+            "exclude-filter": "{{exclude-filter}}",
+            "temp-table-regex": "{{temp-table-regex}}",
+            "advanced-config": "{{advanced-config}}",
+            "cross-connection": "{{cross-connection}}",
+            "use-source-schema-filtering": "{{use-source-schema-filtering}}",
+            "use-jdbc-internal-methods": "{{use-jdbc-internal-methods}}",
+            "control-config-strategy": "{{control-config-strategy}}",
+            "control-config": "{{control-config}}",
+            "preflight-check": "{{preflight-check}}"
+          }
+        }
+      }
+    },
+    "publish": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Publish to Atlas",
+      "app_name": "publish",
+      "inputs": {
+        "workflow_type": "PublishWorkflow",
+        "app_name": "publish",
+        "task_queue": "atlan-publish-{deployment_name}",
+        "args": {
+          "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+          "transformed_data_prefix": "$.extract.outputs.transformed_data_prefix",
+          "publish_state_prefix": "$.extract.outputs.publish_state_prefix",
+          "current_state_prefix": "$.extract.outputs.current_state_prefix",
+          "connection_creation_enabled": true,
+          "executor_enabled": true,
+          "connection_entity": "{{connection}}"
+        }
+      },
+      "depends_on": {
+        "node_id": "extract"
+      },
+      "error_handling": {
+        "initial_interval": 2,
+        "backoff_coefficient": 2,
+        "maximum_interval": 60,
+        "maximum_attempts": 3,
+        "start_to_close_timeout_seconds": 14400
+      }
+    }
+  }
+}

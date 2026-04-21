@@ -1,0 +1,3101 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>App Contract Toolkit - Atlan Developer</title>
+        <style>
+            /* ── Reset & Base ───────────────────────────────────── */
+            *,
+            *::before,
+            *::after {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+            :root {
+                --bg-primary: #0d1117;
+                --bg-secondary: #161b22;
+                --bg-tertiary: #1c2333;
+                --bg-card: #1c2333;
+                --bg-code: #12161f;
+                --border: #30363d;
+                --text-primary: #c9d1d9;
+                --text-secondary: #8b949e;
+                --text-muted: #6e7681;
+                --accent: #6366f1;
+                --accent-light: #818cf8;
+                --accent-dim: rgba(99, 102, 241, 0.15);
+                --link: #58a6ff;
+                --green: #3fb950;
+                --red: #f85149;
+                --yellow: #d29922;
+                --cyan: #56d4dd;
+                --magenta: #db61a2;
+                --orange: #f0883e;
+                --nav-height: 56px;
+                --sidebar-width: 250px;
+                --toc-width: 230px;
+                --font-sans:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica,
+                    Arial, sans-serif;
+                --font-mono:
+                    "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas,
+                    monospace;
+            }
+            html {
+                scroll-behavior: smooth;
+                scroll-padding-top: calc(var(--nav-height) + 28px);
+            }
+            body {
+                font-family: var(--font-sans);
+                background: var(--bg-primary);
+                color: var(--text-primary);
+                line-height: 1.7;
+                font-size: 16.5px;
+            }
+            a {
+                color: var(--link);
+                text-decoration: none;
+            }
+            a:hover {
+                text-decoration: underline;
+            }
+
+            /* ── Unified Nav Bar ────────────────────────────────── */
+            .top-nav {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                z-index: 100;
+                height: var(--nav-height);
+                background: #1e1b4b;
+                display: flex;
+                align-items: center;
+                padding: 0 28px;
+                border-bottom: 2px solid var(--accent);
+                gap: 8px;
+            }
+            .top-nav .brand {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                font-size: 20px;
+                font-weight: 700;
+                color: #fff;
+                text-decoration: none;
+                margin-right: 24px;
+                flex-shrink: 0;
+            }
+            .top-nav .brand:hover {
+                text-decoration: none;
+            }
+            .top-nav .nav-links {
+                display: flex;
+                align-items: center;
+                gap: 4px;
+            }
+            .top-nav .nav-links a {
+                color: var(--text-secondary);
+                font-size: 13.5px;
+                font-weight: 500;
+                padding: 7px 14px;
+                border-radius: 6px;
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                transition: all 0.15s;
+                white-space: nowrap;
+            }
+            .top-nav .nav-links a:hover {
+                color: #fff;
+                background: rgba(255, 255, 255, 0.06);
+                text-decoration: none;
+            }
+            .top-nav .nav-links a.active {
+                color: #fff;
+                background: rgba(99, 102, 241, 0.25);
+            }
+            .sub-nav {
+                display: none;
+            }
+
+            /* ── Layout ─────────────────────────────────────────── */
+            .layout {
+                display: flex;
+                margin-top: var(--nav-height);
+                min-height: calc(100vh - var(--nav-height));
+            }
+
+            /* ── Sidebar ────────────────────────────────────────── */
+            .sidebar {
+                width: var(--sidebar-width);
+                flex-shrink: 0;
+                position: fixed;
+                top: var(--nav-height);
+                bottom: 0;
+                left: 0;
+                overflow-y: auto;
+                padding: 24px 0 24px 20px;
+                border-right: 1px solid var(--border);
+                background: var(--bg-primary);
+            }
+            .sidebar::-webkit-scrollbar {
+                width: 4px;
+            }
+            .sidebar::-webkit-scrollbar-thumb {
+                background: var(--border);
+                border-radius: 4px;
+            }
+            .sidebar-group {
+                margin-bottom: 24px;
+            }
+            .sidebar-group-title {
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--accent-light);
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                margin-bottom: 8px;
+                padding-left: 12px;
+            }
+            .sidebar-link {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 6px 12px;
+                font-size: 14.5px;
+                color: var(--text-secondary);
+                border-radius: 6px;
+                transition: all 0.12s;
+                line-height: 1.4;
+            }
+            .sidebar-link:hover {
+                color: var(--text-primary);
+                background: var(--bg-secondary);
+                text-decoration: none;
+            }
+            .sidebar-link.active {
+                color: var(--accent-light);
+                background: var(--accent-dim);
+            }
+            .sidebar-link svg {
+                flex-shrink: 0;
+                opacity: 0.6;
+            }
+
+            /* ── Main Content ───────────────────────────────────── */
+            .main {
+                margin-left: var(--sidebar-width);
+                margin-right: var(--toc-width);
+                flex: 1;
+                padding: 44px 64px 80px;
+                min-width: 0;
+            }
+
+            /* ── TOC (right) ────────────────────────────────────── */
+            .toc {
+                width: var(--toc-width);
+                flex-shrink: 0;
+                position: fixed;
+                top: var(--nav-height);
+                bottom: 0;
+                right: 0;
+                overflow-y: auto;
+                padding: 24px 16px;
+                border-left: 1px solid var(--border);
+            }
+            .copy-page-btn {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                width: 100%;
+                padding: 8px 14px;
+                margin-bottom: 16px;
+                background: rgba(99, 102, 241, 0.1);
+                border: 1px solid rgba(99, 102, 241, 0.3);
+                border-radius: 6px;
+                color: var(--accent-light);
+                font-size: 13px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: all 0.15s;
+                font-family: var(--font-sans);
+            }
+            .copy-page-btn:hover {
+                background: rgba(99, 102, 241, 0.2);
+                color: #fff;
+            }
+            .toc-title {
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--text-secondary);
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                margin-bottom: 12px;
+            }
+            .toc a {
+                display: block;
+                font-size: 13.5px;
+                color: var(--text-muted);
+                padding: 3px 0 3px 12px;
+                border-left: 2px solid transparent;
+                transition: all 0.12s;
+            }
+            .toc a:hover {
+                color: var(--text-primary);
+                text-decoration: none;
+            }
+            .toc a.active {
+                color: var(--accent-light);
+                border-left-color: var(--accent-light);
+            }
+            .toc a.indent {
+                padding-left: 24px;
+            }
+
+            /* ── Typography ─────────────────────────────────────── */
+            .main h1 {
+                font-size: 38px;
+                font-weight: 600;
+                color: #e6edf3;
+                margin-bottom: 10px;
+                line-height: 1.25;
+            }
+            .main .subtitle {
+                font-size: 19px;
+                color: var(--text-secondary);
+                margin-bottom: 36px;
+                line-height: 1.6;
+            }
+            .main h2 {
+                font-size: 26px;
+                font-weight: 600;
+                color: #e6edf3;
+                margin-top: 56px;
+                margin-bottom: 18px;
+                padding-bottom: 10px;
+                border-bottom: 1px solid var(--border);
+            }
+            .main h3 {
+                font-size: 20px;
+                font-weight: 600;
+                color: #e6edf3;
+                margin-top: 36px;
+                margin-bottom: 14px;
+            }
+            .main h4 {
+                font-size: 17px;
+                font-weight: 600;
+                color: var(--text-primary);
+                margin-top: 28px;
+                margin-bottom: 10px;
+            }
+            .main p {
+                margin-bottom: 16px;
+            }
+            .main ul,
+            .main ol {
+                margin-bottom: 16px;
+                padding-left: 26px;
+            }
+            .main li {
+                margin-bottom: 6px;
+            }
+            .main li code,
+            .main p code,
+            .main td code {
+                background: var(--bg-tertiary);
+                border: 1px solid var(--border);
+                padding: 2px 7px;
+                border-radius: 4px;
+                font-family: var(--font-mono);
+                font-size: 14px;
+                color: var(--cyan);
+            }
+            .main hr {
+                border: none;
+                border-top: 1px solid var(--border);
+                margin: 40px 0;
+            }
+
+            /* ── Code blocks ────────────────────────────────────── */
+            .code-block {
+                position: relative;
+                background: var(--bg-code);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                margin-bottom: 20px;
+                overflow: hidden;
+            }
+            .code-block-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 8px 16px;
+                background: rgba(255, 255, 255, 0.03);
+                border-bottom: 1px solid var(--border);
+                font-size: 12px;
+                color: var(--text-muted);
+            }
+            .code-block-copy {
+                background: none;
+                border: none;
+                color: var(--text-muted);
+                cursor: pointer;
+                padding: 4px;
+                border-radius: 4px;
+                display: flex;
+                align-items: center;
+            }
+            .code-block-copy:hover {
+                color: var(--text-primary);
+                background: rgba(255, 255, 255, 0.06);
+            }
+            .code-block pre {
+                margin: 0;
+                padding: 18px;
+                overflow-x: auto;
+                font-family: var(--font-mono);
+                font-size: 14.5px;
+                line-height: 1.65;
+                color: var(--text-primary);
+            }
+            .code-block .line-numbers {
+                display: inline-block;
+                text-align: right;
+                user-select: none;
+                color: var(--text-muted);
+                margin-right: 16px;
+                min-width: 20px;
+            }
+
+            /* Syntax colors */
+            .kw {
+                color: #ff7b72;
+            }
+            .str {
+                color: #a5d6ff;
+            }
+            .cm {
+                color: #6e7681;
+                font-style: italic;
+            }
+            .fn {
+                color: #d2a8ff;
+            }
+            .ty {
+                color: #79c0ff;
+            }
+            .num {
+                color: #79c0ff;
+            }
+            .op {
+                color: #ff7b72;
+            }
+            .prop {
+                color: #7ee787;
+            }
+            .param {
+                color: #ffa657;
+            }
+
+            /* ── Tables ─────────────────────────────────────────── */
+            .table-wrap {
+                overflow-x: auto;
+                margin-bottom: 20px;
+            }
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 15px;
+            }
+            th {
+                text-align: left;
+                font-weight: 600;
+                color: var(--text-primary);
+                padding: 12px 16px;
+                background: var(--bg-secondary);
+                border-bottom: 2px solid var(--border);
+                white-space: nowrap;
+            }
+            td {
+                padding: 11px 16px;
+                border-bottom: 1px solid var(--border);
+                color: var(--text-secondary);
+                vertical-align: top;
+            }
+            tr:hover td {
+                background: rgba(255, 255, 255, 0.02);
+            }
+
+            /* ── Callouts ───────────────────────────────────────── */
+            .callout {
+                border-radius: 8px;
+                padding: 18px 22px;
+                margin-bottom: 22px;
+                font-size: 15.5px;
+                display: flex;
+                gap: 12px;
+            }
+            .callout-icon {
+                flex-shrink: 0;
+                margin-top: 1px;
+            }
+            .callout.info {
+                background: rgba(56, 139, 253, 0.08);
+                border: 1px solid rgba(56, 139, 253, 0.25);
+            }
+            .callout.info .callout-icon {
+                color: var(--link);
+            }
+            .callout.tip {
+                background: rgba(63, 185, 80, 0.08);
+                border: 1px solid rgba(63, 185, 80, 0.25);
+            }
+            .callout.tip .callout-icon {
+                color: var(--green);
+            }
+            .callout.warn {
+                background: rgba(210, 153, 34, 0.08);
+                border: 1px solid rgba(210, 153, 34, 0.25);
+            }
+            .callout.warn .callout-icon {
+                color: var(--yellow);
+            }
+            .callout.accent-box {
+                background: rgba(219, 97, 162, 0.06);
+                border: 2px solid var(--magenta);
+            }
+
+            /* ── Diagram box ────────────────────────────────────── */
+            .diagram {
+                background: var(--bg-secondary);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 24px;
+                margin-bottom: 20px;
+                text-align: center;
+            }
+            .diagram-flow {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 0;
+                flex-wrap: wrap;
+            }
+            .diagram-node {
+                background: var(--bg-tertiary);
+                border: 1px solid var(--accent);
+                border-radius: 8px;
+                padding: 12px 20px;
+                font-size: 14.5px;
+                font-weight: 500;
+                color: var(--accent-light);
+                white-space: nowrap;
+            }
+            .diagram-arrow {
+                color: var(--text-muted);
+                font-size: 20px;
+                padding: 0 8px;
+            }
+            .diagram-label {
+                font-size: 11px;
+                color: var(--text-muted);
+                margin-top: 6px;
+            }
+
+            /* ── Tabs ───────────────────────────────────────────── */
+            .tabs {
+                display: flex;
+                gap: 0;
+                border-bottom: 2px solid var(--border);
+                margin-bottom: 20px;
+            }
+            .tab {
+                padding: 8px 18px;
+                font-size: 13px;
+                font-weight: 500;
+                color: var(--text-secondary);
+                cursor: pointer;
+                border-bottom: 2px solid transparent;
+                margin-bottom: -2px;
+                transition: all 0.12s;
+            }
+            .tab:hover {
+                color: var(--text-primary);
+            }
+            .tab.active {
+                color: var(--accent-light);
+                border-bottom-color: var(--accent-light);
+            }
+            .tab-content {
+                display: none;
+            }
+            .tab-content.active {
+                display: block;
+            }
+
+            /* ── Badge ──────────────────────────────────────────── */
+            .badge {
+                display: inline-block;
+                font-size: 11px;
+                font-weight: 600;
+                padding: 2px 8px;
+                border-radius: 10px;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+            }
+            .badge-required {
+                background: rgba(248, 81, 73, 0.15);
+                color: var(--red);
+            }
+            .badge-optional {
+                background: rgba(139, 148, 158, 0.15);
+                color: var(--text-secondary);
+            }
+            .badge-default {
+                background: rgba(63, 185, 80, 0.15);
+                color: var(--green);
+            }
+            .badge-legacy {
+                background: rgba(210, 153, 34, 0.15);
+                color: var(--yellow);
+            }
+
+            /* ── Pipeline visual ────────────────────────────────── */
+            .pipeline {
+                display: flex;
+                align-items: stretch;
+                gap: 0;
+                margin: 20px 0;
+                overflow-x: auto;
+            }
+            .pipeline-stage {
+                flex: 1;
+                min-width: 140px;
+                background: var(--bg-secondary);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 14px 16px;
+                position: relative;
+            }
+            .pipeline-stage::after {
+                content: "\2192";
+                position: absolute;
+                right: -16px;
+                top: 50%;
+                transform: translateY(-50%);
+                color: var(--text-muted);
+                font-size: 18px;
+            }
+            .pipeline-stage:last-child::after {
+                display: none;
+            }
+            .pipeline-stage-title {
+                font-size: 14.5px;
+                font-weight: 600;
+                color: var(--accent-light);
+                margin-bottom: 4px;
+            }
+            .pipeline-stage-desc {
+                font-size: 12px;
+                color: var(--text-muted);
+            }
+
+            /* ── Responsive ─────────────────────────────────────── */
+            @media (max-width: 1200px) {
+                .toc {
+                    display: none;
+                }
+                .main {
+                    margin-right: 0;
+                }
+            }
+            @media (max-width: 900px) {
+                .sidebar {
+                    display: none;
+                }
+                .main {
+                    margin-left: 0;
+                    padding: 24px 20px 60px;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <!-- ═══════ Unified Nav ═══════ -->
+        <nav class="top-nav">
+            <a class="brand" href="#">
+                <svg width="72" height="22" viewBox="0 0 72 22" fill="none">
+                    <text
+                        x="0"
+                        y="18"
+                        fill="white"
+                        font-family="-apple-system, sans-serif"
+                        font-size="20"
+                        font-weight="700"
+                    >
+                        atlan
+                    </text>
+                </svg>
+            </a>
+            <div class="nav-links">
+                <a href="#overview" class="active">
+                    <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 16v-4M12 8h.01" />
+                    </svg>
+                    Overview
+                </a>
+                <a href="#package-setup">
+                    <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                    </svg>
+                    Getting Started
+                </a>
+                <a href="#nativeapp">
+                    <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <path
+                            d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
+                        />
+                        <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    Modules
+                </a>
+                <a href="#widgets">
+                    <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <rect x="3" y="3" width="7" height="7" />
+                        <rect x="14" y="3" width="7" height="7" />
+                        <rect x="14" y="14" width="7" height="7" />
+                        <rect x="3" y="14" width="7" height="7" />
+                    </svg>
+                    Widgets
+                </a>
+                <a href="#manifest">
+                    <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                    </svg>
+                    DAG &amp; Manifest
+                </a>
+                <a href="#reference">
+                    <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
+                        <path
+                            d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"
+                        />
+                    </svg>
+                    Reference
+                </a>
+            </div>
+        </nav>
+
+        <div class="layout">
+            <!-- ═══════ Sidebar ═══════ -->
+            <aside class="sidebar">
+                <div class="sidebar-group">
+                    <div class="sidebar-group-title">Getting Started</div>
+                    <a class="sidebar-link active" href="#overview">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path
+                                d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"
+                            />
+                        </svg>
+                        Overview
+                    </a>
+                    <a class="sidebar-link" href="#architecture">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <rect x="2" y="7" width="20" height="14" rx="2" />
+                            <path d="M16 7V5a4 4 0 00-8 0v2" />
+                        </svg>
+                        Architecture
+                    </a>
+                    <a class="sidebar-link" href="#package-setup">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path
+                                d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0022 16z"
+                            />
+                        </svg>
+                        Package Setup
+                    </a>
+                    <a class="sidebar-link" href="#quick-start">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                        </svg>
+                        Full Example
+                    </a>
+                </div>
+                <div class="sidebar-group">
+                    <div class="sidebar-group-title">Core Modules</div>
+                    <a class="sidebar-link" href="#nativeapp">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path
+                                d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
+                            />
+                            <polyline points="14 2 14 8 20 8" />
+                        </svg>
+                        NativeApp.pkl
+                    </a>
+                    <a class="sidebar-link" href="#fieldspec">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                            <path d="M3 9h18M9 21V9" />
+                        </svg>
+                        FieldSpec
+                    </a>
+                    <a class="sidebar-link" href="#conditionalfieldspec">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                            <path d="M3 9h18M9 21V9" />
+                        </svg>
+                        ConditionalFieldSpec
+                    </a>
+                    <a class="sidebar-link" href="#authoption">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <rect x="3" y="11" width="18" height="11" rx="2" />
+                            <path d="M7 11V7a5 5 0 0110 0v4" />
+                        </svg>
+                        AuthOption
+                    </a>
+                    <a class="sidebar-link" href="#widgets">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <rect x="3" y="3" width="7" height="7" />
+                            <rect x="14" y="3" width="7" height="7" />
+                            <rect x="14" y="14" width="7" height="7" />
+                            <rect x="3" y="14" width="7" height="7" />
+                        </svg>
+                        Config.pkl Widgets
+                    </a>
+                    <a class="sidebar-link" href="#connectors">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <circle cx="12" cy="12" r="3" />
+                            <path
+                                d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"
+                            />
+                        </svg>
+                        Connectors.pkl
+                    </a>
+                </div>
+                <div class="sidebar-group">
+                    <div class="sidebar-group-title">DAG &amp; Manifest</div>
+                    <a class="sidebar-link" href="#manifest">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <polyline
+                                points="22 12 18 12 15 21 9 3 6 12 2 12"
+                            />
+                        </svg>
+                        Manifest Generation
+                    </a>
+                    <a class="sidebar-link" href="#dag-nodes">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <circle cx="18" cy="18" r="3" />
+                            <circle cx="6" cy="6" r="3" />
+                            <path d="M13 6h3a2 2 0 012 2v7" />
+                            <path d="M6 9v12" />
+                        </svg>
+                        DAG Nodes
+                    </a>
+                    <a class="sidebar-link" href="#custom-pipelines">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path
+                                d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"
+                            />
+                            <rect x="8" y="2" width="8" height="4" rx="1" />
+                        </svg>
+                        Custom Pipelines
+                    </a>
+                </div>
+                <div class="sidebar-group">
+                    <div class="sidebar-group-title">Generated Output</div>
+                    <a class="sidebar-link" href="#output-workflow">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path
+                                d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
+                            />
+                            <polyline points="14 2 14 8 20 8" />
+                            <line x1="16" y1="13" x2="8" y2="13" />
+                            <line x1="16" y1="17" x2="8" y2="17" />
+                        </svg>
+                        Workflow Config
+                    </a>
+                    <a class="sidebar-link" href="#output-credential">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path
+                                d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"
+                            />
+                        </svg>
+                        Credential Config
+                    </a>
+                    <a class="sidebar-link" href="#output-manifest">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                            <polyline points="2 17 12 22 22 17" />
+                            <polyline points="2 12 12 17 22 12" />
+                        </svg>
+                        Manifest JSON
+                    </a>
+                    <a class="sidebar-link" href="#output-input">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <polyline points="16 18 22 12 16 6" />
+                            <polyline points="8 6 2 12 8 18" />
+                        </svg>
+                        Input Dataclass
+                    </a>
+                </div>
+                <div class="sidebar-group">
+                    <div class="sidebar-group-title">Legacy</div>
+                    <a class="sidebar-link" href="#legacy">
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <circle cx="12" cy="12" r="10" />
+                            <polyline points="12 6 12 12 16 14" />
+                        </svg>
+                        Credential.pkl &amp; Renderers.pkl
+                    </a>
+                </div>
+            </aside>
+
+            <!-- ═══════ Main Content ═══════ -->
+            <main class="main">
+                <!-- Overview -->
+                <section id="overview">
+                    <h1>App Contract Toolkit</h1>
+                    <p class="subtitle">
+                        PKL toolkit for defining Atlan native app contracts. One
+                        <code>app.pkl</code> generates all configuration
+                        artifacts.
+                    </p>
+
+                    <div class="callout accent-box">
+                        <div class="callout-icon">
+                            <svg
+                                width="20"
+                                height="20"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                            >
+                                <path d="M22 11.08V12a10 10 0 11-5.93-9.14" />
+                                <polyline points="22 4 12 14.01 9 11.01" />
+                            </svg>
+                        </div>
+                        <div>
+                            <strong>Single source of truth.</strong> Define your
+                            app once in PKL and generate workflow config,
+                            credential config, AE manifest, and a typed Python
+                            dataclass &mdash; all from one file.
+                        </div>
+                    </div>
+
+                    <h3>What gets generated</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Artifact</th>
+                                    <th>File</th>
+                                    <th>Purpose</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>Workflow Config</code></td>
+                                    <td><code>atlan-{name}.json</code></td>
+                                    <td>UI form schema for the setup wizard</td>
+                                </tr>
+                                <tr>
+                                    <td><code>Credential Config</code></td>
+                                    <td>
+                                        <code
+                                            >atlan-connectors-{name}.json</code
+                                        >
+                                    </td>
+                                    <td>
+                                        Auth form schema with auth-type
+                                        switching
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>Manifest</code></td>
+                                    <td><code>manifest.json</code></td>
+                                    <td>Automation Engine DAG template</td>
+                                </tr>
+                                <tr>
+                                    <td><code>Input Class</code></td>
+                                    <td><code>input.py</code></td>
+                                    <td>
+                                        Python <code>@dataclass</code> for typed
+                                        app inputs
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Architecture -->
+                <section id="architecture">
+                    <h2>Architecture</h2>
+                    <p>
+                        The toolkit sits at the contract layer between the
+                        developer and the Atlan platform runtime:
+                    </p>
+
+                    <div class="diagram">
+                        <div class="diagram-flow">
+                            <div class="diagram-node">
+                                Developer writes<br /><code>app.pkl</code>
+                            </div>
+                            <div class="diagram-arrow">&rarr;</div>
+                            <div class="diagram-node">
+                                <code>pkl eval</code><br />generates JSON
+                            </div>
+                            <div class="diagram-arrow">&rarr;</div>
+                            <div class="diagram-node">
+                                SDK serves<br />at REST endpoints
+                            </div>
+                            <div class="diagram-arrow">&rarr;</div>
+                            <div class="diagram-node">
+                                Frontend renders<br />setup wizard
+                            </div>
+                        </div>
+                        <div style="margin-top: 20px">
+                            <div class="diagram-flow">
+                                <div class="diagram-node">
+                                    User submits form
+                                </div>
+                                <div class="diagram-arrow">&rarr;</div>
+                                <div class="diagram-node">
+                                    Heracles substitutes<br /><code
+                                        >{{params}}</code
+                                    >
+                                </div>
+                                <div class="diagram-arrow">&rarr;</div>
+                                <div class="diagram-node">
+                                    Automation Engine<br />runs DAG
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h3>Consumption endpoints</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Artifact</th>
+                                    <th>SDK Endpoint</th>
+                                    <th>Consumer</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>Workflow config</td>
+                                    <td>
+                                        <code
+                                            >GET
+                                            /workflows/v1/configmap/atlan-{name}</code
+                                        >
+                                    </td>
+                                    <td>Frontend &mdash; renders setup form</td>
+                                </tr>
+                                <tr>
+                                    <td>Credential config</td>
+                                    <td>
+                                        <code
+                                            >GET
+                                            /workflows/v1/configmap/atlan-connectors-{name}</code
+                                        >
+                                    </td>
+                                    <td>
+                                        Frontend &mdash; renders credential form
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>Manifest</td>
+                                    <td><code>GET /manifest</code></td>
+                                    <td>Heracles &rarr; Automation Engine</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Package Setup (moved before Quick Start) -->
+                <section id="package-setup">
+                    <h2>Package Setup</h2>
+
+                    <div class="callout info">
+                        <div class="callout-icon">
+                            <svg
+                                width="18"
+                                height="18"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                            >
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 16v-4M12 8h.01" />
+                            </svg>
+                        </div>
+                        <div>
+                            Requires
+                            <a href="https://pkl-lang.org/" target="_blank"
+                                >PKL</a
+                            >
+                            &ge; 0.25.1. Install with
+                            <code>brew install pkl</code> on macOS.
+                        </div>
+                    </div>
+
+                    <h3>1. Add the dependency</h3>
+                    <p>
+                        Add the toolkit as a PKL dependency in your app's
+                        <code>PklProject</code>:
+                    </p>
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span>contract/PklProject</span>
+                            <button
+                                class="code-block-copy"
+                                onclick="copyCode(this)"
+                                title="Copy"
+                            >
+                                <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                >
+                                    <rect
+                                        x="9"
+                                        y="9"
+                                        width="13"
+                                        height="13"
+                                        rx="2"
+                                    />
+                                    <path
+                                        d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"
+                                    />
+                                </svg>
+                            </button>
+                        </div>
+                        <pre><span class="kw">amends</span> <span class="str">"pkl:Project"</span>
+
+<span class="prop">dependencies</span> {
+  [<span class="str">"app-contract-toolkit"</span>] {
+    <span class="prop">uri</span> = <span class="str">"package://atlanhq.github.io/app-contract-toolkit/app-contract-toolkit@0.2.0"</span>
+  }
+}</pre>
+                    </div>
+
+                    <h3>2. Import in your app.pkl</h3>
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span>contract/app.pkl</span>
+                            <button
+                                class="code-block-copy"
+                                onclick="copyCode(this)"
+                                title="Copy"
+                            >
+                                <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                >
+                                    <rect
+                                        x="9"
+                                        y="9"
+                                        width="13"
+                                        height="13"
+                                        rx="2"
+                                    />
+                                    <path
+                                        d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"
+                                    />
+                                </svg>
+                            </button>
+                        </div>
+                        <pre><span class="kw">amends</span> <span class="str">"@app-contract-toolkit/NativeApp.pkl"</span>
+<span class="kw">import</span> <span class="str">"@app-contract-toolkit/Config.pkl"</span>
+<span class="kw">import</span> <span class="str">"@app-contract-toolkit/Connectors.pkl"</span></pre>
+                    </div>
+
+                    <h3>3. Resolve and generate</h3>
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span>Terminal</span>
+                            <button
+                                class="code-block-copy"
+                                onclick="copyCode(this)"
+                                title="Copy"
+                            >
+                                <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                >
+                                    <rect
+                                        x="9"
+                                        y="9"
+                                        width="13"
+                                        height="13"
+                                        rx="2"
+                                    />
+                                    <path
+                                        d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"
+                                    />
+                                </svg>
+                            </button>
+                        </div>
+                        <pre><span class="cm"># Resolve dependencies</span>
+cd contract &amp;&amp; pkl project resolve
+
+<span class="cm"># Generate all artifacts</span>
+pkl eval -m generated app.pkl</pre>
+                    </div>
+
+                    <h3>Output structure</h3>
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span>contract/generated/</span>
+                        </div>
+                        <pre>contract/generated/
+├── atlan-redshift.json              <span class="cm"># Workflow config (UI form)</span>
+├── atlan-connectors-redshift.json   <span class="cm"># Credential config (auth form)</span>
+├── manifest.json                    <span class="cm"># AE DAG template</span>
+└── input.py                         <span class="cm"># Python @dataclass</span></pre>
+                    </div>
+                </section>
+
+                <!-- Quick Start (full example) -->
+                <section id="quick-start">
+                    <h2>Full Example</h2>
+                    <p>
+                        Here's a complete <code>app.pkl</code> for a Redshift
+                        connector, showing credentials, workflow form, and
+                        everything wired together:
+                    </p>
+
+                    <h3>Complete app.pkl</h3>
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span>contract/app.pkl</span>
+                            <button
+                                class="code-block-copy"
+                                onclick="copyCode(this)"
+                                title="Copy"
+                            >
+                                <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                >
+                                    <rect
+                                        x="9"
+                                        y="9"
+                                        width="13"
+                                        height="13"
+                                        rx="2"
+                                    />
+                                    <path
+                                        d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"
+                                    />
+                                </svg>
+                            </button>
+                        </div>
+                        <pre><span class="kw">amends</span> <span class="str">"@app-contract-toolkit/NativeApp.pkl"</span>
+
+<span class="kw">import</span> <span class="str">"@app-contract-toolkit/Config.pkl"</span>
+<span class="kw">import</span> <span class="str">"@app-contract-toolkit/Connectors.pkl"</span>
+
+<span class="prop">name</span> = <span class="str">"redshift"</span>
+<span class="prop">displayName</span> = <span class="str">"Redshift"</span>
+<span class="prop">connector</span> = Connectors.<span class="ty">REDSHIFT</span>
+<span class="prop">workflowType</span> = <span class="str">"RedshiftMetadataExtractionWorkflow"</span>
+<span class="prop">icon</span> = <span class="str">"https://assets.atlan.com/assets/redshift.svg"</span>
+<span class="prop">credentialConnectorType</span> = <span class="str">"jdbc"</span>
+
+<span class="cm">// Credential fields</span>
+<span class="prop">credentialCommonFields</span> {
+  <span class="kw">new</span> <span class="ty">FieldSpec</span> { <span class="prop">name</span> = <span class="str">"host"</span>; <span class="prop">displayName</span> = <span class="str">"Host Name"</span>; <span class="prop">width</span> = <span class="num">6</span> }
+  <span class="kw">new</span> <span class="ty">FieldSpec</span> { <span class="prop">name</span> = <span class="str">"port"</span>; <span class="prop">fieldType</span> = <span class="str">"number"</span>; <span class="prop">defaultValue</span> = <span class="str">"5439"</span>; <span class="prop">width</span> = <span class="num">2</span> }
+}
+
+<span class="cm">// Auth types</span>
+<span class="prop">credentialAuthOptions</span> {
+  [<span class="str">"basic"</span>] = <span class="kw">new</span> <span class="ty">AuthOption</span> {
+    <span class="prop">label</span> = <span class="str">"Basic"</span>
+    <span class="prop">fields</span> {
+      <span class="kw">new</span> <span class="ty">FieldSpec</span> { <span class="prop">name</span> = <span class="str">"username"</span> }
+      <span class="kw">new</span> <span class="ty">FieldSpec</span> { <span class="prop">name</span> = <span class="str">"password"</span>; <span class="prop">sensitive</span> = <span class="kw">true</span> }
+    }
+  }
+}
+
+<span class="cm">// Workflow form</span>
+<span class="prop">uiConfig</span> {
+  <span class="prop">tasks</span> {
+    [<span class="str">"Credential"</span>] {
+      <span class="prop">inputs</span> {
+        [<span class="str">"credential-guid"</span>] = <span class="kw">new</span> Config.<span class="ty">CredentialInput</span> {
+          <span class="prop">title</span> = <span class="str">""</span>
+          <span class="prop">credType</span> = <span class="str">"atlan-connectors-redshift"</span>
+        }
+      }
+    }
+    [<span class="str">"Connection"</span>] {
+      <span class="prop">inputs</span> {
+        [<span class="str">"connection"</span>] = <span class="kw">new</span> Config.<span class="ty">ConnectionCreator</span> { <span class="prop">title</span> = <span class="str">""</span> }
+      }
+    }
+  }
+}</pre>
+                    </div>
+                </section>
+
+                <hr />
+
+                <!-- NativeApp.pkl -->
+                <section id="nativeapp">
+                    <h2>NativeApp.pkl &mdash; Base Module</h2>
+                    <p>
+                        The primary module developers amend. Defines app
+                        identity, credentials, workflow form, and manifest
+                        generation.
+                    </p>
+
+                    <h3>App Metadata</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Property</th>
+                                    <th>Type</th>
+                                    <th>Default</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>name</code></td>
+                                    <td><code>String</code></td>
+                                    <td>
+                                        <span class="badge badge-required"
+                                            >required</span
+                                        >
+                                    </td>
+                                    <td>
+                                        App slug (e.g.,
+                                        <code>"redshift"</code>). Drives
+                                        configmap names, task queues, file
+                                        names.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>displayName</code></td>
+                                    <td><code>String</code></td>
+                                    <td><code>name.capitalize()</code></td>
+                                    <td>UI display name.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>connector</code></td>
+                                    <td><code>Connectors.Type</code></td>
+                                    <td>
+                                        <span class="badge badge-required"
+                                            >required</span
+                                        >
+                                    </td>
+                                    <td>Connector from the registry.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>icon</code></td>
+                                    <td><code>String</code></td>
+                                    <td>
+                                        <span class="badge badge-required"
+                                            >required</span
+                                        >
+                                    </td>
+                                    <td>Icon URL.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>workflowType</code></td>
+                                    <td><code>String</code></td>
+                                    <td><code>""</code></td>
+                                    <td>
+                                        Python App class name (PascalCase). Auto-converted to kebab-case in manifest
+                                        (e.g., <code>TeradataCrawlerApp</code> → <code>teradata-crawler-app</code>).
+                                        Either this or <code>workflowTypeOverride</code> must be set.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>workflowTypeOverride</code></td>
+                                    <td><code>String?</code></td>
+                                    <td><code>null</code></td>
+                                    <td>
+                                        Explicit workflow type for manifest (no conversion). Use when the Python class
+                                        sets a custom <code>name</code> ClassVar. Takes priority over <code>workflowType</code>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>taskQueuePrefix</code></td>
+                                    <td><code>String</code></td>
+                                    <td><code>"atlan-{name}"</code></td>
+                                    <td>
+                                        Task queue prefix for extract node. Override for multi-manifest apps sharing
+                                        a deployment (e.g., <code>"atlan-teradata"</code> for both crawler and miner).
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>docsUrl</code></td>
+                                    <td><code>String</code></td>
+                                    <td><code>""</code></td>
+                                    <td>Documentation link.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>logo</code></td>
+                                    <td><code>String</code></td>
+                                    <td><code>icon</code></td>
+                                    <td>Logo URL.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>helpdeskLink</code></td>
+                                    <td><code>String</code></td>
+                                    <td><code>""</code></td>
+                                    <td>Helpdesk link for credential form.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h3>Workflow &amp; Manifest Properties</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Property</th>
+                                    <th>Type</th>
+                                    <th>Default</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>hasPublishStep</code></td>
+                                    <td><code>Boolean</code></td>
+                                    <td><code>true</code></td>
+                                    <td>
+                                        Includes publish node in manifest DAG
+                                        and appends publish-related fields to
+                                        Input class.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>credentialFieldName</code></td>
+                                    <td><code>String?</code></td>
+                                    <td><code>"{name}_credential"</code></td>
+                                    <td>
+                                        Credential ref field in Input class.
+                                        Null to omit.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>workflowConfigName</code></td>
+                                    <td><code>String</code></td>
+                                    <td><code>name</code></td>
+                                    <td>
+                                        Workflow configmap name / output
+                                        filename.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>extraNodes</code></td>
+                                    <td>
+                                        <code
+                                            >Mapping&lt;String,
+                                            DAGNode&gt;</code
+                                        >
+                                    </td>
+                                    <td><code>{}</code></td>
+                                    <td>
+                                        Custom DAG nodes. Key
+                                        <code>"publish"</code> replaces
+                                        auto-generated publish.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>manifestTopLevelArgs</code></td>
+                                    <td>
+                                        <code
+                                            >Mapping&lt;String, String&gt;</code
+                                        >
+                                    </td>
+                                    <td>
+                                        <code
+                                            >{"credential_guid":
+                                            "credential-guid", ...}</code
+                                        >
+                                    </td>
+                                    <td>
+                                        Top-level extract args (rest go under
+                                        <code>metadata</code>).
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>flatManifestArgs</code></td>
+                                    <td><code>Boolean</code></td>
+                                    <td><code>false</code></td>
+                                    <td>
+                                        When <code>true</code>, all workflow
+                                        params are emitted as top-level keys in
+                                        <code>args</code> with no
+                                        <code>metadata</code> wrapper.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h3>Credential Config Properties</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Property</th>
+                                    <th>Type</th>
+                                    <th>Default</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>hasCredentialConfig</code></td>
+                                    <td><code>Boolean</code></td>
+                                    <td><code>true</code></td>
+                                    <td>
+                                        Whether to generate credential JSON.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>connectorConfigName</code></td>
+                                    <td><code>String</code></td>
+                                    <td>
+                                        <code>"atlan-connectors-{name}"</code>
+                                    </td>
+                                    <td>Credential configmap name.</td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <code>credentialConnectorType</code>
+                                    </td>
+                                    <td><code>String</code></td>
+                                    <td><code>"rest"</code></td>
+                                    <td>Default connector type.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>credentialCommonFields</code></td>
+                                    <td>
+                                        <code>Listing&lt;FieldSpec&gt;</code>
+                                    </td>
+                                    <td><code>[]</code></td>
+                                    <td>
+                                        Fields shared across all auth types.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>credentialAuthOptions</code></td>
+                                    <td>
+                                        <code
+                                            >Mapping&lt;String,
+                                            AuthOption&gt;?</code
+                                        >
+                                    </td>
+                                    <td><code>null</code></td>
+                                    <td>Auth type options.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>credentialAuthTitle</code></td>
+                                    <td><code>String</code></td>
+                                    <td><code>"Authentication"</code></td>
+                                    <td>Auth radio label.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>credentialAuthRules</code></td>
+                                    <td>
+                                        <code>Listing&lt;Dynamic&gt;?</code>
+                                    </td>
+                                    <td><code>null</code></td>
+                                    <td>
+                                        Validation rules for the auth-type radio
+                                        button.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <code>credentialAuthPlaceholder</code>
+                                    </td>
+                                    <td><code>String?</code></td>
+                                    <td><code>null</code></td>
+                                    <td>
+                                        Placeholder text for the auth-type radio
+                                        button.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- FieldSpec -->
+                <section id="fieldspec">
+                    <h2>FieldSpec &mdash; Credential Field Definition</h2>
+                    <p>
+                        Aligned with the SDK's
+                        <code>application_sdk.credentials.types.FieldSpec</code
+                        >. Single class for all credential fields.
+                    </p>
+
+                    <div class="code-block">
+                        <div class="code-block-header"><span>pkl</span></div>
+                        <pre><span class="kw">class</span> <span class="ty">FieldSpec</span> {
+  <span class="prop">name</span>: <span class="ty">String</span>                           <span class="cm">// Internal name (JSON key)</span>
+  <span class="prop">displayName</span>: <span class="ty">String</span>                    <span class="cm">// UI label (auto from name)</span>
+  <span class="prop">placeholder</span>: <span class="ty">String?</span>                   <span class="cm">// Placeholder text</span>
+  <span class="prop">helpText</span>: <span class="ty">String?</span>                      <span class="cm">// Tooltip</span>
+  <span class="prop">required</span>: <span class="ty">Boolean</span> = <span class="kw">true</span>
+  <span class="prop">sensitive</span>: <span class="ty">Boolean</span> = <span class="kw">false</span>             <span class="cm">// true -> password widget</span>
+  <span class="prop">fieldType</span>: <span class="ty">FieldType</span> = <span class="str">"text"</span>          <span class="cm">// text|password|textarea|select|number|checkbox|url|email</span>
+  <span class="prop">options</span>: <span class="ty">Listing&lt;String&gt;?</span>              <span class="cm">// For select fields</span>
+  <span class="prop">optionLabels</span>: <span class="ty">Mapping&lt;String, String&gt;?</span> <span class="cm">// Display labels for options</span>
+  <span class="prop">defaultValue</span>: <span class="ty">String?</span>                  <span class="cm">// Pre-filled value</span>
+  <span class="prop">validationRegex</span>: <span class="ty">String?</span>              <span class="cm">// Regex pattern</span>
+  <span class="prop">width</span>: <span class="ty">Int</span> = <span class="num">8</span>                         <span class="cm">// Grid: 8=full, 4=half, 2=quarter</span>
+  <span class="prop">isHidden</span>: <span class="ty">Boolean</span> = <span class="kw">false</span>             <span class="cm">// true -> hidden in UI (for fixed-value fields)</span>
+  <span class="prop">feedback</span>: <span class="ty">Boolean?</span>                     <span class="cm">// Show validation feedback indicator</span>
+  <span class="prop">message</span>: <span class="ty">String?</span>                      <span class="cm">// Inline validation message below field</span>
+  <span class="prop">validationRules</span>: <span class="ty">Listing&lt;Dynamic&gt;?</span>    <span class="cm">// Custom validation rules (overrides validationRegex)</span>
+}</pre>
+                    </div>
+
+                    <h3>FieldType &rarr; Widget Mapping</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>FieldSpec Config</th>
+                                    <th>Generated Widget</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>sensitive = true</code></td>
+                                    <td><code>password</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>fieldType = "number"</code></td>
+                                    <td><code>inputNumber</code></td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <code>fieldType = "select"</code> (&le;4
+                                        options)
+                                    </td>
+                                    <td><code>radio</code></td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <code>fieldType = "select"</code> (&gt;4
+                                        options)
+                                    </td>
+                                    <td><code>select</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>fieldType = "checkbox"</code></td>
+                                    <td><code>boolean</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>fieldType = "textarea"</code></td>
+                                    <td><code>textBox</code></td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <code>fieldType = "inputRepeater"</code>
+                                    </td>
+                                    <td><code>inputRepeater</code></td>
+                                </tr>
+                                <tr>
+                                    <td>Default</td>
+                                    <td><code>input</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- ConditionalFieldSpec -->
+                <section id="conditionalfieldspec">
+                    <h2>ConditionalFieldSpec &mdash; Conditional Credential Field</h2>
+                    <p>
+                        Use <code>ConditionalFieldSpec</code> in place of
+                        <code>FieldSpec</code> when a credential field must
+                        emit <code>type: "conditional"</code> with a
+                        <code>conditions</code> array. Each
+                        <code>Config.Condition</code> can match via simple
+                        <code>property</code> / <code>value</code> or via a
+                        compound <code>filter</code>
+                        (<code>$and</code> / <code>$or</code> tree over
+                        sibling form fields), plus an
+                        <code>overrideUi</code> widget override.
+                    </p>
+                    <p>
+                        <code>AuthOption.fields</code> and
+                        <code>AuthOption.extraFields</code> accept both
+                        <code>FieldSpec</code> and
+                        <code>ConditionalFieldSpec</code> &mdash; mix them
+                        freely in the same listing.
+                    </p>
+
+                    <div class="code-block">
+                        <div class="code-block-header"><span>pkl</span></div>
+                        <pre><span class="kw">class</span> <span class="ty">ConditionalFieldSpec</span> {
+  <span class="prop">name</span>: <span class="ty">String</span>                                   <span class="cm">// Internal field name (JSON property key)</span>
+  <span class="prop">required</span>: <span class="ty">Boolean</span> = <span class="kw">false</span>
+  <span class="prop">conditions</span>: <span class="ty">Listing&lt;Config.Condition&gt;</span>         <span class="cm">// Per-condition overrides (filter or property/value)</span>
+  <span class="prop">additionalProperties</span>: <span class="ty">Dynamic?</span>               <span class="cm">// Optional sub-schema for array-valued conditional fields</span>
+  <span class="prop">defaultValue</span>: <span class="ty">Any?</span>                          <span class="cm">// Optional default (emitted verbatim)</span>
+}</pre>
+                    </div>
+
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span>Example: SAP port driven by connection-type &times; extraction-method</span>
+                        </div>
+                        <pre><span class="kw">new</span> <span class="ty">ConditionalFieldSpec</span> {
+  <span class="prop">name</span> = <span class="str">"sap-port"</span>
+  <span class="prop">conditions</span> {
+    <span class="kw">new</span> <span class="ty">Config.Condition</span> {
+      <span class="prop">filter</span> = <span class="kw">new</span> <span class="ty">Dynamic</span> {
+        `$or` {
+          <span class="kw">new</span> <span class="ty">Dynamic</span> {
+            `$and` {
+              <span class="kw">new</span> <span class="ty">Dynamic</span> { [<span class="str">"connection-type"</span>] = <span class="str">"application-server"</span> }
+              <span class="kw">new</span> <span class="ty">Dynamic</span> { [<span class="str">"extraction-method"</span>] = <span class="str">"direct"</span> }
+            }
+          }
+        }
+      }
+      <span class="prop">overrideUi</span> = <span class="kw">new</span> <span class="ty">Config.Widget</span> { <span class="prop">widget</span> = <span class="str">"input"</span>; <span class="prop">label</span> = <span class="str">"Port"</span>; `hidden` = <span class="kw">false</span> }
+    }
+  }
+}</pre>
+                    </div>
+
+                    <p>
+                        See <code>examples/sap-s4/app.pkl</code> for the full
+                        SAP connection-type &times; extraction-method pattern.
+                    </p>
+                </section>
+
+                <!-- AuthOption -->
+                <section id="authoption">
+                    <h2>AuthOption &mdash; Auth Type Definition</h2>
+                    <p>
+                        Each <code>AuthOption</code> becomes a radio button
+                        choice in the credential form. When selected, its fields
+                        are shown.
+                    </p>
+
+                    <div class="code-block">
+                        <div class="code-block-header"><span>pkl</span></div>
+                        <pre><span class="kw">class</span> <span class="ty">AuthOption</span> {
+  <span class="prop">label</span>: <span class="ty">String</span>                    <span class="cm">// Radio button display text</span>
+  <span class="prop">fields</span>: <span class="ty">Listing&lt;FieldSpec|ConditionalFieldSpec&gt;</span>        <span class="cm">// Primary credential fields (stored in Vault)</span>
+  <span class="prop">extraFields</span>: <span class="ty">Listing&lt;FieldSpec|ConditionalFieldSpec&gt;</span> = [] <span class="cm">// Nested under "extra" in credential payload</span>
+  <span class="prop">nestedLabel</span>: <span class="ty">String</span> = <span class="str">""</span>          <span class="cm">// Custom label for nested auth section wrapper</span>
+  <span class="prop">nestedPlaceholder</span>: <span class="ty">String?</span>       <span class="cm">// Custom placeholder for nested auth section wrapper</span>
+}</pre>
+                    </div>
+
+                    <div class="callout tip">
+                        <div class="callout-icon">
+                            <svg
+                                width="18"
+                                height="18"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                            >
+                                <path
+                                    d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"
+                                />
+                                <path d="M9 12l2 2 4-4" />
+                            </svg>
+                        </div>
+                        <div>
+                            <strong>fields</strong> are stored securely in
+                            Vault. <strong>extraFields</strong> are stored in
+                            the object store alongside Vault secrets &mdash; use
+                            them for non-secret connection metadata like
+                            <code>database</code>, <code>deployment_type</code>,
+                            <code>cluster_id</code>.
+                        </div>
+                    </div>
+
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span>Example: Multiple auth types</span>
+                        </div>
+                        <pre><span class="prop">credentialAuthOptions</span> {
+  [<span class="str">"basic"</span>] = <span class="kw">new</span> <span class="ty">AuthOption</span> {
+    <span class="prop">label</span> = <span class="str">"Basic Authentication"</span>
+    <span class="prop">fields</span> {
+      <span class="kw">new</span> <span class="ty">FieldSpec</span> { <span class="prop">name</span> = <span class="str">"username"</span> }
+      <span class="kw">new</span> <span class="ty">FieldSpec</span> { <span class="prop">name</span> = <span class="str">"password"</span>; <span class="prop">sensitive</span> = <span class="kw">true</span> }
+    }
+    <span class="prop">extraFields</span> {
+      <span class="kw">new</span> <span class="ty">FieldSpec</span> { <span class="prop">name</span> = <span class="str">"database"</span>; <span class="prop">displayName</span> = <span class="str">"Database"</span> }
+    }
+  }
+  [<span class="str">"iam"</span>] = <span class="kw">new</span> <span class="ty">AuthOption</span> {
+    <span class="prop">label</span> = <span class="str">"IAM Role"</span>
+    <span class="prop">fields</span> {}
+    <span class="prop">extraFields</span> {
+      <span class="kw">new</span> <span class="ty">FieldSpec</span> { <span class="prop">name</span> = <span class="str">"aws_role_arn"</span>; <span class="prop">displayName</span> = <span class="str">"AWS Role ARN"</span> }
+    }
+  }
+}</pre>
+                    </div>
+                </section>
+
+                <!-- Widgets -->
+                <section id="widgets">
+                    <h2>Config.pkl &mdash; Widget Types</h2>
+                    <p>
+                        30 widget types for the workflow config form. Used
+                        inside <code>uiConfig.tasks</code>.
+                    </p>
+
+                    <h3>Text &amp; Input</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Class</th>
+                                    <th>Widget</th>
+                                    <th>Python Type</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>TextInput</code></td>
+                                    <td><code>input</code></td>
+                                    <td><code>str</code></td>
+                                    <td>
+                                        <code>placeholderText</code>,
+                                        <code>defaultValue</code>,
+                                        <code>validationRules</code>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>TextBoxInput</code></td>
+                                    <td><code>TextInput</code></td>
+                                    <td><code>str</code></td>
+                                    <td>Multi-line</td>
+                                </tr>
+                                <tr>
+                                    <td><code>PasswordInput</code></td>
+                                    <td><code>password</code></td>
+                                    <td><code>str</code></td>
+                                    <td>Masked input</td>
+                                </tr>
+                                <tr>
+                                    <td><code>NumericInput</code></td>
+                                    <td><code>inputNumber</code></td>
+                                    <td><code>int</code></td>
+                                    <td>
+                                        <code>default</code>,
+                                        <code>placeholderValue</code>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>InputRepeater</code></td>
+                                    <td><code>inputRepeater</code></td>
+                                    <td><code>list[str]</code></td>
+                                    <td>
+                                        Repeatable text inputs for
+                                        list-of-strings.
+                                        <code>placeholderText</code>,
+                                        <code>validationRules</code>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h3>Selection</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Class</th>
+                                    <th>Widget</th>
+                                    <th>Python Type</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>Radio</code></td>
+                                    <td><code>radio</code></td>
+                                    <td><code>str</code></td>
+                                    <td>
+                                        <code>possibleValues</code> (required),
+                                        <code>default</code>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>DropDown</code></td>
+                                    <td><code>select</code></td>
+                                    <td>
+                                        <code>str</code> or
+                                        <code>list[str]</code>
+                                    </td>
+                                    <td>
+                                        <code>possibleValues</code>,
+                                        <code>multiSelect</code>,
+                                        <code>default</code>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>TagsInput</code></td>
+                                    <td><code>select</code> (mode=tags)</td>
+                                    <td><code>list[str]</code></td>
+                                    <td>Free-form tags</td>
+                                </tr>
+                                <tr>
+                                    <td><code>BooleanInput</code></td>
+                                    <td><code>boolean</code></td>
+                                    <td><code>bool</code></td>
+                                    <td><code>defaultSelection</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h3>Connection &amp; Credential</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Class</th>
+                                    <th>Widget</th>
+                                    <th>Python Type</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>ConnectionCreator</code></td>
+                                    <td><code>connection</code></td>
+                                    <td><code>Connection | None</code></td>
+                                    <td><code>placeholderText</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>ConnectionSelector</code></td>
+                                    <td><code>connectionSelector</code></td>
+                                    <td><code>str</code></td>
+                                    <td>
+                                        <code>multiSelect</code>,
+                                        <code>connectorFilter</code>,
+                                        <code>connectionCategories</code>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>CredentialInput</code></td>
+                                    <td><code>credential</code></td>
+                                    <td><code>str</code></td>
+                                    <td>
+                                        <code>credType</code> (required) &mdash;
+                                        triggers credential form fetch
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>APITokenSelector</code></td>
+                                    <td><code>apiTokenSelect</code></td>
+                                    <td><code>str</code></td>
+                                    <td>Select existing API token</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h3>Trees &amp; Filters</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Class</th>
+                                    <th>Widget</th>
+                                    <th>Python Type</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>SqlTree</code></td>
+                                    <td><code>sqltree</code></td>
+                                    <td><code>dict[str, Any]</code></td>
+                                    <td>
+                                        <code>sqlQuery</code>,
+                                        <code>cred</code>,
+                                        <code>excludePatterns</code>,
+                                        <code>databaseExcludePatterns</code>,
+                                        <code>desc</code>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>APITree</code></td>
+                                    <td><code>apitree</code></td>
+                                    <td><code>dict[str, Any]</code></td>
+                                    <td>
+                                        <code>credentialType</code>,
+                                        <code>metadataTemplate</code>,
+                                        <code>desc</code>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h3>Complex</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Class</th>
+                                    <th>Widget</th>
+                                    <th>Python Type</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>NestedInput</code></td>
+                                    <td><code>nested</code></td>
+                                    <td><code>dict[str, Any]</code></td>
+                                    <td>
+                                        <code>inputs</code> &mdash; sub-element
+                                        map
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>SageV2</code></td>
+                                    <td><code>sageV2</code></td>
+                                    <td><code>str</code></td>
+                                    <td>
+                                        <code>checks</code> &mdash; preflight
+                                        check definitions
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>FileUploader</code></td>
+                                    <td><code>fileUpload</code></td>
+                                    <td><code>FileReference | None</code></td>
+                                    <td><code>fileTypes</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>AgentSelector</code></td>
+                                    <td><code>agent</code></td>
+                                    <td><code>dict[str, Any]</code></td>
+                                    <td>
+                                        <code>agentConfigEntries</code> &mdash;
+                                        use <code>Listing&lt;Any&gt;</code> with
+                                        <code>Mapping</code> for nested objects
+                                        needing <code>"default"</code> keys
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>ConditionalInput</code></td>
+                                    <td>configurable</td>
+                                    <td>
+                                        <code>str</code> or <code>dict</code>
+                                    </td>
+                                    <td>
+                                        <code>baseWidgetType</code> (default
+                                        <code>"radio"</code>),
+                                        <code>conditions</code>,
+                                        sqltree/connection-specific properties
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h3>Computed</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Function</th>
+                                    <th>Widget</th>
+                                    <th>Python Type</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>evaluateWidget(val)</code></td>
+                                    <td><code>evaluate</code></td>
+                                    <td><code>str</code></td>
+                                    <td>
+                                        Factory function returning a
+                                        <code>Widget</code> for
+                                        <code>Condition.overrideUi</code>.
+                                        Derives value from other form selections
+                                        (hidden, no UI)
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h3>Other</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Class</th>
+                                    <th>Widget</th>
+                                    <th>Python Type</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>DateInput</code></td>
+                                    <td><code>date</code></td>
+                                    <td><code>int</code></td>
+                                    <td>
+                                        Epoch seconds. <code>past</code>,
+                                        <code>future</code>,
+                                        <code>defaultDay</code>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><code>KeygenInput</code></td>
+                                    <td><code>keygen</code></td>
+                                    <td><code>str</code></td>
+                                    <td>Generates unique key</td>
+                                </tr>
+                                <tr>
+                                    <td><code>Schedule</code></td>
+                                    <td><code>schedule</code></td>
+                                    <td><code>str</code></td>
+                                    <td>Cron schedule picker</td>
+                                </tr>
+                                <tr>
+                                    <td><code>CloudProvider</code></td>
+                                    <td><code>CloudProvider</code></td>
+                                    <td><code>str</code></td>
+                                    <td>AWS/GCP/Azure</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Connectors -->
+                <section id="connectors">
+                    <h2>Connectors.pkl &mdash; Connector Registry</h2>
+                    <p>
+                        90+ connector type constants, each with a
+                        <code>value</code> and <code>category</code>.
+                    </p>
+
+                    <div class="code-block">
+                        <div class="code-block-header"><span>pkl</span></div>
+                        <pre><span class="kw">class</span> <span class="ty">Type</span> {
+  <span class="prop">value</span>: <span class="ty">String</span>
+  <span class="prop">category</span>: <span class="ty">AtlanConnectionCategory</span>
+}
+
+<span class="kw">typealias</span> <span class="ty">AtlanConnectionCategory</span> =
+  <span class="str">"warehouse"</span>|<span class="str">"bi"</span>|<span class="str">"custom"</span>|<span class="str">"ObjectStore"</span>|<span class="str">"SaaS"</span>|<span class="str">"lake"</span>|
+  <span class="str">"queryengine"</span>|<span class="str">"elt"</span>|<span class="str">"database"</span>|<span class="str">"API"</span>|<span class="str">"eventbus"</span>|
+  <span class="str">"data-quality"</span>|<span class="str">"schema-registry"</span>|<span class="str">"app"</span></pre>
+                    </div>
+
+                    <h3>Common Connectors</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Constant</th>
+                                    <th>Value</th>
+                                    <th>Category</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>SNOWFLAKE</code></td>
+                                    <td><code>"snowflake"</code></td>
+                                    <td>warehouse</td>
+                                </tr>
+                                <tr>
+                                    <td><code>REDSHIFT</code></td>
+                                    <td><code>"redshift"</code></td>
+                                    <td>warehouse</td>
+                                </tr>
+                                <tr>
+                                    <td><code>BIGQUERY</code></td>
+                                    <td><code>"bigquery"</code></td>
+                                    <td>warehouse</td>
+                                </tr>
+                                <tr>
+                                    <td><code>POSTGRES</code></td>
+                                    <td><code>"postgres"</code></td>
+                                    <td>database</td>
+                                </tr>
+                                <tr>
+                                    <td><code>DATABRICKS</code></td>
+                                    <td><code>"databricks"</code></td>
+                                    <td>lake</td>
+                                </tr>
+                                <tr>
+                                    <td><code>TRINO</code></td>
+                                    <td><code>"trino"</code></td>
+                                    <td>database</td>
+                                </tr>
+                                <tr>
+                                    <td><code>TABLEAU</code></td>
+                                    <td><code>"tableau"</code></td>
+                                    <td>bi</td>
+                                </tr>
+                                <tr>
+                                    <td><code>SALESFORCE</code></td>
+                                    <td><code>"salesforce"</code></td>
+                                    <td>SaaS</td>
+                                </tr>
+                                <tr>
+                                    <td><code>S3</code></td>
+                                    <td><code>"s3"</code></td>
+                                    <td>ObjectStore</td>
+                                </tr>
+                                <tr>
+                                    <td><code>KAFKA</code></td>
+                                    <td><code>"kafka"</code></td>
+                                    <td>eventbus</td>
+                                </tr>
+                                <tr>
+                                    <td><code>DBT</code></td>
+                                    <td><code>"dbt"</code></td>
+                                    <td>elt</td>
+                                </tr>
+                                <tr>
+                                    <td><code>AIRFLOW</code></td>
+                                    <td><code>"airflow"</code></td>
+                                    <td>elt</td>
+                                </tr>
+                                <tr>
+                                    <td><code>MONGODB</code></td>
+                                    <td><code>"mongodb"</code></td>
+                                    <td>database</td>
+                                </tr>
+                                <tr>
+                                    <td><code>MSSQL</code></td>
+                                    <td><code>"mssql"</code></td>
+                                    <td>warehouse</td>
+                                </tr>
+                                <tr>
+                                    <td><code>MYSQL</code></td>
+                                    <td><code>"mysql"</code></td>
+                                    <td>warehouse</td>
+                                </tr>
+                                <tr>
+                                    <td><code>ORACLE</code></td>
+                                    <td><code>"oracle"</code></td>
+                                    <td>warehouse</td>
+                                </tr>
+                                <tr>
+                                    <td><code>SAP_S4_HANA</code></td>
+                                    <td><code>"sap-s4-hana"</code></td>
+                                    <td>warehouse</td>
+                                </tr>
+                                <tr>
+                                    <td><code>SAP_ECC</code></td>
+                                    <td><code>"sap-ecc"</code></td>
+                                    <td>warehouse</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <hr />
+
+                <!-- Manifest -->
+                <section id="manifest">
+                    <h2>Manifest &amp; DAG Generation</h2>
+                    <p>
+                        The manifest defines the Automation Engine DAG. By
+                        default, a two-node pipeline is auto-generated:
+                    </p>
+
+                    <div class="pipeline">
+                        <div class="pipeline-stage">
+                            <div class="pipeline-stage-title">extract</div>
+                            <div class="pipeline-stage-desc">
+                                Runs your workflow class. All form fields become
+                                <code>{{param}}</code> placeholders.
+                            </div>
+                        </div>
+                        <div class="pipeline-stage" style="margin-left: 24px">
+                            <div class="pipeline-stage-title">publish</div>
+                            <div class="pipeline-stage-desc">
+                                Runs <code>PublishWorkflow</code>. Wires extract
+                                outputs via <code>$.extract.outputs.*</code>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h3>DAG Value Types</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Type</th>
+                                    <th>Example</th>
+                                    <th>Resolved By</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>{{param}}</code></td>
+                                    <td><code>"{{credential}}"</code></td>
+                                    <td>Heracles (at submission)</td>
+                                </tr>
+                                <tr>
+                                    <td><code>$.node.outputs.*</code></td>
+                                    <td>
+                                        <code
+                                            >"$.extract.outputs.connection_qualified_name"</code
+                                        >
+                                    </td>
+                                    <td>AE (at runtime)</td>
+                                </tr>
+                                <tr>
+                                    <td>Static</td>
+                                    <td>
+                                        <code>true</code>, <code>"jdbc"</code>
+                                    </td>
+                                    <td>Passed through</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- DAG Nodes -->
+                <section id="dag-nodes">
+                    <h2>DAG Nodes</h2>
+
+                    <h3>DAGNode</h3>
+                    <div class="code-block">
+                        <div class="code-block-header"><span>pkl</span></div>
+                        <pre><span class="kw">open class</span> <span class="ty">DAGNode</span> {
+  <span class="prop">nodeType</span>: <span class="str">"activity"</span>|<span class="str">"workflow"</span> = <span class="str">"workflow"</span>  <span class="cm">// PKL-side discriminator — gates heartbeatTimeoutSeconds</span>
+  <span class="prop">displayName</span>: <span class="ty">String</span>
+  <span class="prop">workflowType</span>: <span class="ty">String</span>
+  <span class="prop">appName</span>: <span class="ty">String</span> = <span class="str">"automation-engine"</span>
+  <span class="prop">taskQueue</span>: <span class="ty">String?</span>                            <span class="cm">// Default: "atlan-{appName}-{deployment_name}"</span>
+  <span class="prop">args</span>: <span class="ty">Mapping&lt;String, Any&gt;</span>
+  <span class="prop">dependsOn</span>: <span class="ty">Listing&lt;String&gt;?</span>
+  <span class="prop">errorHandling</span>: <span class="ty">ErrorHandlingConfig?</span>           <span class="cm">// Retry / timeout policy (see below)</span>
+}</pre>
+                    </div>
+                    <p>
+                        <code>nodeType</code> is PKL-side only (not emitted to JSON). AE
+                        auto-infers <code>"workflow"</code> when
+                        <code>activity_name == "execute_workflow"</code>, which this
+                        toolkit always emits. The field exists so PKL can reject
+                        <code>heartbeatTimeoutSeconds</code> (activity-only) at
+                        <code>pkl eval</code> time instead of at AE parse time.
+                    </p>
+
+                    <h3>ErrorHandlingConfig</h3>
+                    <p>
+                        Maps 1:1 to AE's <code>ErrorHandlingConfig</code>
+                        (<code>automation_engine/registry/models.py</code>). All
+                        fields are optional.
+                    </p>
+                    <div class="code-block">
+                        <div class="code-block-header"><span>pkl</span></div>
+                        <pre><span class="kw">class</span> <span class="ty">ErrorHandlingConfig</span> {
+  <span class="prop">initialInterval</span>: <span class="ty">Int</span>(<span class="prop">this</span> &gt;= <span class="num">1</span>)?                    <span class="cm">// Retry initial interval (seconds)</span>
+  <span class="prop">backoffCoefficient</span>: <span class="ty">Int?</span>                             <span class="cm">// Retry backoff multiplier</span>
+  <span class="prop">maximumInterval</span>: <span class="ty">Int</span>(<span class="prop">this</span> &gt;= <span class="num">1</span>)?                    <span class="cm">// Retry max interval (seconds)</span>
+  <span class="prop">maximumAttempts</span>: <span class="ty">Int?</span>                                <span class="cm">// Retry cap</span>
+  <span class="prop">nonRetryableErrorTypes</span>: <span class="ty">Listing&lt;String&gt;?</span>             <span class="cm">// Error types to skip retry on</span>
+  <span class="prop">startToCloseTimeoutSeconds</span>: <span class="ty">Int</span>(<span class="prop">isBetween</span>(<span class="num">1</span>, <span class="num">86400</span>))?    <span class="cm">// Total node time budget</span>
+  <span class="prop">heartbeatTimeoutSeconds</span>: <span class="ty">Int</span>(<span class="prop">isBetween</span>(<span class="num">1</span>, <span class="num">3600</span>))?         <span class="cm">// Activity-only</span>
+}</pre>
+                    </div>
+                    <p>
+                        Enforced at <code>pkl eval</code> time:
+                        <code>heartbeatTimeoutSeconds &lt; startToCloseTimeoutSeconds</code>
+                        when both set, and <code>heartbeatTimeoutSeconds</code> is
+                        rejected on nodes with <code>nodeType = "workflow"</code>.
+                        AE remaps <code>startToCloseTimeoutSeconds</code>
+                        server-side: it becomes <code>execution_timeout</code>
+                        for workflow nodes (default 2h) and
+                        <code>start_to_close_timeout</code> for activity nodes
+                        (default 30m).
+                    </p>
+                    <div class="code-block">
+                        <div class="code-block-header"><span>Example: long-running publish with retry policy</span></div>
+                        <pre><span class="prop">extraNodes</span> {
+  [<span class="str">"publish"</span>] = <span class="kw">new</span> <span class="ty">PublishNode</span> {
+    <span class="prop">errorHandling</span> = <span class="kw">new</span> <span class="ty">ErrorHandlingConfig</span> {
+      <span class="prop">startToCloseTimeoutSeconds</span> = <span class="num">14400</span>
+      <span class="prop">maximumAttempts</span> = <span class="num">3</span>
+      <span class="prop">initialInterval</span> = <span class="num">2</span>
+      <span class="prop">backoffCoefficient</span> = <span class="num">2</span>
+      <span class="prop">maximumInterval</span> = <span class="num">60</span>
+    }
+  }
+}</pre>
+                    </div>
+
+                    <h3>PublishNode</h3>
+                    <p>
+                        Pre-built publish node. Only specify
+                        <code>upstream</code>:
+                    </p>
+                    <div class="code-block">
+                        <div class="code-block-header"><span>pkl</span></div>
+                        <pre><span class="kw">class</span> <span class="ty">PublishNode</span> <span class="kw">extends</span> <span class="ty">DAGNode</span> {
+  <span class="kw">hidden</span> <span class="prop">upstream</span>: <span class="ty">String</span> = <span class="str">"extract"</span>
+  <span class="prop">displayName</span> = <span class="str">"Publish to Atlas"</span>
+  <span class="prop">workflowType</span> = <span class="str">"PublishWorkflow"</span>
+  <span class="prop">appName</span> = <span class="str">"publish"</span>
+  <span class="prop">args</span> {
+    [<span class="str">"connection_qualified_name"</span>] = <span class="str">"$.&lt;upstream&gt;.outputs.connection_qualified_name"</span>
+    [<span class="str">"transformed_data_prefix"</span>]  = <span class="str">"$.&lt;upstream&gt;.outputs.transformed_data_prefix"</span>
+    [<span class="str">"connection_creation_enabled"</span>] = <span class="kw">true</span>
+    [<span class="str">"executor_enabled"</span>] = <span class="kw">true</span>
+    [<span class="str">"connection_entity"</span>] = <span class="str">"{{connection}}"</span>
+  }
+  <span class="prop">dependsOn</span> { <span class="prop">upstream</span> }
+}</pre>
+                    </div>
+                </section>
+
+                <!-- Custom Pipelines -->
+                <section id="custom-pipelines">
+                    <h2>Custom Pipelines</h2>
+                    <p>
+                        Insert nodes between extract and publish, or replace
+                        publish entirely:
+                    </p>
+
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span
+                                >Example: extract &rarr; lineage &rarr;
+                                publish</span
+                            >
+                        </div>
+                        <pre><span class="prop">extraNodes</span> {
+  [<span class="str">"lineage"</span>] = <span class="kw">new</span> <span class="ty">DAGNode</span> {
+    <span class="prop">displayName</span> = <span class="str">"Extract Lineage"</span>
+    <span class="prop">workflowType</span> = <span class="str">"LineageExtractionWorkflow"</span>
+    <span class="prop">taskQueue</span> = <span class="str">"atlan-redshift-{deployment_name}"</span>
+    <span class="prop">args</span> {
+      [<span class="str">"credential"</span>] = <span class="str">"{{credential}}"</span>
+      [<span class="str">"connection"</span>] = <span class="str">"{{connection}}"</span>
+    }
+    <span class="prop">dependsOn</span> { <span class="str">"extract"</span> }
+  }
+  [<span class="str">"publish"</span>] = <span class="kw">new</span> <span class="ty">PublishNode</span> {
+    <span class="prop">upstream</span> = <span class="str">"lineage"</span>
+  }
+}</pre>
+                    </div>
+
+                    <div class="callout info">
+                        <div class="callout-icon">
+                            <svg
+                                width="18"
+                                height="18"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                            >
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 16v-4M12 8h.01" />
+                            </svg>
+                        </div>
+                        <div>
+                            If <code>extraNodes</code> contains a key
+                            <code>"publish"</code>, the auto-generated default
+                            publish is replaced.
+                        </div>
+                    </div>
+                </section>
+
+                <hr />
+
+                <!-- Generated Output -->
+                <section id="output-workflow">
+                    <h2>Generated Output: Workflow Config</h2>
+                    <p>
+                        <code>atlan-{name}.json</code> &mdash; UI form schema
+                        served at
+                        <code>GET /workflows/v1/configmap/atlan-{name}</code>.
+                    </p>
+
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span>atlan-redshift.json (abbreviated)</span>
+                        </div>
+                        <pre>{
+  <span class="prop">"id"</span>: <span class="str">"redshift"</span>,
+  <span class="prop">"name"</span>: <span class="str">"Redshift"</span>,
+  <span class="prop">"logo"</span>: <span class="str">"https://assets.atlan.com/assets/redshift.svg"</span>,
+  <span class="prop">"config"</span>: {
+    <span class="prop">"properties"</span>: {
+      <span class="prop">"extraction-method"</span>: {
+        <span class="prop">"type"</span>: <span class="str">"string"</span>,
+        <span class="prop">"ui"</span>: { <span class="prop">"widget"</span>: <span class="str">"radio"</span>, <span class="prop">"label"</span>: <span class="str">"Extraction method"</span> },
+        <span class="prop">"enum"</span>: [<span class="str">"direct"</span>, <span class="str">"s3"</span>],
+        <span class="prop">"enumNames"</span>: [<span class="str">"Direct"</span>, <span class="str">"Offline"</span>]
+      },
+      <span class="prop">"credential-guid"</span>: {
+        <span class="prop">"type"</span>: <span class="str">"string"</span>,
+        <span class="prop">"ui"</span>: { <span class="prop">"widget"</span>: <span class="str">"credential"</span>, <span class="prop">"credentialType"</span>: <span class="str">"atlan-connectors-redshift"</span> }
+      }
+    },
+    <span class="prop">"steps"</span>: [
+      { <span class="prop">"title"</span>: <span class="str">"Credential"</span>, <span class="prop">"properties"</span>: [<span class="str">"extraction-method"</span>, <span class="str">"credential-guid"</span>] },
+      { <span class="prop">"title"</span>: <span class="str">"Connection"</span>, <span class="prop">"properties"</span>: [<span class="str">"connection"</span>] },
+      { <span class="prop">"title"</span>: <span class="str">"Metadata"</span>, <span class="prop">"properties"</span>: [<span class="str">"include-filter"</span>, <span class="str">"..."</span>] }
+    ],
+    <span class="prop">"anyOf"</span>: [
+      { <span class="prop">"properties"</span>: { <span class="prop">"extraction-method"</span>: { <span class="prop">"const"</span>: <span class="str">"direct"</span> } }, <span class="prop">"required"</span>: [<span class="str">"credential-guid"</span>] }
+    ]
+  }
+}</pre>
+                    </div>
+                </section>
+
+                <section id="output-credential">
+                    <h2>Generated Output: Credential Config</h2>
+                    <p>
+                        <code>atlan-connectors-{name}.json</code> &mdash; Auth
+                        form schema with conditional auth-type panes.
+                    </p>
+
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span
+                                >atlan-connectors-redshift.json
+                                (abbreviated)</span
+                            >
+                        </div>
+                        <pre>{
+  <span class="prop">"icon"</span>: <span class="str">"https://assets.atlan.com/assets/redshift.svg"</span>,
+  <span class="prop">"connector"</span>: <span class="str">"redshift"</span>,
+  <span class="prop">"defaultConnectorType"</span>: <span class="str">"jdbc"</span>,
+  <span class="prop">"config"</span>: {
+    <span class="prop">"properties"</span>: {
+      <span class="prop">"host"</span>: { <span class="prop">"type"</span>: <span class="str">"string"</span>, <span class="prop">"ui"</span>: { <span class="prop">"widget"</span>: <span class="str">"input"</span>, <span class="prop">"label"</span>: <span class="str">"Host Name"</span> } },
+      <span class="prop">"port"</span>: { <span class="prop">"type"</span>: <span class="str">"number"</span>, <span class="prop">"default"</span>: <span class="num">5439</span> },
+      <span class="prop">"auth-type"</span>: {
+        <span class="prop">"enum"</span>: [<span class="str">"basic"</span>, <span class="str">"iam"</span>, <span class="str">"role"</span>],
+        <span class="prop">"enumNames"</span>: [<span class="str">"Basic"</span>, <span class="str">"IAM User"</span>, <span class="str">"IAM Role"</span>],
+        <span class="prop">"ui"</span>: { <span class="prop">"widget"</span>: <span class="str">"radio"</span> }
+      },
+      <span class="prop">"basic"</span>: {
+        <span class="prop">"ui"</span>: { <span class="prop">"widget"</span>: <span class="str">"nested"</span>, <span class="prop">"hidden"</span>: <span class="kw">true</span> },
+        <span class="prop">"properties"</span>: {
+          <span class="prop">"username"</span>: { <span class="prop">"ui"</span>: { <span class="prop">"widget"</span>: <span class="str">"input"</span> } },
+          <span class="prop">"password"</span>: { <span class="prop">"ui"</span>: { <span class="prop">"widget"</span>: <span class="str">"password"</span> } },
+          <span class="prop">"extra"</span>: { <span class="prop">"properties"</span>: { <span class="prop">"database"</span>: {}, <span class="prop">"deployment_type"</span>: {} } }
+        }
+      }
+    },
+    <span class="prop">"anyOf"</span>: [
+      { <span class="prop">"properties"</span>: { <span class="prop">"auth-type"</span>: { <span class="prop">"const"</span>: <span class="str">"basic"</span> } }, <span class="prop">"required"</span>: [<span class="str">"basic"</span>] }
+    ]
+  }
+}</pre>
+                    </div>
+                </section>
+
+                <section id="output-manifest">
+                    <h2>Generated Output: Manifest</h2>
+                    <p>
+                        <code>manifest.json</code> &mdash; Automation Engine DAG
+                        template. Heracles substitutes
+                        <code>{{params}}</code> at submission time.
+                    </p>
+
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span>manifest.json</span>
+                        </div>
+                        <pre>{
+  <span class="prop">"execution_mode"</span>: <span class="str">"automation-engine"</span>,
+  <span class="prop">"dag"</span>: {
+    <span class="prop">"extract"</span>: {
+      <span class="prop">"activity_name"</span>: <span class="str">"execute_workflow"</span>,
+      <span class="prop">"activity_display_name"</span>: <span class="str">"Extract Redshift Metadata"</span>,
+      <span class="prop">"inputs"</span>: {
+        <span class="prop">"workflow_type"</span>: <span class="str">"RedshiftMetadataExtractionWorkflow"</span>,
+        <span class="prop">"task_queue"</span>: <span class="str">"atlan-redshift-{deployment_name}"</span>,
+        <span class="prop">"args"</span>: {
+          <span class="prop">"credential"</span>: <span class="str">"{{credential}}"</span>,
+          <span class="prop">"credential_guid"</span>: <span class="str">"{{credential-guid}}"</span>,
+          <span class="prop">"connection"</span>: <span class="str">"{{connection}}"</span>,
+          <span class="prop">"metadata"</span>: {
+            <span class="prop">"extraction-method"</span>: <span class="str">"{{extraction-method}}"</span>,
+            <span class="prop">"include-filter"</span>: <span class="str">"{{include-filter}}"</span>
+          }
+        }
+      }
+    },
+    <span class="prop">"publish"</span>: {
+      <span class="prop">"activity_display_name"</span>: <span class="str">"Publish to Atlas"</span>,
+      <span class="prop">"inputs"</span>: {
+        <span class="prop">"workflow_type"</span>: <span class="str">"PublishWorkflow"</span>,
+        <span class="prop">"args"</span>: {
+          <span class="prop">"connection_qualified_name"</span>: <span class="str">"$.extract.outputs.connection_qualified_name"</span>,
+          <span class="prop">"connection_entity"</span>: <span class="str">"{{connection}}"</span>
+        }
+      },
+      <span class="prop">"depends_on"</span>: { <span class="prop">"node_id"</span>: <span class="str">"extract"</span> }
+    }
+  }
+}</pre>
+                    </div>
+                </section>
+
+                <section id="output-input">
+                    <h2>Generated Output: Input Dataclass</h2>
+                    <p>
+                        <code>input.py</code> &mdash; Python
+                        <code>@dataclass</code> with typed fields derived from
+                        <code>uiConfig</code>.
+                    </p>
+
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span>input.py (auto-generated)</span>
+                        </div>
+                        <pre><span class="cm"># AUTO-GENERATED from app.pkl - DO NOT EDIT MANUALLY.</span>
+<span class="kw">from</span> <span class="ty">dataclasses</span> <span class="kw">import</span> dataclass, field
+<span class="kw">from</span> <span class="ty">typing</span> <span class="kw">import</span> Any, ClassVar
+<span class="kw">from</span> <span class="ty">app_framework.app</span> <span class="kw">import</span> Input
+<span class="kw">from</span> <span class="ty">app_framework.app.types</span> <span class="kw">import</span> FileReference
+<span class="kw">from</span> <span class="ty">app_framework.credentials</span> <span class="kw">import</span> CredentialRef
+<span class="kw">from</span> <span class="ty">pyatlan.models.connection</span> <span class="kw">import</span> Connection
+
+<span class="fn">@dataclass</span>
+<span class="kw">class</span> <span class="ty">AppInputContract</span>(<span class="ty">Input</span>):
+    <span class="prop">_config_hash_exclude</span>: <span class="ty">ClassVar</span>[<span class="ty">set</span>[<span class="ty">str</span>]] = {
+        <span class="str">"output_dir"</span>, <span class="str">"checkpoint_dir"</span>, <span class="str">"load_to_atlan"</span>,
+        <span class="str">"atlan_credential"</span>, <span class="str">"loader_batch_size"</span>, ...
+    }
+
+    <span class="cm"># UI fields (from uiConfig.properties)</span>
+    <span class="prop">extraction_method</span>: <span class="ty">str</span> = <span class="str">"direct"</span>
+    <span class="prop">credential_guid</span>: <span class="ty">str</span> = <span class="str">""</span>
+    <span class="prop">connection</span>: <span class="ty">Connection</span> | <span class="kw">None</span> = <span class="kw">None</span>
+    <span class="prop">include_filter</span>: <span class="ty">dict</span>[<span class="ty">str</span>, <span class="ty">Any</span>] = field(default_factory=<span class="ty">dict</span>)
+
+    <span class="cm"># Credential ref</span>
+    <span class="prop">redshift_credential</span>: <span class="ty">CredentialRef</span> | <span class="kw">None</span> = <span class="kw">None</span>
+
+    <span class="cm"># Publish fields (when hasPublishStep=True)</span>
+    <span class="prop">output_dir</span>: <span class="ty">str</span> = <span class="str">""</span>
+    <span class="prop">load_to_atlan</span>: <span class="ty">bool</span> = <span class="kw">True</span>
+    <span class="prop">loader_batch_size</span>: <span class="ty">int</span> = <span class="num">20</span></pre>
+                    </div>
+                </section>
+
+                <hr />
+
+                <!-- Legacy -->
+                <section id="legacy">
+                    <h2>Legacy Modules</h2>
+
+                    <div class="callout warn">
+                        <div class="callout-icon">
+                            <svg
+                                width="18"
+                                height="18"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                            >
+                                <path
+                                    d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+                                />
+                                <line x1="12" y1="9" x2="12" y2="13" />
+                                <line x1="12" y1="17" x2="12.01" y2="17" />
+                            </svg>
+                        </div>
+                        <div>
+                            These modules exist for
+                            <strong
+                                >backward compatibility with Argo-era apps
+                                only</strong
+                            >. New native apps should use
+                            <code>NativeApp.pkl</code> with
+                            <code>FieldSpec</code>.
+                        </div>
+                    </div>
+
+                    <h3>
+                        Credential.pkl
+                        <span class="badge badge-legacy">Legacy</span>
+                    </h3>
+                    <p>
+                        Uses <code>Config.pkl</code> widget classes instead of
+                        <code>FieldSpec</code> for credential definitions. Do
+                        not use for new native apps.
+                    </p>
+
+                    <h3>
+                        Renderers.pkl
+                        <span class="badge badge-legacy">Legacy</span>
+                    </h3>
+                    <p>
+                        Output generators for legacy formats.
+                        <code>NativeApp.pkl</code> has its own rendering
+                        pipeline built-in.
+                    </p>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Function</th>
+                                    <th>Output</th>
+                                    <th>Purpose</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>getConfigMap(m)</code></td>
+                                    <td>YAML</td>
+                                    <td>K8s ConfigMap for workflow config</td>
+                                </tr>
+                                <tr>
+                                    <td><code>getConfigMapJson(m)</code></td>
+                                    <td>JSON</td>
+                                    <td>Plain JSON workflow config</td>
+                                </tr>
+                                <tr>
+                                    <td><code>getWorkflowTemplate(m)</code></td>
+                                    <td>YAML</td>
+                                    <td>Argo WorkflowTemplate</td>
+                                </tr>
+                                <tr>
+                                    <td><code>getConfigClassKt(m)</code></td>
+                                    <td>Kotlin</td>
+                                    <td>Typed config class</td>
+                                </tr>
+                                <tr>
+                                    <td><code>getConfigClassPy(m)</code></td>
+                                    <td>Python</td>
+                                    <td>Pydantic BaseModel config</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Reference -->
+                <section id="reference">
+                    <h2>App Repo Structure</h2>
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span>Typical app repository layout</span>
+                        </div>
+                        <pre>your-app/
+├── contract/
+│   ├── app.pkl                          <span class="cm"># Single source of truth</span>
+│   └── generated/                       <span class="cm"># Output of pkl eval (committed)</span>
+│       ├── atlan-{name}.json            <span class="cm"># Workflow config</span>
+│       ├── atlan-connectors-{name}.json <span class="cm"># Credential config</span>
+│       ├── manifest.json                <span class="cm"># AE DAG template</span>
+│       └── input.py                     <span class="cm"># Python @dataclass</span>
+├── app/                                 <span class="cm"># Python application code</span>
+└── main.py</pre>
+                    </div>
+
+                    <h2>SDK Integration</h2>
+                    <p>
+                        The application-sdk auto-serves from
+                        <code>contract/generated/</code>:
+                    </p>
+                    <ul>
+                        <li>
+                            <code>GET /workflows/v1/configmap/{id}</code> &rarr;
+                            reads <code>contract/generated/{id}.json</code>
+                        </li>
+                        <li>
+                            <code>GET /manifest</code> &rarr; reads
+                            <code>contract/generated/manifest.json</code>
+                        </li>
+                        <li>
+                            <code>GET /workflows/v1/configmaps</code> &rarr;
+                            lists available configmap IDs
+                        </li>
+                    </ul>
+                    <p>
+                        Falls back to existing Python methods when
+                        <code>contract/generated/</code> doesn't exist.
+                    </p>
+                </section>
+
+                <!-- Footer -->
+                <div
+                    style="
+                        margin-top: 60px;
+                        padding-top: 24px;
+                        border-top: 1px solid var(--border);
+                        font-size: 13px;
+                        color: var(--text-muted);
+                    "
+                >
+                    App Contract Toolkit &mdash; Atlan Pte. Ltd. &copy; 2024
+                </div>
+            </main>
+
+            <!-- ═══════ TOC (right sidebar) ═══════ -->
+            <aside class="toc">
+                <button
+                    id="copy-page-btn"
+                    class="copy-page-btn"
+                    onclick="copyPage()"
+                >
+                    <svg
+                        width="15"
+                        height="15"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <rect x="9" y="9" width="13" height="13" rx="2" />
+                        <path
+                            d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"
+                        />
+                    </svg>
+                    Copy Page
+                </button>
+                <div class="toc-title">Table of contents</div>
+                <a href="#overview" class="active">Overview</a>
+                <a href="#architecture">Architecture</a>
+                <a href="#package-setup">Package Setup</a>
+                <a href="#quick-start">Full Example</a>
+                <a href="#nativeapp">NativeApp.pkl</a>
+                <a href="#fieldspec" class="indent">FieldSpec</a>
+                <a href="#conditionalfieldspec" class="indent">ConditionalFieldSpec</a>
+                <a href="#authoption" class="indent">AuthOption</a>
+                <a href="#widgets">Config.pkl Widgets</a>
+                <a href="#connectors">Connectors.pkl</a>
+                <a href="#manifest">Manifest &amp; DAG</a>
+                <a href="#dag-nodes" class="indent">DAG Nodes</a>
+                <a href="#custom-pipelines" class="indent">Custom Pipelines</a>
+                <a href="#output-workflow">Output: Workflow Config</a>
+                <a href="#output-credential">Output: Credential Config</a>
+                <a href="#output-manifest">Output: Manifest JSON</a>
+                <a href="#output-input">Output: Input Dataclass</a>
+                <a href="#legacy">Legacy Modules</a>
+                <a href="#reference">App Repo Structure</a>
+            </aside>
+        </div>
+
+        <script>
+            // ── Copy button ──
+            function copyCode(btn) {
+                const pre = btn.closest(".code-block").querySelector("pre");
+                const text = pre.textContent;
+                navigator.clipboard.writeText(text).then(() => {
+                    btn.innerHTML =
+                        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+                    setTimeout(() => {
+                        btn.innerHTML =
+                            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+                    }, 1500);
+                });
+            }
+
+            // ── TOC, sidebar & nav active state on scroll ──
+            const sections = document.querySelectorAll("section[id]");
+            const tocLinks = document.querySelectorAll(".toc a");
+            const sidebarLinks = document.querySelectorAll(
+                '.sidebar-link[href^="#"]',
+            );
+            const navLinks = document.querySelectorAll(".nav-links a");
+
+            // Map nav links to section groups
+            const navSectionMap = {
+                "#overview": ["overview"],
+                "#package-setup": [
+                    "architecture",
+                    "package-setup",
+                    "quick-start",
+                ],
+                "#nativeapp": [
+                    "nativeapp",
+                    "fieldspec",
+                    "conditionalfieldspec",
+                    "authoption",
+                    "connectors",
+                ],
+                "#widgets": ["widgets"],
+                "#manifest": ["manifest", "dag-nodes", "custom-pipelines"],
+                "#reference": [
+                    "output-workflow",
+                    "output-credential",
+                    "output-manifest",
+                    "output-input",
+                    "legacy",
+                    "reference",
+                ],
+            };
+
+            function updateActive() {
+                let currentId = "";
+                const offset = 120;
+                sections.forEach((s) => {
+                    if (s.getBoundingClientRect().top <= offset)
+                        currentId = s.id;
+                });
+                tocLinks.forEach((a) => {
+                    a.classList.toggle(
+                        "active",
+                        a.getAttribute("href") === "#" + currentId,
+                    );
+                });
+                sidebarLinks.forEach((a) => {
+                    a.classList.toggle(
+                        "active",
+                        a.getAttribute("href") === "#" + currentId,
+                    );
+                });
+                // Update top nav links based on section groups
+                navLinks.forEach((a) => {
+                    const href = a.getAttribute("href");
+                    const group = navSectionMap[href] || [];
+                    a.classList.toggle("active", group.includes(currentId));
+                });
+            }
+            window.addEventListener("scroll", updateActive, { passive: true });
+            updateActive();
+
+            // ── Copy entire page as markdown-ish text ──
+            function copyPage() {
+                const main = document.querySelector(".main");
+                const text = main.innerText;
+                navigator.clipboard.writeText(text).then(() => {
+                    const btn = document.getElementById("copy-page-btn");
+                    btn.innerHTML =
+                        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Copied!';
+                    setTimeout(() => {
+                        btn.innerHTML =
+                            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> Copy Page';
+                    }, 2000);
+                });
+            }
+        </script>
+    </body>
+</html>

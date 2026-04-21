@@ -1,0 +1,853 @@
+/* SPDX-License-Identifier: Apache-2.0
+   Copyright 2024 Atlan Pte. Ltd. */
+
+/// Base module for defining native Atlan apps (Temporal-native, Automation Engine orchestrated).
+///
+/// A developer amends this module to declare their app's:
+/// - Metadata (name, connector, icon)
+/// - Credential config (auth types, fields via FieldSpec) — optional
+/// - Workflow config (UI form params, steps)
+/// - Workflow class name
+///
+/// The toolkit auto-generates up to three artifacts from this single file:
+/// 1. Workflow config JSON — UI form schema served at GET /workflows/v1/configmap/{name}
+/// 2. Credential config JSON — auth form schema served at GET /workflows/v1/configmap/{connectorConfigName}
+/// 3. Manifest JSON — AE DAG template served at GET /manifest
+@ModuleInfo { minPklVersion = "0.25.1" }
+open module com.atlan.app.contract.NativeApp
+
+import "Config.pkl"
+import "Connectors.pkl"
+
+// ---------------------------------------------------------------------------
+// App metadata
+// ---------------------------------------------------------------------------
+
+/// Unique identifier for this app (e.g., "redshift", "trino", "postgres").
+/// Used to derive configmap names, task queues, and file names.
+name: String
+
+/// Human-readable display name for the app. Defaults to capitalized name.
+displayName: String = name.capitalize()
+
+/// Connector type from the Connectors registry.
+connector: Connectors.Type
+
+/// Icon URL for the app.
+icon: String
+
+/// Link to documentation.
+docsUrl: String = ""
+
+/// Logo URL (defaults to icon).
+logo: String = icon
+
+/// Helpdesk link for credential configuration.
+helpdeskLink: String = ""
+
+// ---------------------------------------------------------------------------
+// Workflow class (for manifest generation)
+// ---------------------------------------------------------------------------
+
+/// The Python App class name (PascalCase). Used to derive the Temporal
+/// workflow type name using the same convention as the SDK's _pascal_to_kebab():
+///   TeradataCrawlerApp → teradata-crawler-app
+///
+/// Set this when using SDK v3 convention (class name auto-derives workflow type).
+/// Either workflowType or workflowTypeOverride must be provided.
+workflowType: String = ""
+
+/// Explicit workflow type for the manifest, used as-is (no conversion).
+/// Use this when the Python App class sets a custom `name` ClassVar
+/// that doesn't follow the PascalCase→kebab auto-derivation convention.
+/// When set, workflowType is ignored.
+///
+/// Example — app with explicit name override in Python:
+///   # Python: name: ClassVar[str] = "RedshiftMetadataExtractionWorkflow"
+///   workflowTypeOverride = "RedshiftMetadataExtractionWorkflow"
+workflowTypeOverride: String?
+
+/// Validation: at least one of workflowType or workflowTypeOverride must be non-empty.
+local _validateWorkflowType =
+  if (workflowType == "" && (workflowTypeOverride == null || workflowTypeOverride!! == ""))
+    throw("Either workflowType or workflowTypeOverride must be provided.")
+  else true
+
+/// (Derived) Workflow type used in the manifest.
+/// Priority: workflowTypeOverride (as-is) > workflowType (PascalCase→kebab)
+/// If both are set, workflowTypeOverride wins.
+local workflowTypeResolved: String =
+  let (_ = _validateWorkflowType)
+  if (workflowTypeOverride != null && workflowTypeOverride!! != "") workflowTypeOverride!!
+  else workflowType
+    .replaceAll(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")
+    .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
+    .toLowerCase()
+
+/// Task queue prefix for the extract node in the AE manifest.
+/// The full task queue is "{taskQueuePrefix}-{deployment_name}".
+/// Defaults to "atlan-{name}" which matches the SDK's derivation:
+///   atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}
+///
+/// Override this when multiple manifests (e.g. crawler + miner) share
+/// the same app deployment and task queue. Example:
+///   name = "teradata-miner"
+///   taskQueuePrefix = "atlan-teradata"  // share queue with crawler
+taskQueuePrefix: String = "atlan-\(name)"
+
+/// Whether this app includes a publish step in the DAG pipeline.
+/// When true, a default publish node is added to the manifest and
+/// publish-related fields (output_dir, load_to_atlan, etc.) are
+/// appended to the generated Input class.
+hasPublishStep: Boolean = true
+
+/// Field name for the app's credential reference in the generated Input class.
+/// Set to null to omit. Defaults to "{name}_credential" when hasCredentialConfig.
+credentialFieldName: String? = if (hasCredentialConfig) "\(name.replaceAll("-", "_"))_credential" else null
+
+// ---------------------------------------------------------------------------
+// FieldSpec — credential field definition (aligned with SDK FieldSpec)
+// ---------------------------------------------------------------------------
+
+/// Supported field types for credential UI generation.
+/// Aligned with application_sdk.credentials.types.FieldType.
+typealias FieldType = "text"|"password"|"textarea"|"select"|"number"|"checkbox"|"url"|"email"|"inputRepeater"
+
+/// A single credential field definition.
+/// Aligned with application_sdk.credentials.types.FieldSpec — same properties,
+/// same semantics. The generated JSON produces the configmap format the
+/// frontend understands, but the authoring model matches the SDK's credential system.
+///
+/// Example:
+/// ```
+/// new FieldSpec { name = "host"; displayName = "Host Name"; placeholder = "db.example.com" }
+/// new FieldSpec { name = "password"; sensitive = true }
+/// new FieldSpec { name = "port"; fieldType = "number"; defaultValue = "5439" }
+/// new FieldSpec { name = "region"; fieldType = "select"; options { "us-east-1"; "eu-west-1" } }
+/// ```
+class FieldSpec {
+  /// Internal field name (used in code/SDK). Also the JSON property key.
+  name: String
+
+  /// User-facing label in the UI. Auto-generated from name if not set.
+  displayName: String = name.replaceAll("_", " ").replaceAll("-", " ").capitalize()
+
+  /// Placeholder text in the input field.
+  placeholder: String?
+
+  /// Help text shown as tooltip.
+  helpText: String?
+
+  /// Whether this field is required.
+  required: Boolean = true
+
+  /// Whether this field should be masked (password input).
+  /// When true, overrides fieldType to render as password widget.
+  sensitive: Boolean = false
+
+  /// Field type for UI rendering.
+  fieldType: FieldType = "text"
+
+  /// For select fields — list of allowed values.
+  options: Listing<String>?
+
+  /// For select fields — display labels for each option.
+  /// If not provided, option values are used as labels.
+  optionLabels: Mapping<String, String>?
+
+  /// Pre-filled default value.
+  defaultValue: String?
+
+  /// Regex pattern for validation.
+  validationRegex: String?
+
+  /// Grid width (8 = full width, 4 = half, 2 = quarter).
+  width: Int = 8
+
+  /// Whether this field should be hidden in the UI.
+  /// Use for fields with fixed values that users should not see or edit.
+  isHidden: Boolean = false
+
+  /// Whether to show validation feedback indicator on this field.
+  feedback: Boolean?
+
+  /// Inline validation message shown below the field.
+  message: String?
+
+  /// Validation rules for the field (array of rule objects).
+  /// Example: new Listing { new Dynamic { required = true; message = "Please enter a valid value" } }
+  validationRules: Listing<Dynamic>?
+}
+
+/// A credential field whose visibility/label/placeholder is driven by a compound
+/// boolean filter over sibling form fields. Generates a `type: "conditional"`
+/// property with a `conditions` array — the same shape used by sap-s4 / sap-ecc
+/// credential configmaps for fields like `basic.extra.sap-port` that switch
+/// based on `connection-type` × `extraction-method`.
+///
+/// Example:
+/// ```
+/// new ConditionalFieldSpec {
+///   name = "sap-port"
+///   conditions {
+///     new Config.Condition {
+///       filter = new Dynamic {
+///         `$or` {
+///           new Dynamic { `$and` { new Dynamic { ["extraction-method"] = "agent" } ; ... } }
+///         }
+///       }
+///       overrideUi = new Config.Widget { widget = ""; label = "Port"; `hidden` = false }
+///     }
+///   }
+/// }
+/// ```
+class ConditionalFieldSpec {
+  /// Internal field name (used as the JSON property key).
+  name: String
+
+  /// Whether this field is required (emitted when true).
+  required: Boolean = false
+
+  /// Per-condition overrides. Each Condition may carry a compound `filter`
+  /// (`$and`/`$or` tree) or a simple `property`/`value` match, plus `overrideUi`.
+  conditions: Listing<Config.Condition>
+
+  /// Optional sub-schema for array-valued conditional fields.
+  additionalProperties: Dynamic?
+
+  /// Optional default value (emitted verbatim when set).
+  defaultValue: Any?
+}
+
+/// An auth type option for the credential form.
+/// Each option becomes a radio button choice. When selected, its fields are shown.
+///
+/// Example:
+/// ```
+/// ["basic"] = new AuthOption {
+///   label = "Basic Authentication"
+///   fields {
+///     new FieldSpec { name = "username" }
+///     new FieldSpec { name = "password"; sensitive = true }
+///   }
+///   extraFields {
+///     new FieldSpec { name = "database"; displayName = "Database" }
+///   }
+/// }
+/// ```
+class AuthOption {
+  /// Label shown in the auth-type radio button.
+  label: String
+
+  /// Primary credential fields for this auth type. May mix plain `FieldSpec` and
+  /// `ConditionalFieldSpec` (for fields whose visibility depends on other fields).
+  fields: Listing<FieldSpec|ConditionalFieldSpec>
+
+  /// Additional fields nested under "extra" in the credential payload.
+  /// Used for connection metadata (database, deployment_type, cluster_id, etc.)
+  /// that Heracles stores in the object store alongside Vault secrets.
+  /// May mix plain `FieldSpec` and `ConditionalFieldSpec`.
+  extraFields: Listing<FieldSpec|ConditionalFieldSpec> = new Listing {}
+
+  /// Custom label for the nested auth-type section wrapper in the credential form.
+  /// If not set, defaults to empty string (hidden nested pane).
+  nestedLabel: String = ""
+
+  /// Custom placeholder text for the nested auth-type section wrapper.
+  nestedPlaceholder: String?
+}
+
+// ---------------------------------------------------------------------------
+// Credential configuration (optional)
+// ---------------------------------------------------------------------------
+
+/// Whether this app has a credential config.
+hasCredentialConfig: Boolean = true
+
+/// Name for the credential configmap (e.g., "atlan-connectors-redshift").
+connectorConfigName: String = "atlan-connectors-\(name)"
+
+/// Default connector type for credentials (e.g., "jdbc", "rest").
+credentialConnectorType: String = "rest"
+
+/// Fields shared across all auth types (e.g., host, port).
+credentialCommonFields: Listing<FieldSpec> = new Listing {}
+
+/// Auth type options. Each key becomes a radio option.
+credentialAuthOptions: Mapping<String, AuthOption>?
+
+/// Label for the auth-type radio button.
+credentialAuthTitle: String = "Authentication"
+
+/// Validation rules for the auth-type radio button.
+credentialAuthRules: Listing<Dynamic>?
+
+/// Placeholder text for the auth-type radio button.
+credentialAuthPlaceholder: String?
+
+// ---------------------------------------------------------------------------
+// Workflow configuration (UI form)
+// ---------------------------------------------------------------------------
+
+/// The workflow configmap name (e.g., "redshift").
+workflowConfigName: String = name
+
+/// UI configuration for the workflow setup form.
+/// Define tasks (steps), each with their inputs (form fields).
+uiConfig: Config.UIConfig
+
+// ---------------------------------------------------------------------------
+// Manifest configuration (mostly auto-derived)
+// ---------------------------------------------------------------------------
+
+/// Additional DAG nodes beyond the default extract → publish pipeline.
+/// If a key "publish" is defined here, it replaces the auto-generated publish node.
+/// Use `PublishNode` for the standard publish pattern (only specify upstream).
+/// Use `DAGNode` for fully custom nodes.
+extraNodes: Mapping<String, DAGNode> = new Mapping {}
+
+/// Mapping of manifest arg name → form field name for top-level extract args.
+manifestTopLevelArgs: Mapping<String, String> = new Mapping {
+  ["credential_guid"] = "credential-guid"
+  ["connection"] = "connection"
+}
+
+/// When true, all workflow params are emitted as top-level keys inside `args`
+/// instead of being nested under `metadata`. Set this when the app's workflow
+/// reads inputs directly from args rather than from a metadata sub-object.
+flatManifestArgs: Boolean = false
+
+// ---------------------------------------------------------------------------
+// DAG node definitions
+// ---------------------------------------------------------------------------
+
+/// A generic node in the Automation Engine DAG.
+open class DAGNode {
+  /// DAG node type — `"activity"` or `"workflow"` (child workflow invocation).
+  /// Defaults to `"workflow"` because `renderNode` always emits `activity_name = "execute_workflow"`,
+  /// which AE auto-infers as a workflow node. The discriminator is PKL-side only
+  /// (not emitted to JSON) and gates which `errorHandling` fields are valid:
+  /// `heartbeatTimeoutSeconds` is activity-only and AE rejects it on workflow nodes.
+  nodeType: "activity"|"workflow" = "workflow"
+
+  displayName: String
+  workflowType: String
+  appName: String = "automation-engine"
+  taskQueue: String?
+  args: Mapping<String, Any>
+  dependsOn: Listing<String>?
+
+  /// Error handling / retry / timeout configuration for this node.
+  errorHandling: ErrorHandlingConfig?
+
+  // Invariant: heartbeatTimeoutSeconds is activity-only. Mirrors AE's
+  // _validate_error_handling_for_node_type (registry/models.py).
+  hidden _errorHandlingCheck: Any =
+    if (nodeType == "workflow" && errorHandling != null && errorHandling.heartbeatTimeoutSeconds != null)
+      throw("errorHandling.heartbeatTimeoutSeconds is not valid for workflow nodes (DAGNode.nodeType == \"workflow\"). "
+            + "Set nodeType = \"activity\" or remove heartbeatTimeoutSeconds.")
+    else null
+}
+
+/// Error handling / retry / timeout configuration for a DAG node.
+/// Maps to the automation engine's `ErrorHandlingConfig` (registry/models.py).
+///
+/// Every field is serialized as-is under `error_handling` in the manifest.
+/// Note: AE remaps `start_to_close_timeout_seconds` to `execution_timeout` for
+/// workflow nodes and `start_to_close_timeout` for activity nodes at runtime.
+class ErrorHandlingConfig {
+  /// Initial retry interval in seconds (≥1).
+  initialInterval: Int(this >= 1)?
+
+  /// Retry backoff coefficient (multiplier applied per retry).
+  backoffCoefficient: Int?
+
+  /// Maximum retry interval in seconds (≥1).
+  maximumInterval: Int(this >= 1)?
+
+  /// Maximum retry attempts before the node is considered failed.
+  maximumAttempts: Int?
+
+  /// Error types that should not be retried (exact type/class names).
+  nonRetryableErrorTypes: Listing<String>?
+
+  /// Maximum time from start to completion in seconds (1-86400).
+  /// AE remaps to `execution_timeout` for workflow nodes (default 2 hours)
+  /// or `start_to_close_timeout` for activity nodes (default 30 minutes).
+  startToCloseTimeoutSeconds: Int(isBetween(1, 86400))?
+
+  /// Maximum time between heartbeats in seconds (1-3600). Activity nodes only —
+  /// AE rejects this on workflow nodes (see DAGNode.nodeType).
+  heartbeatTimeoutSeconds: Int(isBetween(1, 3600))?
+
+  // Cross-field invariant — mirrors AE's validate_timeouts (registry/models.py).
+  hidden _timeoutOrderingCheck: Any =
+    if (startToCloseTimeoutSeconds != null && heartbeatTimeoutSeconds != null
+        && heartbeatTimeoutSeconds >= startToCloseTimeoutSeconds)
+      throw("heartbeatTimeoutSeconds (\(heartbeatTimeoutSeconds)) must be less than "
+            + "startToCloseTimeoutSeconds (\(startToCloseTimeoutSeconds)).")
+    else null
+}
+
+/// Pre-built publish node. Only specify `upstream`.
+class PublishNode extends DAGNode {
+  hidden upstream: String = "extract"
+  displayName = "Publish to Atlas"
+  workflowType = "PublishWorkflow"
+  appName = "publish"
+  args {
+    ["connection_qualified_name"] = "$.\(upstream).outputs.connection_qualified_name"
+    ["transformed_data_prefix"] = "$.\(upstream).outputs.transformed_data_prefix"
+    ["publish_state_prefix"] = "$.\(upstream).outputs.publish_state_prefix"
+    ["current_state_prefix"] = "$.\(upstream).outputs.current_state_prefix"
+    ["connection_creation_enabled"] = true
+    ["executor_enabled"] = true
+    ["connection_entity"] = "{{connection}}"
+  }
+  dependsOn { upstream }
+}
+
+// ---------------------------------------------------------------------------
+// Internal: FieldSpec → configmap JSON rendering
+// ---------------------------------------------------------------------------
+
+/// Convert a FieldSpec to the configmap JSON property format.
+local function renderField(f: FieldSpec): Mapping<String, Any> = new Mapping {
+  // Determine the JSON schema type
+  ["type"] = if (f.fieldType == "number") "number"
+    else if (f.fieldType == "checkbox") "boolean"
+    else if (f.fieldType == "inputRepeater") "object"
+    else "string"
+
+  when (f.required) { ["required"] = true }
+
+  // Enum values for select fields
+  when (f.fieldType == "select" && f.options != null) {
+    ["enum"] = f.options
+    when (f.optionLabels != null) {
+      ["enumNames"] = new Listing {
+        for (opt in f.options!!) {
+          f.optionLabels!!.toMap().getOrNull(opt) ?? opt
+        }
+      }
+    }
+  }
+
+  when (f.defaultValue != null) {
+    ["default"] = if (f.fieldType == "number") f.defaultValue!!.toInt()
+      else if (f.fieldType == "checkbox") f.defaultValue == "true"
+      else f.defaultValue
+  }
+
+  // UI rendering config
+  ["ui"] = new Mapping {
+    // Widget selection: sensitive → password, select with ≤4 options → radio, etc.
+    ["widget"] = if (f.sensitive || f.fieldType == "password") "password"
+      else if (f.fieldType == "textarea") "TextInput"
+      else if (f.fieldType == "number") "inputNumber"
+      else if (f.fieldType == "checkbox") "boolean"
+      else if (f.fieldType == "select" && f.options != null && f.options!!.length <= 4) "radio"
+      else if (f.fieldType == "select") "select"
+      else if (f.fieldType == "inputRepeater") "inputRepeater"
+      else "input"
+    ["label"] = f.displayName
+    ["hidden"] = f.isHidden
+    when (f.helpText != null) { ["help"] = f.helpText }
+    when (f.placeholder != null) { ["placeholder"] = f.placeholder }
+    ["grid"] = f.width
+    when (f.feedback != null) { ["feedback"] = f.feedback }
+    when (f.message != null) { ["message"] = f.message }
+    when (f.validationRules != null) {
+      ["rules"] = f.validationRules
+    }
+    when (f.validationRules == null && f.validationRegex != null) {
+      ["rules"] = new Listing {
+        new Dynamic {
+          pattern = f.validationRegex
+          message = "Invalid format"
+          trigger = "blur"
+        }
+      }
+    }
+  }
+}
+
+/// Convert a ConditionalFieldSpec to the configmap JSON property format.
+/// Produces `{ type: "conditional", conditions: [...] }` — the per-condition
+/// rendering (property/value/filter + ui) is handled by Config.Condition itself.
+local function renderConditionalField(cf: ConditionalFieldSpec): Mapping<String, Any> = new Mapping {
+  ["type"] = "conditional"
+  when (cf.required) { ["required"] = true }
+  when (cf.additionalProperties != null) { ["additionalProperties"] = cf.additionalProperties }
+  when (cf.defaultValue != null) { ["default"] = cf.defaultValue }
+  ["conditions"] = cf.conditions
+}
+
+/// Dispatch: FieldSpec → renderField, ConditionalFieldSpec → renderConditionalField.
+local function renderAnyField(f: FieldSpec|ConditionalFieldSpec): Mapping<String, Any> =
+  if (f is ConditionalFieldSpec) renderConditionalField(f)
+  else renderField(f as FieldSpec)
+
+/// Render an AuthOption's fields as a nested input property.
+local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Mapping {
+  ["type"] = "object"
+  ["ui"] = new Mapping {
+    ["widget"] = "nested"
+    ["label"] = opt.nestedLabel
+    when (opt.nestedPlaceholder != null) { ["placeholder"] = opt.nestedPlaceholder }
+    ["hidden"] = true
+    ["nestedValue"] = false
+  }
+  when (!opt.fields.isEmpty || !opt.extraFields.isEmpty) {
+    ["properties"] = new Mapping {
+      for (f in opt.fields) {
+        [f.name] = renderAnyField(f)
+      }
+      when (!opt.extraFields.isEmpty) {
+        ["extra"] = new Mapping {
+          ["type"] = "object"
+          ["ui"] = new Mapping {
+            ["widget"] = "nested"
+            ["label"] = ""
+            ["header"] = "Advanced"
+            ["hidden"] = false
+          }
+          ["properties"] = new Mapping {
+            for (f in opt.extraFields) {
+              [f.name] = renderAnyField(f)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Generate the full credential configmap JSON.
+local function generateCredentialConfig(): Mapping<String, Any> = new Mapping {
+  ["icon"] = icon
+  ["helpdeskLink"] = helpdeskLink
+  ["logo"] = logo
+  ["connector"] = connector.value
+  ["defaultConnectorType"] = credentialConnectorType
+  ["config"] = new Mapping {
+    ["properties"] = new Mapping {
+      // Hidden metadata fields
+      ["name"] = new Mapping {
+        ["type"] = "string"
+        ["required"] = false
+        ["ui"] = new Mapping { ["label"] = "Name"; ["hidden"] = true; ["placeholder"] = "Host Name" }
+      }
+      ["connector"] = new Mapping {
+        ["type"] = "string"
+        ["required"] = false
+        ["ui"] = new Mapping { ["label"] = "Connector"; ["hidden"] = true; ["placeholder"] = "Connector" }
+      }
+      ["connectorType"] = new Mapping {
+        ["type"] = "string"
+        ["required"] = false
+        ["ui"] = new Mapping { ["key"] = "_host"; ["label"] = "connectorType"; ["placeholder"] = "connectorType"; ["hidden"] = true }
+      }
+      // Common fields (host, port, etc.)
+      for (f in credentialCommonFields) {
+        [f.name] = renderField(f)
+      }
+      // Auth-type radio (auto-generated from options)
+      when (credentialAuthOptions != null) {
+        ["auth-type"] = new Mapping {
+          ["type"] = "string"
+          ["enum"] = new Listing { for (k, _ in credentialAuthOptions!!) { k } }
+          ["default"] = credentialAuthOptions!!.keys.first
+          ["required"] = true
+          ["enumNames"] = new Listing { for (_, v in credentialAuthOptions!!) { v.label } }
+          ["ui"] = new Mapping {
+            ["widget"] = "radio"
+            ["hidden"] = false
+            ["label"] = credentialAuthTitle
+            when (credentialAuthRules != null) { ["rules"] = credentialAuthRules }
+            when (credentialAuthPlaceholder != null) { ["placeholder"] = credentialAuthPlaceholder }
+          }
+        }
+        // Nested auth option panes
+        for (k, opt in credentialAuthOptions!!) {
+          [k] = renderAuthOption(opt)
+        }
+      }
+    }
+    // anyOf rules for auth-type conditional visibility
+    when (credentialAuthOptions != null) {
+      ["anyOf"] = new Listing {
+        for (k, _ in credentialAuthOptions!!) {
+          new Mapping {
+            ["properties"] = new Mapping {
+              ["auth-type"] = new Mapping { ["const"] = k }
+            }
+            ["required"] = new Listing { k }
+          }
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Generated outputs
+// ---------------------------------------------------------------------------
+
+/// (Generated) The manifest JSON for Automation Engine.
+local manifestData: Mapping<String, Any> = new Mapping {
+  ["execution_mode"] = "automation-engine"
+  ["dag"] = generateDAG()
+}
+
+local function generateDAG(): Mapping<String, Any> = new Mapping {
+  ["extract"] = generateExtractNode()
+  when (hasPublishStep && !extraNodes.toMap().containsKey("publish")) {
+    ["publish"] = renderNode(new PublishNode {})
+  }
+  for (nodeId, node in extraNodes) {
+    [nodeId] = renderNode(node)
+  }
+}
+
+local function renderNode(node: DAGNode): Mapping<String, Any> =
+  // Force evaluation of the validators — hidden properties are lazy, so reference
+  // them here to trigger their `throw` at eval time rather than silently skipping.
+  let (_nodeCheck = node._errorHandlingCheck)
+  let (_ehCheck = if (node.errorHandling != null) node.errorHandling._timeoutOrderingCheck else null)
+  new Mapping {
+  ["activity_name"] = "execute_workflow"
+  ["activity_display_name"] = node.displayName
+  ["app_name"] = node.appName
+  ["inputs"] = new Mapping {
+    ["workflow_type"] = node.workflowType
+    ["app_name"] = node.appName
+    ["task_queue"] = node.taskQueue ?? "atlan-\(node.appName)-{deployment_name}"
+    ["args"] = node.args
+  }
+  when (node.dependsOn != null && !node.dependsOn.isEmpty) {
+    ["depends_on"] = new Mapping {
+      ["node_id"] = node.dependsOn.first
+    }
+  }
+  when (node.errorHandling != null) {
+    ["error_handling"] = new Mapping {
+      when (node.errorHandling.initialInterval != null) {
+        ["initial_interval"] = node.errorHandling.initialInterval
+      }
+      when (node.errorHandling.backoffCoefficient != null) {
+        ["backoff_coefficient"] = node.errorHandling.backoffCoefficient
+      }
+      when (node.errorHandling.maximumInterval != null) {
+        ["maximum_interval"] = node.errorHandling.maximumInterval
+      }
+      when (node.errorHandling.maximumAttempts != null) {
+        ["maximum_attempts"] = node.errorHandling.maximumAttempts
+      }
+      when (node.errorHandling.nonRetryableErrorTypes != null) {
+        ["non_retryable_error_types"] = node.errorHandling.nonRetryableErrorTypes
+      }
+      when (node.errorHandling.startToCloseTimeoutSeconds != null) {
+        ["start_to_close_timeout_seconds"] = node.errorHandling.startToCloseTimeoutSeconds
+      }
+      when (node.errorHandling.heartbeatTimeoutSeconds != null) {
+        ["heartbeat_timeout_seconds"] = node.errorHandling.heartbeatTimeoutSeconds
+      }
+    }
+  }
+}
+
+local function generateExtractNode(): Mapping<String, Any> =
+  let (topLevelFormFields = manifestTopLevelArgs.toMap().values.toList())
+  new Mapping {
+    ["activity_name"] = "execute_workflow"
+    ["activity_display_name"] = "Extract \(displayName) Metadata"
+    ["app_name"] = "{app_name}"
+    ["inputs"] = new Mapping {
+      ["workflow_type"] = workflowTypeResolved
+      ["app_name"] = "{app_name}"
+      ["app_id"] = ""
+      ["argo_workflow_slug"] = ""
+      ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
+      ["args"] = new Mapping {
+        ["credential"] = "{{credential}}"
+        for (argName, formField in manifestTopLevelArgs) {
+          when (uiConfig.properties.containsKey(formField)) {
+            [argName] = "{{" + formField + "}}"
+          }
+        }
+        when (flatManifestArgs) {
+          for (paramKey, _ in uiConfig.properties) {
+            when (!topLevelFormFields.contains(paramKey)) {
+              [paramKey] = "{{" + paramKey + "}}"
+            }
+          }
+        }
+        when (!flatManifestArgs) {
+          ["metadata"] = new Mapping {
+            for (paramKey, _ in uiConfig.properties) {
+              when (!topLevelFormFields.contains(paramKey)) {
+                [paramKey] = "{{" + paramKey + "}}"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+/// Render workflow config directly as JSON.
+local workflowConfigOutput: FileOutput = new FileOutput {
+  value = new Mapping {
+    ["id"] = workflowConfigName
+    ["name"] = displayName
+    ["logo"] = logo
+    ["config"] = uiConfig
+  }
+  renderer = new JsonRenderer {}
+}
+
+/// Render the manifest as JSON.
+local manifestOutput: FileOutput = new FileOutput {
+  value = manifestData
+  renderer = new JsonRenderer {}
+}
+
+/// Render the credential config as JSON (FieldSpec-based).
+local credentialConfigOutput: FileOutput = new FileOutput {
+  value = generateCredentialConfig()
+  renderer = new JsonRenderer {}
+}
+
+// ---------------------------------------------------------------------------
+// Input.py generation
+// ---------------------------------------------------------------------------
+
+/// Convert a property key to a valid Python identifier (hyphens → underscores).
+local function toPyName(k: String): String = k.replaceAll("-", "_")
+
+/// Map a single UI widget to its Python field declaration (name: type = default).
+/// Does not include the trailing docstring — see generateInputClassPy for that.
+local function getInputPyField(k: String, u: Config.UIElement): String =
+  let (k = toPyName(k))
+  if (u is Config.BooleanInput)
+    "\(k): bool = \(if ((u as Config.BooleanInput).defaultSelection) "True" else "False")"
+  else if (u is Config.NumericInput)
+    "\(k): int = \(if ((u as Config.NumericInput).default != null) (u as Config.NumericInput).default!!.toInt() else 0)"
+  else if (u is Config.DateInput)
+    "\(k): int = 0"
+  else if (u is Config.FileUploader)
+    "\(k): FileReference | None = None"
+  else if (u is Config.ConnectionCreator)
+    "\(k): ConnectionRef | None = None"
+  else if (u is Config.ConnectionSelector)
+    "\(k): str = \"\""
+  else if (u is Config.CredentialInput)
+    "\(k): str = \"\""
+  else if (u is Config.PasswordInput)
+    "\(k): str = \"\""
+  else if (u is Config.TagsInput)
+    "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+  else if (u is Config.InputRepeater)
+    "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+  else if (u is Config.DropDown)
+    (if ((u as Config.DropDown).multiSelect)
+      "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+    else
+      "\(k): str = \"\(if ((u as Config.DropDown).default != null) (u as Config.DropDown).default!! else "")\"")
+  else if (u is Config.Radio)
+    "\(k): str = \"\(if ((u as Config.Radio).default != null) (u as Config.Radio).default!! else "")\""
+  else if (u is Config.CloudProvider)
+    "\(k): str = \"\""
+  else if (u is Config.Sage || u is Config.SageV2)
+    "\(k): str = \"\""
+  else if (u is Config.TextInput)
+    "\(k): str = \"\(if ((u as Config.TextInput).defaultValue != null) (u as Config.TextInput).defaultValue!! else "")\""
+  else if (u is Config.TextBoxInput)
+    "\(k): str = \"\""
+  else if (u is Config.ConditionalInput)
+    (let (ci = u as Config.ConditionalInput)
+      if (ci.baseWidgetType == "sqltree" || ci.baseWidgetType == "apitree")
+        "\(k): Annotated[dict[str, Any], MaxItems(1000)] = Field(default_factory=dict)"
+      else
+        "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
+  else if (u is Config.NestedInput || u is Config.APITree || u is Config.SqlTree || u is Config.AgentSelector)
+    "\(k): Annotated[dict[str, Any], MaxItems(1000)] = Field(default_factory=dict)"
+  else
+    "\(k): str = \"\""
+
+/// Generate a Python Pydantic Input class from the app's uiConfig properties.
+/// The class is always named `AppInputContract` — app code subclasses it.
+///
+/// When any field uses dict[str, Any] (NestedInput, APITree, SqlTree,
+/// AgentSelector), the class emits ``allow_unbounded_fields=True`` so the
+/// SDK v3 payload-safety validator accepts the ``Any`` value type.
+local function generateInputClassPy(): FileOutput = new FileOutput {
+  local uiFieldLines: String = (new Listing {
+    for (k, u in uiConfig.properties) {
+      "    " + getInputPyField(k.replaceAll("-", "_"), u) + "\n" +
+      (if (u.helpText != "") "    \"\"\"" + u.helpText + "\"\"\"\n" else "")
+    }
+  }).toList().fold("", (acc: String, s: String) -> acc + s)
+  local credFieldLine: String = if (credentialFieldName != null)
+    "    \(credentialFieldName!!): CredentialRef | None = None\n"
+  else ""
+  local publishExcludeContent: String = if (hasPublishStep)
+    "        \"output_dir\",\n" +
+    "        \"checkpoint_dir\",\n" +
+    "        \"load_to_atlan\",\n" +
+    "        \"publish_dry_run\","
+  else ""
+  local publishHashExcludeBlock: String = if (hasPublishStep)
+    "    _config_hash_exclude: ClassVar[set[str]] = {\n" + publishExcludeContent + "\n    }\n\n"
+  else ""
+  local publishFieldBlock: String = if (hasPublishStep)
+    "    output_dir: str = \"\"\n" +
+    "    \"\"\"Directory for output JSONL files.\"\"\"\n" +
+    "    checkpoint_dir: str = \"\"\n" +
+    "    \"\"\"Directory for checkpoint database. If provided, enables incremental extraction.\"\"\"\n" +
+    "    load_to_atlan: bool = True\n" +
+    "    \"\"\"If True, load extracted metadata to Atlan via publish-app.\"\"\"\n" +
+    "    publish_dry_run: bool = False\n" +
+    "    \"\"\"When True, skip the Atlas publish step (executor_enabled=False).\"\"\"\n"
+  else ""
+  // True when any UI widget produces a dict[str, Any] field (NestedInput,
+  // APITree, SqlTree, AgentSelector, or ConditionalInput with sqltree/apitree).
+  // The SDK v3 payload-safety validator rejects Any unless the class opts out
+  // with allow_unbounded_fields.
+  local needsUnboundedFlag: Boolean = uiConfig.properties.toMap().values.toList()
+    .any((u) -> u is Config.NestedInput || u is Config.APITree || u is Config.SqlTree || u is Config.AgentSelector
+      || (u is Config.ConditionalInput && let (ci = u as Config.ConditionalInput) (ci.baseWidgetType == "sqltree" || ci.baseWidgetType == "apitree")))
+  local classDecl: String = if (needsUnboundedFlag)
+    "class AppInputContract(Input, allow_unbounded_fields=True):\n"
+  else
+    "class AppInputContract(Input):\n"
+  text =
+    "# AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.\n" +
+    "# To regenerate: make generate\n" +
+    "from __future__ import annotations\n" +
+    "from typing import Annotated, Any, ClassVar\n" +
+    "from pydantic import Field\n" +
+    "from application_sdk.contracts.base import Input\n" +
+    "from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems\n" +
+    "from application_sdk.credentials.ref import CredentialRef\n" +
+    "\n\n" +
+    classDecl +
+    publishHashExcludeBlock +
+    uiFieldLines +
+    credFieldLine +
+    publishFieldBlock
+}
+
+/// Set the module output — generates all artifacts.
+output = new ModuleOutput {
+  files = new Mapping {
+    ["\(workflowConfigName).json"] = workflowConfigOutput
+    when (hasCredentialConfig && credentialAuthOptions != null) {
+      ["\(connectorConfigName).json"] = credentialConfigOutput
+    }
+    ["manifest.json"] = manifestOutput
+    ["_input.py"] = generateInputClassPy()
+    ["__init__.py"] = new FileOutput { text = "" }
+  }
+}

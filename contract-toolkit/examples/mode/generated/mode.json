@@ -1,0 +1,153 @@
+{
+  "id": "mode",
+  "name": "Mode",
+  "logo": "https://assets.atlan.com/assets/mode.svg",
+  "config": {
+    "properties": {
+      "extraction-method": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Extraction method",
+          "hidden": true,
+          "help": "",
+          "placeholder": "",
+          "grid": 8
+        },
+        "default": "direct"
+      },
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Credential Guid",
+          "grid": 8,
+          "credentialType": "atlan-connectors-mode",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "connection": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connection",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Connection Name",
+          "grid": 8
+        }
+      },
+      "exclude-collections": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "apitree",
+          "label": "Exclude Collections",
+          "hidden": false,
+          "help": "Assets from the selected collections will not be fetched.",
+          "grid": 4,
+          "connectorConfigName": "atlan-connectors-mode",
+          "credential": "credential-guid"
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": "{}"
+      },
+      "include-collections": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "apitree",
+          "label": "Include Collections",
+          "hidden": false,
+          "help": "Assets from the selected collections will be fetched. Exclude gets preference over include.",
+          "grid": 4,
+          "connectorConfigName": "atlan-connectors-mode",
+          "credential": "credential-guid"
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": "{}"
+      },
+      "crawl-archived-reports": {
+        "type": "boolean",
+        "required": false,
+        "ui": {
+          "widget": "boolean",
+          "label": "Crawl Archived Reports",
+          "hidden": false,
+          "help": "By default, the crawler retrieves all archived reports from Mode Analytics. Selecting 'No' will exclude them.",
+          "grid": 4
+        },
+        "default": true
+      },
+      "preflight-check": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "sageV2",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "config": [
+            {
+              "id": 1,
+              "name": "collectionsCheck",
+              "extraUrlParam": "",
+              "optional": false,
+              "title": "Collections",
+              "loaderText": "Checking collections access"
+            },
+            {
+              "id": 2,
+              "name": "queryCheck",
+              "extraUrlParam": "",
+              "optional": false,
+              "title": "Query",
+              "loaderText": "Checking query access"
+            }
+          ]
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "extraction-method",
+          "credential-guid"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      },
+      {
+        "title": "Metadata",
+        "description": "",
+        "id": "metadata",
+        "properties": [
+          "exclude-collections",
+          "include-collections",
+          "crawl-archived-reports",
+          "preflight-check"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "icon": "https://assets.atlan.com/assets/monte-carlo.svg",
+  "helpdeskLink": "",
+  "logo": "https://assets.atlan.com/assets/monte-carlo.svg",
+  "connector": "monte-carlo",
+  "defaultConnectorType": "rest",
+  "config": {
+    "properties": {
+      "name": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Name",
+          "hidden": true,
+          "placeholder": "Host Name"
+        }
+      },
+      "connector": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Connector",
+          "hidden": true,
+          "placeholder": "Connector"
+        }
+      },
+      "connectorType": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "key": "_host",
+          "label": "connectorType",
+          "placeholder": "connectorType",
+          "hidden": true
+        }
+      },
+      "host": {
+        "type": "string",
+        "default": "https://api.getmontecarlo.com",
+        "ui": {
+          "widget": "input",
+          "label": "Host",
+          "hidden": true,
+          "placeholder": "https://api.getmontecarlo.com",
+          "grid": 6
+        }
+      },
+      "port": {
+        "type": "number",
+        "default": 443,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Port",
+          "hidden": true,
+          "placeholder": "443",
+          "grid": 2
+        }
+      },
+      "auth-type": {
+        "type": "string",
+        "enum": [
+          "api"
+        ],
+        "default": "api",
+        "required": true,
+        "enumNames": [
+          "API Key"
+        ],
+        "ui": {
+          "widget": "radio",
+          "hidden": false,
+          "label": "Authentication"
+        }
+      },
+      "api": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "label": "",
+          "hidden": true,
+          "nestedValue": false
+        },
+        "properties": {
+          "username": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "input",
+              "label": "API Key ID",
+              "hidden": false,
+              "placeholder": "Enter your Monte Carlo API Key ID",
+              "grid": 4
+            }
+          },
+          "password": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "password",
+              "label": "API Secret",
+              "hidden": false,
+              "placeholder": "Enter your Monte Carlo API Secret",
+              "grid": 4
+            }
+          }
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "auth-type": {
+            "const": "api"
+          }
+        },
+        "required": [
+          "api"
+        ]
+      }
+    ]
+  }
+}

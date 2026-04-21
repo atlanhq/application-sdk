@@ -1,0 +1,284 @@
+{
+  "id": "sap-s4",
+  "name": "SAP S/4 HANA",
+  "logo": "https://assets.atlan.com/assets/sap.svg",
+  "config": {
+    "properties": {
+      "cloud-provider": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "CloudProvider",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8
+        }
+      },
+      "extraction-method": {
+        "type": "conditional",
+        "required": true,
+        "ui": {
+          "widget": "radio",
+          "label": "Extraction method",
+          "hidden": false,
+          "help": "Determines the method the package will use to extract metadata. 'Direct' means the package will directly connect to SAP. 'Agent' means metadata is fetched via the Atlan secure agent.",
+          "placeholder": "Direct",
+          "grid": 8,
+          "rules": [
+            {
+              "required": true,
+              "message": "Please select a valid metadata extraction strategy"
+            }
+          ]
+        },
+        "default": "direct",
+        "conditions": [
+          {
+            "property": "labFlag",
+            "value": "SECURE_AGENT_EXTRACTION",
+            "enum": [
+              "direct",
+              "agent"
+            ],
+            "enumNames": [
+              "Direct",
+              "Agent"
+            ]
+          }
+        ],
+        "enum": [
+          "direct"
+        ],
+        "enumNames": [
+          "Direct"
+        ]
+      },
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Credential Guid",
+          "grid": 8,
+          "credentialType": "atlan-connectors-sap-s4",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "agent-json": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "agent",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Agent JSON",
+          "grid": 8,
+          "agentConfigs": [
+            [
+              "atlan-connectors-sap-s4",
+              {
+                "properties": {
+                  "basic": {
+                    "properties": {
+                      "username": {
+                        "default": "",
+                        "ui": {
+                          "placeholder": "Store Credential Path"
+                        }
+                      },
+                      "password": {
+                        "default": "",
+                        "ui": {
+                          "widget": "",
+                          "placeholder": "Store Credential Path"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            [
+              "atlan-connectors-agent"
+            ]
+          ]
+        }
+      },
+      "connection": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connection",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Connection Name",
+          "grid": 8
+        }
+      },
+      "component-include-filter": {
+        "type": "conditional",
+        "required": false,
+        "ui": {
+          "widget": "apitree",
+          "label": "Include Components",
+          "hidden": false,
+          "help": "Selected components will be processed.",
+          "grid": 6,
+          "connectorConfigName": "atlan-connectors-sap-s4",
+          "credential": "credential-guid",
+          "description": "Selected components will be processed."
+        },
+        "default": "{}",
+        "conditions": [
+          {
+            "property": "extraction-method",
+            "value": "agent",
+            "ui": {
+              "widget": "input",
+              "label": "Include Filter",
+              "hidden": false,
+              "help": "Selected components will be included.",
+              "placeholder": "{\"SAP\": {\"component1_name\": {\"component1_sub\": {}}}}",
+              "grid": 6
+            }
+          }
+        ],
+        "additionalProperties": {
+          "type": "array"
+        }
+      },
+      "component-exclude-filter": {
+        "type": "conditional",
+        "required": false,
+        "ui": {
+          "widget": "apitree",
+          "label": "Exclude Components",
+          "hidden": false,
+          "help": "Selected components will be excluded.",
+          "grid": 6,
+          "connectorConfigName": "atlan-connectors-sap-s4",
+          "credential": "credential-guid",
+          "description": "Selected components will be excluded."
+        },
+        "default": "{}",
+        "conditions": [
+          {
+            "property": "extraction-method",
+            "value": "agent",
+            "ui": {
+              "widget": "input",
+              "label": "Exclude Filter",
+              "hidden": false,
+              "help": "Selected components will be excluded.",
+              "placeholder": "{\"SAP\": {\"component1_name\": {\"component1_sub\": {}}}}",
+              "grid": 6
+            }
+          }
+        ],
+        "additionalProperties": {
+          "type": "array"
+        }
+      },
+      "connection-pool-size": {
+        "type": "number",
+        "required": false,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Connection Pool Size",
+          "hidden": false,
+          "help": "Max number of connections that can be created for a destination simultaneously",
+          "grid": 4
+        },
+        "default": 5
+      },
+      "asset-types": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "select",
+          "label": "Asset types",
+          "hidden": false,
+          "help": "Select asset types to crawl.",
+          "grid": 4,
+          "mode": ""
+        },
+        "enum": [
+          "Table",
+          "View",
+          "ABAPProgram",
+          "TransactionCode",
+          "FunctionModule",
+          "CDSView"
+        ],
+        "enumNames": [
+          "Table",
+          "View",
+          "ABAP Program",
+          "Transaction Codes",
+          "Function Modules",
+          "CDS View"
+        ]
+      },
+      "preflight-check": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "sage",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "config": [
+            {
+              "id": 1,
+              "name": "preflightCheck",
+              "extraUrlParam": "",
+              "optional": false,
+              "title": "SAP S/4 preflight check",
+              "loaderText": "Checking SAP instance accessibility and metadata tables access"
+            }
+          ]
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "cloud-provider",
+          "extraction-method",
+          "credential-guid",
+          "agent-json"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      },
+      {
+        "title": "Metadata",
+        "description": "",
+        "id": "metadata",
+        "properties": [
+          "component-include-filter",
+          "component-exclude-filter",
+          "connection-pool-size",
+          "asset-types",
+          "preflight-check"
+        ]
+      }
+    ]
+  }
+}

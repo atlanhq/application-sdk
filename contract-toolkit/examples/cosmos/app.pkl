@@ -1,0 +1,255 @@
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+
+name = "cosmos"
+displayName = "Cosmos"
+connector = Connectors.COSMOS
+// These apps use explicit name override in their Python code (v2 convention).
+// The override prevents auto kebab-case conversion in the manifest.
+workflowTypeOverride = "CosmosMetadataExtractionWorkflow"
+icon = "https://assets.atlan.com/assets/azureCosmosDB.svg"
+docsUrl = ""
+helpdeskLink = ""
+credentialConnectorType = "sdk"
+
+// ---------------------------------------------------------------------------
+// Credential config — FieldSpec-based, exercises new widget types
+// ---------------------------------------------------------------------------
+
+credentialAuthTitle = "Select the deployment types to crawl"
+credentialAuthPlaceholder = "Credential Type"
+credentialAuthRules {
+  new Dynamic { required = true; message = "Please enter a valid deployment type" }
+}
+
+credentialAuthOptions {
+  ["vcore"] = new AuthOption {
+    label = "vCore"
+    nestedLabel = "VCORE Deployment"
+    nestedPlaceholder = "Credential Type"
+    fields {}
+    extraFields {
+      new FieldSpec {
+        name = "connection_strings"
+        displayName = "Connection Strings"
+        fieldType = "inputRepeater"
+        placeholder = "Enter Connection String"
+        helpText = "List of connection strings for vCore deployments"
+        width = 8
+        validationRules {
+          new Dynamic { required = true; message = "Please enter valid connection strings" }
+        }
+      }
+    }
+  }
+  ["ru"] = new AuthOption {
+    label = "RU"
+    nestedLabel = "RU Deployment"
+    nestedPlaceholder = "Credential Type"
+    fields {}
+    extraFields {
+      new FieldSpec {
+        name = "client_id"
+        displayName = "Client ID"
+        placeholder = "Client ID"
+        feedback = true
+        message = "Please enter a valid client ID"
+        width = 4
+        validationRules {
+          new Dynamic { required = true; message = "Please enter a valid client ID" }
+        }
+      }
+      new FieldSpec {
+        name = "client_secret"
+        displayName = "Client Secret"
+        sensitive = true
+        placeholder = "Client Secret"
+        feedback = true
+        width = 4
+        validationRules {
+          new Dynamic { required = true; message = "Please enter a valid client secret" }
+        }
+      }
+      new FieldSpec {
+        name = "tenant_id"
+        displayName = "Tenant ID"
+        placeholder = "c22285c4-9c8c-43fd-b559-045b36218e31"
+        feedback = true
+        message = "Please enter a valid tenant ID"
+        width = 4
+        validationRules {
+          new Dynamic { required = true; message = "Please enter a valid tenant ID" }
+        }
+      }
+    }
+  }
+  ["vcoreandru"] = new AuthOption {
+    label = "vCore and RU"
+    nestedLabel = "VCORE and RU Deployment"
+    nestedPlaceholder = "Credential Type"
+    fields {}
+    extraFields {
+      new FieldSpec {
+        name = "client_id"
+        displayName = "Client ID"
+        placeholder = "Client ID"
+        feedback = true
+        message = "Please enter a valid client ID"
+        width = 4
+        validationRules {
+          new Dynamic { required = true; message = "Please enter a valid client ID" }
+        }
+      }
+      new FieldSpec {
+        name = "client_secret"
+        displayName = "Client Secret"
+        sensitive = true
+        placeholder = "Client Secret"
+        feedback = true
+        width = 4
+        validationRules {
+          new Dynamic { required = true; message = "Please enter a valid client secret" }
+        }
+      }
+      new FieldSpec {
+        name = "tenant_id"
+        displayName = "Tenant ID"
+        placeholder = "c22285c4-9c8c-43fd-b559-045b36218e31"
+        feedback = true
+        message = "Please enter a valid tenant ID"
+        width = 4
+        validationRules {
+          new Dynamic { required = true; message = "Please enter a valid tenant ID" }
+        }
+      }
+      new FieldSpec {
+        name = "connection_strings"
+        displayName = "Connection Strings"
+        fieldType = "inputRepeater"
+        placeholder = "Enter Connection String"
+        helpText = "List of connection strings for vCore deployments"
+        width = 8
+        validationRules {
+          new Dynamic { required = true; message = "Please enter valid connection strings" }
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Workflow config — exercises Evaluate (conditional) and InputRepeater widgets
+// ---------------------------------------------------------------------------
+
+uiConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["database-api"] = new Config.Radio {
+          title = "Database API"
+          helpText = "Indicates API configured for your Azure Cosmos DB"
+          possibleValues { ["mongo"] = "MongoDB" }
+          default = "mongo"
+          required = true
+          placeholderText = "MongoDB"
+          validationRules {
+            new Dynamic { required = true; message = "Please select a valid metadata extraction database api" }
+          }
+        }
+        ["extraction-method"] = new Config.Radio {
+          title = "Extraction method"
+          helpText = "Determines the method the package will use to extract metadata. 'Direct' means package will directly connect to the database."
+          possibleValues { ["direct"] = "Direct" }
+          default = "direct"
+          required = true
+          placeholderText = "Direct"
+          validationRules {
+            new Dynamic { required = true; message = "Please select a valid metadata extraction strategy" }
+          }
+        }
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-cosmos"
+          placeholderText = "Credential Guid"
+        }
+        ["evaluated-auth-type"] = new Config.ConditionalInput {
+          title = ""
+          default = "vcore"
+          conditions {
+            new Config.Condition {
+              property = "credential-guid.auth-type"
+              value = "ru"
+              overrideUi = Config.evaluateWidget("ru")
+            }
+            new Config.Condition {
+              property = "credential-guid.auth-type"
+              value = "vcoreandru"
+              overrideUi = Config.evaluateWidget("vcoreandru")
+            }
+            new Config.Condition {
+              property = "credential-guid.auth-type"
+              value = "vcore"
+              overrideUi = Config.evaluateWidget("vcore")
+            }
+          }
+        }
+      }
+    }
+    ["Connection"] {
+      inputs {
+        ["connection"] = new Config.ConnectionCreator {
+          title = ""
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+    ["Metadata"] {
+      inputs {
+        ["enable-schema-extraction"] = new Config.BooleanInput {
+          title = "Extract Collection Schemas"
+          helpText = "Allow Atlan to analyze documents and extract collection schemas"
+          width = 4
+          begin = 1
+        }
+        ["schema-extraction-sample-size"] = new Config.NumericInput {
+          title = "Schema extraction sample size"
+          helpText = "Specify the number of documents for schema extraction analysis."
+          default = 100
+          width = 4
+          validationRules {
+            new Dynamic { type = "number"; required = false; min = 1; max = 1000; message = "Sample size should be in range [1, 1000]" }
+          }
+        }
+        ["preflight-check"] = new Config.Sage {
+          title = ""
+          checks {
+            new Dynamic {
+              id = 1
+              name = "subscriptionChecks"
+              extraUrlParam = ""
+              optional = false
+              title = "Subscription permissions"
+              loaderText = "Checking subscriptions"
+            }
+          }
+        }
+      }
+    }
+  }
+  rules {
+    new Config.UIRule {
+      whenInputs { ["enable-schema-extraction"] = "true" }
+      required { "schema-extraction-sample-size" }
+    }
+    new Config.UIRule {
+      whenInputs { ["evaluated-auth-type"] = "ru" }
+      required { "preflight-check" }
+    }
+    new Config.UIRule {
+      whenInputs { ["evaluated-auth-type"] = "vcoreandru" }
+      required { "preflight-check" }
+    }
+  }
+}

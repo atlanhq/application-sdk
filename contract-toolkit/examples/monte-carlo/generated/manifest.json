@@ -1,0 +1,53 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Monte Carlo Metadata",
+      "app_name": "{app_name}",
+      "inputs": {
+        "workflow_type": "MonteCarloWorkflow",
+        "app_name": "{app_name}",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-monte-carlo-{deployment_name}",
+        "args": {
+          "credential": "{{credential}}",
+          "credential_guid": "{{credential-guid}}",
+          "connection": "{{connection}}",
+          "metadata": {
+            "include-filter": "{{include-filter}}",
+            "exclude-filter": "{{exclude-filter}}",
+            "include-incident-feedback-status": "{{include-incident-feedback-status}}",
+            "incident-days-filter": "{{incident-days-filter}}",
+            "advanced-config-strategy": "{{advanced-config-strategy}}",
+            "asset-connection-qualified-names": "{{asset-connection-qualified-names}}",
+            "preflight-check": "{{preflight-check}}"
+          }
+        }
+      }
+    },
+    "publish": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Publish to Atlas",
+      "app_name": "publish",
+      "inputs": {
+        "workflow_type": "PublishWorkflow",
+        "app_name": "publish",
+        "task_queue": "atlan-publish-{deployment_name}",
+        "args": {
+          "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
+          "transformed_data_prefix": "$.extract.outputs.transformed_data_prefix",
+          "publish_state_prefix": "$.extract.outputs.publish_state_prefix",
+          "current_state_prefix": "$.extract.outputs.current_state_prefix",
+          "connection_creation_enabled": true,
+          "executor_enabled": true,
+          "connection_entity": "{{connection}}"
+        }
+      },
+      "depends_on": {
+        "node_id": "extract"
+      }
+    }
+  }
+}

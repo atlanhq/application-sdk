@@ -1,0 +1,115 @@
+/// Teradata Miner — query history extraction for lineage.
+///
+/// Shares credentials and task queue with the crawler. Both are served
+/// from the same native app deployment.
+///
+/// Note: S3/offline extraction mode is not supported in native world.
+/// Only query_history (direct) and agent modes are available.
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+import "./credentials.pkl"
+
+name = "teradata-miner"
+displayName = "Teradata Miner"
+connector = Connectors.TERADATA
+workflowType = "TeradataMinerApp"
+icon = "https://assets.atlan.com/assets/Teradata.svg"
+credentialConnectorType = ""
+
+// Share credential configmap and task queue with crawler
+connectorConfigName = "atlan-connectors-teradata"
+taskQueuePrefix = "atlan-teradata"
+
+credentialCommonFields = credentials.commonFields
+credentialAuthOptions = credentials.authOptions
+
+uiConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection-qualified-name"] = new Config.ConnectionSelector {
+          title = "Connection"
+          connectorFilter = "teradata"
+          placeholderText = "Select a connection"
+          required = true
+        }
+        ["extraction-method"] = new Config.ConditionalInput {
+          title = "Miner Extraction Method"
+          helpText = "Determines the method to use to fetch the raw metadata for mining"
+          baseEnum { "query_history" }
+          baseEnumNames { "Query History" }
+          default = "query_history"
+          required = true
+          conditions {
+            new Config.Condition {
+              property = "labFlag"
+              value = "SECURE_AGENT_EXTRACTION"
+              overrideEnum { "query_history"; "agent" }
+              overrideEnumNames { "Query History"; "Agent" }
+            }
+          }
+        }
+        ["agent-json"] = new Config.AgentSelector {
+          title = ""
+          placeholderText = "Agent JSON"
+          agentConfigEntries = credentials.agentConfig
+        }
+        ["miner-start-time-epoch"] = new Config.TextInput {
+          title = "Start date"
+          helpText = "Start time epoch for miner query extraction."
+          placeholderText = "0"
+          required = true
+          width = 4
+        }
+        ["advanced-config"] = new Config.Radio {
+          title = "Advanced Config"
+          helpText = "Set advanced configuration of the miner"
+          possibleValues { ["default"] = "Default"; ["custom"] = "Advanced" }
+          default = "default"
+          required = true
+        }
+        ["cross-connection"] = new Config.Radio {
+          title = "Cross Connection"
+          helpText = "Enable searching for lineage across all available connections."
+          possibleValues { ["true"] = "True"; ["false"] = "False" }
+          default = "false"
+          width = 4
+        }
+        ["control-config-strategy"] = new Config.Radio {
+          title = "Control Config"
+          helpText = "Controls custom experimental feature flags for the miner"
+          possibleValues { ["default"] = "Default"; ["custom"] = "Custom" }
+          default = "default"
+          required = true
+        }
+        ["control-config"] = new Config.TextInput {
+          title = "Custom Config"
+          helpText = "Custom JSON config controlling experimental feature flags."
+          placeholderText = "{\"feature_x\":true}"
+          required = false
+        }
+        ["preflight-check"] = new Config.SageV2 { title = "Preflight Checks" }
+      }
+    }
+  }
+  rules {
+    new Config.UIRule {
+      whenInputs { ["extraction-method"] = "query_history" }
+      required { "miner-start-time-epoch"; "preflight-check" }
+    }
+    new Config.UIRule {
+      whenInputs { ["extraction-method"] = "agent" }
+      required { "agent-json"; "miner-start-time-epoch" }
+    }
+    new Config.UIRule {
+      whenInputs { ["advanced-config"] = "custom" }
+      required { "cross-connection"; "control-config-strategy" }
+    }
+    new Config.UIRule {
+      whenInputs { ["control-config-strategy"] = "custom" }
+      required { "control-config" }
+    }
+  }
+}

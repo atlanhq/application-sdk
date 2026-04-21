@@ -1,0 +1,158 @@
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+
+name = "mode"
+displayName = "Mode"
+connector = Connectors.MODE
+// These apps use explicit name override in their Python code (v2 convention).
+// The override prevents auto kebab-case conversion in the manifest.
+workflowTypeOverride = "ModeWorkflow"
+icon = "https://assets.atlan.com/assets/mode.svg"
+logo = "https://assets.atlan.com/assets/mode.svg"
+credentialConnectorType = "rest"
+flatManifestArgs = true
+
+// ---------------------------------------------------------------------------
+// Credential config
+// ---------------------------------------------------------------------------
+
+credentialCommonFields {
+  new FieldSpec {
+    name = "host"
+    displayName = "Host Name"
+    defaultValue = "app.mode.com"
+    required = false
+    isHidden = true
+    width = 6
+  }
+  new FieldSpec {
+    name = "port"
+    displayName = "Port"
+    fieldType = "number"
+    defaultValue = "443"
+    required = false
+    isHidden = true
+    width = 2
+  }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec {
+        name = "username"
+        displayName = "API Key ID"
+        placeholder = "API Key ID"
+        helpText = "API Key ID"
+        width = 4
+      }
+      new FieldSpec {
+        name = "password"
+        displayName = "API Secret"
+        placeholder = "API Secret"
+        helpText = "API Secret"
+        sensitive = true
+        width = 4
+      }
+    }
+    extraFields {
+      new FieldSpec {
+        name = "workspace"
+        displayName = "Workspace"
+        placeholder = "Workspace"
+        helpText = "Mode workspace to crawl data from"
+        width = 4
+      }
+      new FieldSpec {
+        name = "collection_filter"
+        displayName = "Exclude all personal collections"
+        fieldType = "select"
+        options { "custom"; "all" }
+        optionLabels {
+          ["custom"] = "Yes"
+          ["all"] = "No"
+        }
+        defaultValue = "all"
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Workflow config
+// ---------------------------------------------------------------------------
+
+uiConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["extraction-method"] = new Config.TextInput {
+          title = "Extraction method"
+          defaultValue = "direct"
+          hide = true
+        }
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-mode"
+          placeholderText = "Credential Guid"
+        }
+      }
+    }
+    ["Connection"] {
+      inputs {
+        ["connection"] = new Config.ConnectionCreator {
+          title = ""
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+    ["Metadata"] {
+      inputs {
+        ["exclude-collections"] = new Config.APITree {
+          title = "Exclude Collections"
+          helpText = "Assets from the selected collections will not be fetched."
+          credentialType = "atlan-connectors-mode"
+          cred = "credential-guid"
+          width = 4
+        }
+        ["include-collections"] = new Config.APITree {
+          title = "Include Collections"
+          helpText = "Assets from the selected collections will be fetched. Exclude gets preference over include."
+          credentialType = "atlan-connectors-mode"
+          cred = "credential-guid"
+          width = 4
+        }
+        ["crawl-archived-reports"] = new Config.BooleanInput {
+          title = "Crawl Archived Reports"
+          helpText = "By default, the crawler retrieves all archived reports from Mode Analytics. Selecting 'No' will exclude them."
+          defaultSelection = true
+          width = 4
+        }
+        ["preflight-check"] = new Config.SageV2 {
+          title = ""
+          checks {
+            new Dynamic {
+              id = 1
+              name = "collectionsCheck"
+              extraUrlParam = ""
+              optional = false
+              title = "Collections"
+              loaderText = "Checking collections access"
+            }
+            new Dynamic {
+              id = 2
+              name = "queryCheck"
+              extraUrlParam = ""
+              optional = false
+              title = "Query"
+              loaderText = "Checking query access"
+            }
+          }
+        }
+      }
+    }
+  }
+}

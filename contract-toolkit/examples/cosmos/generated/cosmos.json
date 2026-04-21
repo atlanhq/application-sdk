@@ -1,0 +1,253 @@
+{
+  "id": "cosmos",
+  "name": "Cosmos",
+  "logo": "https://assets.atlan.com/assets/azureCosmosDB.svg",
+  "config": {
+    "properties": {
+      "database-api": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "radio",
+          "label": "Database API",
+          "hidden": false,
+          "help": "Indicates API configured for your Azure Cosmos DB",
+          "placeholder": "MongoDB",
+          "grid": 8,
+          "rules": [
+            {
+              "required": true,
+              "message": "Please select a valid metadata extraction database api"
+            }
+          ]
+        },
+        "default": "mongo",
+        "enum": [
+          "mongo"
+        ],
+        "enumNames": [
+          "MongoDB"
+        ]
+      },
+      "extraction-method": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "radio",
+          "label": "Extraction method",
+          "hidden": false,
+          "help": "Determines the method the package will use to extract metadata. 'Direct' means package will directly connect to the database.",
+          "placeholder": "Direct",
+          "grid": 8,
+          "rules": [
+            {
+              "required": true,
+              "message": "Please select a valid metadata extraction strategy"
+            }
+          ]
+        },
+        "default": "direct",
+        "enum": [
+          "direct"
+        ],
+        "enumNames": [
+          "Direct"
+        ]
+      },
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Credential Guid",
+          "grid": 8,
+          "credentialType": "atlan-connectors-cosmos",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "evaluated-auth-type": {
+        "type": "conditional",
+        "required": false,
+        "ui": {
+          "widget": "radio",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8
+        },
+        "default": "vcore",
+        "conditions": [
+          {
+            "property": "credential-guid.auth-type",
+            "value": "ru",
+            "ui": {
+              "widget": "evaluate",
+              "label": "",
+              "hidden": false,
+              "help": "",
+              "grid": 8,
+              "value": "ru"
+            }
+          },
+          {
+            "property": "credential-guid.auth-type",
+            "value": "vcoreandru",
+            "ui": {
+              "widget": "evaluate",
+              "label": "",
+              "hidden": false,
+              "help": "",
+              "grid": 8,
+              "value": "vcoreandru"
+            }
+          },
+          {
+            "property": "credential-guid.auth-type",
+            "value": "vcore",
+            "ui": {
+              "widget": "evaluate",
+              "label": "",
+              "hidden": false,
+              "help": "",
+              "grid": 8,
+              "value": "vcore"
+            }
+          }
+        ]
+      },
+      "connection": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connection",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Connection Name",
+          "grid": 8
+        }
+      },
+      "enable-schema-extraction": {
+        "type": "boolean",
+        "required": false,
+        "ui": {
+          "widget": "boolean",
+          "label": "Extract Collection Schemas",
+          "hidden": false,
+          "help": "Allow Atlan to analyze documents and extract collection schemas",
+          "grid": 4,
+          "start": 1
+        },
+        "default": false
+      },
+      "schema-extraction-sample-size": {
+        "type": "number",
+        "required": false,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Schema extraction sample size",
+          "hidden": false,
+          "help": "Specify the number of documents for schema extraction analysis.",
+          "grid": 4,
+          "rules": [
+            {
+              "type": "number",
+              "required": false,
+              "min": 1,
+              "max": 1000,
+              "message": "Sample size should be in range [1, 1000]"
+            }
+          ]
+        },
+        "default": 100
+      },
+      "preflight-check": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "sage",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "config": [
+            {
+              "id": 1,
+              "name": "subscriptionChecks",
+              "extraUrlParam": "",
+              "optional": false,
+              "title": "Subscription permissions",
+              "loaderText": "Checking subscriptions"
+            }
+          ]
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "enable-schema-extraction": {
+            "const": "true"
+          }
+        },
+        "required": [
+          "schema-extraction-sample-size"
+        ]
+      },
+      {
+        "properties": {
+          "evaluated-auth-type": {
+            "const": "ru"
+          }
+        },
+        "required": [
+          "preflight-check"
+        ]
+      },
+      {
+        "properties": {
+          "evaluated-auth-type": {
+            "const": "vcoreandru"
+          }
+        },
+        "required": [
+          "preflight-check"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "database-api",
+          "extraction-method",
+          "credential-guid",
+          "evaluated-auth-type"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      },
+      {
+        "title": "Metadata",
+        "description": "",
+        "id": "metadata",
+        "properties": [
+          "enable-schema-extraction",
+          "schema-extraction-sample-size",
+          "preflight-check"
+        ]
+      }
+    ]
+  }
+}

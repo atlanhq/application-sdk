@@ -1,0 +1,424 @@
+{
+  "icon": "https://assets.atlan.com/assets/sap.svg",
+  "helpdeskLink": "",
+  "logo": "https://assets.atlan.com/assets/sap.svg",
+  "connector": "sap-s4-hana",
+  "defaultConnectorType": "rest",
+  "config": {
+    "properties": {
+      "name": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Name",
+          "hidden": true,
+          "placeholder": "Host Name"
+        }
+      },
+      "connector": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Connector",
+          "hidden": true,
+          "placeholder": "Connector"
+        }
+      },
+      "connectorType": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "key": "_host",
+          "label": "connectorType",
+          "placeholder": "connectorType",
+          "hidden": true
+        }
+      },
+      "host": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "input",
+          "label": "SAP Host Name",
+          "hidden": false,
+          "placeholder": "SAP Host Name",
+          "grid": 8,
+          "feedback": true
+        }
+      },
+      "port": {
+        "type": "number",
+        "default": 9092,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Port",
+          "hidden": true,
+          "placeholder": "Port",
+          "grid": 8
+        }
+      },
+      "auth-type": {
+        "type": "string",
+        "enum": [
+          "basic"
+        ],
+        "default": "basic",
+        "required": true,
+        "enumNames": [
+          "Basic"
+        ],
+        "ui": {
+          "widget": "radio",
+          "hidden": false,
+          "label": "Authentication"
+        }
+      },
+      "basic": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "label": "",
+          "hidden": true,
+          "nestedValue": false
+        },
+        "properties": {
+          "username": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "input",
+              "label": "SAP User Name",
+              "hidden": false,
+              "placeholder": "SAP User Name",
+              "grid": 4,
+              "feedback": true,
+              "message": "Please enter a valid username",
+              "rules": [
+                {
+                  "required": true,
+                  "message": "Please enter a valid username"
+                }
+              ]
+            }
+          },
+          "password": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "password",
+              "label": "SAP Password",
+              "hidden": false,
+              "placeholder": "SAP Password",
+              "grid": 4,
+              "feedback": true,
+              "rules": [
+                {
+                  "required": true,
+                  "message": "Please enter a valid password"
+                }
+              ]
+            }
+          },
+          "extra": {
+            "type": "object",
+            "ui": {
+              "widget": "nested",
+              "label": "",
+              "header": "Advanced",
+              "hidden": false
+            },
+            "properties": {
+              "connection-type": {
+                "type": "string",
+                "required": true,
+                "enum": [
+                  "0",
+                  "1"
+                ],
+                "enumNames": [
+                  "Application server",
+                  "Message Server"
+                ],
+                "default": "0",
+                "ui": {
+                  "widget": "radio",
+                  "label": "Connection Type",
+                  "hidden": false,
+                  "placeholder": "Connection Type",
+                  "grid": 8,
+                  "rules": [
+                    {
+                      "required": true,
+                      "message": "Please enter a valid authentication type"
+                    }
+                  ]
+                }
+              },
+              "sap-port": {
+                "type": "conditional",
+                "conditions": [
+                  {
+                    "filter": {
+                      "$or": [
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "agent"
+                            },
+                            {
+                              "agent-json.basic.extra.connection-type": "0"
+                            }
+                          ]
+                        },
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "direct"
+                            },
+                            {
+                              "credential-guid.basic.extra.connection-type": "0"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "ui": {
+                      "widget": "",
+                      "label": "Port",
+                      "hidden": true,
+                      "help": "",
+                      "placeholder": "Port",
+                      "grid": 8
+                    }
+                  },
+                  {
+                    "filter": {
+                      "$or": [
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "agent"
+                            },
+                            {
+                              "agent-json.basic.extra.connection-type": "1"
+                            }
+                          ]
+                        },
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "direct"
+                            },
+                            {
+                              "credential-guid.basic.extra.connection-type": "1"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "ui": {
+                      "widget": "",
+                      "label": "Port",
+                      "hidden": false,
+                      "help": "",
+                      "placeholder": "SAP Port",
+                      "grid": 4
+                    }
+                  }
+                ]
+              },
+              "group": {
+                "type": "conditional",
+                "conditions": [
+                  {
+                    "filter": {
+                      "$or": [
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "agent"
+                            },
+                            {
+                              "agent-json.basic.extra.connection-type": "0"
+                            }
+                          ]
+                        },
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "direct"
+                            },
+                            {
+                              "credential-guid.basic.extra.connection-type": "0"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "ui": {
+                      "widget": "",
+                      "label": "Group",
+                      "hidden": true,
+                      "help": "",
+                      "placeholder": "Group",
+                      "grid": 8
+                    }
+                  },
+                  {
+                    "filter": {
+                      "$or": [
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "agent"
+                            },
+                            {
+                              "agent-json.basic.extra.connection-type": "1"
+                            }
+                          ]
+                        },
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "direct"
+                            },
+                            {
+                              "credential-guid.basic.extra.connection-type": "1"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "ui": {
+                      "widget": "",
+                      "label": "Group",
+                      "hidden": false,
+                      "help": "",
+                      "placeholder": "Group",
+                      "grid": 4
+                    }
+                  }
+                ]
+              },
+              "r3name": {
+                "type": "conditional",
+                "conditions": [
+                  {
+                    "filter": {
+                      "$or": [
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "agent"
+                            },
+                            {
+                              "agent-json.basic.extra.connection-type": "0"
+                            }
+                          ]
+                        },
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "direct"
+                            },
+                            {
+                              "credential-guid.basic.extra.connection-type": "0"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "ui": {
+                      "widget": "",
+                      "label": "R3 Name",
+                      "hidden": true,
+                      "help": "",
+                      "placeholder": "R3 Name",
+                      "grid": 8
+                    }
+                  },
+                  {
+                    "filter": {
+                      "$or": [
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "agent"
+                            },
+                            {
+                              "agent-json.basic.extra.connection-type": "1"
+                            }
+                          ]
+                        },
+                        {
+                          "$and": [
+                            {
+                              "extraction-method": "direct"
+                            },
+                            {
+                              "credential-guid.basic.extra.connection-type": "1"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "ui": {
+                      "widget": "",
+                      "label": "R3 Name",
+                      "hidden": false,
+                      "help": "",
+                      "placeholder": "R3 Name",
+                      "grid": 4
+                    }
+                  }
+                ]
+              },
+              "system-number": {
+                "type": "string",
+                "required": true,
+                "default": "00",
+                "ui": {
+                  "widget": "input",
+                  "label": "SAP System Number",
+                  "hidden": false,
+                  "help": "SAP System Number is a two-digit identifier (00-99) that uniquely identifies each SAP system instance.",
+                  "placeholder": "SAP System Number",
+                  "grid": 4,
+                  "feedback": true,
+                  "message": "Please enter a System Number"
+                }
+              },
+              "client-number": {
+                "type": "string",
+                "required": true,
+                "default": "100",
+                "ui": {
+                  "widget": "input",
+                  "label": "SAP Client Number",
+                  "hidden": false,
+                  "help": "SAP Client Number is a three-digit identifier (001-999) that uniquely identifies each SAP client instance.",
+                  "placeholder": "SAP Client Number",
+                  "grid": 4,
+                  "feedback": true,
+                  "message": "Please enter a SAP Client Number"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "auth-type": {
+            "const": "basic"
+          }
+        },
+        "required": [
+          "basic"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,155 @@
+/// Teradata Crawler — metadata extraction (databases, schemas, tables, views, columns).
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+import "./credentials.pkl"
+
+name = "teradata"
+displayName = "Teradata Assets"
+connector = Connectors.TERADATA
+workflowType = "TeradataCrawlerApp"
+icon = "https://assets.atlan.com/assets/Teradata.svg"
+credentialConnectorType = ""
+
+credentialCommonFields = credentials.commonFields
+credentialAuthOptions = credentials.authOptions
+
+local teradataSystemSchemaExcludes: List<String> = List(
+  "^All$", "^Crashdumps$", "^DBC$", "^dbcmngr$", "^Default$",
+  "^External_AP$", "^EXTUSER$", "^LockLogShredder$", "^PUBLIC$",
+  "^Sys_Calendar$", "^SysAdmin$", "^SYSBAR$", "^SYSJDBC$", "^SYSLIB$",
+  "^SystemFe$", "^SYSUDTLIB$", "^SYSUIF$", "^TD_SERVER_DB$", "^TDStats$",
+  "^TD_SYSGPL$", "^TD_SYSXML$", "^TDMaps$", "^TDPUSER$", "^TDQCD$",
+  "^tdwm$", "^SQLJ$", "^TD_SYSFNLIB$", "^SYSSPATIAL$", "TDaaS*",
+  "^TD_ANALYTICS_DB$", "^TDBCMgmt$"
+)
+
+uiConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["extraction-method"] = new Config.ConditionalInput {
+          title = "Extraction method"
+          helpText = "Determines the method the package will use to extract metadata."
+          baseEnum { "direct" }
+          baseEnumNames { "Direct" }
+          default = "direct"
+          required = true
+          conditions {
+            new Config.Condition {
+              property = "labFlag"
+              value = "SECURE_AGENT_EXTRACTION"
+              overrideEnum { "direct"; "agent" }
+              overrideEnumNames { "Direct"; "Agent" }
+            }
+          }
+        }
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-teradata"
+          placeholderText = "Credential Guid"
+        }
+        ["agent-json"] = new Config.AgentSelector {
+          title = ""
+          placeholderText = "Agent JSON"
+          agentConfigEntries = credentials.agentConfig
+        }
+      }
+    }
+    ["Connection"] {
+      inputs {
+        ["connection"] = new Config.ConnectionCreator {
+          title = ""
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+    ["Metadata"] {
+      inputs {
+        ["include-filter"] = new Config.ConditionalInput {
+          title = "Include Metadata"
+          helpText = "Only the selected databases and schemas will be extracted."
+          baseWidgetType = "sqltree"
+          sqlQuery = "show atlan schemas"
+          credentialRef = "credential-guid"
+          schemaExcludePatterns = teradataSystemSchemaExcludes
+          width = 4
+          additionalProperties = new Dynamic { type = "array" }
+          conditions {
+            new Config.Condition {
+              property = "extraction-method"
+              value = "agent"
+              overrideUi = new Config.Widget {
+                widget = "input"
+                label = "Include Filter"
+                help = "Only selected databases and schemas will be extracted."
+                placeholder = "{\"^DB1$\": [\"^SCHEMA1$\", \"^SCHEMA2$\"]}"
+                grid = 8
+              }
+            }
+          }
+        }
+        ["exclude-filter"] = new Config.ConditionalInput {
+          title = "Exclude Metadata"
+          helpText = "Selected databases and schemas won't be extracted."
+          baseWidgetType = "sqltree"
+          sqlQuery = "show atlan schemas"
+          credentialRef = "credential-guid"
+          schemaExcludePatterns = teradataSystemSchemaExcludes
+          width = 4
+          additionalProperties = new Dynamic { type = "array" }
+          conditions {
+            new Config.Condition {
+              property = "extraction-method"
+              value = "agent"
+              overrideUi = new Config.Widget {
+                widget = "input"
+                label = "Exclude Filter"
+                help = "Selected databases and schemas will not be extracted."
+                placeholder = "{\"^DB1$\": [\"^SCHEMA1$\", \"^SCHEMA2$\"]}"
+                grid = 8
+              }
+            }
+          }
+        }
+        ["temp-table-regex"] = new Config.TextInput {
+          title = "Exclude regex for tables & views"
+          helpText = "Regex of tables & views to ignore."
+          placeholderText = ".*_TMP|.*_TEMP|TMP.*|TEMP.*"
+          required = false
+          width = 4
+        }
+        ["advanced-config-strategy"] = new Config.Radio {
+          title = "Advanced Config"
+          helpText = "Controls custom experimental features for the crawler"
+          possibleValues { ["default"] = "Default"; ["custom"] = "Advanced" }
+          default = "default"
+          required = true
+        }
+        ["use-source-schema-filtering"] = new Config.Radio {
+          title = "Enable Source Level Filtering"
+          helpText = "Enable or Disable Schema Level Filtering on source."
+          possibleValues { ["true"] = "True"; ["false"] = "False" }
+          default = "false"
+          width = 4
+        }
+        ["preflight-check"] = new Config.SageV2 { title = "Preflight Checks" }
+      }
+    }
+  }
+  rules {
+    new Config.UIRule {
+      whenInputs { ["extraction-method"] = "direct" }
+      required { "credential-guid"; "include-filter"; "exclude-filter"; "temp-table-regex"; "preflight-check" }
+    }
+    new Config.UIRule {
+      whenInputs { ["extraction-method"] = "agent" }
+      required { "agent-json"; "include-filter"; "exclude-filter"; "temp-table-regex" }
+    }
+    new Config.UIRule {
+      whenInputs { ["advanced-config-strategy"] = "custom" }
+      required { "use-source-schema-filtering" }
+    }
+  }
+}

@@ -1,0 +1,286 @@
+/// SAP S/4 HANA — REST-based metadata extraction.
+/// Showcases: compound-filter conditional credential fields (`ConditionalFieldSpec`)
+/// for `basic.extra.sap-port` / `group` / `r3name`, which toggle visibility based on
+/// `connection-type` x `extraction-method` across both direct and agent paths.
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+
+name = "sap-s4"
+displayName = "SAP S/4 HANA"
+connector = Connectors.SAP_S4_HANA
+workflowType = "SapS4App"
+icon = "https://assets.atlan.com/assets/sap.svg"
+credentialConnectorType = "rest"
+
+// ---------------------------------------------------------------------------
+// Helpers: compound filters for connection-type × extraction-method
+// ---------------------------------------------------------------------------
+
+/// Compound filter: `connection-type == v` evaluated under both direct and agent paths.
+local function connTypeFilter(v: String): Dynamic = new {
+  `$or` {
+    new Dynamic {
+      `$and` {
+        new Dynamic { ["extraction-method"] = "agent" }
+        new Dynamic { ["agent-json.basic.extra.connection-type"] = v }
+      }
+    }
+    new Dynamic {
+      `$and` {
+        new Dynamic { ["extraction-method"] = "direct" }
+        new Dynamic { ["credential-guid.basic.extra.connection-type"] = v }
+      }
+    }
+  }
+}
+
+/// Two-branch conditional: hidden when connection-type == "0" (Application server),
+/// visible when connection-type == "1" (Message server). Used for SAP port/group/r3name.
+local function messageServerOnly(lbl: String, placeholderHidden: String, placeholderVisible: String): Listing<Config.Condition> = new {
+  new Config.Condition {
+    filter = connTypeFilter("0")
+    overrideUi = new Config.Widget { widget = ""; label = lbl; `hidden` = true; placeholder = placeholderHidden }
+  }
+  new Config.Condition {
+    filter = connTypeFilter("1")
+    overrideUi = new Config.Widget { widget = ""; label = lbl; `hidden` = false; placeholder = placeholderVisible; grid = 4 }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Credential config — nested basic.extra pane with compound-filter conditionals
+// ---------------------------------------------------------------------------
+
+credentialCommonFields {
+  new FieldSpec {
+    name = "host"
+    displayName = "SAP Host Name"
+    placeholder = "SAP Host Name"
+    feedback = true
+  }
+  new FieldSpec {
+    name = "port"
+    fieldType = "number"
+    defaultValue = "9092"
+    required = false
+    isHidden = true
+    displayName = "Port"
+    placeholder = "Port"
+  }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec {
+        name = "username"
+        displayName = "SAP User Name"
+        placeholder = "SAP User Name"
+        feedback = true
+        width = 4
+        message = "Please enter a valid username"
+        validationRules { new Dynamic { required = true; message = "Please enter a valid username" } }
+      }
+      new FieldSpec {
+        name = "password"
+        displayName = "SAP Password"
+        sensitive = true
+        placeholder = "SAP Password"
+        feedback = true
+        width = 4
+        validationRules { new Dynamic { required = true; message = "Please enter a valid password" } }
+      }
+    }
+    extraFields {
+      new FieldSpec {
+        name = "connection-type"
+        displayName = "Connection Type"
+        fieldType = "select"
+        options { "0"; "1" }
+        optionLabels { ["0"] = "Application server"; ["1"] = "Message Server" }
+        defaultValue = "0"
+        placeholder = "Connection Type"
+        validationRules { new Dynamic { required = true; message = "Please enter a valid authentication type" } }
+      }
+      new ConditionalFieldSpec { name = "sap-port"; conditions = messageServerOnly("Port", "Port", "SAP Port") }
+      new ConditionalFieldSpec { name = "group"; conditions = messageServerOnly("Group", "Group", "Group") }
+      new ConditionalFieldSpec { name = "r3name"; conditions = messageServerOnly("R3 Name", "R3 Name", "R3 Name") }
+      new FieldSpec {
+        name = "system-number"
+        displayName = "SAP System Number"
+        defaultValue = "00"
+        placeholder = "SAP System Number"
+        feedback = true
+        message = "Please enter a System Number"
+        helpText = "SAP System Number is a two-digit identifier (00-99) that uniquely identifies each SAP system instance."
+        width = 4
+      }
+      new FieldSpec {
+        name = "client-number"
+        displayName = "SAP Client Number"
+        defaultValue = "100"
+        placeholder = "SAP Client Number"
+        feedback = true
+        message = "Please enter a SAP Client Number"
+        helpText = "SAP Client Number is a three-digit identifier (001-999) that uniquely identifies each SAP client instance."
+        width = 4
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Workflow config
+// ---------------------------------------------------------------------------
+
+local agentConfig: Listing = new {
+  new Listing {
+    "atlan-connectors-sap-s4"
+    new Mapping {
+      ["properties"] = new Mapping {
+        ["basic"] = new Mapping {
+          ["properties"] = new Mapping {
+            ["username"] = new Mapping { ["default"] = ""; ["ui"] = new Mapping { ["placeholder"] = "Store Credential Path" } }
+            ["password"] = new Mapping { ["default"] = ""; ["ui"] = new Mapping { ["widget"] = ""; ["placeholder"] = "Store Credential Path" } }
+          }
+        }
+      }
+    }
+  }
+  new Listing { "atlan-connectors-agent" }
+}
+
+uiConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["cloud-provider"] = new Config.CloudProvider {
+          title = ""
+        }
+        ["extraction-method"] = new Config.ConditionalInput {
+          title = "Extraction method"
+          helpText = "Determines the method the package will use to extract metadata. 'Direct' means the package will directly connect to SAP. 'Agent' means metadata is fetched via the Atlan secure agent."
+          baseEnum { "direct" }
+          baseEnumNames { "Direct" }
+          default = "direct"
+          required = true
+          placeholderText = "Direct"
+          validationRules { new Dynamic { required = true; message = "Please select a valid metadata extraction strategy" } }
+          conditions {
+            new Config.Condition {
+              property = "labFlag"
+              value = "SECURE_AGENT_EXTRACTION"
+              overrideEnum { "direct"; "agent" }
+              overrideEnumNames { "Direct"; "Agent" }
+            }
+          }
+        }
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-sap-s4"
+          placeholderText = "Credential Guid"
+        }
+        ["agent-json"] = new Config.AgentSelector {
+          title = ""
+          placeholderText = "Agent JSON"
+          agentConfigEntries = agentConfig
+        }
+      }
+    }
+    ["Connection"] {
+      inputs {
+        ["connection"] = new Config.ConnectionCreator {
+          title = ""
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+    ["Metadata"] {
+      inputs {
+        ["component-include-filter"] = new Config.ConditionalInput {
+          title = "Include Components"
+          helpText = "Selected components will be processed."
+          baseWidgetType = "apitree"
+          connectorConfig = "atlan-connectors-sap-s4"
+          credentialRef = "credential-guid"
+          desc = "Selected components will be processed."
+          width = 6
+          additionalProperties = new Dynamic { type = "array" }
+          default = "{}"
+          conditions {
+            new Config.Condition {
+              property = "extraction-method"
+              value = "agent"
+              overrideUi = new Config.Widget {
+                widget = "input"
+                label = "Include Filter"
+                help = "Selected components will be included."
+                placeholder = "{\"SAP\": {\"component1_name\": {\"component1_sub\": {}}}}"
+                grid = 6
+              }
+            }
+          }
+        }
+        ["component-exclude-filter"] = new Config.ConditionalInput {
+          title = "Exclude Components"
+          helpText = "Selected components will be excluded."
+          baseWidgetType = "apitree"
+          connectorConfig = "atlan-connectors-sap-s4"
+          credentialRef = "credential-guid"
+          desc = "Selected components will be excluded."
+          width = 6
+          additionalProperties = new Dynamic { type = "array" }
+          default = "{}"
+          conditions {
+            new Config.Condition {
+              property = "extraction-method"
+              value = "agent"
+              overrideUi = new Config.Widget {
+                widget = "input"
+                label = "Exclude Filter"
+                help = "Selected components will be excluded."
+                placeholder = "{\"SAP\": {\"component1_name\": {\"component1_sub\": {}}}}"
+                grid = 6
+              }
+            }
+          }
+        }
+        ["connection-pool-size"] = new Config.NumericInput {
+          title = "Connection Pool Size"
+          helpText = "Max number of connections that can be created for a destination simultaneously"
+          default = 5
+          width = 4
+        }
+        ["asset-types"] = new Config.DropDown {
+          title = "Asset types"
+          helpText = "Select asset types to crawl."
+          possibleValues {
+            ["Table"] = "Table"
+            ["View"] = "View"
+            ["ABAPProgram"] = "ABAP Program"
+            ["TransactionCode"] = "Transaction Codes"
+            ["FunctionModule"] = "Function Modules"
+            ["CDSView"] = "CDS View"
+          }
+          width = 4
+        }
+        ["preflight-check"] = new Config.Sage {
+          title = ""
+          checks {
+            new Dynamic {
+              id = 1
+              name = "preflightCheck"
+              extraUrlParam = ""
+              optional = false
+              title = "SAP S/4 preflight check"
+              loaderText = "Checking SAP instance accessibility and metadata tables access"
+            }
+          }
+        }
+      }
+    }
+  }
+}

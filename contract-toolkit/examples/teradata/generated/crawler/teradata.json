@@ -1,0 +1,392 @@
+{
+  "id": "teradata",
+  "name": "Teradata Assets",
+  "logo": "https://assets.atlan.com/assets/Teradata.svg",
+  "config": {
+    "properties": {
+      "extraction-method": {
+        "type": "conditional",
+        "required": true,
+        "ui": {
+          "widget": "radio",
+          "label": "Extraction method",
+          "hidden": false,
+          "help": "Determines the method the package will use to extract metadata.",
+          "grid": 8
+        },
+        "default": "direct",
+        "conditions": [
+          {
+            "property": "labFlag",
+            "value": "SECURE_AGENT_EXTRACTION",
+            "enum": [
+              "direct",
+              "agent"
+            ],
+            "enumNames": [
+              "Direct",
+              "Agent"
+            ]
+          }
+        ],
+        "enum": [
+          "direct"
+        ],
+        "enumNames": [
+          "Direct"
+        ]
+      },
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Credential Guid",
+          "grid": 8,
+          "credentialType": "atlan-connectors-teradata",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "agent-json": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "agent",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Agent JSON",
+          "grid": 8,
+          "agentConfigs": [
+            [
+              "atlan-connectors-teradata",
+              {
+                "properties": {
+                  "agent-type": {
+                    "type": "string",
+                    "ui": {
+                      "hidden": true
+                    }
+                  },
+                  "basic": {
+                    "properties": {
+                      "username": {
+                        "default": "",
+                        "ui": {
+                          "placeholder": "Store Credential Path"
+                        }
+                      },
+                      "password": {
+                        "default": "",
+                        "ui": {
+                          "widget": "",
+                          "placeholder": "Store Credential Path"
+                        }
+                      }
+                    }
+                  },
+                  "ldap": {
+                    "properties": {
+                      "username": {
+                        "default": "",
+                        "ui": {
+                          "placeholder": "Store Credential Path"
+                        }
+                      },
+                      "password": {
+                        "default": "",
+                        "ui": {
+                          "widget": "",
+                          "placeholder": "Store Credential Path"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            [
+              "atlan-connectors-agent"
+            ]
+          ]
+        }
+      },
+      "connection": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connection",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Connection Name",
+          "grid": 8
+        }
+      },
+      "include-filter": {
+        "type": "conditional",
+        "required": false,
+        "ui": {
+          "widget": "sqltree",
+          "label": "Include Metadata",
+          "hidden": false,
+          "help": "Only the selected databases and schemas will be extracted.",
+          "grid": 4,
+          "credential": "credential-guid",
+          "sql": "show atlan schemas",
+          "schemaExcludePattern": [
+            "^All$",
+            "^Crashdumps$",
+            "^DBC$",
+            "^dbcmngr$",
+            "^Default$",
+            "^External_AP$",
+            "^EXTUSER$",
+            "^LockLogShredder$",
+            "^PUBLIC$",
+            "^Sys_Calendar$",
+            "^SysAdmin$",
+            "^SYSBAR$",
+            "^SYSJDBC$",
+            "^SYSLIB$",
+            "^SystemFe$",
+            "^SYSUDTLIB$",
+            "^SYSUIF$",
+            "^TD_SERVER_DB$",
+            "^TDStats$",
+            "^TD_SYSGPL$",
+            "^TD_SYSXML$",
+            "^TDMaps$",
+            "^TDPUSER$",
+            "^TDQCD$",
+            "^tdwm$",
+            "^SQLJ$",
+            "^TD_SYSFNLIB$",
+            "^SYSSPATIAL$",
+            "TDaaS*",
+            "^TD_ANALYTICS_DB$",
+            "^TDBCMgmt$"
+          ]
+        },
+        "conditions": [
+          {
+            "property": "extraction-method",
+            "value": "agent",
+            "ui": {
+              "widget": "input",
+              "label": "Include Filter",
+              "hidden": false,
+              "help": "Only selected databases and schemas will be extracted.",
+              "placeholder": "{\"^DB1$\": [\"^SCHEMA1$\", \"^SCHEMA2$\"]}",
+              "grid": 8
+            }
+          }
+        ],
+        "additionalProperties": {
+          "type": "array"
+        }
+      },
+      "exclude-filter": {
+        "type": "conditional",
+        "required": false,
+        "ui": {
+          "widget": "sqltree",
+          "label": "Exclude Metadata",
+          "hidden": false,
+          "help": "Selected databases and schemas won't be extracted.",
+          "grid": 4,
+          "credential": "credential-guid",
+          "sql": "show atlan schemas",
+          "schemaExcludePattern": [
+            "^All$",
+            "^Crashdumps$",
+            "^DBC$",
+            "^dbcmngr$",
+            "^Default$",
+            "^External_AP$",
+            "^EXTUSER$",
+            "^LockLogShredder$",
+            "^PUBLIC$",
+            "^Sys_Calendar$",
+            "^SysAdmin$",
+            "^SYSBAR$",
+            "^SYSJDBC$",
+            "^SYSLIB$",
+            "^SystemFe$",
+            "^SYSUDTLIB$",
+            "^SYSUIF$",
+            "^TD_SERVER_DB$",
+            "^TDStats$",
+            "^TD_SYSGPL$",
+            "^TD_SYSXML$",
+            "^TDMaps$",
+            "^TDPUSER$",
+            "^TDQCD$",
+            "^tdwm$",
+            "^SQLJ$",
+            "^TD_SYSFNLIB$",
+            "^SYSSPATIAL$",
+            "TDaaS*",
+            "^TD_ANALYTICS_DB$",
+            "^TDBCMgmt$"
+          ]
+        },
+        "conditions": [
+          {
+            "property": "extraction-method",
+            "value": "agent",
+            "ui": {
+              "widget": "input",
+              "label": "Exclude Filter",
+              "hidden": false,
+              "help": "Selected databases and schemas will not be extracted.",
+              "placeholder": "{\"^DB1$\": [\"^SCHEMA1$\", \"^SCHEMA2$\"]}",
+              "grid": 8
+            }
+          }
+        ],
+        "additionalProperties": {
+          "type": "array"
+        }
+      },
+      "temp-table-regex": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Exclude regex for tables & views",
+          "hidden": false,
+          "help": "Regex of tables & views to ignore.",
+          "placeholder": ".*_TMP|.*_TEMP|TMP.*|TEMP.*",
+          "grid": 4
+        }
+      },
+      "advanced-config-strategy": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "radio",
+          "label": "Advanced Config",
+          "hidden": false,
+          "help": "Controls custom experimental features for the crawler",
+          "grid": 8
+        },
+        "default": "default",
+        "enum": [
+          "default",
+          "custom"
+        ],
+        "enumNames": [
+          "Default",
+          "Advanced"
+        ]
+      },
+      "use-source-schema-filtering": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "radio",
+          "label": "Enable Source Level Filtering",
+          "hidden": false,
+          "help": "Enable or Disable Schema Level Filtering on source.",
+          "grid": 4
+        },
+        "default": "false",
+        "enum": [
+          "true",
+          "false"
+        ],
+        "enumNames": [
+          "True",
+          "False"
+        ]
+      },
+      "preflight-check": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "sageV2",
+          "label": "Preflight Checks",
+          "hidden": false,
+          "help": "",
+          "grid": 8
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "extraction-method": {
+            "const": "direct"
+          }
+        },
+        "required": [
+          "credential-guid",
+          "include-filter",
+          "exclude-filter",
+          "temp-table-regex",
+          "preflight-check"
+        ]
+      },
+      {
+        "properties": {
+          "extraction-method": {
+            "const": "agent"
+          }
+        },
+        "required": [
+          "agent-json",
+          "include-filter",
+          "exclude-filter",
+          "temp-table-regex"
+        ]
+      },
+      {
+        "properties": {
+          "advanced-config-strategy": {
+            "const": "custom"
+          }
+        },
+        "required": [
+          "use-source-schema-filtering"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "extraction-method",
+          "credential-guid",
+          "agent-json"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      },
+      {
+        "title": "Metadata",
+        "description": "",
+        "id": "metadata",
+        "properties": [
+          "include-filter",
+          "exclude-filter",
+          "temp-table-regex",
+          "advanced-config-strategy",
+          "use-source-schema-filtering",
+          "preflight-check"
+        ]
+      }
+    ]
+  }
+}

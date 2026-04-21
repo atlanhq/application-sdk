@@ -1,0 +1,167 @@
+// Test fixture: full sap-s4 credential configmap using the toolkit.
+// Mirrors packages/atlan/connectors/configmaps/sap-s4.yaml in shape.
+
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+
+name = "sap-s4"
+displayName = "SAP S/4"
+icon = "https://assets.atlan.com/assets/sap.svg"
+connector = Connectors.SAP_S4_HANA
+credentialConnectorType = "rest"
+workflowType = "SapS4App"
+
+// Shared helper: compound filter for "connection-type == <v>" evaluated under both
+// direct (credential-guid.*) and agent (agent-json.*) extraction paths.
+local function connTypeFilter(v: String): Dynamic = new {
+  `$or` {
+    new Dynamic {
+      `$and` {
+        new Dynamic { ["extraction-method"] = "agent" }
+        new Dynamic { ["agent-json.basic.extra.connection-type"] = v }
+      }
+    }
+    new Dynamic {
+      `$and` {
+        new Dynamic { ["extraction-method"] = "direct" }
+        new Dynamic { ["credential-guid.basic.extra.connection-type"] = v }
+      }
+    }
+  }
+}
+
+// Shared helper: two-branch conditional for fields that are hidden when
+// connection-type == "0" (Application server) and visible when == "1" (Message server).
+local function messageServerOnly(visibleLabel: String, placeholderHidden: String, placeholderVisible: String): Listing<Config.Condition> = new {
+  new Config.Condition {
+    filter = connTypeFilter("0")
+    overrideUi = new Config.Widget {
+      widget = ""
+      label = visibleLabel
+      `hidden` = true
+      placeholder = placeholderHidden
+    }
+  }
+  new Config.Condition {
+    filter = connTypeFilter("1")
+    overrideUi = new Config.Widget {
+      widget = ""
+      label = visibleLabel
+      `hidden` = false
+      placeholder = placeholderVisible
+      grid = 4
+    }
+  }
+}
+
+credentialCommonFields {
+  new FieldSpec {
+    name = "host"
+    displayName = "SAP Host Name"
+    placeholder = "SAP Host Name"
+    feedback = true
+  }
+  new FieldSpec {
+    name = "port"
+    fieldType = "number"
+    defaultValue = "9092"
+    required = false
+    isHidden = true
+    displayName = "Port"
+    placeholder = "Port"
+  }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic Authentication"
+    fields {
+      new FieldSpec {
+        name = "username"
+        displayName = "SAP User Name"
+        placeholder = "SAP User Name"
+        feedback = true
+        width = 4
+        message = "Please enter a valid username"
+        validationRules {
+          new Dynamic { required = true; message = "Please enter a valid username" }
+        }
+      }
+      new FieldSpec {
+        name = "password"
+        displayName = "SAP Password"
+        sensitive = true
+        placeholder = "SAP Password"
+        feedback = true
+        width = 4
+        validationRules {
+          new Dynamic { required = true; message = "Please enter a valid password" }
+        }
+      }
+    }
+    extraFields {
+      new FieldSpec {
+        name = "connection-type"
+        displayName = "Connection Type"
+        fieldType = "select"
+        options { "0"; "1" }
+        optionLabels { ["0"] = "Application server"; ["1"] = "Message Server" }
+        defaultValue = "0"
+        placeholder = "Connection Type"
+        validationRules {
+          new Dynamic { required = true; message = "Please enter a valid authentication type" }
+        }
+      }
+      new ConditionalFieldSpec {
+        name = "sap-port"
+        required = false
+        conditions = messageServerOnly("Port", "Port", "SAP Port")
+      }
+      new ConditionalFieldSpec {
+        name = "group"
+        required = false
+        conditions = messageServerOnly("Group", "Group", "Group")
+      }
+      new ConditionalFieldSpec {
+        name = "r3name"
+        required = false
+        conditions = messageServerOnly("R3 Name", "R3 Name", "R3 Name")
+      }
+      new FieldSpec {
+        name = "system-number"
+        displayName = "SAP System Number"
+        defaultValue = "00"
+        placeholder = "SAP System Number"
+        feedback = true
+        message = "Please enter a System Number"
+        helpText = "SAP System Number is a two-digit identifier (00-99) that uniquely identifies each SAP system instance and determines its network ports."
+        width = 4
+      }
+      new FieldSpec {
+        name = "client-number"
+        displayName = "SAP Client Number"
+        defaultValue = "100"
+        placeholder = "SAP Client Number"
+        feedback = true
+        message = "Please enter a SAP Client Number"
+        helpText = "SAP Client Number is a three-digit identifier (001-999) that uniquely identifies each SAP client instance and determines its network ports."
+        width = 4
+      }
+    }
+  }
+}
+
+uiConfig = new Config.UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-sap-s4"
+        }
+      }
+    }
+  }
+}

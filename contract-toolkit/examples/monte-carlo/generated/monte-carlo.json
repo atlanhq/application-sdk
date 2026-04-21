@@ -1,0 +1,219 @@
+{
+  "id": "monte-carlo",
+  "name": "Monte Carlo",
+  "logo": "https://assets.atlan.com/assets/monte-carlo.svg",
+  "config": {
+    "properties": {
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Credential Guid",
+          "grid": 8,
+          "credentialType": "atlan-connectors-monte-carlo",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "connection": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connection",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Connection Name",
+          "grid": 8
+        }
+      },
+      "include-filter": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "apitree",
+          "label": "Include Filter",
+          "hidden": false,
+          "help": "",
+          "grid": 4,
+          "connectorConfigName": "atlan-connectors-monte-carlo",
+          "credential": "credential-guid",
+          "metadataTransformerTemplateKey": "accounts",
+          "metadataTemplateKey": "accounts",
+          "description": "Incidents and Monitors will be fetched from selected filter"
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": "{}"
+      },
+      "exclude-filter": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "apitree",
+          "label": "Exclude Filter",
+          "hidden": false,
+          "help": "",
+          "grid": 4,
+          "connectorConfigName": "atlan-connectors-monte-carlo",
+          "credential": "credential-guid",
+          "metadataTransformerTemplateKey": "accounts",
+          "metadataTemplateKey": "accounts",
+          "description": "Incidents and Monitors from selected filters will be ignored"
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": "{}"
+      },
+      "include-incident-feedback-status": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "apitree",
+          "label": "Include Incident Statuses",
+          "hidden": false,
+          "help": "",
+          "grid": 4,
+          "connectorConfigName": "atlan-connectors-monte-carlo",
+          "credential": "credential-guid",
+          "metadataTransformerTemplateKey": "feedbacks",
+          "metadataTemplateKey": "feedbacks",
+          "description": "Incidents having selected feedback statuses will be fetched. No Status will fetch Incidents without any status."
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": "{}"
+      },
+      "incident-days-filter": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "select",
+          "label": "Incidents and Alerts time range",
+          "hidden": false,
+          "help": "Select how far back you want to sync Incidents and Alerts from Monte Carlo",
+          "placeholder": "Select how many past days to fetch incidents for",
+          "grid": 4,
+          "mode": ""
+        },
+        "default": "30",
+        "enum": [
+          "14",
+          "30",
+          "45"
+        ],
+        "enumNames": [
+          "Last 14 Days",
+          "Last 30 Days",
+          "Last 45 Days"
+        ]
+      },
+      "advanced-config-strategy": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "radio",
+          "label": "Advanced Config",
+          "hidden": false,
+          "help": "Include specific SQL connections you want to enrich with monte carlo metadata",
+          "grid": 8
+        },
+        "default": "default",
+        "enum": [
+          "default",
+          "custom"
+        ],
+        "enumNames": [
+          "Default",
+          "Custom"
+        ]
+      },
+      "asset-connection-qualified-names": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connectionSelector",
+          "label": "Include connections",
+          "hidden": false,
+          "help": "Atlan will only enrich Monte Carlo metadata for the selected connections, this is helpful when you have similar assets in dev or prod connection and only want to enrich one of those connection.",
+          "placeholder": "Select connections to map your alerts and monitors",
+          "grid": 4,
+          "mode": "multiple",
+          "start": 1,
+          "connectionCategories": "['warehouse', 'database', 'lake']"
+        }
+      },
+      "preflight-check": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "sage",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "config": [
+            {
+              "id": 1,
+              "name": "loginCheck",
+              "extraUrlParam": "",
+              "optional": false,
+              "title": "Login",
+              "loaderText": "Checking API credentials"
+            }
+          ]
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "advanced-config-strategy": {
+            "const": "custom"
+          }
+        },
+        "required": [
+          "asset-connection-qualified-names"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "credential-guid"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      },
+      {
+        "title": "Metadata",
+        "description": "",
+        "id": "metadata",
+        "properties": [
+          "include-filter",
+          "exclude-filter",
+          "include-incident-feedback-status",
+          "incident-days-filter",
+          "advanced-config-strategy",
+          "asset-connection-qualified-names",
+          "preflight-check"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,146 @@
+name: Release Contract Toolkit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'contract-toolkit/src/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Target version (e.g. 0.5.0). Leave blank to compute from latest commit message.'
+        required: false
+        type: string
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
+
+      - name: Determine release eligibility
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual trigger — running release."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only HEAD~1 HEAD | grep -q '^contract-toolkit/src/'; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No contract-toolkit/src/ changes — skipping release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install PKL
+        if: steps.check.outputs.release == 'true'
+        run: |
+          curl -L -o pkl https://github.com/apple/pkl/releases/download/0.27.2/pkl-linux-amd64
+          chmod +x pkl
+          sudo mv pkl /usr/local/bin/
+
+      - name: Determine version bump type
+        if: steps.check.outputs.release == 'true'
+        id: bump
+        run: |
+          FILE="contract-toolkit/src/PklProject"
+          CURRENT=$(grep -oP 'version\s*=\s*"\K[^"]+' "$FILE")
+          INPUT_VERSION="${{ inputs.version }}"
+
+          if [ -n "$INPUT_VERSION" ]; then
+            NEW_VERSION="$INPUT_VERSION"
+            BUMP="manual"
+          else
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+            MSG=$(git log -1 --format='%s' HEAD)
+
+            if echo "$MSG" | grep -qiE 'BREAKING[ _-]CHANGE|^[a-z]+!:'; then
+              if [ "$MAJOR" -eq 0 ]; then
+                BUMP="minor"
+                NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
+              else
+                BUMP="major"
+                NEW_VERSION="$((MAJOR + 1)).0.0"
+              fi
+            elif echo "$MSG" | grep -qiE '^feat(\(.+\))?:'; then
+              BUMP="minor"
+              NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
+            else
+              BUMP="patch"
+              NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            fi
+          fi
+
+          if [ "$CURRENT" = "$NEW_VERSION" ]; then
+            echo "Version already at $NEW_VERSION — skipping bump commit."
+            echo "skip_bump=true" >> "$GITHUB_OUTPUT"
+          else
+            sed -i "s/version = \"${CURRENT}\"/version = \"${NEW_VERSION}\"/" "$FILE"
+            echo "skip_bump=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "old=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "new=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=toolkit/v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+          echo "Version: $CURRENT → $NEW_VERSION ($BUMP bump)"
+
+      - name: Commit version bump
+        if: steps.check.outputs.release == 'true' && steps.bump.outputs.skip_bump == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add contract-toolkit/src/PklProject
+          git commit -m "chore(toolkit): bump version ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}"
+          git push
+
+      - name: Build package
+        if: steps.check.outputs.release == 'true'
+        run: pkl project package contract-toolkit/src/ --output-path .out/ --skip-publish-check
+
+      - name: Publish to gh-pages
+        if: steps.check.outputs.release == 'true'
+        run: |
+          PKG="app-contract-toolkit"
+          VERSION="${{ steps.bump.outputs.new }}"
+
+          cp -r .out /tmp/pkl-out
+
+          git fetch origin gh-pages || true
+          git checkout gh-pages 2>/dev/null || git checkout --orphan gh-pages
+
+          # Restore existing gh-pages content (mkdocs + prior toolkit versions)
+          git checkout origin/gh-pages -- . 2>/dev/null || true
+
+          # Copy new toolkit version artifacts (flat layout, coexists with mkdocs)
+          cp "/tmp/pkl-out/${PKG}@${VERSION}" .
+          cp "/tmp/pkl-out/${PKG}@${VERSION}.zip" .
+          cp "/tmp/pkl-out/${PKG}@${VERSION}.zip.sha256" .
+          touch .nojekyll
+
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --cached --quiet || git commit -m "publish ${PKG}@${VERSION}"
+          git push origin gh-pages
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.release == 'true'
+        run: |
+          TAG="${{ steps.bump.outputs.tag }}"
+          VERSION="${{ steps.bump.outputs.new }}"
+          if ! gh release view "$TAG" &>/dev/null; then
+            gh release create "$TAG" \
+              "/tmp/pkl-out/app-contract-toolkit@${VERSION}.zip" \
+              "/tmp/pkl-out/app-contract-toolkit@${VERSION}" \
+              "/tmp/pkl-out/app-contract-toolkit@${VERSION}.zip.sha256" \
+              --title "Toolkit v${VERSION}" \
+              --generate-notes
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

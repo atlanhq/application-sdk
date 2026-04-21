@@ -1,0 +1,214 @@
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Config.pkl"
+import "../../src/Connectors.pkl"
+
+name = "redshift"
+displayName = "Redshift"
+connector = Connectors.REDSHIFT
+// These apps use explicit name override in their Python code (v2 convention).
+// The override prevents auto kebab-case conversion in the manifest.
+workflowTypeOverride = "RedshiftMetadataExtractionWorkflow"
+icon = "https://assets.atlan.com/assets/redshift.svg"
+docsUrl = "https://ask.atlan.com/hc/en-us/articles/4418217886481"
+helpdeskLink = "https://ask.atlan.com/hc/en-us/articles/4418217886481-How-to-set-up-your-Redshift-connection-with-Atlan"
+credentialConnectorType = "jdbc"
+
+// ---------------------------------------------------------------------------
+// Credential config — FieldSpec-based
+// ---------------------------------------------------------------------------
+
+credentialCommonFields {
+  new FieldSpec {
+    name = "host"
+    displayName = "Host Name"
+    placeholder = "examplecluster.abc123xyz789.us-west-2.redshift.amazonaws.com"
+    helpText = "Redshift cluster hostname"
+    width = 6
+  }
+  new FieldSpec {
+    name = "port"
+    displayName = "Port"
+    fieldType = "number"
+    defaultValue = "5439"
+    width = 2
+  }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username"; placeholder = "Username"; helpText = "Redshift database username"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; placeholder = "Password"; width = 4 }
+    }
+    extraFields {
+      new FieldSpec { name = "database"; displayName = "Database"; placeholder = "dev"; helpText = "Default database for JDBC connection authentication."; width = 4 }
+      new FieldSpec { name = "deployment_type"; displayName = "Deployment Type"; fieldType = "select"; options { "provisioned"; "serverless" }; optionLabels { ["provisioned"] = "Provisioned"; ["serverless"] = "Serverless" }; defaultValue = "provisioned"; helpText = "Redshift cluster Deployment Type" }
+    }
+  }
+  ["iam"] = new AuthOption {
+    label = "IAM User"
+    fields {
+      new FieldSpec { name = "username"; displayName = "AWS Access Key"; placeholder = "Access Key"; helpText = "AWS Access Key"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "AWS Secret Key"; placeholder = "Secret Key"; helpText = "AWS Secret Key"; width = 4 }
+    }
+    extraFields {
+      new FieldSpec { name = "dbuser"; displayName = "Username"; placeholder = "Username"; helpText = "Redshift database username"; width = 4 }
+      new FieldSpec { name = "cluster_id"; displayName = "Cluster ID"; placeholder = "cluster-id"; helpText = "Redshift cluster ID, needed only for private clusters"; required = false; width = 4 }
+      new FieldSpec { name = "database"; displayName = "Database"; placeholder = "dev"; helpText = "Default database for JDBC connection authentication."; width = 4 }
+      new FieldSpec { name = "deployment_type"; displayName = "Deployment Type"; fieldType = "select"; options { "provisioned"; "serverless" }; optionLabels { ["provisioned"] = "Provisioned"; ["serverless"] = "Serverless" }; defaultValue = "provisioned"; helpText = "Redshift cluster Deployment Type" }
+    }
+  }
+  ["role"] = new AuthOption {
+    label = "IAM Role"
+    fields {}
+    extraFields {
+      new FieldSpec { name = "dbuser"; displayName = "Username"; placeholder = "Username"; helpText = "Redshift database username"; width = 4 }
+      new FieldSpec { name = "aws_role_arn"; displayName = "AWS Role ARN"; placeholder = "arn:aws:iam::123456789012:role/roleName"; helpText = "AWS role to assume for the connection"; required = false; width = 4; validationRegex = "^arn:aws:iam::\\d{12}:role/.+" }
+      new FieldSpec { name = "region_name"; displayName = "Region"; placeholder = "us-west-2"; helpText = "AWS region of Redshift cluster"; required = false; width = 4 }
+      new FieldSpec { name = "cluster_id"; displayName = "Cluster ID"; placeholder = "cluster-id"; helpText = "Redshift cluster ID, needed only for private clusters"; required = false; width = 4 }
+      new FieldSpec { name = "aws_external_id"; displayName = "AWS External ID"; placeholder = "12345678-1234-1234-1234"; helpText = "AWS External ID"; required = false; width = 4 }
+      new FieldSpec { name = "database"; displayName = "Database"; placeholder = "dev"; helpText = "Default database for JDBC connection authentication."; width = 4 }
+      new FieldSpec { name = "deployment_type"; displayName = "Deployment Type"; fieldType = "select"; options { "provisioned"; "serverless" }; optionLabels { ["provisioned"] = "Provisioned"; ["serverless"] = "Serverless" }; defaultValue = "provisioned"; helpText = "Redshift cluster Deployment Type" }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DAG customization — override the default publish node with a longer timeout
+// and retry policy suited for large Redshift clusters (CosmosDB-style ingest).
+// ---------------------------------------------------------------------------
+
+extraNodes {
+  ["publish"] = new PublishNode {
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 14400  // 4 hours — AE remaps to execution_timeout for workflow nodes
+      maximumAttempts = 3
+      initialInterval = 2
+      backoffCoefficient = 2
+      maximumInterval = 60
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Workflow config
+// ---------------------------------------------------------------------------
+
+uiConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["extraction-method"] = new Config.Radio {
+          title = "Extraction method"
+          helpText = "Determines the method the package will use to extract metadata."
+          possibleValues { ["direct"] = "Direct"; ["s3"] = "Offline" }
+          default = "direct"
+          required = true
+        }
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-redshift"
+          placeholderText = "Credential Guid"
+        }
+      }
+    }
+    ["Connection"] {
+      inputs {
+        ["connection"] = new Config.ConnectionCreator {
+          title = ""
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+    ["Metadata"] {
+      inputs {
+        ["include-filter"] = new Config.SqlTree {
+          title = "Include Metadata"
+          desc = "Only selected databases and schemas will be extracted."
+          sqlQuery = "show atlan schemas"
+          cred = "credential-guid"
+          excludePatterns = List("pg_*", "information_*")
+          width = 4
+        }
+        ["exclude-filter"] = new Config.SqlTree {
+          title = "Exclude Metadata"
+          desc = "Selected databases and schemas wont be extracted."
+          sqlQuery = "show atlan schemas"
+          cred = "credential-guid"
+          excludePatterns = List("pg_*", "information_*")
+          width = 4
+        }
+        ["temp-table-regex"] = new Config.TextInput {
+          title = "Exclude regex for tables & views"
+          helpText = "Regex of tables & views to ignore."
+          placeholderText = ".*_TMP|.*_TEMP|TMP.*|TEMP.*"
+          width = 4
+        }
+        ["advanced-config"] = new Config.Radio {
+          title = "Advanced Config"
+          helpText = "Set advanced configuration of the crawler"
+          possibleValues { ["default"] = "Default"; ["custom"] = "Advanced" }
+          default = "default"
+          required = true
+        }
+        ["cross-connection"] = new Config.BooleanInput {
+          title = "Cross Connection"
+          helpText = "Enable searching for lineage across all available connections on Atlan."
+          width = 4
+        }
+        ["use-source-schema-filtering"] = new Config.Radio {
+          title = "Enable Source Level Filtering"
+          helpText = "Enable or Disable Schema Level Filtering on source."
+          possibleValues { ["true"] = "True"; ["false"] = "False" }
+          default = "false"
+          width = 4
+        }
+        ["use-jdbc-internal-methods"] = new Config.Radio {
+          title = "Use JDBC Internal Methods"
+          helpText = "Enable or Disable JDBC internal methods for data extraction."
+          possibleValues { ["true"] = "True"; ["false"] = "False" }
+          default = "true"
+          width = 4
+          hide = true
+        }
+        ["control-config-strategy"] = new Config.Radio {
+          title = "Control Config"
+          helpText = "Controls custom experimental feature flags for the crawler"
+          possibleValues { ["default"] = "Default"; ["custom"] = "Custom" }
+          default = "default"
+          required = true
+        }
+        ["control-config"] = new Config.TextInput {
+          title = "Custom Config"
+          helpText = "Custom JSON config controlling experimental feature flags"
+          placeholderText = "{\"feature_x\":true}"
+          defaultValue = "{}"
+        }
+        ["preflight-check"] = new Config.SageV2 {
+          title = ""
+          checks {
+            new Dynamic { id = 1; name = "schemasCheck"; title = "Databases and schemas"; loaderText = "Checking databases/schemas permissions" }
+            new Dynamic { id = 2; name = "tablesMetadataCheck"; title = "Tables metadata"; loaderText = "Checking tables full metadata permission" }
+            new Dynamic { id = 3; name = "externalTablesMetadataCheck"; title = "External tables metadata"; loaderText = "Checking external tables full metadata permission"; optional = true }
+          }
+        }
+      }
+    }
+  }
+  rules {
+    new Config.UIRule {
+      whenInputs { ["extraction-method"] = "direct" }
+      required { "credential-guid"; "include-filter"; "exclude-filter"; "temp-table-regex"; "preflight-check" }
+    }
+    new Config.UIRule {
+      whenInputs { ["advanced-config"] = "custom" }
+      required { "cross-connection"; "use-source-schema-filtering"; "use-jdbc-internal-methods"; "control-config-strategy" }
+    }
+    new Config.UIRule {
+      whenInputs { ["advanced-config"] = "custom"; ["control-config-strategy"] = "custom" }
+      required { "control-config" }
+    }
+  }
+}

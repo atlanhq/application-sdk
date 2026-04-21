@@ -1,0 +1,315 @@
+{
+  "icon": "https://assets.atlan.com/assets/azureCosmosDB.svg",
+  "helpdeskLink": "",
+  "logo": "https://assets.atlan.com/assets/azureCosmosDB.svg",
+  "connector": "cosmos",
+  "defaultConnectorType": "sdk",
+  "config": {
+    "properties": {
+      "name": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Name",
+          "hidden": true,
+          "placeholder": "Host Name"
+        }
+      },
+      "connector": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Connector",
+          "hidden": true,
+          "placeholder": "Connector"
+        }
+      },
+      "connectorType": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "key": "_host",
+          "label": "connectorType",
+          "placeholder": "connectorType",
+          "hidden": true
+        }
+      },
+      "auth-type": {
+        "type": "string",
+        "enum": [
+          "vcore",
+          "ru",
+          "vcoreandru"
+        ],
+        "default": "vcore",
+        "required": true,
+        "enumNames": [
+          "vCore",
+          "RU",
+          "vCore and RU"
+        ],
+        "ui": {
+          "widget": "radio",
+          "hidden": false,
+          "label": "Select the deployment types to crawl",
+          "rules": [
+            {
+              "required": true,
+              "message": "Please enter a valid deployment type"
+            }
+          ],
+          "placeholder": "Credential Type"
+        }
+      },
+      "vcore": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "label": "VCORE Deployment",
+          "placeholder": "Credential Type",
+          "hidden": true,
+          "nestedValue": false
+        },
+        "properties": {
+          "extra": {
+            "type": "object",
+            "ui": {
+              "widget": "nested",
+              "label": "",
+              "header": "Advanced",
+              "hidden": false
+            },
+            "properties": {
+              "connection_strings": {
+                "type": "object",
+                "required": true,
+                "ui": {
+                  "widget": "inputRepeater",
+                  "label": "Connection Strings",
+                  "hidden": false,
+                  "help": "List of connection strings for vCore deployments",
+                  "placeholder": "Enter Connection String",
+                  "grid": 8,
+                  "rules": [
+                    {
+                      "required": true,
+                      "message": "Please enter valid connection strings"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "ru": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "label": "RU Deployment",
+          "placeholder": "Credential Type",
+          "hidden": true,
+          "nestedValue": false
+        },
+        "properties": {
+          "extra": {
+            "type": "object",
+            "ui": {
+              "widget": "nested",
+              "label": "",
+              "header": "Advanced",
+              "hidden": false
+            },
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "input",
+                  "label": "Client ID",
+                  "hidden": false,
+                  "placeholder": "Client ID",
+                  "grid": 4,
+                  "feedback": true,
+                  "message": "Please enter a valid client ID",
+                  "rules": [
+                    {
+                      "required": true,
+                      "message": "Please enter a valid client ID"
+                    }
+                  ]
+                }
+              },
+              "client_secret": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "password",
+                  "label": "Client Secret",
+                  "hidden": false,
+                  "placeholder": "Client Secret",
+                  "grid": 4,
+                  "feedback": true,
+                  "rules": [
+                    {
+                      "required": true,
+                      "message": "Please enter a valid client secret"
+                    }
+                  ]
+                }
+              },
+              "tenant_id": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "input",
+                  "label": "Tenant ID",
+                  "hidden": false,
+                  "placeholder": "c22285c4-9c8c-43fd-b559-045b36218e31",
+                  "grid": 4,
+                  "feedback": true,
+                  "message": "Please enter a valid tenant ID",
+                  "rules": [
+                    {
+                      "required": true,
+                      "message": "Please enter a valid tenant ID"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "vcoreandru": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "label": "VCORE and RU Deployment",
+          "placeholder": "Credential Type",
+          "hidden": true,
+          "nestedValue": false
+        },
+        "properties": {
+          "extra": {
+            "type": "object",
+            "ui": {
+              "widget": "nested",
+              "label": "",
+              "header": "Advanced",
+              "hidden": false
+            },
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "input",
+                  "label": "Client ID",
+                  "hidden": false,
+                  "placeholder": "Client ID",
+                  "grid": 4,
+                  "feedback": true,
+                  "message": "Please enter a valid client ID",
+                  "rules": [
+                    {
+                      "required": true,
+                      "message": "Please enter a valid client ID"
+                    }
+                  ]
+                }
+              },
+              "client_secret": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "password",
+                  "label": "Client Secret",
+                  "hidden": false,
+                  "placeholder": "Client Secret",
+                  "grid": 4,
+                  "feedback": true,
+                  "rules": [
+                    {
+                      "required": true,
+                      "message": "Please enter a valid client secret"
+                    }
+                  ]
+                }
+              },
+              "tenant_id": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "input",
+                  "label": "Tenant ID",
+                  "hidden": false,
+                  "placeholder": "c22285c4-9c8c-43fd-b559-045b36218e31",
+                  "grid": 4,
+                  "feedback": true,
+                  "message": "Please enter a valid tenant ID",
+                  "rules": [
+                    {
+                      "required": true,
+                      "message": "Please enter a valid tenant ID"
+                    }
+                  ]
+                }
+              },
+              "connection_strings": {
+                "type": "object",
+                "required": true,
+                "ui": {
+                  "widget": "inputRepeater",
+                  "label": "Connection Strings",
+                  "hidden": false,
+                  "help": "List of connection strings for vCore deployments",
+                  "placeholder": "Enter Connection String",
+                  "grid": 8,
+                  "rules": [
+                    {
+                      "required": true,
+                      "message": "Please enter valid connection strings"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "auth-type": {
+            "const": "vcore"
+          }
+        },
+        "required": [
+          "vcore"
+        ]
+      },
+      {
+        "properties": {
+          "auth-type": {
+            "const": "ru"
+          }
+        },
+        "required": [
+          "ru"
+        ]
+      },
+      {
+        "properties": {
+          "auth-type": {
+            "const": "vcoreandru"
+          }
+        },
+        "required": [
+          "vcoreandru"
+        ]
+      }
+    ]
+  }
+}

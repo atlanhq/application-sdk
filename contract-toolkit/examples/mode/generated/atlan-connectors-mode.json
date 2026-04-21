@@ -1,0 +1,164 @@
+{
+  "icon": "https://assets.atlan.com/assets/mode.svg",
+  "helpdeskLink": "",
+  "logo": "https://assets.atlan.com/assets/mode.svg",
+  "connector": "mode",
+  "defaultConnectorType": "rest",
+  "config": {
+    "properties": {
+      "name": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Name",
+          "hidden": true,
+          "placeholder": "Host Name"
+        }
+      },
+      "connector": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Connector",
+          "hidden": true,
+          "placeholder": "Connector"
+        }
+      },
+      "connectorType": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "key": "_host",
+          "label": "connectorType",
+          "placeholder": "connectorType",
+          "hidden": true
+        }
+      },
+      "host": {
+        "type": "string",
+        "default": "app.mode.com",
+        "ui": {
+          "widget": "input",
+          "label": "Host Name",
+          "hidden": true,
+          "grid": 6
+        }
+      },
+      "port": {
+        "type": "number",
+        "default": 443,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Port",
+          "hidden": true,
+          "grid": 2
+        }
+      },
+      "auth-type": {
+        "type": "string",
+        "enum": [
+          "basic"
+        ],
+        "default": "basic",
+        "required": true,
+        "enumNames": [
+          "Basic"
+        ],
+        "ui": {
+          "widget": "radio",
+          "hidden": false,
+          "label": "Authentication"
+        }
+      },
+      "basic": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "label": "",
+          "hidden": true,
+          "nestedValue": false
+        },
+        "properties": {
+          "username": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "input",
+              "label": "API Key ID",
+              "hidden": false,
+              "help": "API Key ID",
+              "placeholder": "API Key ID",
+              "grid": 4
+            }
+          },
+          "password": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "password",
+              "label": "API Secret",
+              "hidden": false,
+              "help": "API Secret",
+              "placeholder": "API Secret",
+              "grid": 4
+            }
+          },
+          "extra": {
+            "type": "object",
+            "ui": {
+              "widget": "nested",
+              "label": "",
+              "header": "Advanced",
+              "hidden": false
+            },
+            "properties": {
+              "workspace": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "input",
+                  "label": "Workspace",
+                  "hidden": false,
+                  "help": "Mode workspace to crawl data from",
+                  "placeholder": "Workspace",
+                  "grid": 4
+                }
+              },
+              "collection_filter": {
+                "type": "string",
+                "required": true,
+                "enum": [
+                  "custom",
+                  "all"
+                ],
+                "enumNames": [
+                  "Yes",
+                  "No"
+                ],
+                "default": "all",
+                "ui": {
+                  "widget": "radio",
+                  "label": "Exclude all personal collections",
+                  "hidden": false,
+                  "grid": 8
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "auth-type": {
+            "const": "basic"
+          }
+        },
+        "required": [
+          "basic"
+        ]
+      }
+    ]
+  }
+}
