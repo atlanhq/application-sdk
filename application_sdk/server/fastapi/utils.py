@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import UploadFile, status
 from fastapi.responses import JSONResponse
 
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
 from application_sdk.storage.batch import upload_file_from_bytes
 
@@ -32,10 +33,7 @@ def internal_server_error_handler(_, exc: Exception) -> JSONResponse:
         JSONResponse: A formatted error response with the following structure:
             - success (bool): Always False for errors
             - error (str): A generic error message
-            - details (str): The string representation of the exception
     """
-    from application_sdk.observability.logger_adaptor import get_logger
-
     logger = get_logger(__name__)
     logger.error("Internal server error: %s", exc, exc_info=True)
 

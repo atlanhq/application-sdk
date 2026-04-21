@@ -27,9 +27,7 @@ class TestInternalServerErrorHandler:
             "password authentication failed for user 'admin'"
         )
         response = internal_server_error_handler(None, sensitive_exc)
-        import json as _json
-
-        body = _json.loads(response.body)
+        body = json.loads(response.body)
         assert response.status_code == 500
         assert body["success"] is False
         assert "10.0.1.42" not in body.get("details", "")
