@@ -4,6 +4,8 @@ import glob
 import json
 import os
 import re
+
+import orjson
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
     Any,
@@ -648,11 +650,11 @@ async def resolve_credential_file(
 
     # Detect format: JSON object-store reference vs raw base64 string
     try:
-        parsed = json.loads(value)
+        parsed = orjson.loads(value)
         if isinstance(parsed, dict) and ("key" in parsed or "fileKey" in parsed):
             # Object-store reference — delegate to existing download utility
             return await download_file_from_upload_response(value)
-    except (json.JSONDecodeError, TypeError):
+    except (orjson.JSONDecodeError, TypeError):
         pass
 
     # Base64-encoded file content — decode and write to disk
