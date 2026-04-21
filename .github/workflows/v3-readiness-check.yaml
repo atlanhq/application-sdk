@@ -179,8 +179,8 @@ jobs:
             echo "::error::'poe generate' failed"
             exit 1
           }
-          if ! git -C . diff --exit-code -- contract/generated/ app/contracts/_input.py; then
-            echo "::error::contract/generated artifacts are stale — run 'poe generate' locally and commit"
+          if ! git -C . diff --exit-code -- app/generated/; then
+            echo "::error::app/generated artifacts are stale — run 'poe generate' locally and commit"
             exit 1
           fi
 

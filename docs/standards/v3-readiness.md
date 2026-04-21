@@ -37,8 +37,10 @@ Each item corresponds to a `FAIL`/`WARN` rule in `tools/migrate_v3/check_migrati
 
 The SDK generates workflow/credential/manifest/input artifacts from a single `contract/app.pkl`. See [`.claude/skills/contract/SKILL.md`](../../.claude/skills/contract/SKILL.md).
 
+> **Output directory is `app/generated/`**, importable as `app.generated`. The SDK reads it via `ATLAN_CONTRACT_GENERATED_DIR` (default defined in [`application_sdk/constants.py`](../../application_sdk/constants.py) as `app/generated`). If an app writes generated artifacts elsewhere, either set `ATLAN_CONTRACT_GENERATED_DIR` to match or (preferred) point `poe generate` at `app/generated/` so the runtime finds them without extra config.
+
 - [ ] **`contract/app.pkl`** exists and is the source of truth for the app's metadata, credentials, and workflow form.
-- [ ] **Generated artifacts are committed** — `contract/generated/{name}.json`, `atlan-connectors-{name}.json`, `manifest.json` and `app/contracts/_input.py` are present.
+- [ ] **Generated artifacts are committed** — `app/generated/{name}.json`, `atlan-connectors-{name}.json`, `manifest.json` and `app/generated/_input.py` are present.
 - [ ] **`poe generate` task wired** in `pyproject.toml` and produces no diff on a clean checkout (i.e. generated files are not stale).
 - [ ] **`PklProject.deps.json`** lockfile committed.
 - [ ] **No stale overrides** — `app/templates/`, `get_configmap()` / `get_manifest()` handler overrides are removed; the SDK auto-serves generated artifacts.
@@ -73,9 +75,9 @@ E2E coverage is **not** limited to the happy path. Every user-observable scenari
 
 - [ ] **Boot probe** — start the app via `run_dev_combined` in-process (or as a subprocess) and confirm:
   - `GET /health` returns 200
-  - `GET /manifest` returns the committed `contract/generated/manifest.json` verbatim
+  - `GET /manifest` returns the committed `app/generated/manifest.json` verbatim
   - `GET /workflows/v1/configmap/{name}` returns the committed workflow config
-- [ ] **Golden contract drift** — re-run `poe generate` in CI and `git diff --exit-code contract/generated/ app/contracts/_input.py` must be clean.
+- [ ] **Golden contract drift** — re-run `poe generate` in CI and `git diff --exit-code app/generated/ app/generated/_input.py` must be clean.
 - [ ] **Scenario matrix** — one E2E test per supported scenario. Each drives `POST /workflows/v1/start` with a realistic payload and asserts the final outcome (NDJSON artifacts, uploaded object-store keys, publish-app state, response codes). Cover at minimum:
   - Happy path for every `import_type` / extraction mode the app exposes (e.g. URL vs CLOUD, full vs incremental, agent vs GUID credentials).
   - Each credential / auth flow the `Handler.test_auth` accepts (success and failure).
@@ -108,7 +110,7 @@ Wire this into CI (GitHub Actions job, pre-commit hook, or `poe check-v3`) so re
 
 ```bash
 uv run poe generate
-git diff --exit-code contract/generated/ app/contracts/_input.py
+git diff --exit-code app/generated/ app/generated/_input.py
 ```
 
 Non-zero exit = generated artifacts are stale relative to `contract/app.pkl`. Regenerate and commit.
@@ -125,7 +127,7 @@ trap "kill $APP_PID" EXIT
 until curl -sf http://127.0.0.1:8000/health; do sleep 1; done
 
 # Fetch manifest + configmaps and diff against committed artifacts
-curl -sf http://127.0.0.1:8000/manifest | diff - contract/generated/manifest.json
+curl -sf http://127.0.0.1:8000/manifest | diff - app/generated/manifest.json
 ```
 
 Mismatches mean the SDK serves something different from what the repo committed — a readiness failure.
