@@ -207,3 +207,86 @@ class TestGuidResolutionPath:
             ref = legacy_credential_ref("abc-123")
             with pytest.raises(CredentialNotFoundError):
                 await getattr(resolver, method)(ref)
+
+
+# ---------------------------------------------------------------------------
+# End-to-end credential resolution test
+# ---------------------------------------------------------------------------
+
+
+class TestEndToEndCredentialResolution:
+    """Integration test: write secrets locally + mock object store, verify merged result."""
+
+    async def test_resolve_raw_merges_sensitive_and_nonsensitive(self, tmp_path):
+        """Full flow: secrets.json (sensitive) + mock vault config (non-sensitive)
+        → resolve_raw returns merged dict with all fields.
+        """
+        import os
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        guid = "e2e-test-guid-abc123"
+
+        # 1. Write sensitive secrets to local secrets.json
+        secrets_dir = tmp_path / "local" / "dapr" / "secrets"
+        secrets_dir.mkdir(parents=True)
+        secrets_file = secrets_dir / "secrets.json"
+        sensitive_data = {
+            guid: {
+                "username": "admin",
+                "password": "s3cret",
+                "extra": {"ssl_cert": "-----BEGIN CERT-----"},
+            }
+        }
+        secrets_file.write_text(json.dumps(sensitive_data))
+
+        # 2. Set up mock DaprCredentialVault that reads local secrets
+        #    and returns config merged with secrets (simulating local env)
+        non_sensitive_config = {
+            "credentialSource": "direct",
+            "host": "db.example.com",
+            "port": 5432,
+            "authType": "basic",
+        }
+
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            return_value=BindingResult(
+                data=json.dumps(non_sensitive_config).encode(), metadata={}
+            )
+        )
+        mock_client.close = AsyncMock()
+
+        # In local env, _get_secret reads from local file instead of Dapr
+        original_cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            with (
+                patch("application_sdk.constants.DEPLOYMENT_NAME", "local"),
+                patch(
+                    "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+                    MagicMock(return_value=mock_client),
+                ),
+            ):
+                from application_sdk.infrastructure._dapr.credential_vault import (
+                    DaprCredentialVault,
+                )
+
+                vault = DaprCredentialVault(
+                    mock_client,
+                    upstream_binding_name="upstream",
+                    secret_store_name="secretstore",
+                )
+                result = await vault.get_credentials(guid)
+        finally:
+            os.chdir(original_cwd)
+
+        # 3. Verify merged result has both sensitive and non-sensitive fields
+        assert result["host"] == "db.example.com"
+        assert result["port"] == 5432
+        assert result["authType"] == "basic"
+        assert result["username"] == "admin"
+        assert result["password"] == "s3cret"
+        assert result["extra"] == {"ssl_cert": "-----BEGIN CERT-----"}
+        assert result["credentialSource"] == "direct"
