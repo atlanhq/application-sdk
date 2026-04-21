@@ -116,22 +116,45 @@ def _make_vault_patches(vault_return=None, vault_side_effect=None):
 class TestGuidResolutionPath:
     """Tests for the GUID-based resolution path.
 
-    The resolver checks the local secret store first (in-process inline
-    credentials), then falls back to DaprCredentialVault for platform GUIDs.
+    The resolver checks the state store (local dev), then the secret store
+    (returns immediately if complete — has authType), then falls through to
+    DaprCredentialVault which merges S3 config + Vault secrets.
     """
 
-    async def test_local_store_takes_precedence_over_vault(self, store, resolver):
-        """Inline credentials stored in the local secret store are resolved
-        directly — DaprCredentialVault is never called."""
+    async def test_complete_secret_store_creds_returned(self, store, resolver):
+        """Secret store credentials with authType are returned directly."""
         import json
 
-        store.set("guid-abc", json.dumps({"host": "local.example.com", "port": 5432}))
+        store.set(
+            "guid-abc",
+            json.dumps(
+                {"host": "local.example.com", "port": 5432, "authType": "basic"}
+            ),
+        )
         ref = legacy_credential_ref("guid-abc")
-        # No Dapr mock needed — local store should return before Dapr is reached.
         raw = await resolver.resolve_raw(ref)
 
         assert raw["host"] == "local.example.com"
         assert raw["port"] == 5432
+        assert raw["authType"] == "basic"
+
+    async def test_partial_secret_store_creds_fall_through(self, store, resolver):
+        """Secret store credentials without authType fall through to
+        DaprCredentialVault (which fails in unit tests without Dapr)."""
+        import json
+
+        import pytest
+
+        from application_sdk.credentials.errors import CredentialNotFoundError
+
+        # Vault-only creds: missing authType → should NOT be returned directly
+        store.set(
+            "guid-abc", json.dumps({"username": "user", "extra": {"database": "db"}})
+        )
+        ref = legacy_credential_ref("guid-abc")
+
+        with pytest.raises(CredentialNotFoundError):
+            await resolver.resolve_raw(ref)
 
     async def test_get_credentials_receives_string_not_dict(self, store, resolver):
         """Regression: resolver must pass the GUID as a plain string, not a dict."""

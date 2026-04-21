@@ -690,10 +690,16 @@ class TestCredentialResolverAgentBranch:
         }
         assert resolved["extra"]["database"] == "real_pg_db"
 
-    async def test_resolve_raw_legacy_guid_ref_still_works(self) -> None:
-        """Legacy GUID refs continue to resolve via the local secret
-        store path — agent branch is additive, not a replacement.
+    async def test_resolve_raw_legacy_guid_ref_requires_credential_vault(
+        self,
+    ) -> None:
+        """GUID refs resolve via DaprCredentialVault (merging S3 config +
+        Vault secrets), NOT the secret store alone.  Without a running Dapr
+        sidecar, this raises CredentialNotFoundError.
         """
+        import pytest
+
+        from application_sdk.credentials.errors import CredentialNotFoundError
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver
 
@@ -703,8 +709,8 @@ class TestCredentialResolverAgentBranch:
         )
         resolver = CredentialResolver(store)
 
-        resolved = await resolver.resolve_raw(ref)
-        assert resolved == {"username": "real_user", "host": "h"}
+        with pytest.raises(CredentialNotFoundError):
+            await resolver.resolve_raw(ref)
 
     async def test_resolve_typed_agent_ref_uses_auth_type_for_parser(self) -> None:
         """When ``credential_type`` is empty on an agent ref (which is

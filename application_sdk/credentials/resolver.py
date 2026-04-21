@@ -31,13 +31,13 @@ class CredentialResolver:
        contract.  Typed resolution uses the ``auth_type`` field on the
        spec when ``credential_type`` is empty.
 
-    2. **GUID path** (``credential_guid`` is non-empty): First checks
-       ``secret_store.get(ref.name)`` to cover in-process inline credentials
-       stored by the handler layer (combined-mode / local dev). If not found
-       there, uses ``DaprCredentialVault.get_credentials(guid)`` to resolve
-       platform-issued GUIDs from the upstream store. → if
-       ``credential_type != "unknown"`` parses into typed Credential, otherwise
-       wraps in ``RawCredential``.
+    2. **GUID path** (``credential_guid`` is non-empty): Checks the
+       state store (local-dev inline creds), then the secret store (returns
+       immediately if the result is complete — i.e. contains ``authType``),
+       then falls through to ``DaprCredentialVault.get_credentials(guid)``
+       which merges S3 config with Vault secrets.  → if
+       ``credential_type != "unknown"`` parses into typed Credential,
+       otherwise wraps in ``RawCredential``.
 
     3. **Named path** (both routing fields empty): Calls
        ``secret_store.get(ref.name)`` → parses JSON → looks up parser in
@@ -178,9 +178,14 @@ class CredentialResolver:
     async def _resolve_by_guid(self, ref: "CredentialRef") -> dict[str, Any]:
         """Resolve credentials by GUID.
 
-        Checks the local secret store first (covers in-process credential
-        injection from handler/service.py in combined-mode and local dev), then
-        falls back to DaprCredentialVault for production platform-issued GUIDs.
+        Resolution order:
+        1. State store (local-dev only) — inline credentials from handler
+        2. Secret store — returns immediately if result is complete (has authType)
+        3. DaprCredentialVault — merges S3 config + Vault secrets (production path)
+
+        In production, the secret store (Vault) only holds the sensitive half
+        of the credential.  The completeness check (``authType in result``)
+        ensures we fall through to DaprCredentialVault for the full merge.
         """
 
         # State store check — handler/service.py stores inline credentials here
@@ -207,29 +212,40 @@ class CredentialResolver:
                     exc_info=True,
                 )
 
-        # Secret store check (backward compat) — handler/service.py previously
-        # stored inline credentials here under the same UUID.
+        # Secret store check — backward compat path.  In production the Dapr
+        # secret store resolves to Vault which only holds the *sensitive* half
+        # of the credential (e.g. username, tokens).  If the result looks
+        # incomplete (missing authType — a key config field that always lives
+        # in S3), fall through to DaprCredentialVault which merges both halves.
         from application_sdk.infrastructure.secrets import SecretNotFoundError
 
         try:
             raw = await self._secret_store.get(ref.name)
             data_parsed: dict[str, Any] = json.loads(raw)
-            return data_parsed
+            if "authType" in data_parsed:
+                # Complete credential (e.g. local dev inline or full bundle)
+                return data_parsed
+            logger.debug(
+                "Secret store returned partial creds for GUID %r "
+                "(missing authType); falling through to credential vault",
+                ref.name,
+            )
         except SecretNotFoundError:
             pass
         except json.JSONDecodeError:
             logger.debug(
-                "Local store value for GUID %r is not valid JSON; trying Dapr",
+                "Local store value for GUID %r is not valid JSON; trying vault",
                 ref.name,
             )
         except Exception:
             logger.debug(
-                "Local store lookup failed for GUID %r; trying Dapr",
+                "Local store lookup failed for GUID %r; trying vault",
                 ref.name,
                 exc_info=True,
             )
 
-        # Fall back to DaprCredentialVault for platform-issued GUIDs.
+        # Fall back to DaprCredentialVault which merges S3 config (authType,
+        # host, port, etc.) with Vault secrets (passwords, tokens, etc.).
         from application_sdk.credentials.errors import CredentialNotFoundError
         from application_sdk.infrastructure import AsyncDaprClient, DaprCredentialVault
 
