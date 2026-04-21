@@ -136,14 +136,6 @@ class DaprCredentialVault:
             else:
                 secret_data = await self._fetch_single_key_secrets(credential_config)
 
-            logger.info(
-                "Credential merge: guid=%s source=%s config_keys=%s secret_keys=%s",
-                credential_guid,
-                credential_source.value,
-                sorted(credential_config.keys()),
-                sorted(secret_data.keys()),
-            )
-
             if credential_source == _CredentialSource.DIRECT:
                 credential_config.update(secret_data)
                 return credential_config
