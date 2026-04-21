@@ -91,7 +91,11 @@ jobs:
         with:
           repository: ${{ steps.parse.outputs.repo }}
           ref: ${{ inputs.branch }}
-          token: ${{ secrets.app_repo_token || secrets.GITHUB_TOKEN }}
+          # Token fallback chain:
+          #   1. secrets.app_repo_token — passed by workflow_call callers
+          #   2. secrets.APP_REPO_READ_TOKEN — repo secret, used on workflow_dispatch
+          #   3. secrets.GITHUB_TOKEN — only works for public targets
+          token: ${{ secrets.app_repo_token || secrets.APP_REPO_READ_TOKEN || secrets.GITHUB_TOKEN }}
           path: app
           fetch-depth: 1
 
