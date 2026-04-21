@@ -1066,7 +1066,7 @@ async def run_dev_combined(
             print(f"\n  curl {base}/workflows/v1/result/{workflow_id}\n")
 
         # Schedule provisioning + start as a background task — runs after the server starts
-        asyncio.get_event_loop().create_task(_provision_and_start())
+        asyncio.create_task(_provision_and_start())
     else:
         print(f"\nDev server running at http://{host}:{port}")
         print(

@@ -233,7 +233,7 @@ class DaprCredentialVault:
         All secrets are stored in a single ``./local/dapr/secrets/secrets.json``
         file keyed by guid. No user input in filenames.
         """
-        from pathlib import Path
+        from pathlib import Path  # deferred import: only needed in local dev path
 
         secrets_file = Path(".", "local", "dapr", "secrets", "secrets.json")
         if not secrets_file.exists():
