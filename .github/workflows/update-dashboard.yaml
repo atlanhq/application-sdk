@@ -45,6 +45,7 @@ permissions:
 jobs:
   update:
     name: Update Dashboard
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == github.event.repository.default_branch
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -273,14 +274,25 @@ jobs:
         run: |
           SLUG=$(echo "$REPO_SLUG" | tr '/' '_')
 
-          # Upload per-repo data (no --delete, doesn't clobber other repos)
+          # Upload per-repo data
           aws s3 cp "/tmp/dashboard-deploy/repos/${SLUG}.json" \
             "s3://kryptonite-store/${{ inputs.dashboard_path }}/repos/${SLUG}.json"
 
-          # Upload dashboard HTML (shared, idempotent)
+          # Generate manifest of all repo files in S3
+          aws s3 ls "s3://kryptonite-store/${{ inputs.dashboard_path }}/repos/" \
+            | grep '\.json$' | awk '{print $4}' \
+            | python3 -c "import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))" \
+            > /tmp/dashboard-deploy/repos.json
+          aws s3 cp /tmp/dashboard-deploy/repos.json \
+            "s3://kryptonite-store/${{ inputs.dashboard_path }}/repos.json"
+
+          # Upload dashboard HTML
           if [ -f /tmp/dashboard-deploy/index.html ]; then
             aws s3 cp /tmp/dashboard-deploy/index.html \
               "s3://kryptonite-store/${{ inputs.dashboard_path }}/index.html"
           fi
+
+          # Remove stale legacy data.json
+          aws s3 rm "s3://kryptonite-store/${{ inputs.dashboard_path }}/data.json" 2>/dev/null || true
 
           echo "Dashboard updated at https://k.atlan.dev/${{ inputs.dashboard_path }}/"

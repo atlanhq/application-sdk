@@ -1,0 +1,53 @@
+# Validate Allowlist — enforces expiry policy on base-allowlist.json entries.
+#
+# Triggers on every PR (no paths filter — required status checks must always
+# report a result, or PRs that don't touch .security/ would be permanently
+# blocked waiting for a status that never fires).
+#
+# The check exits early with success when the PR doesn't modify
+# .security/base-allowlist.json, so there's no noise on unrelated PRs.
+#
+# Rules (enforced by .github/scripts/validate_allowlist.py):
+#   - Required fields: package, severity, reason, expires, added_by
+#   - expires must be a valid YYYY-MM-DD date, not already past
+#   - CRITICAL entries: expires ≤ 30 days from today (configurable via _expiry_policy)
+#   - HIGH entries:     expires ≤ 60 days from today (configurable via _expiry_policy)
+#
+# Make "Allowlist Expiry Check" a required status check on main to enforce.
+#
+name: Allowlist Expiry Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validate:
+    name: Allowlist Expiry Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check if PR modifies base-allowlist.json
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              per_page: 100,
+            });
+            const modified = files.some(f => f.filename === '.security/base-allowlist.json');
+            core.setOutput('modified', modified.toString());
+            if (!modified) {
+              console.log('base-allowlist.json not modified — skipping validation');
+            }
+
+      - name: Checkout
+        if: steps.check.outputs.modified == 'true'
+        uses: actions/checkout@v4
+
+      - name: Validate allowlist expiry policy
+        if: steps.check.outputs.modified == 'true'
+        run: python3 .github/scripts/validate_allowlist.py

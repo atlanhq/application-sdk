@@ -1,7 +1,7 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-04-18",
+  "_updated": "2026-04-21",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 60 days. HIGH: 90 days. Review before expiry.",
   "SNYK-GOLANG-GOOGLEGOLANGORGGRPC-15691172": {
     "package": "google.golang.org/grpc",
@@ -170,5 +170,47 @@
     "reason": "Next.js pinned to ~16.1.6 due to router.replace static export regression in 16.2.x. Upgrade blocked until Next.js fixes the regression.",
     "expires": "2026-07-18",
     "added_by": "bichitra.sahoo"
+  },
+  "CVE-2026-33816": {
+    "package": "github.com/jackc/pgx/v5",
+    "severity": "CRITICAL",
+    "reason": "Base image \u2014 Dapr Go dependency, fix available in 5.9.0",
+    "expires": "2026-06-21",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-27140": {
+    "package": "dapr-daprd-1.17",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Dapr runtime, fix available in 1.17.5-r0",
+    "expires": "2026-07-21",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-32281": {
+    "package": "dapr-daprd-1.17",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Dapr runtime, fix available in 1.17.5-r0",
+    "expires": "2026-07-21",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-32283": {
+    "package": "dapr-daprd-1.17",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Dapr runtime, fix available in 1.17.5-r0",
+    "expires": "2026-07-21",
+    "added_by": "mananjain99"
+  },
+  "GHSA-85gx-3qv6-4463": {
+    "package": "github.com/dapr/dapr",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Dapr runtime, fix available in 1.17.5",
+    "expires": "2026-07-21",
+    "added_by": "mananjain99"
+  },
+  "CVE-2026-35469": {
+    "package": "github.com/moby/spdystream",
+    "severity": "HIGH",
+    "reason": "Base image \u2014 Go dependency, fix available in 0.5.1",
+    "expires": "2026-07-21",
+    "added_by": "mananjain99"
   }
 }
