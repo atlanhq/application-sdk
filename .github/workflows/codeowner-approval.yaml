@@ -1,0 +1,62 @@
+name: CODEOWNER Approval Check
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-approval:
+    name: Require CODEOWNER approval
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check for CODEOWNER approval
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const CODEOWNERS = [
+              'cmgrote',
+              'OnkarVO7',
+              'louisnow',
+              'Aryamanz29',
+              'vaibhavatlan',
+            ];
+
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            // Get the latest review per user (dismiss overrides prior approval)
+            const latestByUser = {};
+            for (const review of reviews) {
+              const login = review.user.login;
+              if (!latestByUser[login] || new Date(review.submitted_at) > new Date(latestByUser[login].submitted_at)) {
+                latestByUser[login] = review;
+              }
+            }
+
+            const approvals = Object.values(latestByUser)
+              .filter(r => r.state === 'APPROVED')
+              .map(r => r.user.login);
+
+            const codeownerApprovals = approvals.filter(login =>
+              CODEOWNERS.includes(login)
+            );
+
+            console.log(`Approvals: ${approvals.join(', ') || 'none'}`);
+            console.log(`CODEOWNER approvals: ${codeownerApprovals.join(', ') || 'none'}`);
+
+            if (codeownerApprovals.length === 0) {
+              core.setFailed(
+                `Requires at least 1 approval from a CODEOWNER (${CODEOWNERS.join(', ')}). ` +
+                `Current approvals: ${approvals.join(', ') || 'none'}`
+              );
+            } else {
+              console.log(`✅ Approved by CODEOWNER: ${codeownerApprovals.join(', ')}`);
+            }
