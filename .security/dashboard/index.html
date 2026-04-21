@@ -193,10 +193,9 @@ function animateCount(el,target){let cur=0;const step=Math.max(1,Math.ceil(targe
 
 async function load(){
     try{
-        const r=await fetch('repos/');
-        if(r.ok){const h=await r.text();const fs=[...h.matchAll(/href="([^"]+\.json)"/g)].map(m=>m[1]);
-            for(const f of fs){try{const rr=await fetch('repos/'+f);const d=await rr.json();if(d.repo){D.repos[d.repo]=d;D.generated_at=d.scanned_at;}}catch(e){}}}
-        if(!Object.keys(D.repos).length){const r2=await fetch('data.json');D=await r2.json();}
+        const mr=await fetch('repos.json');
+        if(mr.ok){const files=await mr.json();
+            for(const f of files){try{const rr=await fetch('repos/'+f);const d=await rr.json();if(d.repo){D.repos[d.repo]=d;D.generated_at=d.scanned_at;}}catch(e){}}}
         buildVM();renderAll();
     }catch(e){document.getElementById('empty').style.display='block';document.getElementById('empty').textContent='No data yet.';}
 }
