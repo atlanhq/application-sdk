@@ -229,12 +229,19 @@ class DaprCredentialVault:
 
     def _get_local_secret(self, secret_key: str) -> dict[str, Any]:
         """Read secret from local file for development."""
-        import os
+        from pathlib import Path
 
-        secret_path = os.path.join(
-            ".", "local", "dapr", "secrets", f"{secret_key}.json"
-        )
-        if not os.path.exists(secret_path):
+        # Validate the key to prevent path traversal.
+        if not _SAFE_GUID_RE.match(secret_key):
+            logger.debug("Unsafe local secret key rejected: %r", secret_key)
+            return {}
+
+        secrets_dir = Path(".", "local", "dapr", "secrets").resolve()
+        secret_path = (secrets_dir / f"{secret_key}.json").resolve()
+        if not secret_path.parent == secrets_dir:
+            logger.debug("Path traversal detected for key %r", secret_key)
+            return {}
+        if not secret_path.exists():
             logger.debug("No local secret file for key %s", secret_key)
             return {}
         try:

@@ -1523,10 +1523,16 @@ def create_app_handler_service(
             else:
                 non_sensitive[key] = value
 
-        # Write sensitive fields to local Dapr secrets directory
-        secrets_dir = Path(".", "local", "dapr", "secrets")
+        # Write sensitive fields to local Dapr secrets directory.
+        # Resolve paths and verify the target stays within the secrets dir
+        # to prevent path traversal (CodeQL: uncontrolled-data-in-path).
+        secrets_dir = Path(".", "local", "dapr", "secrets").resolve()
         secrets_dir.mkdir(parents=True, exist_ok=True)
-        secret_path = secrets_dir / f"{guid}.json"
+        secret_path = (secrets_dir / f"{guid}.json").resolve()
+        if not secret_path.parent == secrets_dir:
+            raise HTTPException(
+                status_code=400, detail="Invalid guid — path traversal detected"
+            )
         secret_path.write_bytes(orjson.dumps(sensitive))
 
         # Write non-sensitive fields to object storage
