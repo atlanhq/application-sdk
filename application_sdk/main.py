@@ -1017,24 +1017,23 @@ async def run_dev_combined(
     if credentials is not None:
         import httpx
 
-        async def _provision_and_print() -> None:
-            """Wait for the handler to be ready, provision creds, then print examples."""
-            # Wait for the handler to be ready
+        async def _provision_and_start() -> None:
+            """Wait for handler, provision creds, start workflow — mimics prod."""
+            base = f"http://{host}:{port}"
             async with httpx.AsyncClient() as client:
+                # Wait for the handler to be ready
                 for _ in range(30):
                     try:
-                        resp = await client.get(
-                            f"http://{host}:{port}/health", timeout=2
-                        )
+                        resp = await client.get(f"{base}/health", timeout=2)
                         if resp.status_code == 200:
                             break
                     except Exception:
                         pass
                     await asyncio.sleep(1)
 
-                # Provision credentials
+                # Step 1: Provision credentials (mimics Heracles)
                 resp = await client.post(
-                    f"http://{host}:{port}/dev/local-vault",
+                    f"{base}/dev/local-vault",
                     json=credentials,
                     timeout=10,
                 )
@@ -1042,25 +1041,32 @@ async def run_dev_combined(
                 credential_guid = result.get("data", {}).get(
                     "credential_guid"
                 ) or result.get("credential_guid")
+                logger.info("Auto-provisioned credentials: guid=%s", credential_guid)
 
-            logger.info("Auto-provisioned credentials: guid=%s", credential_guid)
-
-            # Build the full workflow input
-            workflow_input = dict(example_input or {})
-            workflow_input["credential_guid"] = credential_guid
+                # Step 2: Start workflow (mimics Heracles/AE)
+                workflow_input = dict(example_input or {})
+                workflow_input["credential_guid"] = credential_guid
+                resp = await client.post(
+                    f"{base}/workflows/v1/start",
+                    json=workflow_input,
+                    timeout=30,
+                )
+                start_result = resp.json()
+                wf_data = start_result.get("data", {})
+                workflow_id = wf_data.get("workflow_id", "")
+                run_id = wf_data.get("run_id", "")
+                logger.info(
+                    "Auto-started workflow: id=%s run_id=%s",
+                    workflow_id,
+                    run_id,
+                )
 
             print(f"\n  Credentials provisioned: credential_guid={credential_guid}")
-            print("\n  Start workflow:")
-            example_json = _json.dumps(workflow_input, indent=2)
-            print(f"  curl -X POST http://{host}:{port}/workflows/v1/start \\")
-            print('    -H "Content-Type: application/json" \\')
-            print(f"    -d '{example_json}'")
-            print(
-                f"\n  curl http://{host}:{port}/workflows/v1/result/{{workflow_id}}\n"
-            )
+            print(f"  Workflow started: workflow_id={workflow_id} run_id={run_id}")
+            print(f"\n  curl {base}/workflows/v1/result/{workflow_id}\n")
 
-        # Schedule provisioning as a background task — runs after the server starts
-        asyncio.get_event_loop().create_task(_provision_and_print())
+        # Schedule provisioning + start as a background task — runs after the server starts
+        asyncio.get_event_loop().create_task(_provision_and_start())
     else:
         print(f"\nDev server running at http://{host}:{port}")
         print(
