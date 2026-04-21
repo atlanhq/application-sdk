@@ -160,6 +160,23 @@ jobs:
             exit 1
           fi
 
+      - name: "§3 Dockerfile entry — no CMD/ENTRYPOINT override"
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [[ ! -f Dockerfile ]]; then
+            exit 0
+          fi
+          # Ignore comments; detect real CMD / ENTRYPOINT instructions only.
+          if grep -Ein '^[[:space:]]*(CMD|ENTRYPOINT)[[:space:]]' Dockerfile; then
+            echo "::error::Dockerfile must NOT override CMD or ENTRYPOINT — the base image's entrypoint launches the SDK CLI and co-runs daprd with graceful-shutdown handling"
+            exit 1
+          fi
+          if ! grep -Eq '^[[:space:]]*ENV[[:space:]]+ATLAN_APP_MODULE\b' Dockerfile; then
+            echo "::error::Dockerfile must set 'ENV ATLAN_APP_MODULE=<module>:<AppClass>' so the base entrypoint knows what to load"
+            exit 1
+          fi
+
       # --------------------------------------------------------------------
       # §2 — contract drift (only when the app ships a PKL contract)
       # --------------------------------------------------------------------

@@ -54,7 +54,20 @@ The SDK generates workflow/credential/manifest/input artifacts from a single `co
   No `*-latest` tags, no dev-branch tags (e.g. `refactor-v3-latest`), no other `app-runtime-base` image. Bump this pin in lockstep with the SDK `>=3.0.0,<4.0.0` major version.
 - [ ] **Non-root `appuser`** runs the app process.
 - [ ] **No secrets in build layers** — credentials resolved at runtime via Dapr / `SecretStore`.
-- [ ] **Container entry** runs the SDK CLI (`application-sdk --mode combined` via `ATLAN_APP_MODULE`), not a custom asyncio bootstrap.
+- [ ] **No `ENTRYPOINT` / `CMD` override** — the app Dockerfile inherits the base image's entrypoint (`/usr/local/bin/entrypoint.sh`, which launches `python -m application_sdk.main` and co-runs `daprd` with graceful-shutdown handling). The app only needs `ENV ATLAN_APP_MODULE=<module>:<AppClass>`; the runtime mode (`worker`/`handler`/`combined`) is supplied by Helm via `ATLAN_APP_MODE`.
+
+  ❌ Do not do this — it bypasses daprd co-launch and graceful shutdown:
+  ```dockerfile
+  CMD ["python", "main.py"]
+  ENTRYPOINT ["uv", "run", "application-sdk"]
+  ```
+
+  ✅ Correct — inherit everything from the base image:
+  ```dockerfile
+  FROM registry.atlan.com/public/app-runtime-base:3.0.0
+  ENV ATLAN_APP_MODULE=app.connector:OpenAPIConnector
+  # (no CMD or ENTRYPOINT)
+  ```
 
 ## 4 — Tests that must pass
 
@@ -160,7 +173,7 @@ Paste this into the description of the PR that declares an app v3-ready. Reviewe
 
 ### Deployment (§3)
 - [ ] Dockerfile `FROM registry.atlan.com/public/app-runtime-base:3.0.0` (exact tag)
-- [ ] Container entry uses `application-sdk --mode combined`
+- [ ] No `CMD`/`ENTRYPOINT` override; `ENV ATLAN_APP_MODULE` set; mode comes from `ATLAN_APP_MODE` at runtime
 
 ### Tests (§4)
 - [ ] Unit tests cover App instantiation, every `@task`, and contract round-trips
