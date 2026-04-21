@@ -34,12 +34,16 @@ def internal_server_error_handler(_, exc: Exception) -> JSONResponse:
             - error (str): A generic error message
             - details (str): The string representation of the exception
     """
+    from application_sdk.observability.logger_adaptor import get_logger
+
+    logger = get_logger(__name__)
+    logger.error("Internal server error: %s", exc, exc_info=True)
+
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
             "success": False,
             "error": "An internal error has occurred.",
-            "details": str(exc),
         },
     )
 
