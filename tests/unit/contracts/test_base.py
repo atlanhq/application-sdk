@@ -490,3 +490,78 @@ class TestContractMetadata:
         )
         with pytest.raises((ValidationError, AttributeError, TypeError)):
             meta.name = "other"  # type: ignore[misc]
+
+
+# =============================================================================
+# Hyphenated key normalization
+# =============================================================================
+
+
+class TestHyphenatedKeyNormalization:
+    """Test that Input normalizes hyphenated keys from AE payloads."""
+
+    def test_hyphenated_keys_mapped_to_underscored(self) -> None:
+        class MyInput(Input):
+            credential_guid: str = ""
+            include_filter: str = ""
+
+        obj = MyInput.model_validate(
+            {"credential-guid": "abc-123", "include-filter": '{"db": ["schema"]}'}
+        )
+        assert obj.credential_guid == "abc-123"
+        assert obj.include_filter == '{"db": ["schema"]}'
+
+    def test_underscored_keys_still_work(self) -> None:
+        class MyInput(Input):
+            credential_guid: str = ""
+
+        obj = MyInput.model_validate({"credential_guid": "abc-123"})
+        assert obj.credential_guid == "abc-123"
+
+    def test_underscored_takes_precedence_over_hyphenated(self) -> None:
+        class MyInput(Input):
+            credential_guid: str = ""
+
+        obj = MyInput.model_validate(
+            {"credential_guid": "from-underscore", "credential-guid": "from-hyphen"}
+        )
+        assert obj.credential_guid == "from-underscore"
+
+    def test_hyphenated_key_without_matching_field_ignored(self) -> None:
+        class MyInput(Input):
+            name: str = ""
+
+        obj = MyInput.model_validate({"no-such-field": "value", "name": "test"})
+        assert obj.name == "test"
+
+    def test_works_with_json_string(self) -> None:
+        class MyInput(Input):
+            credential_guid: str = ""
+
+        obj = MyInput.model_validate_json('{"credential-guid": "abc-123"}')
+        assert obj.credential_guid == "abc-123"
+
+    def test_non_dict_input_passthrough(self) -> None:
+        class MyInput(Input):
+            name: str = ""
+
+        obj = MyInput(name="test")
+        assert obj.name == "test"
+
+    def test_nested_hyphens_normalized(self) -> None:
+        class MyInput(Input):
+            temp_table_regex: str = ""
+
+        obj = MyInput.model_validate({"temp-table-regex": "^tmp_.*"})
+        assert obj.temp_table_regex == "^tmp_.*"
+
+    def test_allow_unbounded_fields_still_normalizes(self) -> None:
+        class MyInput(Input, allow_unbounded_fields=True):
+            credential_guid: str = ""
+            metadata: dict[str, Any] = {}
+
+        obj = MyInput.model_validate(
+            {"credential-guid": "abc", "metadata": {"key": "val"}}
+        )
+        assert obj.credential_guid == "abc"
+        assert obj.metadata == {"key": "val"}

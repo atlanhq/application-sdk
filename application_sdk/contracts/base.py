@@ -140,6 +140,13 @@ class Input(BaseModel):
     2. Backwards-compatible evolution via Pydantic fields with defaults
     3. Proper serialization through Temporal
 
+    Key normalization:
+        Hyphenated keys in incoming data (e.g. ``credential-guid``) are
+        automatically mapped to their underscored Pydantic field equivalents
+        (``credential_guid``).  This is needed because the Automation Engine
+        dispatches payloads with hyphenated keys while Pydantic models use
+        underscored field names.
+
     Example:
         class ExtractInput(Input):
             source_url: str
@@ -153,6 +160,39 @@ class Input(BaseModel):
     """
 
     model_config = ConfigDict()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_hyphenated_keys(cls, data: Any) -> Any:
+        """Map hyphenated keys to underscored field names.
+
+        The Automation Engine sends payload keys with hyphens
+        (e.g. ``credential-guid``, ``include-filter``) but Pydantic
+        models define fields with underscores.  This validator runs
+        before field assignment and copies hyphenated values into the
+        corresponding underscored key when the underscored key is
+        absent or empty.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        field_names = set(cls.model_fields)
+        updates: dict[str, Any] = {}
+
+        for key, value in data.items():
+            if "-" not in key:
+                continue
+            underscore_key = key.replace("-", "_")
+            if underscore_key not in field_names:
+                continue
+            # Only fill in if the underscored key is missing or falsy
+            existing = data.get(underscore_key)
+            if not existing:
+                updates[underscore_key] = value
+
+        if updates:
+            data = {**data, **updates}
+        return data
 
     workflow_id: str = ""
     """Temporal workflow ID for the current run. Populated by the framework at dispatch time."""
