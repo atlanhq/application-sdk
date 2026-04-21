@@ -376,7 +376,7 @@ def create_app_handler_service(
     # Deprecated: state_store is no longer used. Credential resolution now
     # goes through DaprCredentialVault exclusively. Passing this parameter
     # emits a DeprecationWarning. Will be removed in v3.2.0.
-    **kwargs: Any,
+    state_store: Any = None,
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
 
@@ -402,7 +402,7 @@ def create_app_handler_service(
     """
     global _workflow_config, _secret_store, _storage
 
-    if "state_store" in kwargs:
+    if state_store is not None:
         warnings.warn(
             "state_store parameter is deprecated and ignored. "
             "Credential resolution now uses DaprCredentialVault exclusively. "
@@ -1503,7 +1503,7 @@ def create_app_handler_service(
     async def _provision_local_vault(guid: str, body: dict[str, Any]) -> JSONResponse:
         """Split credentials into sensitive/non-sensitive and persist locally.
 
-        Sensitive fields are written to ``./local/dapr/secrets/{guid}.json``.
+        Sensitive fields are written to ``./local/dapr/secrets/secrets.json`` keyed by guid.
         Non-sensitive fields are written to object storage via the config endpoint.
         """
         if DEPLOYMENT_NAME != LOCAL_ENVIRONMENT:
