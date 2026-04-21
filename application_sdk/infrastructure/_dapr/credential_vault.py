@@ -228,25 +228,23 @@ class DaprCredentialVault:
             raise rewrap(e, "Failed to fetch secret (component=%s)" % store) from e
 
     def _get_local_secret(self, secret_key: str) -> dict[str, Any]:
-        """Read secret from local file for development."""
+        """Read secret from the local secrets file for development.
+
+        All secrets are stored in a single ``./local/dapr/secrets/secrets.json``
+        file keyed by guid. No user input in filenames.
+        """
         from pathlib import Path
 
-        # Validate the key to prevent path traversal.
-        if not _SAFE_GUID_RE.match(secret_key):
-            logger.debug("Unsafe local secret key rejected: %r", secret_key)
-            return {}
-
-        secrets_dir = Path(".", "local", "dapr", "secrets").resolve()
-        secret_path = (secrets_dir / f"{secret_key}.json").resolve()
-        if not secret_path.parent == secrets_dir:
-            logger.debug("Path traversal detected for key %r", secret_key)
-            return {}
-        if not secret_path.exists():
-            logger.debug("No local secret file for key %s", secret_key)
+        secrets_file = Path(".", "local", "dapr", "secrets", "secrets.json")
+        if not secrets_file.exists():
+            logger.debug("No local secrets file found")
             return {}
         try:
-            with open(secret_path) as f:
-                return json.load(f)
+            all_secrets = json.loads(secrets_file.read_text())
+            secret = all_secrets.get(secret_key, {})
+            if not secret:
+                logger.debug("No local secret for key %s", secret_key)
+            return secret
         except Exception:
             logger.debug(
                 "Failed to read local secret file for key %s",
