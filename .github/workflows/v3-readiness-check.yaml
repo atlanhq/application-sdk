@@ -112,27 +112,30 @@ jobs:
         run: uv sync --all-extras --all-groups
 
       # --------------------------------------------------------------------
-      # §1 — static check
+      # All checks below use `continue-on-error: true` so every check runs
+      # even when an earlier one fails. The "Aggregate results" step at the
+      # end reads each step's outcome and fails the job if any check failed —
+      # so app owners see every fix they need to make in a single run.
       # --------------------------------------------------------------------
+
       - name: "§1 Static check — tools.migrate_v3.check_migration"
         id: static
+        continue-on-error: true
         working-directory: sdk
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/report"
           report="$RUNNER_TEMP/report/check_migration.txt"
           if uv run python -m tools.migrate_v3.check_migration --no-color ../app | tee "$report"; then
-            echo "result=pass" >> "$GITHUB_OUTPUT"
+            exit 0
           else
-            echo "result=fail" >> "$GITHUB_OUTPUT"
             echo "::error::check_migration reported FAILs — see the uploaded report artifact"
             exit 1
           fi
 
-      # --------------------------------------------------------------------
-      # §1 — SDK pin must be ==3.0.0 (extras OK; [tool.uv.sources] OK)
-      # --------------------------------------------------------------------
       - name: "§1 SDK pin — atlan-application-sdk[...]==3.0.0"
+        id: sdk_pin
+        continue-on-error: true
         working-directory: app
         run: |
           set -euo pipefail
@@ -147,10 +150,9 @@ jobs:
             exit 1
           fi
 
-      # --------------------------------------------------------------------
-      # §3 — Dockerfile base image must be app-runtime-base:3.0.0 (when present)
-      # --------------------------------------------------------------------
       - name: "§3 Dockerfile base — app-runtime-base:3.0.0"
+        id: dockerfile_base
+        continue-on-error: true
         working-directory: app
         run: |
           set -euo pipefail
@@ -165,26 +167,28 @@ jobs:
           fi
 
       - name: "§3 Dockerfile entry — no CMD/ENTRYPOINT override"
+        id: dockerfile_entry
+        continue-on-error: true
         working-directory: app
         run: |
           set -euo pipefail
           if [[ ! -f Dockerfile ]]; then
             exit 0
           fi
-          # Ignore comments; detect real CMD / ENTRYPOINT instructions only.
+          failed=0
           if grep -Ein '^[[:space:]]*(CMD|ENTRYPOINT)[[:space:]]' Dockerfile; then
             echo "::error::Dockerfile must NOT override CMD or ENTRYPOINT — the base image's entrypoint launches the SDK CLI and co-runs daprd with graceful-shutdown handling"
-            exit 1
+            failed=1
           fi
           if ! grep -Eq '^[[:space:]]*ENV[[:space:]]+ATLAN_APP_MODULE\b' Dockerfile; then
             echo "::error::Dockerfile must set 'ENV ATLAN_APP_MODULE=<module>:<AppClass>' so the base entrypoint knows what to load"
-            exit 1
+            failed=1
           fi
+          exit $failed
 
-      # --------------------------------------------------------------------
-      # §2 — contract drift (only when the app ships a PKL contract)
-      # --------------------------------------------------------------------
       - name: "§2 Contract drift — poe generate must be a no-op"
+        id: contract_drift
+        continue-on-error: true
         working-directory: app
         run: |
           set -euo pipefail
@@ -206,23 +210,56 @@ jobs:
           fi
 
       # --------------------------------------------------------------------
-      # Step summary + artifact upload
+      # Aggregate — single place that fails the job, after all checks ran.
       # --------------------------------------------------------------------
-      - name: Write step summary
+      - name: Aggregate results
         if: always()
         working-directory: sdk
+        env:
+          STATIC_OUTCOME: ${{ steps.static.outcome }}
+          SDK_PIN_OUTCOME: ${{ steps.sdk_pin.outcome }}
+          DOCKERFILE_BASE_OUTCOME: ${{ steps.dockerfile_base.outcome }}
+          DOCKERFILE_ENTRY_OUTCOME: ${{ steps.dockerfile_entry.outcome }}
+          CONTRACT_DRIFT_OUTCOME: ${{ steps.contract_drift.outcome }}
+          TARGET_REPO: ${{ steps.parse.outputs.repo }}
+          TARGET_REF: ${{ inputs.branch }}
         run: |
+          set -euo pipefail
+          summary="$RUNNER_TEMP/report/summary.md"
+          failed=0
+          render() {
+            local name="$1" outcome="$2"
+            case "$outcome" in
+              success)  icon="✅" ;;
+              failure)  icon="❌" ; failed=1 ;;
+              skipped)  icon="➖" ;;
+              *)        icon="❓" ;;
+            esac
+            echo "- $icon **$name** — $outcome"
+          }
           {
-            echo "# v3 Readiness — ${{ steps.parse.outputs.repo }}@${{ inputs.branch }}"
+            echo "# v3 Readiness — \`$TARGET_REPO\`@\`$TARGET_REF\`"
             echo ""
             echo "Checklist: [docs/standards/v3-readiness.md](./docs/standards/v3-readiness.md)"
+            echo ""
+            echo "## Results"
+            echo ""
+            render "§1 Static check (check_migration)" "$STATIC_OUTCOME"
+            render "§1 SDK pin (atlan-application-sdk[...]==3.0.0)" "$SDK_PIN_OUTCOME"
+            render "§3 Dockerfile base (app-runtime-base:3.0.0)" "$DOCKERFILE_BASE_OUTCOME"
+            render "§3 Dockerfile entry (no CMD/ENTRYPOINT override)" "$DOCKERFILE_ENTRY_OUTCOME"
+            render "§2 Contract drift (poe generate)" "$CONTRACT_DRIFT_OUTCOME"
             echo ""
             echo "## check_migration output"
             echo ""
             echo '```'
             cat "$RUNNER_TEMP/report/check_migration.txt" 2>/dev/null || echo "(no report)"
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee "$summary" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$failed" -eq 1 ]]; then
+            echo "::error::One or more v3-readiness checks failed — see the step summary and report artifact"
+            exit 1
+          fi
 
       - name: Upload report
         if: always()
