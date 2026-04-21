@@ -565,9 +565,9 @@ class TestStartWorkflowRouting:
             # The started workflow name must end in ':extract', not ':load'
             started_name = mock_client.start_workflow.call_args[0][0]
             assert ":load" not in started_name, f"load was dispatched: {started_name!r}"
-            assert started_name.endswith(
-                ":extract"
-            ), f"Expected :extract, got {started_name!r}"
+            assert started_name.endswith(":extract"), (
+                f"Expected :extract, got {started_name!r}"
+            )
             assert not any(
                 issubclass(w.category, DeprecationWarning) for w in caught
             ), "Canonical ?entrypoint= path must not emit DeprecationWarning"
@@ -798,9 +798,9 @@ class TestWorkflowConfigValidation:
             "/workflows/v1/config/valid-id",
             params={"type": type_param},
         )
-        assert (
-            response.status_code == 422
-        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        assert response.status_code == 422, (
+            f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        )
 
     @pytest.mark.parametrize(
         "type_param",
@@ -813,9 +813,9 @@ class TestWorkflowConfigValidation:
             params={"type": type_param},
             json={"key": "value"},
         )
-        assert (
-            response.status_code == 422
-        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        assert response.status_code == 422, (
+            f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        )
 
     @pytest.mark.parametrize(
         "config_id",
@@ -825,9 +825,9 @@ class TestWorkflowConfigValidation:
         """Valid config_ids pass the regex check (result is 503/404 without a store, not 400)."""
         client = _make_client()
         response = client.get(f"/workflows/v1/config/{config_id}")
-        assert (
-            response.status_code != 400
-        ), f"Valid config_id {config_id!r} was wrongly rejected"
+        assert response.status_code != 400, (
+            f"Valid config_id {config_id!r} was wrongly rejected"
+        )
 
 
 class TestDaprSubscribeEndpoint:
