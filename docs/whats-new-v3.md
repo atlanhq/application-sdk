@@ -5,6 +5,7 @@ If you know v2 well, this guide will orient you quickly — it explains *what* c
 and shows each change side-by-side.
 
 > For a step-by-step upgrade checklist, see [`upgrade-guide-v3.md`](upgrade-guide-v3.md).
+> For the ship-it sign-off checklist, see [`standards/v3-readiness.md`](standards/v3-readiness.md).
 > For automated tooling, see [`tools/migrate_v3/`](../tools/migrate_v3/README.md).
 
 ---
