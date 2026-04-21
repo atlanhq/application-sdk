@@ -285,7 +285,7 @@ function renderTable(){
             <td><span class="badge b-${v.scanner}">${v.scanner}</span></td>
             <td><span class="badge b-${v.source_type==='base_image'?'base':'app'}">${v.source_type==='base_image'?'Base':'App'}</span></td>
             <td><span class="badge b-${status}">${status}</span></td>
-            <td>${v.repos.map(r=>'<span class="repo-tag">'+esc(r.split('/').pop())+'</span>').join(' ')}</td>
+            <td>${v.repos.length<=3?v.repos.map(r=>'<span class="repo-tag">'+esc(r.split('/').pop())+'</span>').join(' '):'<span class="repo-tag">'+esc(v.repos[0].split('/').pop())+'</span> <span class="repo-tag">'+esc(v.repos[1].split('/').pop())+'</span> <span class="repo-tag" style="background:#e0e2ff;color:#6366f1">+'+(v.repos.length-2)+' more</span>'}</td>
             <td>${v.fixed?esc(v.fixed):'<span style="color:#b0b3c6">None</span>'}</td>`;
         tb.appendChild(r);
         const dr=document.createElement('tr');dr.className='detail-row';dr.id='d'+i;
