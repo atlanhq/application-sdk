@@ -1,5 +1,41 @@
 # Changelog
 
+## v3.0.1 (April 21, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.0.0...v3.0.1
+
+### Features
+
+- fix broken link and stale tasks in getting-started (#1462) (by @AtMrun in [515ff85](https://github.com/atlanhq/application-sdk/commit/515ff85))
+- ready /upgrade-v3 for full connector rollout (#1467) (by @AtMrun in [b7222d7](https://github.com/atlanhq/application-sdk/commit/b7222d7))
+- add v3 readiness checklist for app owners (#1481) (by @AtMrun in [2c21ac0](https://github.com/atlanhq/application-sdk/commit/2c21ac0))
+
+### Bug Fixes
+
+- include release_id in event metadata (#1466) (by @anuj-atlan in [589c7ce](https://github.com/atlanhq/application-sdk/commit/589c7ce))
+- auto-fix adds transitive deps to pyproject.toml (#1468) (by @mananjain99 in [9a245e7](https://github.com/atlanhq/application-sdk/commit/9a245e7))
+- proper pyproject.toml insertion for transitive deps (#1469) (by @mananjain99 in [5b14016](https://github.com/atlanhq/application-sdk/commit/5b14016))
+- add trailing comma before inserting new dep in pyproject.toml (#1471) (by @mananjain99 in [9ff0ae2](https://github.com/atlanhq/application-sdk/commit/9ff0ae2))
+- add inline comment for transitive deps in pyproject.toml (#1472) (by @mananjain99 in [a003b89](https://github.com/atlanhq/application-sdk/commit/a003b89))
+- bump pymdown-extensions to unblock mkdocs build (#1465) (by @AtMrun in [846c36e](https://github.com/atlanhq/application-sdk/commit/846c36e))
+- correct source_type in dashboard — base allowlist CVEs always show as Base image (#1473) (by @mananjain99 in [0969af1](https://github.com/atlanhq/application-sdk/commit/0969af1))
+- add debug logging for dashboard source_type classification (#1476) (by @mananjain99 in [b45fdce](https://github.com/atlanhq/application-sdk/commit/b45fdce))
+- Snyk applications section was hardcoded to source_type=app (#1477) (by @mananjain99 in [9fb1ed6](https://github.com/atlanhq/application-sdk/commit/9fb1ed6))
+- dashboard — base_image source_type wins when merging CVEs across repos (#1478) (by @mananjain99 in [0c53675](https://github.com/atlanhq/application-sdk/commit/0c53675))
+- pin Dapr/Temporal install scripts and Snyk reusable workflow [BLDX-1026] (#1403) (by @vaibhavatlan in [459a677](https://github.com/atlanhq/application-sdk/commit/459a677))
+- hold distributed lock until business activity completes [BLDX-1025] (#1402) (by @vaibhavatlan in [c72c152](https://github.com/atlanhq/application-sdk/commit/c72c152))
+- v3-readiness pulls APP_REPO_READ_TOKEN on workflow_dispatch (#1482) (by @AtMrun in [95dc659](https://github.com/atlanhq/application-sdk/commit/95dc659))
+- v3-readiness runs every check, reports all failures in one pass (#1484) (by @AtMrun in [86a64a2](https://github.com/atlanhq/application-sdk/commit/86a64a2))
+- delete stale data.json from S3 dashboard (#1491) (by @mananjain99 in [d4107fb](https://github.com/atlanhq/application-sdk/commit/d4107fb))
+- dashboard uses repos.json manifest instead of directory listing (#1492) (by @mananjain99 in [ef9a827](https://github.com/atlanhq/application-sdk/commit/ef9a827))
+- validate base-allowlist expiry policy on PRs (#1474) (by @adityachoudhury-cloud in [1336203](https://github.com/atlanhq/application-sdk/commit/1336203))
+- include Snyk results in security gate — both scanners block PRs (#1494) (by @mananjain99 in [00c5445](https://github.com/atlanhq/application-sdk/commit/00c5445))
+- dashboard only updates on merge to main (#1496) (by @mananjain99 in [19f0c19](https://github.com/atlanhq/application-sdk/commit/19f0c19))
+- add 6 newly disclosed base image CVEs to allowlist (#1499) (by @mananjain99 in [ac236dd](https://github.com/atlanhq/application-sdk/commit/ac236dd))
+- dashboard — wrap repos column for long lists (#1501) (by @mananjain99 in [43b206b](https://github.com/atlanhq/application-sdk/commit/43b206b))
+- remove GraphQL auto-resolve logic from sdk-review (#1506) (by @vaibhavatlan in [65219d2](https://github.com/atlanhq/application-sdk/commit/65219d2))
+
+
 ## v3.0.0 (April 19, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v2.8.7...v3.0.0
