@@ -34,15 +34,12 @@ uv run pre-commit install
 
 ## Starting a Workflow Locally
 
-Local dev uses the same credential flow as production. Credentials are split
-into non-sensitive config (stored in object storage) and sensitive secrets
-(stored in local files). The workflow receives only a `credential_guid`
-pointer and resolves the full credential at runtime via `DaprCredentialVault`.
+### Step 1: Provision credentials
 
-### Option 1: Use the poe utility (recommended)
+Give the utility your full credentials as JSON — it handles the rest and
+returns a `credential_guid` to use when starting the workflow.
 
 ```bash
-# From a JSON string
 uv run poe provision-credentials --body '{
   "host": "your-database-host.example.com",
   "port": "5432",
@@ -50,49 +47,26 @@ uv run poe provision-credentials --body '{
   "username": "myuser",
   "password": "mypassword",
   "connectorConfigName": "postgres",
-  "extra": {}
+  "extra": {
+    "database": "mydb"
+  }
 }'
+# Returns: {"credential_guid": "a1b2c3d4..."}
+```
 
-# From a JSON file
+Or from a file:
+
+```bash
 uv run poe provision-credentials --from-file creds.json
 ```
 
-The command prints the `credential_guid` to use in the `/start` call.
-
-### Option 2: Call the endpoint directly
-
-```bash
-# Auto-generate a GUID
-curl -X POST "http://localhost:8000/dev/local-vault" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "host": "your-database-host.example.com",
-    "port": "5432",
-    "authType": "basic",
-    "username": "myuser",
-    "password": "mypassword",
-    "connectorConfigName": "postgres",
-    "extra": {}
-  }'
-
-# Or provide your own GUID
-curl -X POST "http://localhost:8000/dev/local-vault/my-test-guid" \
-  -H "Content-Type: application/json" \
-  -d '{ ... }'
-```
-
-The endpoint splits the body into sensitive fields (`username`, `password`,
-`extra`, `url`, `driverProperties`, `sodaConnection`) written to
-`./local/dapr/secrets/{guid}.json`, and non-sensitive fields written to
-object storage. This is gated to `DEPLOYMENT_NAME == local`.
-
-### Start the workflow
+### Step 2: Start the workflow
 
 ```bash
 curl -X POST "http://localhost:8000/workflows/v1/start" \
   -H "Content-Type: application/json" \
   -d "{
-    \"credential_guid\": \"<GUID_FROM_ABOVE>\",
+    \"credential_guid\": \"<GUID_FROM_STEP_1>\",
     \"connection\": {
       \"connection_name\": \"test-connection\",
       \"connection_qualified_name\": \"default/postgres/$(date +%s)\"
@@ -102,12 +76,8 @@ curl -X POST "http://localhost:8000/workflows/v1/start" \
   }"
 ```
 
-Do **not** send raw credentials (username, password) in the `/start` body.
-They will be stripped and ignored. Secrets are resolved at runtime from
-the local secret files (dev) or Dapr secret store (prod).
-
-For Claude Code agents invoking apps locally: provision credentials via
-`POST /dev/local-vault`, then POST `/start` with the returned guid.
+Do **not** send raw credentials in the `/start` body — they will be stripped.
+Credentials are resolved at runtime using the `credential_guid`.
 
 ## Testing
 
