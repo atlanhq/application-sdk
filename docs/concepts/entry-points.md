@@ -67,7 +67,6 @@ For local development and integration tests, use `run_dev_combined()`:
 import asyncio
 from application_sdk.main import run_dev_combined
 from my_package.apps import MyExtractor
-from my_package.handlers import MyHandler
 
 asyncio.run(run_dev_combined(MyExtractor))
 ```
@@ -84,7 +83,6 @@ from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyExtractor,
-    handler_class=MyHandler,
     secret_store=MockSecretStore({"my-api-key": "dev-secret"}),
     state_store=MockStateStore(),
 ))

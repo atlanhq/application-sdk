@@ -1084,7 +1084,6 @@ from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
-    handler_class=MyHandler,
     secret_store=MockSecretStore({"my-api-key": "test-value"}),
     state_store=MockStateStore(),
 ))

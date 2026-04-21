@@ -67,7 +67,6 @@ For integration tests or custom setups:
 ```python
 from application_sdk.main import run_dev_combined
 from my_package.apps import MyExtractor
-from my_package.handlers import MyHandler
 
 import asyncio
 asyncio.run(run_dev_combined(MyExtractor))
