@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import TYPE_CHECKING, Any
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -31,10 +30,8 @@ class CredentialResolver:
        contract.  Typed resolution uses the ``auth_type`` field on the
        spec when ``credential_type`` is empty.
 
-    2. **GUID path** (``credential_guid`` is non-empty): First checks
-       ``secret_store.get(ref.name)`` to cover in-process inline credentials
-       stored by the handler layer (combined-mode / local dev). If not found
-       there, uses ``DaprCredentialVault.get_credentials(guid)`` to resolve
+    2. **GUID path** (``credential_guid`` is non-empty): Uses
+       ``DaprCredentialVault.get_credentials(guid)`` to resolve
        platform-issued GUIDs from the upstream store. → if
        ``credential_type != "unknown"`` parses into typed Credential, otherwise
        wraps in ``RawCredential``.
@@ -176,60 +173,12 @@ class CredentialResolver:
         return self._registry.parse(ref.credential_type, data)
 
     async def _resolve_by_guid(self, ref: "CredentialRef") -> dict[str, Any]:
-        """Resolve credentials by GUID.
+        """Resolve credentials by GUID via DaprCredentialVault.
 
-        Checks the local secret store first (covers in-process credential
-        injection from handler/service.py in combined-mode and local dev), then
-        falls back to DaprCredentialVault for production platform-issued GUIDs.
+        Fetches the non-secret credential config from the upstream object store
+        (S3) and merges it with secrets from the Dapr secret store (Vault).
+        This is the single resolution path for both production and local dev.
         """
-
-        # State store check — handler/service.py stores inline credentials here
-        # under the "cred:" prefix + UUID that becomes ref.name / ref.credential_guid.
-        # Guarded to local-dev only (symmetric with the write guard in handler/service.py)
-        # to avoid unnecessary state store round-trips in production.
-
-        from application_sdk.infrastructure.context import get_infrastructure
-
-        is_local_dev = os.environ.get("ATLAN_LOCAL_DEVELOPMENT", "").lower() in (
-            "true",
-            "1",
-        )
-        infra = get_infrastructure()
-        if is_local_dev and infra and infra.state_store:
-            try:
-                data = await infra.state_store.load(f"cred:{ref.name}")
-                if data is not None:
-                    return data
-            except Exception:
-                logger.debug(
-                    "State store lookup failed for GUID %r; trying secret store",
-                    ref.name,
-                    exc_info=True,
-                )
-
-        # Secret store check (backward compat) — handler/service.py previously
-        # stored inline credentials here under the same UUID.
-        from application_sdk.infrastructure.secrets import SecretNotFoundError
-
-        try:
-            raw = await self._secret_store.get(ref.name)
-            data_parsed: dict[str, Any] = json.loads(raw)
-            return data_parsed
-        except SecretNotFoundError:
-            pass
-        except json.JSONDecodeError:
-            logger.debug(
-                "Local store value for GUID %r is not valid JSON; trying Dapr",
-                ref.name,
-            )
-        except Exception:
-            logger.debug(
-                "Local store lookup failed for GUID %r; trying Dapr",
-                ref.name,
-                exc_info=True,
-            )
-
-        # Fall back to DaprCredentialVault for platform-issued GUIDs.
         from application_sdk.credentials.errors import CredentialNotFoundError
         from application_sdk.infrastructure import AsyncDaprClient, DaprCredentialVault
 

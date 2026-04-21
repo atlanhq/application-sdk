@@ -124,8 +124,9 @@
         .b-expired{background:linear-gradient(135deg,#fffbeb,#fef3c7);color:#d97706;}
         .b-base{background:#f0f2f5;color:#5c5f77;}
         .b-app{background:linear-gradient(135deg,#fffbeb,#fef3c7);color:#d97706;}
-        .repo-tag{display:inline-block;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:600;background:#f0f2f5;color:#5c5f77;margin:1px 2px;transition:all 0.2s;}
+        .repo-tag{display:inline-block;padding:3px 8px;border-radius:20px;font-size:9px;font-weight:600;background:#f0f2f5;color:#5c5f77;margin:1px 2px;transition:all 0.2s;white-space:nowrap;}
         .repo-tag:hover{background:#e2e6ea;transform:scale(1.05);}
+        .repos-cell{max-width:200px;display:flex;flex-wrap:wrap;gap:2px;}
         code{background:#f0f2f5;padding:2px 7px;border-radius:6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;font-weight:500;}
 
         .empty{text-align:center;padding:60px;color:#8c8fa3;font-size:14px;}
@@ -193,10 +194,9 @@ function animateCount(el,target){let cur=0;const step=Math.max(1,Math.ceil(targe
 
 async function load(){
     try{
-        const r=await fetch('repos/');
-        if(r.ok){const h=await r.text();const fs=[...h.matchAll(/href="([^"]+\.json)"/g)].map(m=>m[1]);
-            for(const f of fs){try{const rr=await fetch('repos/'+f);const d=await rr.json();if(d.repo){D.repos[d.repo]=d;D.generated_at=d.scanned_at;}}catch(e){}}}
-        if(!Object.keys(D.repos).length){const r2=await fetch('data.json');D=await r2.json();}
+        const mr=await fetch('repos.json');
+        if(mr.ok){const files=await mr.json();
+            for(const f of files){try{const rr=await fetch('repos/'+f);const d=await rr.json();if(d.repo){D.repos[d.repo]=d;D.generated_at=d.scanned_at;}}catch(e){}}}
         buildVM();renderAll();
     }catch(e){document.getElementById('empty').style.display='block';document.getElementById('empty').textContent='No data yet.';}
 }
@@ -286,7 +286,7 @@ function renderTable(){
             <td><span class="badge b-${v.scanner}">${v.scanner}</span></td>
             <td><span class="badge b-${v.source_type==='base_image'?'base':'app'}">${v.source_type==='base_image'?'Base':'App'}</span></td>
             <td><span class="badge b-${status}">${status}</span></td>
-            <td>${v.repos.map(r=>'<span class="repo-tag">'+esc(r.split('/').pop())+'</span>').join(' ')}</td>
+            <td><div class="repos-cell">${v.repos.length<=3?v.repos.map(r=>'<span class="repo-tag">'+esc(r.split('/').pop())+'</span>').join(''):'<span class="repo-tag">'+esc(v.repos[0].split('/').pop())+'</span><span class="repo-tag">'+esc(v.repos[1].split('/').pop())+'</span><span class="repo-tag" style="background:#e0e2ff;color:#6366f1;cursor:default" title="'+v.repos.map(r=>r.split('/').pop()).join(', ')+'">+'+(v.repos.length-2)+' more</span>'}</div></td>
             <td>${v.fixed?esc(v.fixed):'<span style="color:#b0b3c6">None</span>'}</td>`;
         tb.appendChild(r);
         const dr=document.createElement('tr');dr.className='detail-row';dr.id='d'+i;

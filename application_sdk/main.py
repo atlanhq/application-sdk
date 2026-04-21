@@ -735,7 +735,6 @@ def run_handler_mode(config: AppConfig) -> None:
         auth_token_url=config.auth_token_url,
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
-        state_store=infra.state_store,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
@@ -877,7 +876,6 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_token_url=config.auth_token_url,
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
-        state_store=infra.state_store,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
@@ -936,6 +934,7 @@ async def run_dev_combined(
     app_class: type[App],
     *,
     credential_stores: Mapping[str, SecretStore] | None = None,
+    credentials: dict[str, Any] | None = None,
     example_input: dict[str, Any] | None = None,
     host: str = "127.0.0.1",
     port: int = 8000,
@@ -952,7 +951,15 @@ async def run_dev_combined(
     Args:
         app_class: The App class to serve (must already be imported).
         credential_stores: Optional mapping of store name → SecretStore.
-        example_input: Optional dict shown as curl example in startup banner.
+        credentials: Optional credential dict (host, port, username, password,
+            authType, extra, etc.). If provided, credentials are auto-provisioned
+            via ``POST /workflows/v1/dev/local-vault`` once the handler is ready, and the
+            returned ``credential_guid`` is injected into ``example_input``.
+            This mimics the production flow where Heracles provisions credentials
+            before starting a workflow.
+        example_input: Optional dict used as the workflow input. If ``credentials``
+            is also provided, ``credential_guid`` is auto-injected before the
+            workflow starts.
         host: Bind host (default: "127.0.0.1").
         port: Handler HTTP port.
         temporal_host: Temporal server address.
@@ -963,7 +970,18 @@ async def run_dev_combined(
 
         import asyncio
         from my_app import MyApp
-        asyncio.run(run_dev_combined(MyApp, example_input={"key": "value"}))
+
+        asyncio.run(run_dev_combined(
+            MyApp,
+            credentials={
+                "host": "localhost", "port": "5432", "authType": "basic",
+                "username": "admin", "password": "secret",
+                "extra": {"database": "mydb"},
+            },
+            example_input={
+                "connection": {"connection_name": "test", "connection_qualified_name": "default/app/1234"},
+            },
+        ))
     """
     import json as _json
 
@@ -993,24 +1011,79 @@ async def run_dev_combined(
     infra = await _create_infrastructure(credential_stores=credential_stores)
     set_infrastructure(infra)
 
-    print(f"\nDev server running at http://{host}:{port}")
-    print("  POST /workflows/v1/start                         - Start workflow")
-    print("  POST /workflows/v1/stop/{workflow_id}/{run_id}   - Stop workflow")
-    print("  GET  /workflows/v1/result/{workflow_id}          - Get result")
-    print("  GET  /workflows/v1/status/{workflow_id}/{run_id} - Get status")
-    print("  GET  /health                                      - Health check")
-    print("\nExample:")
-    if example_input is not None:
-        example_json = _json.dumps(example_input, indent=2)
-        print(f"  curl -X POST http://{host}:{port}/workflows/v1/start \\")
-        print('    -H "Content-Type: application/json" \\')
-        print(f"    -d '{example_json}'")
+    # Auto-provision credentials if provided (mimics Heracles writing to
+    # /workflows/v1/dev/local-vault before starting the workflow). This writes non-sensitive
+    # config to object storage and sensitive secrets to the local secrets file.
+    if credentials is not None:
+        import httpx
+
+        async def _provision_and_start() -> None:
+            """Wait for handler, provision creds, start workflow — mimics prod."""
+            base = f"http://{host}:{port}"
+            async with httpx.AsyncClient() as client:
+                # Wait for the handler to be ready
+                for _ in range(30):
+                    try:
+                        resp = await client.get(f"{base}/health", timeout=2)
+                        if resp.status_code == 200:
+                            break
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1)
+
+                # Step 1: Provision credentials (mimics Heracles)
+                resp = await client.post(
+                    f"{base}/workflows/v1/dev/local-vault",
+                    json=credentials,
+                    timeout=10,
+                )
+                result = resp.json()
+                credential_guid = result.get("data", {}).get(
+                    "credential_guid"
+                ) or result.get("credential_guid")
+                logger.info("Auto-provisioned credentials: guid=%s", credential_guid)
+
+                # Step 2: Start workflow (mimics Heracles/AE)
+                workflow_input = dict(example_input or {})
+                workflow_input["credential_guid"] = credential_guid
+                resp = await client.post(
+                    f"{base}/workflows/v1/start",
+                    json=workflow_input,
+                    timeout=30,
+                )
+                start_result = resp.json()
+                wf_data = start_result.get("data", {})
+                workflow_id = wf_data.get("workflow_id", "")
+                run_id = wf_data.get("run_id", "")
+                logger.info(
+                    "Auto-started workflow: id=%s run_id=%s",
+                    workflow_id,
+                    run_id,
+                )
+
+            print(f"\n  Credentials provisioned: credential_guid={credential_guid}")
+            print(f"  Workflow started: workflow_id={workflow_id} run_id={run_id}")
+            print(f"\n  curl {base}/workflows/v1/result/{workflow_id}\n")
+
+        # Schedule provisioning + start as a background task — runs after the server starts
+        asyncio.create_task(_provision_and_start())
     else:
+        print(f"\nDev server running at http://{host}:{port}")
         print(
-            f"  curl -X POST http://{host}:{port}/workflows/v1/start"
-            f' -H "Content-Type: application/json" -d \'{{"name": "World"}}\''
+            "  POST /workflows/v1/dev/local-vault                            - Provision credentials"
         )
-    print(f"\n  curl http://{host}:{port}/workflows/v1/result/{{workflow_id}}\n")
+        print("  POST /workflows/v1/start                         - Start workflow")
+        print("  POST /workflows/v1/stop/{workflow_id}/{run_id}   - Stop workflow")
+        print("  GET  /workflows/v1/result/{workflow_id}          - Get result")
+        print("  GET  /workflows/v1/status/{workflow_id}/{run_id} - Get status")
+        print("  GET  /health                                      - Health check")
+        if example_input is not None:
+            print("\nExample:")
+            example_json = _json.dumps(example_input, indent=2)
+            print(f"  curl -X POST http://{host}:{port}/workflows/v1/start \\")
+            print('    -H "Content-Type: application/json" \\')
+            print(f"    -d '{example_json}'")
+        print(f"\n  curl http://{host}:{port}/workflows/v1/result/{{workflow_id}}\n")
 
     await run_combined_mode(config)
 
