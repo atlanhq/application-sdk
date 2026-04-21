@@ -49,7 +49,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
-from application_sdk.constants import DEPLOYMENT_NAME, ENABLE_PROMETHEUS_METRICS
+from application_sdk.constants import (
+    DEPLOYMENT_NAME,
+    ENABLE_PROMETHEUS_METRICS,
+    LOCAL_ENVIRONMENT,
+)
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
@@ -1482,6 +1486,86 @@ def create_app_handler_service(
             Do **not** add new callers of this endpoint.
         """
         return await get_manifest(entrypoint=entrypoint)
+
+    # ------------------------------------------------------------------
+    # Dev-only: local credential provisioning
+    # ------------------------------------------------------------------
+
+    SENSITIVE_FIELDS = {
+        "username",
+        "password",
+        "extra",
+        "url",
+        "driverProperties",
+        "sodaConnection",
+    }
+
+    async def _provision_local_vault(guid: str, body: dict[str, Any]) -> JSONResponse:
+        """Split credentials into sensitive/non-sensitive and persist locally.
+
+        Sensitive fields are written to ``./local/dapr/secrets/{guid}.json``.
+        Non-sensitive fields are written to object storage via the config endpoint.
+        """
+        if DEPLOYMENT_NAME != LOCAL_ENVIRONMENT:
+            raise HTTPException(status_code=403, detail="Dev-only endpoint")
+
+        if not _CONFIG_KEY_RE.match(guid):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid guid — must match %s" % _CONFIG_KEY_PATTERN,
+            )
+
+        sensitive: dict[str, Any] = {}
+        non_sensitive: dict[str, Any] = {}
+        for key, value in body.items():
+            if key in SENSITIVE_FIELDS:
+                sensitive[key] = value
+            else:
+                non_sensitive[key] = value
+
+        # Write sensitive fields to local Dapr secrets directory
+        secrets_dir = Path(".", "local", "dapr", "secrets")
+        secrets_dir.mkdir(parents=True, exist_ok=True)
+        secret_path = secrets_dir / f"{guid}.json"
+        secret_path.write_bytes(orjson.dumps(sensitive))
+
+        # Write non-sensitive fields to object storage
+        non_sensitive["credentialSource"] = non_sensitive.get(
+            "credentialSource", "direct"
+        )
+        await _config_save_to_objectstore(
+            guid, non_sensitive, config_type="credentials"
+        )
+
+        logger.info(
+            "Provisioned local credentials: guid=%s sensitive_keys=%s non_sensitive_keys=%s",
+            guid,
+            sorted(sensitive.keys()),
+            sorted(non_sensitive.keys()),
+        )
+
+        return JSONResponse(
+            content=_wrap_response(
+                {"credential_guid": guid},
+                message="Credentials provisioned successfully",
+            )
+        )
+
+    @app.post("/dev/local-vault/{guid}")
+    async def provision_local_vault_with_guid(
+        guid: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
+        request: Request,
+    ) -> JSONResponse:
+        """Provision credentials for local development with an explicit GUID."""
+        body: dict[str, Any] = await request.json()
+        return await _provision_local_vault(guid, body)
+
+    @app.post("/dev/local-vault")
+    async def provision_local_vault(request: Request) -> JSONResponse:
+        """Provision credentials for local development (auto-generates GUID)."""
+        body: dict[str, Any] = await request.json()
+        guid = uuid4().hex
+        return await _provision_local_vault(guid, body)
 
     # ------------------------------------------------------------------
     # Health probes

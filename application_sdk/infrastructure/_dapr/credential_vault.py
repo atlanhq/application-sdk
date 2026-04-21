@@ -218,7 +218,7 @@ class DaprCredentialVault:
         from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 
         if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
-            return {}
+            return self._get_local_secret(secret_key)
 
         store = component_name or self._secret_store_name
         try:
@@ -226,6 +226,27 @@ class DaprCredentialVault:
             return process_secret_data(result)
         except Exception as e:
             raise rewrap(e, "Failed to fetch secret (component=%s)" % store) from e
+
+    def _get_local_secret(self, secret_key: str) -> dict[str, Any]:
+        """Read secret from local file for development."""
+        import os
+
+        secret_path = os.path.join(
+            ".", "local", "dapr", "secrets", f"{secret_key}.json"
+        )
+        if not os.path.exists(secret_path):
+            logger.debug("No local secret file for key %s", secret_key)
+            return {}
+        try:
+            with open(secret_path) as f:
+                return json.load(f)
+        except Exception:
+            logger.debug(
+                "Failed to read local secret file for key %s",
+                secret_key,
+                exc_info=True,
+            )
+            return {}
 
     async def _fetch_single_key_secrets(
         self, credential_config: dict[str, Any]
