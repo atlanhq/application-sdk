@@ -264,7 +264,7 @@ jobs:
       - name: Check against allowlist
         env:
           FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
-        run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json --write-comment
+        run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json --snyk-results /tmp/snyk_results.json --write-comment
 
       - name: Report Snyk findings (informational)
         if: always()
