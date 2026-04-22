@@ -6,9 +6,9 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
 from application_sdk.contracts.types import ConnectionRef, MaxItems
@@ -50,6 +50,22 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     Accepts a JSON string, dict, or :class:`AgentCredentialSpec` on input —
     the spec's model validator normalises all three forms.
     """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _skip_agent_json_for_direct(cls, data: Any) -> Any:
+        """Null out agent_json when extraction_method is direct.
+
+        In direct mode, agent_json may contain placeholder values (e.g.
+        ``"port": "port"``) that fail AgentCredentialSpec validation.
+        Since agent_json is only used for agent-based extraction, we
+        discard it for direct mode.
+        """
+        if isinstance(data, dict):
+            method = data.get("extraction_method", "")
+            if method != "agent" and "agent_json" in data:
+                data = {**data, "agent_json": None}
+        return data
 
     output_prefix: str = ""
     """Object store prefix for all output artifacts."""

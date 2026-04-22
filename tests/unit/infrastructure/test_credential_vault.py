@@ -267,3 +267,119 @@ class TestDaprCredentialVaultGetCredentials:
             await vault.get_credentials("valid-prefix/injected")
 
         mock_client.invoke_binding.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _get_local_secret tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetLocalSecret:
+    """Tests for DaprCredentialVault._get_local_secret."""
+
+    def _make_vault(self) -> DaprCredentialVault:
+        mock_client = MagicMock()
+        return DaprCredentialVault(
+            mock_client,
+            upstream_binding_name="upstream-objectstore",
+            secret_store_name="secretstore",
+        )
+
+    def test_happy_path_returns_secret_dict(self, tmp_path):
+        """Create secrets.json with a key, verify _get_local_secret returns it."""
+        import os
+
+        secrets_dir = tmp_path / "local" / "dapr" / "secrets"
+        secrets_dir.mkdir(parents=True)
+        secrets_file = secrets_dir / "secrets.json"
+        secrets_data = {
+            "my-guid": {"username": "admin", "password": "secret"},
+            "other-guid": {"api_key": "xyz"},
+        }
+        secrets_file.write_text(json.dumps(secrets_data))
+
+        vault = self._make_vault()
+        original_cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            result = vault._get_local_secret("my-guid")
+        finally:
+            os.chdir(original_cwd)
+
+        assert result == {"username": "admin", "password": "secret"}
+
+    def test_missing_key_returns_empty_dict(self, tmp_path):
+        """Key not in secrets.json returns {}."""
+        import os
+
+        secrets_dir = tmp_path / "local" / "dapr" / "secrets"
+        secrets_dir.mkdir(parents=True)
+        secrets_file = secrets_dir / "secrets.json"
+        secrets_file.write_text(json.dumps({"other-guid": {"key": "val"}}))
+
+        vault = self._make_vault()
+        original_cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            result = vault._get_local_secret("nonexistent-guid")
+        finally:
+            os.chdir(original_cwd)
+
+        assert result == {}
+
+    def test_missing_file_returns_empty_dict(self, tmp_path):
+        """secrets.json doesn't exist returns {}."""
+        import os
+
+        vault = self._make_vault()
+        original_cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            result = vault._get_local_secret("any-guid")
+        finally:
+            os.chdir(original_cwd)
+
+        assert result == {}
+
+    def test_malformed_json_returns_empty_dict(self, tmp_path):
+        """secrets.json has invalid JSON returns {}."""
+        import os
+
+        secrets_dir = tmp_path / "local" / "dapr" / "secrets"
+        secrets_dir.mkdir(parents=True)
+        secrets_file = secrets_dir / "secrets.json"
+        secrets_file.write_text("NOT VALID JSON {{{")
+
+        vault = self._make_vault()
+        original_cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            result = vault._get_local_secret("my-guid")
+        finally:
+            os.chdir(original_cwd)
+
+        assert result == {}
+
+    async def test_get_secret_uses_local_secret_in_local_env(self, tmp_path):
+        """When DEPLOYMENT_NAME == LOCAL_ENVIRONMENT, _get_secret calls _get_local_secret."""
+        import os
+
+        secrets_dir = tmp_path / "local" / "dapr" / "secrets"
+        secrets_dir.mkdir(parents=True)
+        secrets_file = secrets_dir / "secrets.json"
+        secrets_file.write_text(
+            json.dumps(
+                {"my-guid": {"username": "local-user", "password": "local-pass"}}
+            )
+        )
+
+        vault = self._make_vault()
+        original_cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            with patch("application_sdk.constants.DEPLOYMENT_NAME", "local"):
+                result = await vault._get_secret("my-guid")
+        finally:
+            os.chdir(original_cwd)
+
+        assert result == {"username": "local-user", "password": "local-pass"}

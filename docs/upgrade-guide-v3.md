@@ -679,7 +679,7 @@ You do not need to create `DaprClient` instances in your code.
 | v2 | v3 (`self.context` in handler methods) |
 |----|----------------------------------------|
 | `services.secretstore.SecretStore.get_credentials(...)` | `await self.context.get_secret(name)` |
-| `/workflows/v1/config/{id}` (503 error) | Works automatically (state store wired) |
+| `/workflows/v1/config/{id}` (503 error) | Works automatically (object store wired) |
 | `/workflows/v1/file` (503 error) | Works automatically (storage binding wired) |
 
 ### Upgrading ObjectStore calls
