@@ -642,3 +642,93 @@ class TestGetCredentials:
             await extractor._get_credentials(
                 ExtractionTaskInput(credential_guid="some-guid-that-needs-a-store")
             )
+
+
+class TestConnectionQnExtraction:
+    """Tests for connection_qualified_name extraction logic in run().
+
+    The run() method extracts connection_qualified_name from input.connection
+    using this inline pattern:
+        connection_qn = ""
+        if input.connection and input.connection.attributes:
+            connection_qn = input.connection.attributes.qualified_name or ""
+    These tests verify the ExtractionInput → connection_qn derivation.
+    """
+
+    @staticmethod
+    def _extract_connection_qn(inp: ExtractionInput) -> str:
+        """Replicate the inline connection_qn extraction from run()."""
+        connection_qn = ""
+        if inp.connection and inp.connection.attributes:
+            connection_qn = inp.connection.attributes.qualified_name or ""
+        return connection_qn
+
+    def test_returns_qualified_name_from_connection(self) -> None:
+        from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
+
+        inp = ExtractionInput(
+            connection=ConnectionRef(
+                attributes=ConnectionAttributes(
+                    qualified_name="default/alloydb-postgres/my-conn"
+                )
+            )
+        )
+        assert self._extract_connection_qn(inp) == "default/alloydb-postgres/my-conn"
+
+    def test_returns_empty_when_no_connection(self) -> None:
+        inp = ExtractionInput()
+        assert self._extract_connection_qn(inp) == ""
+
+    def test_returns_empty_when_no_attributes(self) -> None:
+        from application_sdk.contracts.types import ConnectionRef
+
+        inp = ExtractionInput(connection=ConnectionRef())
+        assert self._extract_connection_qn(inp) == ""
+
+    def test_returns_empty_when_qualified_name_is_empty(self) -> None:
+        from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
+
+        inp = ExtractionInput(
+            connection=ConnectionRef(attributes=ConnectionAttributes(qualified_name=""))
+        )
+        assert self._extract_connection_qn(inp) == ""
+
+
+class TestExtractionOutputFields:
+    """Tests for connection_qualified_name, output_path, output_prefix on ExtractionOutput.
+
+    The fix ensures run() passes these fields to ExtractionOutput so that
+    PublishInputMixin can auto-derive publish_state_prefix and current_state_prefix.
+    """
+
+    def test_sets_connection_qualified_name(self) -> None:
+        output = ExtractionOutput(
+            success=True,
+            connection_qualified_name="default/postgres/prod",
+            databases_extracted=2,
+            schemas_extracted=5,
+            records_uploaded=10,
+        )
+        assert output.connection_qualified_name == "default/postgres/prod"
+
+    def test_sets_output_path_and_prefix(self) -> None:
+        output = ExtractionOutput(
+            success=True,
+            output_path="artifacts/apps/my-app/workflows/wf1/run1",
+            output_prefix="/tmp",
+        )
+        assert output.output_path == "artifacts/apps/my-app/workflows/wf1/run1"
+        assert output.output_prefix == "/tmp"
+
+    def test_defaults_to_empty_strings(self) -> None:
+        output = ExtractionOutput()
+        assert output.connection_qualified_name == ""
+        assert output.output_path == ""
+        assert output.output_prefix == ""
+
+    def test_publish_state_prefix_derived_from_connection_qn(self) -> None:
+        output = ExtractionOutput(
+            connection_qualified_name="default/postgres/prod",
+        )
+        assert "default/postgres/prod" in output.publish_state_prefix
+        assert "default/postgres/prod" in output.current_state_prefix

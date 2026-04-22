@@ -244,7 +244,7 @@ class DaprPubSub:
             await self._client.publish_event(
                 pubsub_name=self._pubsub_name,
                 topic=topic,
-                data=json.dumps(data),
+                data=orjson.dumps(data).decode(),
                 metadata=metadata or {},
             )
         except Exception as e:
