@@ -9,10 +9,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional, Type
 
-from pyatlan.model.enums import AtlanConnectorType, EntityStatus
-
 if TYPE_CHECKING:
     import daft
+    from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
@@ -175,6 +174,8 @@ class AtlasTransformer(TransformerInterface):
                     enriched_data["custom_attributes"]
                 )
 
+                from pyatlan.model.enums import EntityStatus  # deferred: pyatlan is optional
+
                 entity = entity_attributes["entity_class"](
                     attributes=entity_attributes["attributes"],
                     custom_attributes=entity_attributes["custom_attributes"],
@@ -211,6 +212,11 @@ class AtlasTransformer(TransformerInterface):
 
         attributes = {}
         custom_attributes = {}
+
+        from pyatlan.model.enums import (  # deferred: pyatlan is optional
+            AtlanConnectorType,
+            EntityStatus,
+        )
 
         attributes["status"] = EntityStatus.ACTIVE
         attributes["tenant_id"] = self.tenant_id

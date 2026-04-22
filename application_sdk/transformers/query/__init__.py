@@ -5,8 +5,6 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 
 import yaml
-from pyatlan.model.enums import AtlanConnectorType
-
 if TYPE_CHECKING:
     import daft
 
@@ -372,6 +370,7 @@ class QueryBasedTransformer(TransformerInterface):
             Tuple[daft.DataFrame, str]: DataFrame with default attributes added and the entity SQL template
         """
         import daft
+        from pyatlan.model.enums import AtlanConnectorType  # deferred: pyatlan is optional
 
         # prepare default attributes
         default_attributes = {
