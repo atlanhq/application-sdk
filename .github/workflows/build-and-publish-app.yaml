@@ -274,11 +274,15 @@ jobs:
         env:
           GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
           DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
+          BRANCH:          ${{ needs.prepare.outputs.branch }}
         run: |
+          DOCKERHUB_BASE="${DOCKERHUB_IMAGE%:*}"
           docker buildx imagetools create \
             --tag "${DOCKERHUB_IMAGE}" \
+            --tag "${DOCKERHUB_BASE}:${BRANCH}-latest" \
             "${GHCR_IMAGE}"
           echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
+          echo "Pushed to DockerHub: ${DOCKERHUB_BASE}:${BRANCH}-latest"
 
       - name: Summary
         run: |
