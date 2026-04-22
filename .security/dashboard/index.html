@@ -165,7 +165,12 @@
             <div class="card"><div class="card-title">Per Repo</div><div id="repoBars"></div></div>
         </div>
     </div>
-    <div class="tab-panel" id="tab-repos"><div class="repo-grid" id="repoCards"></div></div>
+    <div class="tab-panel" id="tab-repos">
+        <div class="filters-bar" style="margin-bottom:14px">
+            <div class="filter-group"><label>SDK Version</label><select id="fRepoSdk" onchange="renderRepos()"><option value="all">All</option></select></div>
+        </div>
+        <div class="repo-grid" id="repoCards"></div>
+    </div>
     <div class="tab-panel" id="tab-vulns">
         <div class="filters-bar">
             <div class="filter-group"><label>Repo</label><select id="fRepo"></select></div>
@@ -249,7 +254,14 @@ function renderOverview(){
 }
 
 function renderRepos(){
-    document.getElementById('repoCards').innerHTML=Object.keys(D.repos).map(r=>{
+    // Populate SDK filter for repos tab
+    const repoSdkSel=document.getElementById('fRepoSdk'),curRepoSdk=repoSdkSel.value;
+    const allRepos=Object.keys(D.repos);
+    const sdkVers=[...new Set(allRepos.map(r=>D.repos[r].sdk_version||'unknown').filter(s=>s!=='unknown'))].sort();
+    repoSdkSel.innerHTML='<option value="all">All ('+allRepos.length+')</option>';sdkVers.forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent=s;if(s===curRepoSdk)o.selected=true;repoSdkSel.appendChild(o);});
+    // Filter repos
+    const filteredRepos=curRepoSdk==='all'?allRepos:allRepos.filter(r=>(D.repos[r].sdk_version||'')==curRepoSdk);
+    document.getElementById('repoCards').innerHTML=filteredRepos.map(r=>{
         const d=D.repos[r],t=d.total||1,hasNew=(d.new||0)>0;
         const sdk=d.sdk_version||'unknown';
         const isV3=sdk.startsWith('3')||sdk.includes('v3')||sdk.includes('refactor-v3');
