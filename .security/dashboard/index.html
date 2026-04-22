@@ -208,14 +208,19 @@ function renderAll(){renderStats();renderOverview();renderRepos();renderTable();
 
 function renderStats(){
     const vs=Object.values(VM);
+    const repos=Object.keys(D.repos);
     const c=vs.filter(v=>v.severity==='CRITICAL').length,h=vs.filter(v=>v.severity==='HIGH').length;
     const nw=vs.filter(v=>Object.values(v.statuses).includes('new')).length,al=vs.length-nw;
+    // SDK version breakdown
+    let v2=0,v3=0;
+    repos.forEach(r=>{const sdk=(D.repos[r].sdk_version||'');if(sdk.startsWith('3')||sdk.includes('v3')||sdk.includes('refactor-v3'))v3++;else if(sdk!=='unknown')v2++;});
     document.getElementById('stats').innerHTML=`
         <div class="stat s-total" onclick="qf('all')"><div class="stat-glow"></div><div class="stat-icon">&#128202;</div><div class="stat-value" data-count="${vs.length}">0</div><div class="stat-label">Total CVEs</div><div class="stat-bar" style="width:100%;background:linear-gradient(90deg,#6366f1,#a855f7)"></div></div>
         <div class="stat s-crit" onclick="qf('CRITICAL')"><div class="stat-glow"></div><div class="stat-icon">&#9888;&#65039;</div><div class="stat-value" data-count="${c}">0</div><div class="stat-label">Critical</div><div class="stat-bar" style="width:${pct(c,vs.length)}%;background:#ef4444"></div></div>
-        <div class="stat s-high" onclick="qf('HIGH')"><div class="stat-glow"></div><div class="stat-icon">&#9650;</div><div class="stat-value" data-count="${h}">0</div><div class="stat-label">High</div><div class="stat-bar" style="width:${pct(h,vs.length)}%;background:#f97316"></div></div>
         <div class="stat s-new" onclick="qf('new')"><div class="stat-glow"></div><div class="stat-icon">&#10060;</div><div class="stat-value" data-count="${nw}">0</div><div class="stat-label">Blocking</div><div class="stat-bar" style="width:${pct(nw,vs.length)}%;background:#ef4444"></div></div>
-        <div class="stat s-ok" onclick="qf('allowlisted')"><div class="stat-glow"></div><div class="stat-icon">&#10004;&#65039;</div><div class="stat-value" data-count="${al}">0</div><div class="stat-label">Allowlisted</div><div class="stat-bar" style="width:${pct(al,vs.length)}%;background:#22c55e"></div></div>`;
+        <div class="stat s-ok" onclick="qf('allowlisted')"><div class="stat-glow"></div><div class="stat-icon">&#10004;&#65039;</div><div class="stat-value" data-count="${al}">0</div><div class="stat-label">Allowlisted</div><div class="stat-bar" style="width:${pct(al,vs.length)}%;background:#22c55e"></div></div>
+        <div class="stat" style="cursor:default"><div class="stat-glow" style="background:#6366f1"></div><div class="stat-icon" style="background:#eef0ff;color:#6366f1">&#128230;</div><div class="stat-value" data-count="${repos.length}">0</div><div class="stat-label">Repos Scanned</div><div class="stat-bar" style="width:100%;background:#6366f1"></div></div>
+        <div class="stat" style="cursor:default"><div class="stat-glow" style="background:#22c55e"></div><div class="stat-icon" style="background:#f0fdf4;color:#22c55e">&#9889;</div><div class="stat-value">${v3} <span style="font-size:12px;color:#8c8fa3;font-weight:500">v3</span> / ${v2} <span style="font-size:12px;color:#8c8fa3;font-weight:500">v2</span></div><div class="stat-label">SDK Versions</div><div class="stat-bar" style="width:${pct(v3,v2+v3)}%;background:linear-gradient(90deg,#22c55e,#16a34a)"></div></div>`;
     document.querySelectorAll('.stat-value[data-count]').forEach(el=>animateCount(el,parseInt(el.dataset.count)));
 }
 
@@ -246,8 +251,10 @@ function renderOverview(){
 function renderRepos(){
     document.getElementById('repoCards').innerHTML=Object.keys(D.repos).map(r=>{
         const d=D.repos[r],t=d.total||1,hasNew=(d.new||0)>0;
+        const sdk=d.sdk_version||'unknown';
+        const isV3=sdk.startsWith('3')||sdk.includes('v3')||sdk.includes('refactor-v3');
         return`<div class="repo-card" onclick="selectRepo('${r}')">
-            <div class="repo-name"><div class="health-dot ${hasNew?'red':'green'}"></div>${esc(r.split('/').pop())}</div>
+            <div class="repo-name"><div class="health-dot ${hasNew?'red':'green'}"></div>${esc(r.split('/').pop())}<span class="badge" style="margin-left:auto;${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'}">${esc(sdk)}</span></div>
             <div class="repo-stats">
                 <div class="repo-stat"><div class="repo-stat-val">${d.total}</div><div class="repo-stat-lbl">Total</div></div>
                 <div class="repo-stat"><div class="repo-stat-val" style="color:#ef4444">${d.critical}</div><div class="repo-stat-lbl">Critical</div></div>
