@@ -4,7 +4,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import orjson
-
 import pytest
 
 from application_sdk.infrastructure._dapr.client import (
