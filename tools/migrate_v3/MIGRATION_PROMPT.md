@@ -803,7 +803,7 @@ async def test_metadata_extraction(app_config: AppConfig) -> None:
 1. **Count before you generate.** Count every test method in the original. The new file must have at least that many test functions.
 2. **Copy real payload values.** If `default_payload()` returns `{"connection_id": "abc-123", "tenant_id": "xyz"}`, use those exact values — not `"test-connection"`.
 3. **Map assertions, not just structure.** For each `assert` in the original, write an equivalent `assert` in the new test. If the response shape changed, keep the assert but add `# TODO(upgrade-v3): response format changed — update field names`.
-4. **One fixture, many tests.** All test functions share the `deployed_app` session-scoped fixture. Do not deploy/undeploy per-test.
+4. **One fixture, many tests.** All test functions share the `app_config` session-scoped fixture. Deployment is handled externally.
 5. **Preserve test names.** Derive the new function name directly from the original method name (strip the `test_` prefix rule of the class if needed, but keep the semantic name).
 
 Place the new test at `tests/e2e/test_<connector_name>_v3.py` alongside the
