@@ -413,7 +413,7 @@ class TestResourceSampler:
         from application_sdk.observability.resource_sampler import sample
 
         s = sample()
-        # On Mac/Linux with psutil installed, this should work
+        # On Mac/Linux, stdlib resource module should work
         if s is not None:
             assert s.cpu_time_s >= 0
             assert s.rss_bytes > 0
@@ -483,7 +483,7 @@ class TestAppVitalsEfficiencyMetrics:
 
             await interceptor.execute_activity(MockExecuteActivityInput())
 
-            # Efficiency metrics should be emitted if psutil works on this platform
+            # Efficiency metrics should be emitted if resource sampling works on this platform
             # (may be 0.0 values, but metrics are emitted)
 
 
@@ -624,8 +624,6 @@ class TestErrorClassifierRichFields:
                 e = err
         chain = extract_cause_chain(e, limit=3)
         assert len(chain) == 3
-
-
 
 
 class TestAppVitalsRichErrorFields:
