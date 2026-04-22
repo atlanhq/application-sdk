@@ -27,11 +27,6 @@ class TestSample:
     def test_sample_returns_none_when_resource_unavailable(self):
         """If resource module can't be imported, return None gracefully."""
         with patch.dict("sys.modules", {"resource": None}):
-            # Force ImportError on next import attempt
-            import importlib
-
-            # Can't easily force ImportError inside sample() without
-            # mocking builtins.__import__, so test the contract:
             # sample() should never raise, always return None or ResourceSample
             result = sample()
             assert result is None or isinstance(result, ResourceSample)
