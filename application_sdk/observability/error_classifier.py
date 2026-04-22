@@ -5,8 +5,18 @@ breakdowns can be grouped in dashboards and alerts. Also extracts the
 exception cause chain and a retriable-heuristic so downstream debugging
 tools have structured context without reading stack traces manually.
 
-The classifier is deliberately conservative: if it can't confidently
-classify an error, it returns "internal" rather than guessing.
+Error types:
+  timeout    — TimeoutError, deadline exceeded
+  oom        — MemoryError, OOMKilled
+  connection — ConnectionError, ConnectionRefused, SSLError (network/infra)
+  auth       — authentication failures, 401/403 (credentials rejected)
+  cancelled  — CancelledError, KeyboardInterrupt
+  internal   — everything else (includes ValueError, KeyError, TypeError)
+
+Note: ValueError/KeyError/TypeError are intentionally classified as "internal",
+not "config". These are generic Python exceptions that could be code bugs.
+Config vs non-config is determined at the workflow level using preflight_passed
+and circuit_breaker_tripped signals on wf.summary, not by exception class.
 """
 
 from __future__ import annotations
@@ -25,7 +35,7 @@ def classify_error(exc: BaseException) -> str:
         exc: The exception to classify.
 
     Returns:
-        One of: "timeout", "oom", "upstream", "config", "cancelled", "internal".
+        One of: "timeout", "oom", "connection", "auth", "cancelled", "internal".
     """
     # Unwrap Temporal wrappers to get to the real cause. The wrapper types are
     # string-matched (not isinstance) to avoid importing from temporalio here.
@@ -39,9 +49,6 @@ def classify_error(exc: BaseException) -> str:
         cls_name = type(current).__name__
         if cls_name in ("ActivityError", "ChildWorkflowError", "ApplicationError"):
             if cls_name == "ApplicationError":
-                # Keep the FIRST (outermost) hint — it represents the actual
-                # error the workflow observed. Inner ApplicationErrors are the
-                # cause chain, not the raised error.
                 if original_type_hint is None:
                     app_err_type = getattr(current, "type", None)
                     if app_err_type:
@@ -56,7 +63,6 @@ def classify_error(exc: BaseException) -> str:
 
     exc_type = type(exc).__name__
     msg = str(exc).lower()
-    # Merge in the ApplicationError `.type` hint (if we unwrapped to one)
     effective_type_names = {exc_type}
     if original_type_hint:
         effective_type_names.add(original_type_hint)
@@ -91,50 +97,36 @@ def classify_error(exc: BaseException) -> str:
     if "cancelled" in msg or "canceled" in msg:
         return "cancelled"
 
-    # Upstream / connectivity
+    # Auth — credentials rejected, permission denied (split from old "upstream")
+    if "AuthenticationError" in effective_type_names:
+        return "auth"
+    if "authentication" in msg or "unauthorized" in msg:
+        return "auth"
+    if "403" in msg or "401" in msg:
+        return "auth"
+
+    # Connection — network/infra issues (split from old "upstream")
     if isinstance(exc, (ConnectionError, ConnectionRefusedError, ConnectionResetError)):
-        return "upstream"
-    upstream_types = {
-        "AuthenticationError",
+        return "connection"
+    connection_types = {
         "ConnectionError",
         "ConnectionRefusedError",
         "ConnectionResetError",
         "SSLError",
         "HTTPError",
     }
-    if effective_type_names & upstream_types:
-        return "upstream"
+    if effective_type_names & connection_types:
+        return "connection"
     if "connection refused" in msg or "connection reset" in msg:
-        return "upstream"
-    if "authentication" in msg or "unauthorized" in msg or "403" in msg or "401" in msg:
-        return "upstream"
+        return "connection"
 
-    # Config / validation
-    if isinstance(exc, (ValueError, KeyError, TypeError)):
-        return "config"
-    config_types = {
-        "ValueError",
-        "KeyError",
-        "TypeError",
-        "ConfigurationError",
-        "ValidationError",
-        "SchemaError",
-    }
-    if effective_type_names & config_types:
-        return "config"
-    if (
-        "invalid config" in msg
-        or "missing required" in msg
-        or "not found in config" in msg
-    ):
-        return "config"
-
-    # Default
+    # Everything else — including ValueError, KeyError, TypeError which are
+    # generic Python exceptions that could be code bugs, not config issues.
     return "internal"
 
 
-# Error types that never benefit from retry (fix requires code/config change)
-_NON_RETRIABLE_TYPES = frozenset({"config", "cancelled"})
+# Error types that never benefit from retry
+_NON_RETRIABLE_TYPES = frozenset({"cancelled"})
 
 
 def extract_cause_chain(exc: BaseException, limit: int = 5) -> list[str]:
@@ -162,20 +154,12 @@ def extract_cause_chain(exc: BaseException, limit: int = 5) -> list[str]:
 def is_retriable(exc: BaseException, error_type: str | None = None) -> bool:
     """Heuristic for whether this error is worth retrying.
 
-    - ``config`` / ``cancelled`` errors don't benefit from retry — they need
-      human or code intervention.
-    - ``timeout`` / ``upstream`` / ``oom`` / ``internal`` are retriable by
-      default (retry policy may still cap attempts).
+    - ``cancelled`` errors don't benefit from retry.
+    - Everything else is retriable by default (retry policy caps attempts).
 
     Respects an explicit ``non_retryable`` flag on the exception if present
     (Temporal's ApplicationError pattern).
-
-    Args:
-        exc: The exception to evaluate.
-        error_type: Optional pre-computed error_type from classify_error().
-                    If None, classifies internally.
     """
-    # Explicit Temporal ApplicationError non_retryable flag
     if getattr(exc, "non_retryable", False):
         return False
 

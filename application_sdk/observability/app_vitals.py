@@ -272,6 +272,8 @@ async def _track_activity_completion(record: dict[str, Any], awaitable: Any) -> 
         record["status"] = "failed"
         record["error_type"] = classify_error(exc)
         record["error_class"] = type(exc).__name__
+        record["error_message"] = str(exc)[:500]
+        record["error_cause_chain"] = extract_cause_chain(exc)
         record["end_ns"] = time.monotonic_ns()
         record["duration_ms"] = round(
             (record["end_ns"] - record["start_ns"]) / 1_000_000, 1
@@ -320,6 +322,32 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             sum(a.get("duration_ms", 0) for a in acts_with_duration), 1
         )
 
+        # Preflight detection — any activity with "preflight", "setup", or
+        # "connection_check" in its name is considered a preflight step.
+        # If ANY preflight activity failed → preflight_passed = False (config issue).
+        # If ALL passed → True. If none exist → None (not applicable).
+        _PREFLIGHT_KEYWORDS = ("preflight", "setup", "connection_check")
+        preflight_acts = [
+            a for a in acts
+            if any(kw in a.get("activity_type", "").lower() for kw in _PREFLIGHT_KEYWORDS)
+        ]
+        if preflight_acts:
+            preflight_passed = all(a.get("status") == "succeeded" for a in preflight_acts)
+        else:
+            preflight_passed = None
+
+        # Circuit breaker detection — scan failed activities for circuit breaker
+        # signals in error_class or error_message.
+        _CB_KEYWORDS = ("circuit breaker", "circuit_breaker", "circuitbreaker")
+        circuit_breaker_tripped = any(
+            any(
+                kw in str(a.get("error_class", "")).lower()
+                or kw in str(a.get("error_message", "")).lower()
+                for kw in _CB_KEYWORDS
+            )
+            for a in failed
+        )
+
         summary: dict[str, Any] = {
             **common,
             **_build_workflow_identity_attrs(info),
@@ -330,6 +358,8 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             "failed_activities": len(failed),
             "total_child_workflows": len(self._child_workflow_records),
             "sum_activity_duration_ms": sum_activity_duration_ms,
+            "preflight_passed": preflight_passed,
+            "circuit_breaker_tripped": circuit_breaker_tripped,
             "dimension": "reliability",
             "source": "temporal",
             "metric_name": "app_vitals.reliability.wf_summary",
