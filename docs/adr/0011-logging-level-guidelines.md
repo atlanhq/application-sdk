@@ -196,4 +196,4 @@ No framework changes required — these are conventions enforced in code review:
 2. Are INFO calls inside tight loops? (Use DEBUG or batch summaries instead.)
 3. Are structured fields used instead of f-string interpolation?
 
-Log level is controlled by `ATLAN_LOG_LEVEL` env var → `logLevel` in `helm/atlan-app/values.yaml` → defaults to `INFO`. Debug logs are never visible in production unless explicitly enabled.
+Log level is controlled by the `ATLAN_LOG_LEVEL` env var and defaults to `INFO`. Debug logs are never visible in production unless explicitly enabled.
