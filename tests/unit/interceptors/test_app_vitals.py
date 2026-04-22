@@ -55,28 +55,28 @@ class TestClassifyError:
         assert classify_error(Exception("workflow was cancelled")) == "cancelled"
 
     def test_connection_error(self):
-        assert classify_error(ConnectionError("refused")) == "upstream"
+        assert classify_error(ConnectionError("refused")) == "connection"
 
     def test_connection_refused(self):
-        assert classify_error(ConnectionRefusedError()) == "upstream"
+        assert classify_error(ConnectionRefusedError()) == "connection"
 
     def test_connection_reset(self):
-        assert classify_error(ConnectionResetError()) == "upstream"
+        assert classify_error(ConnectionResetError()) == "connection"
 
     def test_auth_in_message(self):
-        assert classify_error(Exception("authentication failed")) == "upstream"
+        assert classify_error(Exception("authentication failed")) == "auth"
 
     def test_unauthorized_in_message(self):
-        assert classify_error(Exception("401 unauthorized")) == "upstream"
+        assert classify_error(Exception("401 unauthorized")) == "auth"
 
     def test_value_error(self):
-        assert classify_error(ValueError("invalid input")) == "config"
+        assert classify_error(ValueError("invalid input")) == "internal"
 
     def test_key_error(self):
-        assert classify_error(KeyError("missing_field")) == "config"
+        assert classify_error(KeyError("missing_field")) == "internal"
 
     def test_type_error(self):
-        assert classify_error(TypeError("expected str")) == "config"
+        assert classify_error(TypeError("expected str")) == "internal"
 
     def test_generic_exception(self):
         assert classify_error(Exception("something went wrong")) == "internal"
@@ -367,7 +367,7 @@ class TestAppVitalsWorkflowInterceptor:
             )
             log_attrs = completed_call[0][1]
             assert log_attrs["status"] == "failed"
-            assert log_attrs["error_type"] == "upstream"
+            assert log_attrs["error_type"] == "connection"
             assert "db unreachable" in log_attrs["error_message"]
 
 
@@ -626,8 +626,9 @@ class TestErrorClassifierRichFields:
         chain = extract_cause_chain(e, limit=3)
         assert len(chain) == 3
 
-    def test_is_retriable_config_error(self):
-        assert is_retriable(ValueError("bad input")) is False
+    def test_is_retriable_internal_error(self):
+        # ValueError is now "internal" (retriable) — no longer "config"
+        assert is_retriable(ValueError("bad input")) is True
 
     def test_is_retriable_timeout(self):
         assert is_retriable(TimeoutError("timed out")) is True
@@ -1073,6 +1074,8 @@ class TestLoggerAdaptorExtraKeysAllowlist:
         "first_failure_error_type",
         "bottleneck_activity_type",
         "bottleneck_duration_ms",
+        "preflight_passed",
+        "circuit_breaker_tripped",
     ]
 
     def test_all_app_vitals_fields_survive_extra_dict_filter(self):
@@ -1125,3 +1128,87 @@ class TestLoggerAdaptorExtraKeysAllowlist:
 
 # TestDurationMetricsUseHistogram removed — Path 2 (OTel metrics) was removed;
 # all analytics are now computed from Path 1 (log events → MV).
+
+
+class TestPreflightAndCircuitBreaker:
+    """Tests for preflight_passed and circuit_breaker_tripped on wf.summary."""
+
+    def _make_interceptor(self):
+        from application_sdk.observability.app_vitals import (
+            _AppVitalsWorkflowInboundInterceptor,
+        )
+        mock_next = mock.AsyncMock()
+        return _AppVitalsWorkflowInboundInterceptor(mock_next)
+
+    def test_preflight_passed_true(self):
+        interceptor = self._make_interceptor()
+        interceptor._activity_records = [
+            {"activity_type": "preflight_check", "status": "succeeded",
+             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
+            {"activity_type": "fetch_databases", "status": "succeeded",
+             "start_ns": 1000, "end_ns": 2000, "duration_ms": 1.0},
+        ]
+        common = {"app_name": "test"}
+        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "succeeded", 100.0)
+        assert summary["preflight_passed"] is True
+        assert summary["circuit_breaker_tripped"] is False
+
+    def test_preflight_passed_false(self):
+        interceptor = self._make_interceptor()
+        interceptor._activity_records = [
+            {"activity_type": "preflight_check", "status": "failed",
+             "error_type": "connection", "error_class": "ConnectionRefusedError",
+             "error_message": "Connection refused",
+             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
+        ]
+        common = {"app_name": "test"}
+        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "failed", 100.0)
+        assert summary["preflight_passed"] is False
+
+    def test_preflight_passed_none_when_no_preflight(self):
+        interceptor = self._make_interceptor()
+        interceptor._activity_records = [
+            {"activity_type": "parse_sql", "status": "succeeded",
+             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
+        ]
+        common = {"app_name": "test"}
+        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "succeeded", 100.0)
+        assert summary["preflight_passed"] is None
+
+    def test_circuit_breaker_tripped_via_class(self):
+        interceptor = self._make_interceptor()
+        interceptor._activity_records = [
+            {"activity_type": "calculate_diff", "status": "failed",
+             "error_type": "internal", "error_class": "CircuitBreakerError",
+             "error_message": "Failure rate exceeded 80%",
+             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
+        ]
+        common = {"app_name": "test"}
+        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "failed", 100.0)
+        assert summary["circuit_breaker_tripped"] is True
+
+    def test_circuit_breaker_tripped_via_message(self):
+        interceptor = self._make_interceptor()
+        interceptor._activity_records = [
+            {"activity_type": "publish_entities", "status": "failed",
+             "error_type": "internal", "error_class": "RuntimeError",
+             "error_message": "circuit breaker: diff exceeded 80% threshold",
+             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
+        ]
+        common = {"app_name": "test"}
+        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "failed", 100.0)
+        assert summary["circuit_breaker_tripped"] is True
+
+    def test_circuit_breaker_not_tripped(self):
+        interceptor = self._make_interceptor()
+        interceptor._activity_records = [
+            {"activity_type": "fetch_tables", "status": "failed",
+             "error_type": "connection", "error_class": "ConnectionError",
+             "error_message": "Connection refused",
+             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
+        ]
+        common = {"app_name": "test"}
+        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "failed", 100.0)
+        assert summary["circuit_breaker_tripped"] is False
+
+
