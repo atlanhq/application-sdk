@@ -17,12 +17,14 @@ identically for single files and directories.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import tempfile
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
+from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
 
 if TYPE_CHECKING:
@@ -168,6 +170,7 @@ async def upload(
     store: "ObjectStore | None" = None,
     _app_prefix: str = "",
     _tier: StorageTier = StorageTier.RETAINED,
+    max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
 ) -> "UploadOutput":
     """Upload a local file or directory to the object store.
 
@@ -188,6 +191,8 @@ async def upload(
         skip_if_exists: Skip files whose SHA-256 matches the stored sidecar.
         store: Object store to use, or ``None`` to resolve from infrastructure.
         _app_prefix: Internal prefix injected by the ``App.upload`` task.
+        max_concurrency: Maximum parallel uploads for directory mode
+            (default :data:`~application_sdk.constants.MAX_CONCURRENT_STORAGE_TRANSFERS`).
 
     Returns:
         :class:`~application_sdk.contracts.storage.UploadOutput`
@@ -249,16 +254,30 @@ async def upload(
         else:
             prefix = src.name
 
+        sem = asyncio.Semaphore(max_concurrency)
+
         files = [p for p in src.rglob("*") if p.is_file()]
-        transferred_count = 0
+
+        async def _bounded_upload(file_path: Path, key: str) -> bool:
+            async with sem:
+                ok, _ = await _upload_one(
+                    resolved, file_path, key, skip_if_exists=skip_if_exists
+                )
+                return ok
+
+        keys = []
         for file_path in files:
             relative = str(file_path.relative_to(src)).replace(os.sep, "/")
-            key = f"{prefix}/{relative}" if prefix else relative
-            ok, _ = await _upload_one(
-                resolved, file_path, key, skip_if_exists=skip_if_exists
-            )
-            if ok:
-                transferred_count += 1
+            keys.append(f"{prefix}/{relative}" if prefix else relative)
+
+        results = await asyncio.gather(
+            *[_bounded_upload(fp, k) for fp, k in zip(files, keys)],
+            return_exceptions=True,
+        )
+        errors = [r for r in results if isinstance(r, BaseException)]
+        if errors:
+            raise errors[0]
+        transferred_count = sum(1 for ok in results if ok)
 
         store_prefix = (prefix.rstrip("/") + "/") if prefix else ""
         reason = "uploaded" if transferred_count > 0 else "skipped:hash_match"
