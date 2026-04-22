@@ -273,8 +273,8 @@ async def test_transfer_upload_directory_concurrent(store, tmp_path):
     assert out.synced is True
     assert out.reason == "uploaded"
 
-    # Verify all keys exist in the store
-    keys = await list_keys("transfer-conc", store)
+    # Verify all data keys exist in the store (excludes .sha256 sidecars)
+    keys = await list_keys("transfer-conc", store, suffix=".csv")
     assert len(keys) == 15
 
 
