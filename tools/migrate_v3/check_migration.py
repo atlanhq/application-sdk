@@ -388,9 +388,15 @@ def check_file(path: Path, *, is_test: bool = False) -> list[CheckResult]:
     # contracts yet. If the signature already uses MetadataInput/PreflightInput,
     # the handler is properly migrated and no warning is needed.
     if _RE_HANDLER_BASE.search(full_text):
-        _re_metadata_v3 = re.compile(r"async\s+def\s+fetch_metadata\s*\([^)]*MetadataInput")
-        _re_preflight_v3 = re.compile(r"async\s+def\s+preflight_check\s*\([^)]*PreflightInput")
-        if _RE_FETCH_METADATA_DEF.search(full_text) and not _re_metadata_v3.search(full_text):
+        _re_metadata_v3 = re.compile(
+            r"async\s+def\s+fetch_metadata\s*\([^)]*MetadataInput"
+        )
+        _re_preflight_v3 = re.compile(
+            r"async\s+def\s+preflight_check\s*\([^)]*PreflightInput"
+        )
+        if _RE_FETCH_METADATA_DEF.search(full_text) and not _re_metadata_v3.search(
+            full_text
+        ):
             results.append(
                 CheckResult(
                     level=WARN,
