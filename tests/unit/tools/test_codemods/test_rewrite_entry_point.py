@@ -148,7 +148,7 @@ async def main():
         assert "BaseApplication" in code
         assert "start_worker" in code
         # But a TODO comment is prepended
-        assert "TODO(migrate-v3)" in code
+        assert "TODO(upgrade-v3)" in code
         assert any("Skipped" in c for c in changes)
 
     def test_include_router_gets_todo(self) -> None:
@@ -164,7 +164,7 @@ async def main():
             source, RewriteEntryPointCodemod, app_class_name="AthenaApp"
         )
         assert "include_router" in code
-        assert "TODO(migrate-v3)" in code
+        assert "TODO(upgrade-v3)" in code
         assert any("Skipped" in c for c in changes)
 
     def test_no_base_application_unchanged(self) -> None:

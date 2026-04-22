@@ -106,15 +106,15 @@ All infrastructure is accessed through Protocol-based interfaces, not concrete i
 
 | Protocol | Methods | Production impl | Test impl |
 |----------|---------|-----------------|-----------|
-| `StateStore` | `save`, `load`, `delete`, `list_keys` | `DaprStateStore` | `InMemoryStateStore` |
-| `SecretStore` | `get`, `get_optional`, `get_bulk` | `DaprSecretStore` | `InMemorySecretStore`, `EnvironmentSecretStore` |
-| `PubSub` | `publish`, `subscribe` | `DaprBinding` | `InMemoryPubSub` |
-| `Binding` | `invoke` | `DaprBinding` | `InMemoryBinding` |
+| `StateStore` | `save`, `load`, `delete`, `list_keys` | `DaprStateStore` | `MockStateStore` |
+| `SecretStore` | `get`, `get_optional`, `get_bulk` | `DaprSecretStore` | `MockSecretStore`, `EnvironmentSecretStore` |
+| `PubSub` | `publish`, `subscribe` | `DaprPubSub` | `MockPubSub` |
+| `Binding` | `invoke` | `DaprBinding` | `MockBinding` |
 | `CapacityPool` | `acquire`, `release`, `renew` | Redis-backed | `LocalCapacityPool` |
 
 An `InfrastructureContext` (frozen dataclass) holds all of these, stored in a `ContextVar`. Set once at startup via `application_sdk.main`; accessed anywhere via `get_infrastructure()`.
 
-This means **unit tests never need a Dapr sidecar or Temporal server** — swap in the in-memory implementations and run pure Python. See [ADR-0005](../adr/0005-infrastructure-abstraction.md).
+This means **unit tests never need a Dapr sidecar or Temporal server** — inject `MockStateStore`, `MockSecretStore`, etc. from `application_sdk.testing.mocks` and run pure Python. See [ADR-0005](../adr/0005-infrastructure-abstraction.md).
 
 ---
 
@@ -195,7 +195,7 @@ Higher-level: `App` provides `self.upload()` and `self.download()` framework tas
 
 ## Observability
 
-Structured logs and OTel traces flow from every worker and handler pod to the cluster's central OTLP collector. Workers configure `OTEL_EXPORTER_OTLP_ENDPOINT` to the node IP (`$(K8S_NODE_IP):4317`) at deploy time; the Helm chart wires this automatically.
+Structured logs and OTel traces flow from every worker and handler pod to the cluster's central OTLP collector. Workers configure `OTEL_EXPORTER_OTLP_ENDPOINT` to the node IP (`$(K8S_NODE_IP):4317`) at deploy time.
 
 `self.logger` is available in both `run()` and `@task` methods. It is automatically bound with `app_name`, `run_id`, and `correlation_id` on every entry. When apps call other apps, the correlation ID propagates automatically, linking distributed traces across services. See [ADR-0003](../adr/0003-per-app-observability.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
 
@@ -205,16 +205,7 @@ Errors carry structured codes in `AAF-{COMPONENT}-{ID}` format.
 
 ## Deployment
 
-Apps are deployed via the `helm/atlan-app/` Helm chart:
-
-```bash
-helm install my-connector oci://ghcr.io/atlanhq/charts/atlan-app \
-  --set appName=my-connector \
-  --set appModule=my_package.app:MyConnector \
-  --set image.tag=1.2.3
-```
-
-Both deployments use the same container image with a different `--mode` argument:
+Apps are deployed to Kubernetes via the platform's deployment tooling (GM). Both deployments use the same container image with a different `--mode` argument:
 
 ```bash
 # Handler pod
@@ -239,8 +230,7 @@ application_sdk/
 │   ├── base.py             # App class, run() wrapper, determinism helpers
 │   ├── task.py             # @task decorator, signature validation
 │   ├── registry.py         # AppRegistry, TaskRegistry singletons
-│   ├── context.py          # AppContext, logging, infra/credential access
-│   └── client.py           # Child app invocation (call, call_by_name)
+│   └── context.py          # AppContext, logging, infra/credential access
 │
 ├── contracts/              # Typed cross-boundary contracts
 │   ├── base.py             # Input, Output, HeartbeatDetails base classes

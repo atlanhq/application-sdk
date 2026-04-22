@@ -67,12 +67,15 @@ runs:
 
     - name: Setup AWS Credentials
       uses: aws-actions/configure-aws-credentials@v4
+      continue-on-error: true
+      id: aws-creds
       with:
         aws-region: ap-south-1
         # Only usable in atlanhq repositories
         role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
 
     - name: Upload Coverage Report to Kryptonite Bucket
+      if: steps.aws-creds.outcome == 'success'
       shell: bash
       run: |
         aws s3 sync ./htmlcov s3://kryptonite-store/coverage/application-sdk/pr/${{ github.event.number }} --delete

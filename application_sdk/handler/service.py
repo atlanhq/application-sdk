@@ -31,18 +31,29 @@ from __future__ import annotations
 import dataclasses
 import json
 import mimetypes
+import os
+import re
+import tempfile
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+import orjson
+from fastapi import FastAPI, File, Form, HTTPException
+from fastapi import Path as PathParam
+from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
-from application_sdk.constants import DEPLOYMENT_NAME, ENABLE_PROMETHEUS_METRICS
+from application_sdk.constants import (
+    DEPLOYMENT_NAME,
+    ENABLE_PROMETHEUS_METRICS,
+    LOCAL_ENVIRONMENT,
+)
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
@@ -98,29 +109,7 @@ def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
     return pairs
 
 
-def _pairs_to_flat(pairs: list[dict[str, str]]) -> dict[str, Any]:
-    """Convert v3 [{key, value}] pairs to a flat credential dict.
-
-    Reverse of ``_flatten_to_pairs``.  ``extra.*`` keys are nested under
-    an ``extra`` dict so ``parse_credentials_extra()`` works correctly.
-
-    Note: all values remain strings — no type coercion is performed.
-    A round-trip through ``_flatten_to_pairs`` then ``_pairs_to_flat``
-    will stringify non-string values (e.g. ``int 5432`` → ``str "5432"``).
-    """
-    flat: dict[str, Any] = {}
-    extra: dict[str, Any] = {}
-    for p in pairs:
-        key, value = p["key"], p["value"]
-        if key.startswith("extra."):
-            extra[key[len("extra.") :]] = value
-        else:
-            flat[key] = value
-    if extra:
-        flat["extra"] = extra
-    return flat
-
-
+# v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
 def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize v2 credential formats to v3 list[{key, value}] format.
 
@@ -170,7 +159,6 @@ if TYPE_CHECKING:
 
     from application_sdk.app.base import App
     from application_sdk.infrastructure.secrets import SecretStore
-    from application_sdk.infrastructure.state import StateStore
 
 
 # ---------------------------------------------------------------------------
@@ -263,12 +251,40 @@ class WorkflowClientConfig:
 _temporal_client: Client | None = None
 _workflow_config: WorkflowClientConfig = WorkflowClientConfig()
 _handler_auth_manager: Any | None = None
-_state_store: StateStore | None = None
 _secret_store: SecretStore | None = None
 _storage: ObjectStore | None = None
 
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
+
+# Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
+# Identical to the @entrypoint decorator constraint. Used as a path-traversal guard
+# in get_manifest() before any filesystem path is constructed.
+_ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+
+# Allowed characters for config_id and config_type path components.
+# Prevents path traversal (no slashes, dots, or percent-encoding) when these
+# values are interpolated into object-store keys.
+_CONFIG_KEY_PATTERN = r"^[a-zA-Z0-9_\-]{1,128}$"
+_CONFIG_KEY_RE = re.compile(_CONFIG_KEY_PATTERN)
+
+# Strips any character that is not a simple alphanumeric from file extensions
+# before they are used as mkstemp suffixes, preventing taint-flow path traversal.
+_SAFE_EXT_RE = re.compile(r"[^a-zA-Z0-9]")
+
+
+def _validated_temp_path(path: str) -> str:
+    """Resolve *path* and assert it lies within the system temp directory.
+
+    All temp-file paths in this module are created via :func:`tempfile.mkstemp`.
+    This check makes the invariant explicit so SAST tools can confirm no
+    user-supplied value can escape the temp directory.
+    """
+    tmp_root = os.path.realpath(tempfile.gettempdir())
+    real = os.path.realpath(path)
+    if real != tmp_root and not real.startswith(tmp_root + os.sep):
+        raise ValueError("Temp file path escapes system temp directory")
+    return real
 
 
 async def _get_temporal_client() -> Client:
@@ -348,7 +364,6 @@ def create_app_handler_service(
     auth_token_url: str = "",
     auth_base_url: str = "",
     auth_scopes: str = "",
-    state_store: StateStore | None = None,
     secret_store: SecretStore | None = None,
     storage: ObjectStore | None = None,
     event_triggers: list[EventTriggerConfig] | None = None,
@@ -358,6 +373,10 @@ def create_app_handler_service(
     description: str = "Per-app handler service for authentication, preflight, and metadata operations",
     version: str = "1.0.0",
     frontend_assets_path: str = "app/generated/frontend/static",
+    # Deprecated: state_store is no longer used. Credential resolution now
+    # goes through DaprCredentialVault exclusively. Passing this parameter
+    # emits a DeprecationWarning. Will be removed in v3.2.0.
+    state_store: Any = None,
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
 
@@ -369,12 +388,7 @@ def create_app_handler_service(
         temporal_namespace: Temporal namespace.
         task_queue: Task queue name (default: "{app_name}-queue").
         data_converter: Optional custom Temporal DataConverter.
-        state_store: Optional state store for workflow config persistence.
-        secret_store: Optional secret store for credential interception.
-            When provided, the ``/start`` handler stores inline credentials
-            here and replaces them with a ``credential_guid`` so secrets
-            never travel over Temporal.  Passed directly to avoid ContextVar
-            propagation issues with uvicorn ASGI request handlers.
+        secret_store: Optional secret store for credential resolution.
         storage: Optional obstore store for file uploads.
         title: OpenAPI title.
         description: OpenAPI description.
@@ -386,9 +400,17 @@ def create_app_handler_service(
     Returns:
         Configured FastAPI application.
     """
-    global _workflow_config, _state_store, _secret_store, _storage
+    global _workflow_config, _secret_store, _storage
 
-    _state_store = state_store
+    if state_store is not None:
+        warnings.warn(
+            "state_store parameter is deprecated and ignored. "
+            "Credential resolution now uses DaprCredentialVault exclusively. "
+            "Will be removed in v3.2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     _secret_store = secret_store
     _storage = storage
     _workflow_config = WorkflowClientConfig(
@@ -448,7 +470,6 @@ def create_app_handler_service(
             started_at=datetime.now(UTC),
             _credentials=credentials,
             _secret_store=_secret_store,
-            _state_store=_state_store,
         )
 
     # ------------------------------------------------------------------
@@ -655,43 +676,60 @@ def create_app_handler_service(
 
         body: dict[str, Any] = await request.json()
         explicit_workflow_id: str | None = body.pop("workflow_id", None)
-        workflow_type: str | None = body.pop("workflow_type", None)
+        # ?entrypoint= query param is the canonical selector; fall back to the
+        # legacy body field 'workflow_type' for backward compatibility.
+        entrypoint_param: str | None = request.query_params.get("entrypoint")
+        legacy_workflow_type: str | None = body.pop("workflow_type", None)
+        selected_entrypoint: str | None = entrypoint_param or legacy_workflow_type
         workflow_id = explicit_workflow_id or "(unknown)"
+
+        if legacy_workflow_type is not None and entrypoint_param is None:
+            warnings.warn(
+                f"App {app_name}: 'workflow_type' body field is deprecated and will be "
+                "removed in v3.1.0. Use ?entrypoint=<name> query param instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            logger.warning(
+                "App %s: 'workflow_type' body field is deprecated (removed in v3.1.0); "
+                "use ?entrypoint=<name> query param instead.",
+                app_name,
+            )
 
         try:
             client = await _get_temporal_client()
 
-            # Resolve entry point and workflow name from workflow_type.
+            # Resolve entry point and workflow name from the selected entrypoint.
             # Deferred to avoid a circular import at module load time.
             from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
 
             app_meta = AppRegistry.get_instance().get(app_cls._app_name)  # type: ignore[attr-defined]
             entry_points = app_meta.entry_points
 
-            if workflow_type:
-                if workflow_type not in entry_points:
+            if selected_entrypoint:
+                if selected_entrypoint not in entry_points:
                     logger.warning(
-                        "Unknown workflow_type '%s' for app %s; available: %s",
-                        workflow_type,
+                        "Unknown entrypoint '%s' for app %s; available: %s",
+                        selected_entrypoint,
                         app_name,
                         sorted(entry_points.keys()),
                     )
                     raise HTTPException(
                         status_code=400,
-                        detail="Invalid workflow_type.",
+                        detail="Invalid entrypoint.",
                     )
-                ep = entry_points[workflow_type]
+                ep = entry_points[selected_entrypoint]
             elif len(entry_points) == 1:
                 ep = next(iter(entry_points.values()))
             elif len(entry_points) > 1:
                 logger.warning(
-                    "workflow_type required but not provided for multi-entry-point app %s; available: %s",
+                    "entrypoint required but not provided for multi-entry-point app %s; available: %s",
                     app_name,
                     sorted(entry_points.keys()),
                 )
                 raise HTTPException(
                     status_code=400,
-                    detail="workflow_type is required for this app.",
+                    detail="entrypoint is required for this app.",
                 )
             else:
                 # Fallback: no entry_points (shouldn't happen for a registered app)
@@ -712,34 +750,15 @@ def create_app_handler_service(
                     detail=f"App class {app_cls.__name__} entry point has no input type.",
                 )
 
-            # Save inline credentials to the secret store and replace with a
-            # credential_guid so raw secrets never travel over Temporal.
-            # Uses the closure-captured _secret_store (passed directly to
-            # create_app_handler_service) instead of get_infrastructure()
-            # because ContextVar does not propagate to uvicorn ASGI request
-            # handlers.
             body = _normalize_credentials(body)
-            if "credentials" in body and body["credentials"]:
-                if _secret_store is not None and hasattr(_secret_store, "set"):
-                    credential_guid = str(uuid4())
-                    # Convert v3 list [{key, value}] to flat dict so
-                    # get_secret() returns the same format as production
-                    # (Dapr/Vault). extra.* keys nested under "extra".
-                    flat_creds = _pairs_to_flat(body["credentials"])
-                    _secret_store.set(credential_guid, json.dumps(flat_creds))
-                    body["credential_guid"] = credential_guid
-                    del body["credentials"]
-                    logger.debug(
-                        "Saved inline credentials to secret store: guid=%s",
-                        credential_guid,
-                    )
-                else:
-                    logger.warning(
-                        "Secret store not writable; inline credentials will be "
-                        "passed through on the workflow input."
-                    )
+            if "credentials" in body:
+                # Always strip raw credentials — never pass through to
+                # Temporal history. Credentials are resolved at runtime
+                # via DaprCredentialVault using credential_guid.
+                del body["credentials"]
+                logger.debug("Stripped inline credentials from /start request body")
 
-            input_data = input_type(**body)
+            input_data = input_type.model_validate(body)
 
             if explicit_workflow_id:
                 workflow_id = explicit_workflow_id
@@ -793,20 +812,6 @@ def create_app_handler_service(
                 handle.result_run_id,
                 correlation_id,
             )
-
-            if _state_store is not None:
-                try:
-                    config_to_store = {
-                        k: v for k, v in body.items() if k != "credentials"
-                    }
-                    config_to_store["workflow_id"] = handle.id
-                    await _state_store.save(f"workflows/{handle.id}", config_to_store)
-                except Exception:
-                    logger.warning(
-                        "Failed to save workflow config to state store for workflow %s",
-                        handle.id,
-                        exc_info=True,
-                    )
 
             return JSONResponse(
                 content={
@@ -864,7 +869,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Failed to stop workflow: {error_msg}"
+                status_code=500, detail="Failed to stop workflow"
             ) from None
 
     @app.get("/workflows/v1/result/{workflow_id}")
@@ -897,12 +902,17 @@ def create_app_handler_service(
                         )
                     )
                 except Exception as e:
+                    logger.warning(
+                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        workflow_id,
+                        e,
+                    )
                     return JSONResponse(
                         content=_wrap_response(
                             {
                                 "status": "failed",
                                 "workflow_id": workflow_id,
-                                "error": str(e),
+                                "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
                         )
@@ -941,12 +951,17 @@ def create_app_handler_service(
                         )
                     )
                 except Exception as e:
+                    logger.warning(
+                        "Workflow result retrieval failed for workflow_id=%s: %r",
+                        workflow_id,
+                        e,
+                    )
                     return JSONResponse(
                         content=_wrap_response(
                             {
                                 "status": "failed",
                                 "workflow_id": workflow_id,
-                                "error": str(e),
+                                "error": "Workflow execution failed.",
                             },
                             message="Workflow failed",
                         )
@@ -987,7 +1002,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Failed to get workflow result: {error_msg}"
+                status_code=500, detail="Failed to get workflow result"
             ) from None
 
     @app.get("/workflows/v1/status/{workflow_id}/{run_id:path}")
@@ -1038,7 +1053,7 @@ def create_app_handler_service(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=500, detail=f"Failed to get workflow status: {error_msg}"
+                status_code=500, detail="Failed to get workflow status"
             ) from None
 
     # ------------------------------------------------------------------
@@ -1050,6 +1065,10 @@ def create_app_handler_service(
 
         Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json
         """
+        if not _CONFIG_KEY_RE.match(config_id):
+            raise ValueError(f"Invalid config_id: {config_id!r}")
+        if not _CONFIG_KEY_RE.match(config_type):
+            raise ValueError(f"Invalid config_type: {config_type!r}")
         from application_sdk.constants import APPLICATION_NAME
 
         return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
@@ -1060,23 +1079,22 @@ def create_app_handler_service(
         """Load workflow config from object store (S3) fallback."""
         if _storage is None:
             return None
-        import json as _json
-        import os
-        import tempfile
 
-        from application_sdk.storage.ops import download_file
+        from application_sdk.storage.ops import download_file  # noqa: PLC0415
 
         key = _config_objectstore_key(config_id, config_type)
-        tmp = tempfile.mktemp(suffix=".json")
+        fd, tmp = tempfile.mkstemp(suffix=".json")
+        safe_tmp = _validated_temp_path(tmp)
+        os.close(fd)
         try:
-            await download_file(key, tmp, _storage)
-            with open(tmp) as f:
-                return _json.load(f)
-        except Exception:
+            await download_file(key, safe_tmp, _storage)
+            return orjson.loads(Path(safe_tmp).read_bytes())
+        except Exception as exc:
+            logger.warning("Object-store config load failed for key=%s: %r", key, exc)
             return None
         finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+            if os.path.exists(safe_tmp):
+                os.unlink(safe_tmp)
 
     async def _config_save_to_objectstore(
         config_id: str, body: "dict[str, Any]", config_type: str = "workflows"
@@ -1084,49 +1102,25 @@ def create_app_handler_service(
         """Save workflow config to object store (S3) fallback."""
         if _storage is None:
             return False
-        import json as _json
-        import os
-        import tempfile
 
-        from application_sdk.storage.ops import upload_file
+        from application_sdk.storage.ops import put_json  # noqa: PLC0415
 
         key = _config_objectstore_key(config_id, config_type)
-        tmp = tempfile.mktemp(suffix=".json")
-        try:
-            with open(tmp, "w") as f:
-                _json.dump(body, f)
-            await upload_file(key, tmp, _storage)
-            return True
-        finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+        await put_json(key, body, _storage)
+        return True
 
     @app.get("/workflows/v1/config/{config_id}")
     async def get_workflow_config(
-        config_id: str, type: str = "workflows"
+        config_id: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
+        type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
     ) -> JSONResponse:
-        """Fetch workflow config — tries statestore first, falls back to object store."""
-        config = None
+        """Fetch workflow config from object store."""
+        config = await _config_load_from_objectstore(config_id, config_type=type)
 
-        # Try statestore
-        if _state_store is not None:
-            try:
-                config = await _state_store.load(f"workflows/{config_id}")
-            except Exception:
-                logger.warning(
-                    "State store load failed for config %s (type=%s), trying object store",
-                    config_id,
-                    type,
-                )
-
-        # Fallback to object store (S3)
-        if config is None:
-            config = await _config_load_from_objectstore(config_id, config_type=type)
-
-        if config is None and _state_store is None and _storage is None:
+        if config is None and _storage is None:
             raise HTTPException(
                 status_code=503,
-                detail="No state store or object store configured",
+                detail="No object store configured",
             )
         if config is None:
             raise HTTPException(
@@ -1141,38 +1135,27 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/config/{config_id}")
     async def update_workflow_config(
-        config_id: str, request: Request, type: str = "workflows"
+        config_id: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
+        request: Request,
+        type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
     ) -> JSONResponse:
-        """Save workflow config — tries statestore first, falls back to object store.
-
-        Object store fallback is only used for non-credential config types
-        to avoid persisting sensitive credential data to S3.
-        """
+        """Save workflow config to object store."""
         body = await request.json()
-        saved = False
 
-        # Try statestore
-        if _state_store is not None:
-            try:
-                await _state_store.save(f"workflows/{config_id}", body)
-                saved = True
-            except Exception:
-                logger.warning(
-                    "State store save failed for config %s (type=%s), trying object store",
-                    config_id,
-                    type,
-                )
+        if type == "workflows":
+            warnings.warn(
+                "Saving config with type='workflows' is deprecated; "
+                "use a specific config type instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
-        # Fallback to object store (S3) for all config types.
-        # Credential configs only contain non-sensitive metadata (host, port,
-        # authType, extra) — actual secrets are managed by Heracles/Vault.
-        if not saved:
-            saved = await _config_save_to_objectstore(config_id, body, config_type=type)
+        saved = await _config_save_to_objectstore(config_id, body, config_type=type)
 
         if not saved:
             raise HTTPException(
                 status_code=503,
-                detail="No state store or object store configured",
+                detail="No object store configured",
             )
         return JSONResponse(
             content=_wrap_response(
@@ -1198,13 +1181,15 @@ def create_app_handler_service(
         import asyncio
         import os
         import shutil
-        import tempfile
         from pathlib import PurePosixPath
 
         from application_sdk.storage.ops import upload_file as _upload_file
 
         raw_name = filename or file.filename or "upload"
-        extension = PurePosixPath(raw_name).suffix.lstrip(".")
+        # Strip non-alphanumeric chars and cap at 16 chars for object-store key safety.
+        extension = _SAFE_EXT_RE.sub("", PurePosixPath(raw_name).suffix.lstrip("."))[
+            :16
+        ]
         resolved_type = (
             contentType
             or file.content_type
@@ -1220,19 +1205,20 @@ def create_app_handler_service(
         # Stream the upload: drain the spooled temp file to a named temp file,
         # then stream-upload to the object store (avoids materialising in memory).
         fd, tmp_path = tempfile.mkstemp(suffix=f".{extension}" if extension else "")
+        safe_tmp_path = _validated_temp_path(tmp_path)
         try:
             os.close(fd)
 
             def _drain_to_tmp() -> int:
-                with open(tmp_path, "wb") as dst:
+                with open(safe_tmp_path, "wb") as dst:
                     shutil.copyfileobj(file.file, dst)
-                return os.path.getsize(tmp_path)
+                return os.path.getsize(safe_tmp_path)
 
             file_size = await asyncio.to_thread(_drain_to_tmp)
-            await _upload_file(key, tmp_path, _storage)
+            await _upload_file(key, safe_tmp_path, _storage)
         finally:
             try:
-                os.unlink(tmp_path)
+                os.unlink(safe_tmp_path)
             except FileNotFoundError:
                 pass
 
@@ -1416,11 +1402,15 @@ def create_app_handler_service(
 
     @app.get("/workflows/v1/configmaps")
     async def list_configmaps() -> JSONResponse:
+        seen: set[str] = set()
         configmap_ids: list[str] = []
         if CONTRACT_GENERATED_DIR.exists():
-            for json_file in CONTRACT_GENERATED_DIR.glob("*.json"):
-                if json_file.stem != "manifest":
-                    configmap_ids.append(json_file.stem)
+            for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
+                stem = json_file.stem
+                if stem == "manifest" or stem in seen:
+                    continue
+                seen.add(stem)
+                configmap_ids.append(stem)
         return JSONResponse(
             content=_wrap_response(
                 cast("dict[str, Any]", {"configmaps": configmap_ids}),
@@ -1433,20 +1423,45 @@ def create_app_handler_service(
     # ------------------------------------------------------------------
 
     @app.get("/workflows/v1/manifest")
-    async def get_manifest() -> Response:
+    async def get_manifest(entrypoint: str | None = None) -> Response:
+        deployment = (DEPLOYMENT_NAME or "default").encode()
+
+        if entrypoint:
+            # Guard 1 (400): reject obviously-malformed names before touching disk.
+            if not _ENTRYPOINT_NAME_RE.match(entrypoint):
+                raise HTTPException(status_code=400, detail="Invalid entrypoint name")
+            # Build a registry from the filesystem: {entrypoint_name → manifest_path}.
+            # The Path objects in the dict come from glob(), not from user input, so
+            # the path that reaches read_bytes() is never tainted by the HTTP param.
+            # glob("*/manifest.json") only returns direct children of CONTRACT_GENERATED_DIR,
+            # so no is_relative_to guard is needed.
+            registry: dict[str, Path] = {
+                p.parent.name: p for p in CONTRACT_GENERATED_DIR.glob("*/manifest.json")
+            }
+            ep_manifest = registry.get(entrypoint)
+            if ep_manifest is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No manifest found for entrypoint {entrypoint!r}",
+                )
+            raw = ep_manifest.read_bytes()
+            raw = raw.replace(b"{deployment_name}", deployment)
+            raw = raw.replace(b"{app_name}", (app_name or "").encode())
+            return Response(content=raw, media_type="application/json")
+
+        # No entrypoint param: single-entrypoint path
         if manifest is not None:
-            # Programmatic: Pydantic model → JSON bytes, single hop.
             return Response(
                 content=manifest.model_dump_json(), media_type="application/json"
             )
         manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
         if manifest_path.exists():
-            # Disk: contract-generated file — serve raw bytes with deployment
-            # name substitution. No parse/reserialize: the file is already
-            # valid JSON, validated at build time by the contract tooling.
+            # Disk: contract-generated file — serve raw bytes with placeholder
+            # substitution. No parse/reserialize: the file is already valid JSON,
+            # validated at build time by the contract tooling.
             raw = manifest_path.read_bytes()
-            deployment = (DEPLOYMENT_NAME or "default").encode()
             raw = raw.replace(b"{deployment_name}", deployment)
+            raw = raw.replace(b"{app_name}", (app_name or "").encode())
             return Response(content=raw, media_type="application/json")
         raise HTTPException(status_code=404, detail="No manifest available")
 
@@ -1460,7 +1475,7 @@ def create_app_handler_service(
     # ------------------------------------------------------------------
 
     @app.get("/manifest", include_in_schema=False)
-    async def get_manifest_legacy() -> Response:
+    async def get_manifest_legacy(entrypoint: str | None = None) -> Response:
         """Unversioned alias for ``GET /workflows/v1/manifest``.
 
         .. deprecated::
@@ -1470,7 +1485,84 @@ def create_app_handler_service(
             orchestrators have been updated to use ``/workflows/v1/manifest``.
             Do **not** add new callers of this endpoint.
         """
-        return await get_manifest()
+        return await get_manifest(entrypoint=entrypoint)
+
+    # ------------------------------------------------------------------
+    # Dev-only: local credential provisioning
+    # ------------------------------------------------------------------
+
+    SENSITIVE_FIELDS = {
+        "username",
+        "password",
+        "extra",
+        "url",
+        "driverProperties",
+        "sodaConnection",
+    }
+
+    async def _provision_local_vault(guid: str, body: dict[str, Any]) -> JSONResponse:
+        """Split credentials into sensitive/non-sensitive and persist locally.
+
+        Sensitive fields are written to ``./local/dapr/secrets/secrets.json`` keyed by guid.
+        Non-sensitive fields are written to object storage via the config endpoint.
+        """
+        if DEPLOYMENT_NAME != LOCAL_ENVIRONMENT:
+            raise HTTPException(status_code=403, detail="Dev-only endpoint")
+
+        if not _CONFIG_KEY_RE.match(guid):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid guid — must match %s" % _CONFIG_KEY_PATTERN,
+            )
+
+        sensitive: dict[str, Any] = {}
+        non_sensitive: dict[str, Any] = {}
+        for key, value in body.items():
+            if key in SENSITIVE_FIELDS:
+                sensitive[key] = value
+            else:
+                non_sensitive[key] = value
+
+        # Write sensitive fields to the local secrets file.
+        # All secrets are stored in a single JSON file keyed by guid
+        # (avoids user input in filenames — CodeQL path-traversal).
+        secrets_dir = Path(".", "local", "dapr", "secrets")
+        secrets_dir.mkdir(parents=True, exist_ok=True)
+        secrets_file = secrets_dir / "secrets.json"
+        all_secrets: dict[str, Any] = {}
+        if secrets_file.exists():
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+        all_secrets[guid] = sensitive
+        secrets_file.write_bytes(orjson.dumps(all_secrets))
+
+        # Write non-sensitive fields to object storage
+        non_sensitive["credentialSource"] = non_sensitive.get(
+            "credentialSource", "direct"
+        )
+        await _config_save_to_objectstore(
+            guid, non_sensitive, config_type="credentials"
+        )
+
+        logger.info(
+            "Provisioned local credentials: guid=%s sensitive_keys=%s non_sensitive_keys=%s",
+            guid,
+            sorted(sensitive.keys()),
+            sorted(non_sensitive.keys()),
+        )
+
+        return JSONResponse(
+            content=_wrap_response(
+                {"credential_guid": guid},
+                message="Credentials provisioned successfully",
+            )
+        )
+
+    @app.post("/workflows/v1/dev/local-vault")
+    async def provision_local_vault(request: Request) -> JSONResponse:
+        """Provision credentials for local development (auto-generates GUID)."""
+        body: dict[str, Any] = await request.json()
+        guid = uuid4().hex
+        return await _provision_local_vault(guid, body)
 
     # ------------------------------------------------------------------
     # Health probes

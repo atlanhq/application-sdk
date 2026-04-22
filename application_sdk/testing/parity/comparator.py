@@ -1,0 +1,179 @@
+"""Core comparison engine for parity testing.
+
+Loads NDJSON output from two extraction runs, strips volatile fields,
+joins on qualifiedName, and classifies each asset as ADDED, REMOVED,
+MODIFIED, or UNCHANGED.
+"""
+
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+from application_sdk.testing.parity.models import AssetDiff, CategoryResult, FieldDiff
+
+logger = logging.getLogger(__name__)
+
+# Fields that change every run and must be ignored in comparison.
+VOLATILE_FIELDS: set[str] = {
+    "lastSyncWorkflowName",
+    "lastSyncRun",
+    "lastSyncRunAt",
+}
+
+
+def load_ndjson(directory: Path) -> list[dict[str, Any]]:
+    """Load all NDJSON files from a directory, skipping statistics files."""
+    assets: list[dict[str, Any]] = []
+    if not directory.exists():
+        return assets
+    for json_file in sorted(directory.glob("*.json")):
+        if "statistics" in json_file.name:
+            continue
+        with open(json_file, encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    assets.append(json.loads(line))
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Skipping malformed JSON at %s:%d", json_file.name, line_num
+                    )
+    return assets
+
+
+def strip_volatile(obj: Any) -> Any:
+    """Recursively remove volatile fields from dicts and lists."""
+    if isinstance(obj, dict):
+        return {
+            k: strip_volatile(v) for k, v in obj.items() if k not in VOLATILE_FIELDS
+        }
+    if isinstance(obj, list):
+        return [strip_volatile(item) for item in obj]
+    return obj
+
+
+def get_qualified_name(asset: dict[str, Any]) -> str:
+    """Extract qualifiedName from an asset."""
+    return asset.get("attributes", {}).get("qualifiedName", "")
+
+
+def diff_dicts(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    prefix: str = "",
+) -> list[FieldDiff]:
+    """Deep diff two dicts, returning a list of field differences."""
+    diffs: list[FieldDiff] = []
+    all_keys = set(baseline.keys()) | set(candidate.keys())
+
+    for key in sorted(all_keys):
+        path = f"{prefix}.{key}" if prefix else key
+        b_val = baseline.get(key)
+        c_val = candidate.get(key)
+
+        if b_val == c_val:
+            continue
+
+        if isinstance(b_val, dict) and isinstance(c_val, dict):
+            diffs.extend(diff_dicts(b_val, c_val, path))
+        else:
+            diffs.append(
+                FieldDiff(
+                    field_path=path,
+                    baseline_value=b_val,
+                    candidate_value=c_val,
+                )
+            )
+
+    return diffs
+
+
+def compare_category(
+    category: str,
+    baseline_dir: Path,
+    candidate_dir: Path,
+) -> CategoryResult:
+    """Compare a single category (e.g., 'table', 'column') between two runs."""
+    baseline_assets = load_ndjson(baseline_dir)
+    candidate_assets = load_ndjson(candidate_dir)
+
+    baseline_map: dict[str, dict[str, Any]] = {}
+    for asset in baseline_assets:
+        qn = get_qualified_name(asset)
+        if qn:
+            baseline_map[qn] = strip_volatile(asset)
+
+    candidate_map: dict[str, dict[str, Any]] = {}
+    for asset in candidate_assets:
+        qn = get_qualified_name(asset)
+        if qn:
+            candidate_map[qn] = strip_volatile(asset)
+
+    result = CategoryResult(
+        category=category,
+        baseline_count=len(baseline_map),
+        candidate_count=len(candidate_map),
+    )
+
+    # REMOVED: in baseline but not in candidate
+    for qn in sorted(set(baseline_map) - set(candidate_map)):
+        asset = baseline_map[qn]
+        result.removed.append(
+            AssetDiff(
+                qualified_name=qn,
+                type_name=asset.get("typeName", "?"),
+                diff_type="REMOVED",
+            )
+        )
+
+    # ADDED: in candidate but not in baseline
+    for qn in sorted(set(candidate_map) - set(baseline_map)):
+        asset = candidate_map[qn]
+        result.added.append(
+            AssetDiff(
+                qualified_name=qn,
+                type_name=asset.get("typeName", "?"),
+                diff_type="ADDED",
+            )
+        )
+
+    # MODIFIED: in both, check for field diffs
+    for qn in sorted(set(baseline_map) & set(candidate_map)):
+        field_diffs = diff_dicts(baseline_map[qn], candidate_map[qn])
+        if field_diffs:
+            result.modified.append(
+                AssetDiff(
+                    qualified_name=qn,
+                    type_name=baseline_map[qn].get("typeName", "?"),
+                    diff_type="MODIFIED",
+                    field_diffs=field_diffs,
+                )
+            )
+
+    return result
+
+
+def discover_categories(baseline_dir: Path, candidate_dir: Path) -> list[str]:
+    """Find all category subdirectories across both dirs."""
+    categories: set[str] = set()
+    for d in [baseline_dir, candidate_dir]:
+        if d.exists():
+            for subdir in d.iterdir():
+                if subdir.is_dir() and not subdir.name.startswith("."):
+                    categories.add(subdir.name)
+    return sorted(categories)
+
+
+def run_comparison(
+    baseline_dir: Path,
+    candidate_dir: Path,
+) -> list[CategoryResult]:
+    """Run full parity comparison across all categories."""
+    categories = discover_categories(baseline_dir, candidate_dir)
+    return [
+        compare_category(cat, baseline_dir / cat, candidate_dir / cat)
+        for cat in categories
+    ]

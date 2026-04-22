@@ -6,13 +6,24 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.base import Input, Output, PublishInputMixin
 from application_sdk.contracts.types import ConnectionRef, MaxItems
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.credentials.spec import AgentCredentialSpec
+
+# Disallow single quotes in filter/regex fields to prevent SQL injection when
+# values are substituted into SQL templates via _prepare_sql (str.replace).
+# Safety invariant: every fetch_*_sql template MUST wrap substituted values in
+# single quotes (e.g. ``'{normalized_exclude_regex}'``).  This pattern blocks
+# the only character that would escape that wrapping.  If a connector template
+# omits the surrounding quotes this guard provides no protection — the wrapping
+# is a required connector contract, not optional.  Real-world DB name patterns
+# never require single quotes, so the restriction is not a practical limitation.
+_SAFE_FILTER_PATTERN = r"^[^']*$"
 
 
 class ExtractionInput(Input, allow_unbounded_fields=True):
@@ -30,26 +41,52 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     credential_ref: CredentialRef | None = None
     """Typed credential reference — preferred over credential_guid for new apps."""
 
+    extraction_method: str = ""
+    """``"agent"`` or ``"direct"``. Empty defaults to direct."""
+
+    agent_json: AgentCredentialSpec | None = None
+    """Typed agent credential spec. Non-None when extraction_method is agent.
+
+    Accepts a JSON string, dict, or :class:`AgentCredentialSpec` on input —
+    the spec's model validator normalises all three forms.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _skip_agent_json_for_direct(cls, data: Any) -> Any:
+        """Null out agent_json when extraction_method is direct.
+
+        In direct mode, agent_json may contain placeholder values (e.g.
+        ``"port": "port"``) that fail AgentCredentialSpec validation.
+        Since agent_json is only used for agent-based extraction, we
+        discard it for direct mode.
+        """
+        if isinstance(data, dict):
+            method = data.get("extraction_method", "")
+            if method != "agent" and "agent_json" in data:
+                data = {**data, "agent_json": None}
+        return data
+
     output_prefix: str = ""
     """Object store prefix for all output artifacts."""
 
     output_path: str = ""
     """Local or object store path for output files."""
 
-    exclude_filter: str = ""
+    exclude_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     """Regex filter for excluding schemas/tables."""
 
-    include_filter: str = ""
+    include_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     """Regex filter for including schemas/tables."""
 
-    temp_table_regex: str = ""
+    temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     """Regex pattern identifying temporary tables."""
 
     source_tag_prefix: str = ""
     """Tag prefix for source-level metadata."""
 
 
-class ExtractionOutput(Output):
+class ExtractionOutput(Output, PublishInputMixin):
     """Top-level output from a SQL metadata extraction run."""
 
     workflow_id: str = ""
@@ -79,9 +116,9 @@ class ExtractionTaskInput(Input, allow_unbounded_fields=True):
     credential_ref: CredentialRef | None = None
     output_prefix: str = ""
     output_path: str = ""
-    exclude_filter: str = ""
-    include_filter: str = ""
-    temp_table_regex: str = ""
+    exclude_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
+    include_filter: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
+    temp_table_regex: Annotated[str, Field(pattern=_SAFE_FILTER_PATTERN)] = ""
     source_tag_prefix: str = ""
 
 

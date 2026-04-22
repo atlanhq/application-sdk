@@ -1,4 +1,4 @@
-"""Unit tests for InMemorySecretStore, EnvironmentSecretStore, and get_deployment_secret."""
+"""Unit tests for MockSecretStore, EnvironmentSecretStore, and get_deployment_secret."""
 
 import json
 import os
@@ -8,19 +8,19 @@ import pytest
 
 from application_sdk.infrastructure.secrets import (
     EnvironmentSecretStore,
-    InMemorySecretStore,
     SecretNotFoundError,
     SecretStoreError,
     get_deployment_secret,
 )
+from application_sdk.testing.mocks import MockSecretStore
 
 
-class TestInMemorySecretStore:
-    """Tests for InMemorySecretStore."""
+class TestMockSecretStore:
+    """Tests for MockSecretStore."""
 
     async def test_get_returns_secret_value(self) -> None:
         """Test that get returns the stored secret value."""
-        store = InMemorySecretStore({"MY_SECRET": "hunter2"})
+        store = MockSecretStore({"MY_SECRET": "hunter2"})
 
         value = await store.get("MY_SECRET")
 
@@ -28,7 +28,7 @@ class TestInMemorySecretStore:
 
     async def test_get_raises_secret_not_found_when_missing(self) -> None:
         """Test that get raises SecretNotFoundError when secret is not found."""
-        store = InMemorySecretStore()
+        store = MockSecretStore()
 
         with pytest.raises(SecretNotFoundError) as exc_info:
             await store.get("MISSING")
@@ -37,7 +37,7 @@ class TestInMemorySecretStore:
 
     async def test_get_optional_returns_value_when_present(self) -> None:
         """Test that get_optional returns the value when the secret exists."""
-        store = InMemorySecretStore({"TOKEN": "abc123"})
+        store = MockSecretStore({"TOKEN": "abc123"})
 
         value = await store.get_optional("TOKEN")
 
@@ -45,7 +45,7 @@ class TestInMemorySecretStore:
 
     async def test_get_optional_returns_none_when_missing(self) -> None:
         """Test that get_optional returns None when the secret is not found."""
-        store = InMemorySecretStore()
+        store = MockSecretStore()
 
         value = await store.get_optional("MISSING")
 
@@ -53,7 +53,7 @@ class TestInMemorySecretStore:
 
     async def test_get_bulk_returns_found_secrets(self) -> None:
         """Test that get_bulk returns only the secrets that exist."""
-        store = InMemorySecretStore({"A": "val_a", "B": "val_b", "C": "val_c"})
+        store = MockSecretStore({"A": "val_a", "B": "val_b", "C": "val_c"})
 
         result = await store.get_bulk(["A", "C", "D"])
 
@@ -61,7 +61,7 @@ class TestInMemorySecretStore:
 
     async def test_get_bulk_returns_empty_when_none_found(self) -> None:
         """Test that get_bulk returns empty dict when no secrets are found."""
-        store = InMemorySecretStore({"X": "x"})
+        store = MockSecretStore({"X": "x"})
 
         result = await store.get_bulk(["A", "B"])
 
@@ -69,7 +69,7 @@ class TestInMemorySecretStore:
 
     async def test_list_names_returns_all_names(self) -> None:
         """Test that list_names returns all secret names."""
-        store = InMemorySecretStore({"FOO": "1", "BAR": "2"})
+        store = MockSecretStore({"FOO": "1", "BAR": "2"})
 
         names = await store.list_names()
 
@@ -77,7 +77,7 @@ class TestInMemorySecretStore:
 
     async def test_list_names_empty_store(self) -> None:
         """Test that list_names returns empty list for empty store."""
-        store = InMemorySecretStore()
+        store = MockSecretStore()
 
         names = await store.list_names()
 
@@ -85,21 +85,21 @@ class TestInMemorySecretStore:
 
     def test_set_adds_secret(self) -> None:
         """Test that set() adds a secret to the store."""
-        store = InMemorySecretStore()
+        store = MockSecretStore()
         store.set("NEW_SECRET", "new_value")
 
         assert store._secrets["NEW_SECRET"] == "new_value"
 
     def test_clear_removes_all_secrets(self) -> None:
         """Test that clear() removes all secrets."""
-        store = InMemorySecretStore({"A": "1", "B": "2"})
+        store = MockSecretStore({"A": "1", "B": "2"})
         store.clear()
 
         assert store._secrets == {}
 
     async def test_init_with_no_args_creates_empty_store(self) -> None:
         """Test that initializing without args creates an empty store."""
-        store = InMemorySecretStore()
+        store = MockSecretStore()
 
         names = await store.list_names()
         assert names == []
@@ -107,7 +107,7 @@ class TestInMemorySecretStore:
     async def test_init_with_secrets_dict(self) -> None:
         """Test that initializing with a secrets dict populates the store."""
         secrets = {"DB_PASS": "secret123", "API_KEY": "key456"}
-        store = InMemorySecretStore(secrets)
+        store = MockSecretStore(secrets)
 
         assert await store.get("DB_PASS") == "secret123"
         assert await store.get("API_KEY") == "key456"

@@ -52,8 +52,8 @@ brew install temporal
 DAPR (Distributed Application Runtime) simplifies microservice development:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | /bin/bash -s 1.16.2
-dapr init --runtime-version 1.16.0 --slim
+curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | /bin/bash -s 1.17.1
+dapr init --runtime-version 1.17.3 --slim
 ```
 
 > [!NOTE]
@@ -61,4 +61,4 @@ dapr init --runtime-version 1.16.0 --slim
 > - Install project dependencies
 > - Run example applications
 
-For common setup issues, please see our [Troubleshooting Guide](https://github.com/atlanhq/application-sdk/blob/refactor-v3/docs/setup/troubleshooting.md).
+For common setup issues, please see our [Troubleshooting Guide](https://github.com/atlanhq/application-sdk/blob/main/docs/setup/troubleshooting.md).

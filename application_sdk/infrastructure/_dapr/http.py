@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from httpx_retries import Retry, RetryTransport
@@ -103,7 +104,7 @@ class AsyncDaprClient:
     # State Store
     # ------------------------------------------------------------------
 
-    async def save_state(self, store_name: str, key: str, value: str) -> None:
+    async def save_state(self, store_name: str, key: str, value: Any) -> None:
         resp = await self._client.post(
             STATE_PATH.format(store_name=store_name),
             json=[{"key": key, "value": value}],
@@ -132,7 +133,7 @@ class AsyncDaprClient:
 
     async def get_secret(self, store_name: str, key: str) -> dict[str, str]:
         resp = await self._client.get(
-            SECRET_STORE_PATH.format(store_name=store_name, key=key)
+            SECRET_STORE_PATH.format(store_name=store_name, key=quote(key, safe=""))
         )
         resp.raise_for_status()
         return resp.json()

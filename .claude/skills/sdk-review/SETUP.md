@@ -14,22 +14,16 @@ To make `sdk-review` a required check that blocks merge, configure branch protec
 
 Go to: **Settings → Branches → Branch protection rules**
 
-### For `refactor-v3` (now):
+### For `main`:
 
-1. Click "Add rule" (or edit existing rule for `refactor-v3`)
-2. Branch name pattern: `refactor-v3`
+1. Click "Add rule" (or edit existing rule for `main`)
+2. Branch name pattern: `main`
 3. Enable: **Require status checks to pass before merging**
 4. Search for and add: `sdk-review`
 5. Do NOT enable "Require branches to be up to date before merging"
    (branch-keeper handles this for auto-maintained PRs; for others,
    authors update manually and the status check persists)
 6. Save changes
-
-### For `main` (later, after refactor-v3 merges to main):
-
-Same as above but for branch pattern `main`. Also update
-`branch-keeper.yml` to trigger on `main` instead of `refactor-v3`
-(or in addition to).
 
 ## Secrets — All Already Configured
 
@@ -55,7 +49,7 @@ gh label create "needs-rebase" --color "e4e669" --description "PR has conflicts 
 
 ## Test the Setup (After Merge)
 
-1. Create a test PR against `refactor-v3`
+1. Create a test PR against `main`
 2. Comment: `@sdk-review`
 3. Verify:
    - Status check `sdk-review` appears as "pending" immediately

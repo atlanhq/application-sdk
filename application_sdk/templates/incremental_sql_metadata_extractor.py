@@ -1,4 +1,4 @@
-"""Incremental SQL metadata extraction App — v3 implementation.
+"""Incremental SQL metadata extraction App.
 
 Provides ``IncrementalSqlMetadataExtractor``, a concrete orchestrator for
 incremental metadata extraction built on top of ``SqlMetadataExtractor``.
@@ -7,16 +7,6 @@ The class provides the full incremental orchestration in ``run()`` and defines
 the typed contracts for all tasks. Connector implementers subclass this and
 implement the abstract tasks (``fetch_databases``, ``fetch_schemas``,
 ``fetch_tables``, ``transform_data``, ``build_incremental_column_sql``).
-
-Migration from v2::
-
-    # v2: IncrementalSQLMetadataExtractionActivities
-    from application_sdk.activities.metadata_extraction.incremental import (
-        IncrementalSQLMetadataExtractionActivities,
-    )
-
-    # v3: IncrementalSqlMetadataExtractor
-    from application_sdk.templates import IncrementalSqlMetadataExtractor
 
 Example subclass::
 
@@ -428,9 +418,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             download_s3_prefix_with_structure,
             get_persistent_artifacts_path,
         )
-        from application_sdk.execution._temporal.activity_utils import (
-            get_object_store_prefix,
-        )
+        from application_sdk.execution import get_object_store_prefix
         from application_sdk.storage.batch import download_prefix, upload_prefix
 
         if not input.output_path:
@@ -583,9 +571,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         import json
         import pathlib
 
-        from application_sdk.execution._temporal.activity_utils import (
-            get_object_store_prefix,
-        )
+        from application_sdk.execution import get_object_store_prefix
         from application_sdk.storage.ops import download_file
 
         if not input.output_path:
@@ -685,13 +671,13 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     async def write_current_state(
         self, input: WriteCurrentStateInput
     ) -> WriteCurrentStateOutput:
-        """Create the current-state snapshot, merge ancestral columns, and upload to S3.
+        """Create lightweight current-state snapshot with deletion detection and upload to S3.
 
         Steps:
         1. Build ``transformed_dir`` from ``input.output_path``.
         2. Download previous state via ``prepare_previous_state()``.
         3. Get ``current_state_dir`` via ``get_persistent_artifacts_path()``.
-        4. Call ``create_current_state_snapshot()`` (merge + diff + upload).
+        4. Call ``create_current_state_snapshot()`` (copy + diff + delete detection + upload).
         5. Clean up temporary previous state directory.
         """
         from application_sdk.common.incremental.helpers import (
@@ -710,7 +696,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         app_name = input.application_name
 
         logger.info(
-            "Starting write_current_state with ancestral merge: workflow_id=%s run_id=%s",
+            "Starting write_current_state: workflow_id=%s run_id=%s",
             input.workflow_id,
             run_id,
         )
@@ -740,7 +726,6 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 run_id=run_id,
                 application_name=app_name,
                 copy_workers=input.copy_workers,
-                column_chunk_size=input.column_chunk_size,
             )
 
             return WriteCurrentStateOutput(
@@ -809,6 +794,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         conn_qn = input.connection.attributes.qualified_name
         application_name = os.getenv("ATLAN_APPLICATION_NAME", "")
 
+        # TODO(v3-cleanup): remove credential_guid fallback when all connectors use credential_ref.
         cred_ref = input.credential_ref
         if cred_ref is None and input.credential_guid:
             from application_sdk.credentials import legacy_credential_ref

@@ -349,30 +349,6 @@ class TestAllAppsActivities:
         assert "_dedup-secondary:task_s" in defn_names
 
 
-class TestLoadExtraAppModules:
-    """Tests for _load_extra_app_modules return value."""
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def test_returns_empty_list_when_none(self) -> None:
-        from application_sdk.main import _load_extra_app_modules
-
-        result = _load_extra_app_modules(None)
-        assert result == []
-
-    def test_returns_empty_list_when_empty(self) -> None:
-        from application_sdk.main import _load_extra_app_modules
-
-        result = _load_extra_app_modules([])
-        assert result == []
-
-
 class TestGetActivityOptions:
     """Tests for get_activity_options()."""
 

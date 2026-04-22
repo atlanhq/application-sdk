@@ -9,7 +9,11 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from application_sdk.constants import APPLICATION_NAME, WORKER_START_EVENT_VERSION
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    RELEASE_ID,
+    WORKER_START_EVENT_VERSION,
+)
 
 
 class EventTypes(Enum):
@@ -46,6 +50,7 @@ class EventMetadata(BaseModel):
 
     Attributes:
         application_name: Name of the application the event belongs to.
+        release_id: Release UUID from Global Marketplace (empty if not injected).
         created_timestamp: Timestamp when the event was created.
         workflow_type: Type of the workflow.
         workflow_id: ID of the workflow.
@@ -58,6 +63,7 @@ class EventMetadata(BaseModel):
     """
 
     application_name: str = Field(init=True, default=APPLICATION_NAME)
+    release_id: str = Field(init=True, default=RELEASE_ID)
     created_timestamp: int = Field(init=True, default=0)
 
     # Workflow information
@@ -163,6 +169,12 @@ class WorkerStartEventData(BaseModel):
         max_concurrent_activities: Maximum number of concurrent activities.
         workflow_count: Number of workflow classes registered.
         activity_count: Number of activity functions registered.
+        app_version: Semantic version of the app release (ATLAN_APPLICATION_VERSION).
+        release_id: Release UUID from Global Marketplace (ATLAN_RELEASE_ID).
+        release_channel: Release channel (ATLAN_RELEASE_CHANNEL).
+        sdk_version: SDK version used to build the app image (ATLAN_SDK_VERSION).
+        app_type: App type from Global Marketplace (ATLAN_APP_TYPE).
+        published_at: Release publication timestamp (ATLAN_PUBLISHED_AT).
     """
 
     version: str = WORKER_START_EVENT_VERSION
@@ -178,6 +190,12 @@ class WorkerStartEventData(BaseModel):
     activity_count: int
     build_id: Optional[str] = None
     use_worker_versioning: bool = False
+    app_version: str = ""
+    release_id: str = ""
+    release_channel: str = ""
+    sdk_version: str = ""
+    app_type: str = ""
+    published_at: str = ""
 
 
 class WorkerTokenRefreshEventData(BaseModel):

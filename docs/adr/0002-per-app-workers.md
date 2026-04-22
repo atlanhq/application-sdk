@@ -24,16 +24,10 @@ Each app has its own worker process and task queue.
 ```
 Relational Assets Worker          Snowflake Extractor Worker
 ├── Task Queue: relational-queue  ├── Task Queue: snowflake-queue
-└── RelationalAssetsPipeline          └── SnowflakeExtractor
-        │                                  │
-        │  call_by_name("loader")           │  call_by_name("loader")
-        ▼                                  ▼
-                    Loader Worker
-                    ├── Task Queue: loader-queue
-                    └── Loader app
+└── RelationalAssetsPipeline      └── SnowflakeExtractor
 ```
 
-Both callers invoke the shared Loader app, but each runs in its own worker. Upgrading one app's worker doesn't require restarting the other.
+Each worker is deployed, scaled, and upgraded independently. Upgrading one app's worker doesn't require restarting the other.
 
 **Pros:**
 - **Scale to zero**: KEDA scales workers to 0 replicas when task queues are empty
@@ -42,7 +36,7 @@ Both callers invoke the shared Loader app, but each runs in its own worker. Upgr
 - **Resource tuning**: Allocate different CPU/memory per app based on workload
 - **Independent deployments**: Deploy/upgrade workers without affecting other apps
 - **Dependency isolation**: Each worker has its own Python environment
-- **Decoupled lifecycles**: Even related apps (parent calling child) evolve independently
+- **Decoupled lifecycles**: Related apps evolve independently
 - **Version coexistence**: Run v1 and v2 workers simultaneously during migration
 
 **Cons:**
@@ -70,7 +64,7 @@ A single shared worker runs all app workflows on one task queue.
 1. **Cost efficiency**: KEDA scales workers to zero when idle. Apps that run infrequently consume no resources between runs.
 2. **Fault isolation**: A memory leak or infinite loop in one app's activity doesn't take down workers for other apps.
 3. **Precise scaling**: KEDA scales each worker based on its specific task queue depth.
-4. **Independent lifecycle**: Even related apps evolve independently. Upgrading a parent app doesn't require restarting child app workers.
+4. **Independent lifecycle**: Apps evolve independently. Upgrading one app's worker doesn't require restarting any other app's worker.
 5. **Temporal best practice**: Temporal recommends dedicated task queues per workflow type for production deployments.
 
 ## Consequences
@@ -83,7 +77,7 @@ A single shared worker runs all app workflows on one task queue.
 
 **Negative:**
 - More Kubernetes deployments to manage (mitigated by the Helm chart)
-- Parent-child workflow calls cross task queue boundaries (Temporal handles this transparently)
+- Multi-app coordination crosses task queue boundaries (handled at the orchestration layer)
 
 ## Implementation
 

@@ -26,8 +26,7 @@ async def _run_to_file(args: list[str], output_path: Path) -> None:
 class LogCollector:
     """Collect kubectl logs, pod descriptions, and events from a namespace.
 
-    All collection methods are best-effort and never raise — matching the
-    behaviour of the experimental-app-sdk's LogCollector.
+    All collection methods are best-effort and never raise.
 
     Args:
         namespace: K8s namespace to collect from.

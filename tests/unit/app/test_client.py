@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, patch
-
+# BLDX-878: inter-app calls deactivated pending review.
+# Re-enable by removing these three lines once the feature is restored.
 import pytest
 
-from application_sdk.app.client import WorkflowAppClient
-from application_sdk.contracts.base import Input, Output
+pytest.skip(
+    "Inter-app calls deactivated pending BLDX-878; re-enable when resolved.",
+    allow_module_level=True,
+)
+
+from datetime import datetime, timedelta  # noqa: E402
+from unittest.mock import AsyncMock, patch  # noqa: E402
+
+from application_sdk.app.client import WorkflowAppClient  # noqa: E402
+from application_sdk.contracts.base import Input, Output  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures & Helpers

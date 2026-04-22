@@ -240,27 +240,32 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             Exception: If sending fails, logs error and continues
         """
         try:
+            otel_attrs = {
+                k: v
+                for k, v in metric_record.labels.items()
+                if isinstance(v, (str, int, float, bool))
+            }
             if metric_record.type == MetricType.COUNTER:
                 counter = self.meter.create_counter(
                     name=metric_record.name,
                     description=metric_record.description,
                     unit=metric_record.unit,
                 )
-                counter.add(metric_record.value, metric_record.labels)
+                counter.add(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.GAUGE:
                 gauge = self.meter.create_observable_gauge(
                     name=metric_record.name,
                     description=metric_record.description,
                     unit=metric_record.unit,
                 )
-                gauge.add(metric_record.value, metric_record.labels)
+                gauge.add(metric_record.value, otel_attrs)
             elif metric_record.type == MetricType.HISTOGRAM:
                 histogram = self.meter.create_histogram(
                     name=metric_record.name,
                     description=metric_record.description,
                     unit=metric_record.unit,
                 )
-                histogram.record(metric_record.value, metric_record.labels)
+                histogram.record(metric_record.value, otel_attrs)
         except Exception:
             logging.error("Error sending metric to OpenTelemetry", exc_info=True)
 
@@ -300,7 +305,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         name: str,
         value: float,
         metric_type: MetricType,
-        labels: Dict[str, str],
+        labels: Dict[str, Any],
         description: Optional[str] = None,
         unit: Optional[str] = None,
     ):
@@ -310,7 +315,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             name (str): Name of the metric
             value (float): Numeric value of the metric
             metric_type (str): Type of metric (counter, gauge, or histogram)
-            labels (Dict[str, str]): Key-value pairs for metric dimensions
+            labels (Dict[str, Any]): Key-value pairs for metric dimensions
             description (Optional[str]): Optional description of the metric
             unit (Optional[str]): Optional unit of measurement
 

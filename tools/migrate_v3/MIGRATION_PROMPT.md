@@ -1,20 +1,22 @@
-# v3 Migration Prompt — AI Agent Instructions
+# v3 Upgrade Prompt — AI Agent Instructions
 
 > **Scope**: This document guides an AI coding agent through the *structural*
-> parts of the v2 → v3 migration (Categories B and C).
+> parts of the v2 → v3 upgrade (Categories B and C).
 >
-> **Pre-condition — SDK dependency**: Until v3 is published to PyPI, the
-> connector must depend on `atlan-application-sdk` from the `refactor-v3`
-> branch.  If the connector's `pyproject.toml` still references a v2 PyPI
-> release, update it before doing anything else:
+> **Pre-condition — SDK dependency**: `atlan-application-sdk` v3.0.0 is on
+> PyPI. The connector's `pyproject.toml` should pin it via a normal version
+> range, and any leftover `[tool.uv.sources]` git override from v3
+> development should be removed:
 >
 > ```toml
-> [tool.uv.sources]
-> atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", branch = "refactor-v3" }
+> [project]
+> dependencies = [
+>     "atlan-application-sdk>=3.0.0,<4.0.0",
+> ]
 > ```
 >
 > **Pre-condition — import rewriter**: Run the import rewriter first.  All
-> `# TODO(v3-migration)` comments in the codebase mark exactly where
+> `# TODO(upgrade-v3)` comments in the codebase mark exactly where
 > structural work is needed.
 >
 > **Post-condition**: Run `check_migration` and confirm zero FAIL items.
@@ -30,7 +32,7 @@
 
 Do **not** guess at business logic.  If a method body does something
 non-obvious, preserve it verbatim inside the new `@task` method — the goal
-is structural migration, not refactoring.
+is structural upgrade work, not refactoring.
 
 ---
 
@@ -322,7 +324,7 @@ class ModeExtractor(BaseMetadataExtractor):
   is empty (local dev), build it:
   ```python
   from application_sdk.constants import TEMPORARY_PATH
-  from application_sdk.common.utils import build_output_path
+  from application_sdk.execution import build_output_path
   output_path = os.path.join(TEMPORARY_PATH, build_output_path())
   ```
 - **`output_prefix` must default to `TEMPORARY_PATH`.** This is needed for
@@ -377,7 +379,7 @@ class MyConnector(App):
 ### Checklist
 
 - [ ] For each `@activity.defn` method in the old activities class:
-  - Define a typed `Input` / `Output` model pair (see §8 of the migration guide).
+  - Define a typed `Input` / `Output` model pair (see §8 of the upgrade guide).
   - Move the method body into a `@task` method on the new `App` subclass.
   - Rename `workflow_args: Dict[str, Any]` → `input: MyInput`.
 - [ ] For the old `@workflow.run` method, implement `run()` on the `App` subclass.
@@ -480,12 +482,121 @@ CMD ["application-sdk", "--mode", "combined", "--app", "app.app:MyExtractor"]
 
 - [ ] Replace the `BaseXxxApplication(...)` instantiation with `run_dev_combined(...)`.
 - [ ] Add `ENV ATLAN_APP_MODULE=<module.path:ClassName>` to the app's `Dockerfile`.
-      **This is required** — the process will not start without it.
+      **This is required** — the process will not start without it. Always a single
+      `module:ClassName` — comma-separated lists are not supported; use `@entrypoint`
+      methods instead (see §5b).
 - [ ] Set `CMD ["application-sdk", "--mode", "combined"]` (or `worker`/`handler`) in
       the `Dockerfile`.
 - [ ] If the connector used `app.setup_workflow(...)` / `app.start_workflow(...)` for
       integration tests, replace with direct `await connector.run(input)` calls
       (the framework handles Temporal wiring automatically).
+- [ ] **If this connector had more than one v2 workflow**, see §5b below before writing
+      the Dockerfile.
+
+---
+
+## 5b. Multi-Entry-Point Apps
+
+> Skip this section if the connector has only one workflow.
+
+When a v2 connector had multiple `WorkflowInterface`/`ActivitiesInterface` pairs, consolidate
+them into a single `App` subclass with one `@entrypoint`-decorated method per v2 workflow.
+All entry points share `@task` methods, the handler, and `AppContext`.
+
+### Import
+
+```python
+from application_sdk.app import App, entrypoint, task
+from application_sdk.contracts.base import Input, Output
+```
+
+### Contract requirements (enforced by the decorator)
+
+- Exactly one parameter extending `Input` — no `*args`/`**kwargs`
+- Return type extending `Output`
+- Input/Output dataclasses must be defined at **module level** — not inside functions
+  or under `from __future__ import annotations`
+
+### Before (v2) — two separate pairs
+
+```python
+class MetadataExtractionWorkflow(WorkflowInterface):
+    async def run(self, input):
+        await execute_activity_method(self.activities.extract_tables, ...)
+
+class MetadataExtractionActivities(ActivitiesInterface):
+    async def extract_tables(self, input): ...
+
+class LineageWorkflow(WorkflowInterface):
+    async def run(self, input):
+        await execute_activity_method(self.activities.fetch_lineage, ...)
+
+class LineageActivities(ActivitiesInterface):
+    async def fetch_lineage(self, input): ...
+```
+
+### After (v3) — one App, two @entrypoint methods
+
+```python
+from typing import Any
+
+class ExtractionInput(Input, allow_unbounded_fields=True):
+    credential_guid: str = ""
+    connection: dict[str, Any] = {}
+
+class ExtractionOutput(Output):
+    transformed_data_prefix: str = ""
+
+class LineageInput(Input, allow_unbounded_fields=True):
+    credential_guid: str = ""
+    connection: dict[str, Any] = {}
+
+class LineageOutput(Output):
+    transformed_data_prefix: str = ""
+
+class MyConnectorApp(App):
+    @task(timeout_seconds=3600)
+    async def extract_tables(self, input: ExtractionInput) -> ExtractionOutput:
+        ...
+
+    @task(timeout_seconds=3600)
+    async def fetch_lineage(self, input: LineageInput) -> LineageOutput:
+        ...
+
+    @entrypoint
+    async def extract_metadata(self, input: ExtractionInput) -> ExtractionOutput:
+        return await self.extract_tables(input)
+
+    @entrypoint
+    async def extract_lineage(self, input: LineageInput) -> LineageOutput:
+        return await self.fetch_lineage(input)
+```
+
+### Workflow naming and HTTP dispatch
+
+Method names are auto-converted to kebab-case. For an App registered as `my-connector`:
+
+| Entry point | Temporal workflow name | HTTP trigger |
+|---|---|---|
+| `extract_metadata` | `my-connector:extract-metadata` | `POST /workflows/v1/start?entrypoint=extract-metadata` |
+| `extract_lineage` | `my-connector:extract-lineage` | `POST /workflows/v1/start?entrypoint=extract-lineage` |
+
+The `?entrypoint=` query parameter is **required** for multi-entry-point apps (400 otherwise).
+Argo/marketplace templates that previously passed `workflow_type` in the request body still
+work as a transitional fallback — but migrate to `?entrypoint=` when regenerating templates.
+
+### on_complete()
+
+`on_complete()` fires after every entry point, on success and failure.
+
+### Checklist
+
+- [ ] Merge each v2 `{Workflow, Activities}` pair into one `@entrypoint` method on the shared App
+- [ ] Hoist duplicated activity helpers into shared `@task` methods
+- [ ] `ATLAN_APP_MODULE` is a single entry — one App class, multiple workflows via `@entrypoint`
+- [ ] One handler total — the App serves `/auth`, `/check`, `/metadata` for all entry points
+- [ ] Marketplace templates: trigger via `POST /workflows/v1/start?entrypoint=<name>`
+- [ ] `ATLAN_CONTRACT_GENERATED_DIR` restructured into per-entrypoint subfolders (kebab-case) each with their own `manifest.json` — see `docs/concepts/entry-points.md` for the layout and `GET /workflows/v1/manifest?entrypoint=<name>` endpoint details
 
 ---
 
@@ -620,7 +731,7 @@ production deployment.
 
 ---
 
-## 10. E2E test migration reference
+## 10. E2E test upgrade reference
 
 If the connector has e2e tests that use a `BaseTest` / `TestInterface` pattern from
 v2, replace them with the v3 `application_sdk.testing.e2e` API.
@@ -641,9 +752,9 @@ class TestMyConnector(BaseTest):
 ### After (v3)
 
 ```python
-# TODO(v3-migration): human must validate this test is equivalent to the original
+# TODO(upgrade-v3): human must validate this test is equivalent to the original
 import pytest
-from application_sdk.testing.e2e import AppConfig, AppDeployer, run_workflow, wait_for_workflow
+from application_sdk.testing.e2e import AppConfig, run_workflow, wait_for_workflow
 
 @pytest.fixture(scope="session")
 def app_config() -> AppConfig:
@@ -654,26 +765,18 @@ def app_config() -> AppConfig:
         image="ghcr.io/atlanhq/my-connector:latest",
     )
 
-@pytest.fixture(scope="session")
-async def deployed_app(app_config: AppConfig):
-    deployer = AppDeployer(app_config)
-    await deployer.deploy()
-    yield deployer
-    await deployer.undeploy()
-
-async def test_metadata_extraction(deployed_app: AppDeployer) -> None:
-    cfg = deployed_app.config
+async def test_metadata_extraction(app_config: AppConfig) -> None:
     workflow_id = await run_workflow(
-        namespace=cfg.namespace,
-        service=cfg.app_name,
-        port=cfg.handler_port,
+        namespace=app_config.namespace,
+        service=app_config.app_name,
+        port=app_config.handler_port,
         workflow_name="metadata_extraction",
         payload={"connection_id": "test-connection"},
     )
     result = await wait_for_workflow(
-        namespace=cfg.namespace,
-        service=cfg.app_name,
-        port=cfg.handler_port,
+        namespace=app_config.namespace,
+        service=app_config.app_name,
+        port=app_config.handler_port,
         workflow_id=workflow_id,
         timeout=300.0,
     )
@@ -684,12 +787,12 @@ async def test_metadata_extraction(deployed_app: AppDeployer) -> None:
 
 | v2 | v3 |
 |----|----|
-| `BaseTest` class | `AppConfig` + `AppDeployer` fixtures |
+| `BaseTest` class | `AppConfig` fixtures |
 | `self.run_workflow(name, payload)` | `run_workflow(namespace, service, port, name, payload)` |
 | Built-in wait/poll | `wait_for_workflow(namespace, service, port, workflow_id, timeout)` |
 | `self.default_payload()` | Explicit `payload` dict — extract values from the v2 method body |
 | `self.check_health()` / health-check step | `kube_http_call(namespace, service, port, "/healthz")` or skip if not applicable |
-| Ordered `test_*` methods in a class | Independent top-level `async def test_xxx(deployed_app)` functions |
+| Ordered `test_*` methods in a class | Independent top-level `async def test_xxx(app_config)` functions |
 | `assert result['authenticationCheck']` | `assert result.status == AuthStatus.SUCCESS` (update field names) |
 | `assert result['hostCheck']` | `assert result.status == PreflightStatus.READY` (update field names) |
 | `result['metadata']` hierarchical list | `result.fields` flat list — response shape changed |
@@ -699,8 +802,8 @@ async def test_metadata_extraction(deployed_app: AppDeployer) -> None:
 
 1. **Count before you generate.** Count every test method in the original. The new file must have at least that many test functions.
 2. **Copy real payload values.** If `default_payload()` returns `{"connection_id": "abc-123", "tenant_id": "xyz"}`, use those exact values — not `"test-connection"`.
-3. **Map assertions, not just structure.** For each `assert` in the original, write an equivalent `assert` in the new test. If the response shape changed, keep the assert but add `# TODO(v3-migration): response format changed — update field names`.
-4. **One fixture, many tests.** All test functions share the `deployed_app` session-scoped fixture. Do not deploy/undeploy per-test.
+3. **Map assertions, not just structure.** For each `assert` in the original, write an equivalent `assert` in the new test. If the response shape changed, keep the assert but add `# TODO(upgrade-v3): response format changed — update field names`.
+4. **One fixture, many tests.** All test functions share the `app_config` session-scoped fixture. Deployment is handled externally.
 5. **Preserve test names.** Derive the new function name directly from the original method name (strip the `test_` prefix rule of the class if needed, but keep the semantic name).
 
 Place the new test at `tests/e2e/test_<connector_name>_v3.py` alongside the
@@ -736,7 +839,7 @@ app/
    (e.g. `from app.activities.my_connector import MyConnector`), delete it.
 4. Delete the now-empty `app/activities/` and `app/workflows/` directories.
 5. Update all production-code imports that referenced the old paths.
-6. In test files, add a `# TODO(v3-migration): update import to app.<app_name>`
+6. In test files, add a `# TODO(upgrade-v3): update import to app.<app_name>`
    comment but leave the import line unchanged (test files are out of bounds for
    structural changes).
 7. Re-run `check_migration` to confirm `no-v2-directory-structure` warning is gone.

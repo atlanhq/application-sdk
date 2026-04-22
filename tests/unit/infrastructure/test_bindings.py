@@ -8,8 +8,8 @@ from application_sdk.infrastructure.bindings import (
     BindingError,
     BindingRequest,
     BindingResponse,
-    InMemoryBinding,
 )
+from application_sdk.testing.mocks import MockBinding
 
 
 class TestBindingDataclasses:
@@ -53,12 +53,12 @@ class TestBindingError:
         assert "AAF-INF-001" in str(err)
 
 
-class TestInMemoryBinding:
-    """Tests for InMemoryBinding."""
+class TestMockBinding:
+    """Tests for MockBinding."""
 
     @pytest.mark.asyncio
     async def test_invoke_records_invocation(self) -> None:
-        binding = InMemoryBinding("test")
+        binding = MockBinding("test")
         await binding.invoke("get", b"data", {"k": "v"})
         invocations = binding.get_invocations()
         assert len(invocations) == 1
@@ -66,14 +66,14 @@ class TestInMemoryBinding:
 
     @pytest.mark.asyncio
     async def test_invoke_default_response(self) -> None:
-        binding = InMemoryBinding()
+        binding = MockBinding()
         resp = await binding.invoke("get")
         assert resp.data is None
         assert resp.metadata == {}
 
     @pytest.mark.asyncio
     async def test_invoke_configured_response(self) -> None:
-        binding = InMemoryBinding()
+        binding = MockBinding()
         binding.set_response(
             "get", BindingResponse(data=b"result", metadata={"x": "1"})
         )
@@ -83,7 +83,7 @@ class TestInMemoryBinding:
 
     @pytest.mark.asyncio
     async def test_get_invocations_filtered_by_operation(self) -> None:
-        binding = InMemoryBinding()
+        binding = MockBinding()
         await binding.invoke("get")
         await binding.invoke("put", b"x")
         await binding.invoke("get", b"y")
@@ -94,7 +94,7 @@ class TestInMemoryBinding:
 
     @pytest.mark.asyncio
     async def test_clear_resets_invocations_and_responses(self) -> None:
-        binding = InMemoryBinding()
+        binding = MockBinding()
         binding.set_response("get", BindingResponse(data=b"x"))
         await binding.invoke("get")
         binding.clear()
@@ -103,16 +103,16 @@ class TestInMemoryBinding:
         assert resp.data is None
 
     def test_name_property(self) -> None:
-        binding = InMemoryBinding("my-binding")
+        binding = MockBinding("my-binding")
         assert binding.name == "my-binding"
 
     def test_default_name(self) -> None:
-        binding = InMemoryBinding()
-        assert binding.name == "in-memory"
+        binding = MockBinding()
+        assert binding.name == "mock"
 
     @pytest.mark.asyncio
     async def test_metadata_defaults_to_empty_dict(self) -> None:
-        binding = InMemoryBinding()
+        binding = MockBinding()
         await binding.invoke("op", b"data")
         op, data, metadata = binding.get_invocations()[0]
         assert metadata == {}

@@ -137,7 +137,6 @@ def _enrich_event_metadata(event: Event) -> Event:
 def _send_lifecycle_event_to_segment(event: Event) -> None:
     """Send lifecycle event to Segment (best-effort side-channel).
 
-    Mirrors the logic from the v2 EventStore._send_lifecycle_event_to_segment.
     Never raises — failures are logged at DEBUG level.
     """
     if event.event_name not in LIFECYCLE_EVENTS:

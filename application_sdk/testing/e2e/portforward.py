@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 def _find_free_port() -> int:
     """Bind to port 0 to let the OS pick a free port, return it."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
+        s.bind(("", 0))  # noqa: S104 — intentional: OS picks free port on all interfaces
         return s.getsockname()[1]
 
 

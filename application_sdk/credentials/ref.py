@@ -2,27 +2,63 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict
+
+from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 class CredentialRef(BaseModel, frozen=True):
     """A reference to a credential in the secret store.
 
     This is a secret-free identifier — it contains no sensitive data itself.
-    Use a CredentialResolver to turn a CredentialRef into a typed Credential.
+    Use a :class:`~application_sdk.credentials.resolver.CredentialResolver`
+    to turn a :class:`CredentialRef` into a typed
+    :class:`~application_sdk.credentials.types.Credential` (or a raw dict
+    via ``resolver.resolve_raw``).
 
-    When ``credential_guid`` is non-empty the resolver first checks the local
-    secret store (for in-process credential injection in combined-mode / local
-    dev), then falls back to ``DaprCredentialVault`` for platform-issued GUIDs.
+    ``CredentialRef`` is the single typed identifier for every credential
+    resolution flow.  Its populated field tells the resolver which path
+    to take:
+
+    * ``agent_spec`` non-empty → v3 agent-shape inline resolution.  The
+      spec describes *how* to look up the credential from an external
+      secret manager (e.g. AWS Secrets Manager).  The resolver fetches
+      the bundle at ``secret-path`` via the injected
+      :class:`~application_sdk.infrastructure.secrets.SecretStore`,
+      substitutes ref-keys for real values, and returns the result.
+    * ``credential_guid`` non-empty → legacy GUID resolution.  The
+      resolver checks the local secret store first (for in-process
+      inline credentials stored by the handler layer in combined-mode /
+      local dev), then falls back to ``DaprCredentialVault`` for
+      platform-issued GUIDs.
+    * neither → named-path resolution via ``secret_store.get(name)``
+      with registry-based typed parsing.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    name: str
-    """Secret store key or human-readable name for this credential."""
+    name: str = ""
+    """Secret store key or human-readable name for this credential.
 
-    credential_type: str
-    """Type identifier used to look up the parser in the registry (e.g. 'api_key')."""
+    Empty when resolution goes through ``agent_spec`` — in that case
+    the secret-store key lives inside the spec (``secret_path``).
+    """
+
+    credential_type: str = ""
+    """Type identifier used to look up the parser in the registry
+    (e.g. ``"basic"``, ``"api_key"``).
+
+    Optional for the ``resolve_raw`` path (agent + legacy GUID both
+    return raw dicts regardless of type).  Required for the typed
+    ``resolve`` path — for agent refs the resolver falls back to the
+    ``auth_type`` field on the spec when ``credential_type``
+    is empty.
+    """
 
     store_name: str = "default"
     """Which secret store to use (for multi-store setups)."""
@@ -30,13 +66,113 @@ class CredentialRef(BaseModel, frozen=True):
     credential_guid: str = ""
     """Platform-issued credential GUID — non-empty triggers GUID resolution path."""
 
+    agent_spec: "AgentCredentialSpec | None" = None
+    """Typed agent credential spec — non-None triggers v3 agent resolution.
+
+    Parsed from the ``agent_json`` workflow field.  Contains the typed
+    envelope (``agent_name``, ``secret_path``, ``auth_type``, …) plus
+    any connector-specific dotted keys in ``model_extra``.
+    """
+
     def __repr__(self) -> str:
+        # Intentionally terse — agent_spec and credential_guid are
+        # logged separately when useful; we don't want the whole spec
+        # blob in every repr.
+        agent_flag = "<agent>" if self.agent_spec else ""
+        guid_flag = f"guid={self.credential_guid[:8]}…" if self.credential_guid else ""
+        extras = " ".join(x for x in (agent_flag, guid_flag) if x)
         return (
             f"CredentialRef("
             f"name={self.name!r}, "
             f"credential_type={self.credential_type!r}, "
             f"store_name={self.store_name!r}"
+            f"{' ' + extras if extras else ''}"
             f")"
+        )
+
+    # ------------------------------------------------------------------
+    # Factory — build the right ref from a Temporal workflow payload
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_workflow_args(cls, workflow_args: dict[str, Any]) -> "CredentialRef":
+        """Build a :class:`CredentialRef` from a Temporal workflow payload.
+
+        This is the canonical adapter for the Atlan Argo marketplace
+        template contract.  It inspects ``extraction_method``,
+        ``agent_json``, and ``credential_guid`` on the payload and
+        returns a ref with exactly one routing field populated.
+
+        Routing rules:
+
+        +-----------------------+-------------+------------------+-------------+
+        | extraction_method     | agent_json  | credential_guid  | Route       |
+        +=======================+=============+==================+=============+
+        | ``"agent"``           | populated   | any              | agent       |
+        +-----------------------+-------------+------------------+-------------+
+        | ``"agent"``           | empty/``{}``| set              | legacy GUID |
+        +-----------------------+-------------+------------------+-------------+
+        | anything else         | any         | set              | legacy GUID |
+        +-----------------------+-------------+------------------+-------------+
+        | (none applies)        |             |                  | ValueError  |
+        +-----------------------+-------------+------------------+-------------+
+
+        ``extraction_method`` is case-insensitive and trimmed.
+        ``agent_json`` may arrive as a JSON string (raw wire format from
+        Argo), a ``dict`` (already-parsed Input field), or an
+        :class:`~application_sdk.credentials.spec.AgentCredentialSpec`
+        instance.  All are normalised to a typed spec on the returned ref.
+
+        Args:
+            workflow_args: The Temporal workflow input dict — typically
+                obtained via ``input.model_dump()`` in a task or
+                orchestrator.
+
+        Returns:
+            A :class:`CredentialRef` with exactly one routing field
+            populated (``agent_spec`` or ``credential_guid``).
+
+        Raises:
+            ValueError: If no routable credential source is present.
+        """
+        from application_sdk.credentials.spec import AgentCredentialSpec
+
+        method = (workflow_args.get("extraction_method") or "").strip().lower()
+        raw_agent = workflow_args.get("agent_json")
+
+        # Build a spec from whatever shape agent_json arrived in.
+        # AgentCredentialSpec's model_validator handles str, dict, and spec.
+        spec: AgentCredentialSpec | None = None
+        if raw_agent is not None:
+            if isinstance(raw_agent, AgentCredentialSpec):
+                spec = raw_agent
+            else:
+                try:
+                    spec = AgentCredentialSpec.model_validate(raw_agent)
+                except Exception:
+                    logger.debug(
+                        "Failed to parse agent_json, treating as unpopulated",
+                        exc_info=True,
+                    )
+                    spec = None
+
+        agent_populated = spec is not None and spec.is_populated()
+
+        if method == "agent" and agent_populated:
+            return cls(agent_spec=spec)
+
+        guid = workflow_args.get("credential_guid") or ""
+        if guid:
+            return cls(
+                name=guid,
+                credential_type="unknown",
+                credential_guid=guid,
+            )
+
+        raise ValueError(
+            "workflow_args has no routable credential source: need either "
+            "extraction_method='agent' with a non-empty agent_json, "
+            "or a non-empty credential_guid"
         )
 
 

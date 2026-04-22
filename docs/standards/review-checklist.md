@@ -113,7 +113,7 @@ application_sdk/server/mcp/decorators.py  # MCP decorators near MCP server
 
 - snake_case for variables/functions, PascalCase for classes, UPPER_SNAKE_CASE for constants
 - Use type hints for all function parameters and return values
-- Use dataclasses or Pydantic for structured data
+- Use Pydantic `BaseModel` for structured data crossing workflow/task boundaries; `@dataclass` only for internal value types (e.g., `MaxItems`)
 - Follow PEP 8 formatting standards (120 character line length)
 - Use double quotes for strings consistently
 - Use list comprehensions when they improve readability
@@ -540,7 +540,7 @@ def good_validation(max_value: int) -> int:
 - Implement proper `__str__` and `__repr__` methods for classes
 - Use generators for memory-efficient iteration
 - Follow asyncio best practices for concurrent code
-- Use dataclasses or Pydantic models for structured data
+- Use Pydantic `BaseModel` for structured data crossing workflow/task boundaries; `@dataclass` only for internal value types
 - Implement proper exception hierarchies in `error_codes.py`
 
 **Temporal workflow patterns:**

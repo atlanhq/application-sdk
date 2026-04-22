@@ -14,11 +14,8 @@ from typing import (
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.exc_utils import rewrap
 from application_sdk.common.models import TaskStatistics
-from application_sdk.common.utils import (
-    get_database_names,
-    parse_credentials_extra,
-    prepare_query,
-)
+from application_sdk.common.sql_filters import get_database_names, prepare_query
+from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.formats.parquet import ParquetFileWriter
 

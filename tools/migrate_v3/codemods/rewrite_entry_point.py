@@ -28,7 +28,7 @@ import libcst as cst
 
 from tools.migrate_v3.codemods import BaseCodemod
 
-_TODO_COMMENT = "# TODO(migrate-v3): custom entry point — rewrite manually"
+_TODO_COMMENT = "# TODO(upgrade-v3): custom entry point — rewrite manually"
 
 # Temporal-specific kwargs to BaseApplication.start() that have no v3 equivalent.
 _COMPLEX_METHOD_NAMES = frozenset(

@@ -6,15 +6,13 @@ These replace the ``Dict[str, Any]`` interfaces used by
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any
 
 from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionRef, MaxItems
-
-if TYPE_CHECKING:
-    from application_sdk.credentials import CredentialRef
+from application_sdk.credentials.ref import CredentialRef
 
 
 class QueryExtractionInput(Input, allow_unbounded_fields=True):
@@ -29,7 +27,7 @@ class QueryExtractionInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
     """GUID of credentials stored in the secret store."""
 
-    credential_ref: "CredentialRef | None" = None
+    credential_ref: CredentialRef | None = None
     """Typed credential reference — preferred over credential_guid for new apps."""
 
     output_prefix: str = ""
@@ -60,7 +58,14 @@ class QueryExtractionOutput(Output):
 
 
 class QueryBatchInput(Input, allow_unbounded_fields=True):
-    """Input for the get_query_batches task."""
+    """Input for the get_query_batches task.
+
+    ``workflow_args`` is a pass-through dict rather than typed fields because
+    query-mining connectors vary widely in what context they need for batch
+    sizing (e.g. date ranges, warehouse IDs, session filters).  The dict lets
+    each connector add connector-specific keys without requiring a base-class
+    change.  ``SqlQueryExtractor.run()`` populates it from ``QueryExtractionInput``.
+    """
 
     workflow_args: dict[str, Any] = Field(default_factory=dict)
 
@@ -74,7 +79,12 @@ class QueryBatchOutput(Output):
 
 
 class QueryFetchInput(Input, allow_unbounded_fields=True):
-    """Input for the fetch_queries task."""
+    """Input for the fetch_queries task.
+
+    ``workflow_args`` carries the same connector context as ``QueryBatchInput``
+    (see its docstring).  ``batch_number`` and ``batch_size`` are typed here
+    because all connectors need them for pagination.
+    """
 
     workflow_args: dict[str, Any] = Field(default_factory=dict)
     batch_number: int = 0

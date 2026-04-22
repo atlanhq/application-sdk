@@ -1,5 +1,9 @@
 """Execution layer for running Apps on Temporal."""
 
+from application_sdk.execution._temporal.activity_utils import (
+    build_output_path,
+    get_object_store_prefix,
+)
 from application_sdk.execution._temporal.auth import (
     TemporalAuthConfig,
     TemporalAuthManager,
@@ -12,6 +16,8 @@ from application_sdk.execution.errors import ApplicationError
 
 __all__ = [
     "ApplicationError",
+    "build_output_path",
+    "get_object_store_prefix",
     "needs_lock",
     "AppWorker",
     "create_worker",

@@ -67,6 +67,7 @@ from application_sdk.credentials.registry import (
     register_credential_type,
 )
 from application_sdk.credentials.resolver import CredentialResolver
+from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.credentials.types import (
     ApiKeyCredential,
     BasicCredential,
@@ -78,8 +79,9 @@ from application_sdk.credentials.types import (
 )
 
 __all__ = [
-    # Core ref
+    # Core ref + spec
     "CredentialRef",
+    "AgentCredentialSpec",
     # Factory functions
     "api_key_ref",
     "basic_ref",

@@ -136,7 +136,9 @@ class OAuthTokenService:
         Raises:
             OAuthTokenError: On HTTP error or missing ``access_token``.
         """
-        import httpx
+        import httpx  # deferred: matches existing lazy-import pattern for optional heavy deps
+
+        from application_sdk.clients.ssl_utils import get_ssl_context
 
         data: dict[str, str] = {
             "grant_type": "client_credentials",
@@ -153,7 +155,9 @@ class OAuthTokenService:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as http:
+            async with httpx.AsyncClient(
+                timeout=30.0, verify=get_ssl_context()
+            ) as http:
                 response = await http.post(self._base.token_url, data=data)
                 response.raise_for_status()
                 body: dict = response.json()

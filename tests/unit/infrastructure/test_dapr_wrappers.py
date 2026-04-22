@@ -3,6 +3,7 @@
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+import orjson
 import pytest
 
 from application_sdk.infrastructure._dapr.client import (
@@ -48,7 +49,7 @@ class TestDaprStateStore:
         value = {"foo": "bar"}
         await self.store.save("k1", value)
         self.client.save_state.assert_awaited_once_with(
-            store_name="mystate", key="k1", value=json.dumps(value)
+            store_name="mystate", key="k1", value=value
         )
 
     async def test_save_error(self):
@@ -110,8 +111,16 @@ class TestDaprSecretStore:
             store_name="mysecrets", key="db_pass"
         )
 
-    async def test_get_raises_not_found(self):
-        self.client.get_secret.return_value = {"other_key": "val"}
+    async def test_get_multi_key_returns_serialized_json(self):
+        """Multi-key response (name not in dict) is serialized as JSON."""
+        self.client.get_secret.return_value = {"user": "u", "pass": "p"}
+        import orjson
+
+        result = await self.store.get("some-secret")
+        assert orjson.loads(result) == {"user": "u", "pass": "p"}
+
+    async def test_get_raises_not_found_on_empty(self):
+        self.client.get_secret.return_value = {}
         with pytest.raises(SecretNotFoundError):
             await self.store.get("missing")
 
@@ -173,7 +182,7 @@ class TestDaprPubSub:
         self.client.publish_event.assert_awaited_once_with(
             pubsub_name="mypubsub",
             topic="orders",
-            data=json.dumps(data),
+            data=orjson.dumps(data).decode(),
             metadata={},
         )
 
@@ -184,7 +193,7 @@ class TestDaprPubSub:
         self.client.publish_event.assert_awaited_once_with(
             pubsub_name="mypubsub",
             topic="orders",
-            data=json.dumps(data),
+            data=orjson.dumps(data).decode(),
             metadata=meta,
         )
 

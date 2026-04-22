@@ -125,3 +125,62 @@ async def executor(temporal_client, task_queue):
     from application_sdk.execution._temporal.backend import TemporalExecutorBackend
 
     return TemporalExecutorBackend(temporal_client, task_queue)
+
+
+# =============================================================================
+# HTTP Integration Test Fixtures (connector integration testing framework)
+# =============================================================================
+
+
+@pytest.fixture(scope="session")
+def server_host() -> str:
+    """Get the application server host from environment.
+
+    Returns:
+        str: The server URL (default: http://localhost:8000).
+    """
+    return os.getenv("APP_SERVER_URL", "http://localhost:8000")
+
+
+@pytest.fixture(scope="session")
+def integration_test_config() -> dict:
+    """Get integration test configuration from environment.
+
+    Returns:
+        dict: Configuration dictionary with server_host, version, endpoint, timeout.
+    """
+    return {
+        "server_host": os.getenv("APP_SERVER_URL", "http://localhost:8000"),
+        "server_version": os.getenv("APP_SERVER_VERSION", "v1"),
+        "workflow_endpoint": os.getenv("WORKFLOW_ENDPOINT", "/start"),
+        "timeout": int(os.getenv("INTEGRATION_TEST_TIMEOUT", "30")),
+    }
+
+
+def load_credentials_from_env(prefix: str) -> dict:
+    """Load credentials from environment variables with a given prefix.
+
+    Collects all environment variables that start with ``{PREFIX}_``
+    and returns them as a dict with lowercase keys.
+
+    Args:
+        prefix: The environment variable prefix (e.g., "POSTGRES").
+
+    Returns:
+        dict: Credentials dictionary.
+    """
+    credentials: dict = {}
+    prefix_upper = prefix.upper()
+
+    for key, value in os.environ.items():
+        if key.startswith(f"{prefix_upper}_"):
+            cred_key = key[len(prefix_upper) + 1 :].lower()
+            credentials[cred_key] = value
+
+    return credentials
+
+
+@pytest.fixture
+def load_creds():
+    """Fixture returning the :func:`load_credentials_from_env` helper."""
+    return load_credentials_from_env

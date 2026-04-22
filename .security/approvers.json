@@ -1,0 +1,12 @@
+{
+  "_note": "Only these GitHub usernames can approve changes to files in .security/. Self-protecting: changes to this file also require approval from an existing approver.",
+  "allowlist_approvers": [
+    "nishantmunjal7",
+    "anbarasantr",
+    "AtMrun",
+    "gaurav-atlan",
+    "akshay-vishwanath27",
+    "louisnow",
+    "cmgrote"
+  ]
+}

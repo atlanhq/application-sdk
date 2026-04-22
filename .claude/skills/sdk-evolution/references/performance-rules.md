@@ -56,7 +56,7 @@ async def read_extraction_output(self, path: str) -> list[dict]:
 
 **Good Pattern:**
 ```python
-from application_sdk.common.utils import run_in_thread
+from application_sdk.execution.heartbeat import run_in_thread
 import orjson
 
 async def read_extraction_output(self, path: str) -> list[dict]:
@@ -67,6 +67,8 @@ async def read_extraction_output(self, path: str) -> list[dict]:
 ```
 
 **Expected Performance Impact:** Reading a 500MB JSON file synchronously blocks the event loop for 5-15 seconds. Using `run_in_thread()` moves the blocking work to a thread pool, keeping the event loop responsive.
+
+**Important:** Never use `run_in_thread()` to wrap `AtlanClient` calls — the Atlan client is async-only. Use its native async API directly.
 
 ---
 
@@ -508,6 +510,13 @@ async def analyze_query_log(self, log_path: str) -> dict:
 
 **Expected Performance Impact:** Eager imports of heavy libraries add 500-700ms to worker startup time. In auto-scaling scenarios where workers start/stop frequently, this adds significant latency to the first activity execution.
 
+**Exclude (do NOT flag):**
+- Modules whose **sole purpose** is to use the heavy dependency (e.g., `transformers/query/__init__.py` exists to provide daft-based transformation — every class uses daft). Anyone importing the module needs the dependency.
+- Modules named after the dependency (e.g., `duckdb_utils.py`, `parquet.py`) — the dependency is expected.
+- Only flag when the heavy import is in a **general-purpose module** that has consumers who never use the heavy-dep code path.
+
+*Lesson from 2026-04-16 run: Gate 1 correctly killed PERF-014 findings for `transformers/query/__init__.py`, `transformers/atlas/__init__.py`, and `incremental/column_extraction/backfill.py` — all modules whose entire purpose is the heavy dependency.*
+
 ---
 
 ## File I/O
@@ -530,7 +539,7 @@ async def download_and_process(self, key: str) -> int:
 
 **Good Pattern:**
 ```python
-from application_sdk.common.utils import run_in_thread
+from application_sdk.execution.heartbeat import run_in_thread
 
 async def download_and_process(self, key: str) -> int:
     local_path = "/tmp/download.parquet"
@@ -598,7 +607,7 @@ async def preflight_checks(self, config: ConnectionConfig) -> list[CheckResult]:
 
 **Bad Pattern:**
 ```python
-from application_sdk.common.utils import run_in_thread
+from application_sdk.execution.heartbeat import run_in_thread
 
 async def extract_all_tables(self, tables: list[str]) -> list[dict]:
     tasks = []
@@ -611,7 +620,7 @@ async def extract_all_tables(self, tables: list[str]) -> list[dict]:
 **Good Pattern:**
 ```python
 import asyncio
-from application_sdk.common.utils import run_in_thread
+from application_sdk.execution.heartbeat import run_in_thread
 
 async def extract_all_tables(self, tables: list[str], concurrency: int = 20) -> list[dict]:
     semaphore = asyncio.Semaphore(concurrency)
@@ -625,3 +634,9 @@ async def extract_all_tables(self, tables: list[str], concurrency: int = 20) -> 
 ```
 
 **Expected Performance Impact:** The default thread pool in Python has a limited number of workers (usually `min(32, os.cpu_count() + 4)`). Spawning thousands of `run_in_thread()` calls queues them all, creating massive memory overhead and scheduling contention. A semaphore bounds actual concurrency to a sustainable level.
+
+**Exclude (do NOT flag):**
+- `ThreadPoolExecutor` created per-method-call (e.g., `with ThreadPoolExecutor() as pool:` inside a function) when the function is called a **low number of times** per workflow (e.g., `run_query()` called a handful of times). Threads are lazily spawned and the `with` block properly cleans up. Only flag when the executor is created inside a **loop** or in a function called hundreds/thousands of times.
+- `run_in_executor(None, ...)` with the default executor — this uses Python's shared default pool and is fine for occasional blocking calls.
+
+*Lesson from 2026-04-16 run: PR #1407 was closed after human review found that `BaseSQLClient.run_query()` creates a ThreadPoolExecutor per call, but the call frequency is low (a few queries per workflow). The proposed fix (reusing the heartbeat executor) would have polluted a pool meant for a different purpose.*

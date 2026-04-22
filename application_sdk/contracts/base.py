@@ -56,6 +56,8 @@ Evolution:
     Never remove fields or change their types - this breaks running workflows.
 """
 
+import hashlib
+import logging
 import re
 from enum import StrEnum
 from typing import (
@@ -70,11 +72,14 @@ from typing import (
     runtime_checkable,
 )
 
+import orjson
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
 from application_sdk.contracts.types import MaxItems  # noqa: TC001
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
+
+_logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Serializable Enum Base Class
@@ -164,6 +169,66 @@ class Input(BaseModel):
     config_hash() unions this set across the full MRO, so subclass entries
     are merged with (not replaced by) base-class exclusions."""
 
+    _unknown_keys_seen: ClassVar[set[tuple[str, tuple[str, ...]]]] = set()
+    """Dedup set for the unknown-key warning: at most one log line per
+    (subclass name, sorted unknown keys) pair across the process lifetime."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _warn_on_unknown_keys(cls, data: Any) -> Any:
+        """Warn when the incoming payload contains keys not declared on the model.
+
+        Pydantic silently drops unknown keys by default. That default masks
+        contract drift between the SDK and upstream payload producers (the
+        Automation Engine, Heracles, the Kill-Argo native dispatcher, or the
+        manifest generator in app-contract-toolkit) — the symptom is an empty
+        field at runtime with no trace of why.
+
+        We don't rewrite the payload here. Normalization belongs at the source.
+        This validator only emits a one-time ``WARNING`` per (class, extras)
+        pair so the drift is visible in logs and the root cause can be fixed
+        upstream.
+
+        Kebab-case keys get an extra hint in the log line — they're the
+        most common form of drift today (AE payloads built from kebab-case
+        UI form field names). See ARUN-527.
+        """
+        if not isinstance(data, dict):
+            return data
+        if cls.model_config.get("extra") == "allow":
+            return data
+        known = {name for name in cls.model_fields}
+        known.update(
+            field.alias
+            for field in cls.model_fields.values()
+            if field.alias is not None
+        )
+        extras = sorted(
+            str(k) for k in data if k not in known and not str(k).startswith("_")
+        )
+        if not extras:
+            return data
+        seen_key = (cls.__name__, tuple(extras))
+        if seen_key in Input._unknown_keys_seen:
+            return data
+        Input._unknown_keys_seen.add(seen_key)
+        kebab = [k for k in extras if "-" in k]
+        hint = ""
+        if kebab:
+            mapped = {k: k.replace("-", "_") for k in kebab}
+            hint = (
+                f" Kebab-case keys detected — producer likely meant {mapped}."
+                " Fix at the source (manifest generator / payload producer),"
+                " not in the SDK."
+            )
+        _logger.warning(
+            "Unknown keys in payload for %s, silently dropped by Pydantic: %s.%s",
+            cls.__name__,
+            extras,
+            hint,
+        )
+        return data
+
     def _log_summary(self) -> dict[str, Any]:
         """Return a dict of field values safe for logging.
 
@@ -231,8 +296,6 @@ class Input(BaseModel):
         Returns:
             16-character hex string (64 bits of SHA-256).
         """
-        import hashlib
-        import json
 
         exclude: set[str] = set()
         for cls in type(self).__mro__:
@@ -263,8 +326,10 @@ class Input(BaseModel):
                 return obj.model_dump()
             return str(obj)
 
-        content = json.dumps(data, sort_keys=True, default=default_serializer)
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+        content = orjson.dumps(
+            data, option=orjson.OPT_SORT_KEYS, default=default_serializer
+        )
+        return hashlib.sha256(content).hexdigest()[:16]
 
     def __init_subclass__(
         cls, allow_unbounded_fields: bool = False, **kwargs: Any

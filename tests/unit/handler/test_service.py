@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk.contracts.base import Input, Output
@@ -30,7 +32,6 @@ from application_sdk.handler.contracts import (
 from application_sdk.handler.service import (
     _flatten_to_pairs,
     _normalize_credentials,
-    _pairs_to_flat,
     _wrap_response,
     create_app_handler_service,
 )
@@ -467,8 +468,8 @@ class TestStartWorkflowRouting:
         finally:
             patcher.stop()
 
-    def test_multi_ep_valid_workflow_type_routes_correctly(self) -> None:
-        """Multi-entry-point app with a valid workflow_type returns 200."""
+    def test_multi_ep_entrypoint_query_param_routes_correctly(self) -> None:
+        """Multi-entry-point app with ?entrypoint= query param returns 200."""
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
@@ -484,15 +485,97 @@ class TestStartWorkflowRouting:
         client, patcher = self._make_routed_client(_MultiEpApp)
         try:
             response = client.post(
-                "/workflows/v1/start",
-                json={"workflow_type": "extract", "name": "x"},
+                "/workflows/v1/start?entrypoint=extract",
+                json={"name": "x"},
             )
             assert response.status_code == 200
         finally:
             patcher.stop()
 
-    def test_unknown_workflow_type_returns_400(self) -> None:
-        """Providing an unrecognised workflow_type returns 400 without leaking entry point names."""
+    def test_multi_ep_body_workflow_type_fallback_routes_correctly(self) -> None:
+        """Multi-entry-point app falls back to body 'workflow_type' when ?entrypoint= absent."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpFallbackApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher = self._make_routed_client(_MultiEpFallbackApp)
+        try:
+            with pytest.warns(DeprecationWarning, match="workflow_type.*deprecated"):
+                response = client.post(
+                    "/workflows/v1/start",
+                    json={"workflow_type": "extract", "name": "x"},
+                )
+            assert response.status_code == 200
+        finally:
+            patcher.stop()
+
+    def test_query_param_takes_precedence_over_body_workflow_type(self) -> None:
+        """?entrypoint= wins over body 'workflow_type' when both are provided."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _PrecedenceApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        handler = _TestHandler()
+        svc = create_app_handler_service(
+            handler,
+            app_name="precedence-test",
+            app_class=_PrecedenceApp,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-prec"
+        mock_handle.result_run_id = "run-prec"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        tc = TestClient(svc, raise_server_exceptions=False)
+        try:
+            # ?entrypoint=extract wins over body workflow_type=load;
+            # the canonical query-param path must NOT emit a DeprecationWarning.
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                response = tc.post(
+                    "/workflows/v1/start?entrypoint=extract",
+                    json={"workflow_type": "load", "name": "x"},
+                )
+            assert response.status_code == 200
+            assert mock_client.start_workflow.call_count == 1
+            # The started workflow name must end in ':extract', not ':load'
+            started_name = mock_client.start_workflow.call_args[0][0]
+            assert ":load" not in started_name, f"load was dispatched: {started_name!r}"
+            assert started_name.endswith(
+                ":extract"
+            ), f"Expected :extract, got {started_name!r}"
+            assert not any(
+                issubclass(w.category, DeprecationWarning) for w in caught
+            ), "Canonical ?entrypoint= path must not emit DeprecationWarning"
+        finally:
+            patcher.stop()
+
+    def test_unknown_entrypoint_query_param_returns_400(self) -> None:
+        """Providing an unrecognised ?entrypoint= returns 400 without leaking names."""
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
@@ -508,19 +591,18 @@ class TestStartWorkflowRouting:
         client, patcher = self._make_routed_client(_TwoEpApp)
         try:
             response = client.post(
-                "/workflows/v1/start",
-                json={"workflow_type": "does-not-exist", "name": "x"},
+                "/workflows/v1/start?entrypoint=does-not-exist",
+                json={"name": "x"},
             )
             assert response.status_code == 400
             detail = response.json().get("detail", "")
-            # Entry point names must NOT be exposed to clients
             assert "extract" not in detail
             assert "load" not in detail
         finally:
             patcher.stop()
 
-    def test_multi_ep_missing_workflow_type_returns_400(self) -> None:
-        """Multi-entry-point app without workflow_type returns 400."""
+    def test_multi_ep_missing_entrypoint_returns_400(self) -> None:
+        """Multi-entry-point app with no ?entrypoint= and no body selector returns 400."""
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
@@ -656,6 +738,96 @@ class TestConfigMapEndpoints:
             assert response.json()["data"]["configmaps"] == []
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+
+class TestWorkflowConfigValidation:
+    """Tests for _CONFIG_KEY_RE validation on /workflows/v1/config/{config_id}."""
+
+    @pytest.mark.parametrize(
+        "config_id",
+        [
+            "../foo",
+            "a/b",
+            "a.b",
+            "",
+            "a" * 129,
+            "%2e%2e",
+            "a b",
+        ],
+    )
+    def test_get_config_rejects_invalid_config_id(self, config_id: str) -> None:
+        client = _make_client()
+        response = client.get(f"/workflows/v1/config/{config_id}")
+        assert response.status_code in {
+            400,
+            404,
+            422,
+        }, f"Expected rejection for {config_id!r}, got {response.status_code}"
+
+    @pytest.mark.parametrize(
+        "config_id",
+        [
+            "../foo",
+            "a/b",
+            "a.b",
+            "",
+            "a" * 129,
+            "%2e%2e",
+            "a b",
+        ],
+    )
+    def test_post_config_rejects_invalid_config_id(self, config_id: str) -> None:
+        client = _make_client()
+        response = client.post(
+            f"/workflows/v1/config/{config_id}",
+            json={"key": "value"},
+        )
+        assert response.status_code in {
+            400,
+            404,
+            422,
+        }, f"Expected rejection for {config_id!r}, got {response.status_code}"
+
+    @pytest.mark.parametrize(
+        "type_param",
+        ["../etc", "a/b", "a.b", "a" * 129],
+    )
+    def test_get_config_rejects_invalid_type_param(self, type_param: str) -> None:
+        client = _make_client()
+        response = client.get(
+            "/workflows/v1/config/valid-id",
+            params={"type": type_param},
+        )
+        assert (
+            response.status_code == 422
+        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+
+    @pytest.mark.parametrize(
+        "type_param",
+        ["../etc", "a/b", "a.b", "a" * 129],
+    )
+    def test_post_config_rejects_invalid_type_param(self, type_param: str) -> None:
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/config/valid-id",
+            params={"type": type_param},
+            json={"key": "value"},
+        )
+        assert (
+            response.status_code == 422
+        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+
+    @pytest.mark.parametrize(
+        "config_id",
+        ["abc123", "ABC_123", "a-b", "a" * 128],
+    )
+    def test_get_config_accepts_valid_config_id(self, config_id: str) -> None:
+        """Valid config_ids pass the regex check (result is 503/404 without a store, not 400)."""
+        client = _make_client()
+        response = client.get(f"/workflows/v1/config/{config_id}")
+        assert (
+            response.status_code != 400
+        ), f"Valid config_id {config_id!r} was wrongly rejected"
 
 
 class TestDaprSubscribeEndpoint:
@@ -869,6 +1041,40 @@ class TestManifestEndpoint:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
             svc_module.DEPLOYMENT_NAME = original_dep
 
+    def test_manifest_disk_substitutes_app_name(self, tmp_path: Path) -> None:
+        from application_sdk.handler import service as svc_module
+
+        manifest_data = {
+            "execution_mode": "dag",
+            "dag": {
+                "extract": {
+                    "activity_name": "execute_workflow",
+                    "activity_display_name": "Extract",
+                    "app_name": "{app_name}",
+                    "inputs": {
+                        "workflow_type": "extraction",
+                        "task_queue": "{deployment_name}-queue",
+                    },
+                }
+            },
+        }
+        (tmp_path / "manifest.json").write_text(__import__("json").dumps(manifest_data))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        original_dep = svc_module.DEPLOYMENT_NAME
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        svc_module.DEPLOYMENT_NAME = "prod-deploy"
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["dag"]["extract"]["app_name"] == "test-app"
+            assert body["dag"]["extract"]["inputs"]["task_queue"] == "prod-deploy-queue"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+            svc_module.DEPLOYMENT_NAME = original_dep
+
     def test_manifest_programmatic_takes_priority(self, tmp_path: Path) -> None:
         """When both programmatic and disk manifest exist, programmatic wins."""
         from application_sdk.handler import service as svc_module
@@ -915,6 +1121,83 @@ class TestManifestEndpoint:
             client = _make_client()
             response = client.get("/workflows/v1/manifest")
             assert response.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_simple_app_manifest_lives_at_root_not_in_subdir(
+        self, tmp_path: Path
+    ) -> None:
+        """Simple apps (only run(), no @entrypoint) place manifest.json at
+        CONTRACT_GENERATED_DIR/manifest.json — no subdirectory.
+
+        Heracles does not pass ?entrypoint= for these apps.  The endpoint must
+        serve the root file when no param is present, and must NOT search inside
+        any named subdirectory.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+        # Root manifest — correct location for a simple app.
+        (contract_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear", "app_name": "simple-app"})
+        )
+        # A subdir manifest should NOT be found when no ?entrypoint= is provided.
+        subdir = contract_dir / "run"
+        subdir.mkdir()
+        (subdir / "manifest.json").write_text(json.dumps({"app_name": "wrong"}))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            # No ?entrypoint= → root manifest, not the subdir one.
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["app_name"] == "simple-app"
+            assert body["execution_mode"] == "linear"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_simple_app_manifest_convention_vs_multi_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """Documents the path convention side-by-side:
+
+        - Simple app (no @entrypoint):  CONTRACT_GENERATED_DIR/manifest.json
+          Served via GET /manifest (no ?entrypoint= param).
+        - Multi-entrypoint app:         CONTRACT_GENERATED_DIR/{name}/manifest.json
+          Served via GET /manifest?entrypoint={name}.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+
+        # Simple-app root manifest.
+        (contract_dir / "manifest.json").write_text(json.dumps({"app_name": "simple"}))
+        # Multi-entrypoint subdir manifests.
+        for ep_name in ("crawler", "miner"):
+            ep_dir = contract_dir / ep_name
+            ep_dir.mkdir()
+            (ep_dir / "manifest.json").write_text(json.dumps({"app_name": ep_name}))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+
+            # Simple app path: no param → root.
+            resp = client.get("/workflows/v1/manifest")
+            assert resp.status_code == 200
+            assert resp.json()["app_name"] == "simple"
+
+            # Multi-entrypoint paths: ?entrypoint= → subdir.
+            for ep_name in ("crawler", "miner"):
+                resp = client.get(f"/workflows/v1/manifest?entrypoint={ep_name}")
+                assert resp.status_code == 200
+                assert resp.json()["app_name"] == ep_name
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
@@ -1145,97 +1428,15 @@ class TestFlattenToPairs:
         assert "extra" not in creds
 
 
-class TestPairsToFlat:
-    """Tests for _pairs_to_flat (v3 list → flat dict)."""
+class TestStartCredentialStripping:
+    """Tests for credential stripping in /start handler.
 
-    def test_simple_keys(self) -> None:
-        pairs = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "username", "value": "admin"},
-        ]
-        result = _pairs_to_flat(pairs)
-        assert result == {"host": "db.example.com", "username": "admin"}
-
-    def test_extra_keys_nested(self) -> None:
-        pairs = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "extra.role", "value": "ACCOUNTADMIN"},
-            {"key": "extra.warehouse", "value": "MINER_WH"},
-        ]
-        result = _pairs_to_flat(pairs)
-        assert result["host"] == "db.example.com"
-        assert result["extra"] == {"role": "ACCOUNTADMIN", "warehouse": "MINER_WH"}
-        assert "extra.role" not in result
-        assert "extra.warehouse" not in result
-
-    def test_no_extra_keys(self) -> None:
-        pairs = [{"key": "host", "value": "db.example.com"}]
-        result = _pairs_to_flat(pairs)
-        assert "extra" not in result
-        assert result == {"host": "db.example.com"}
-
-    def test_empty_list(self) -> None:
-        assert _pairs_to_flat([]) == {}
-
-    def test_single_extra_key(self) -> None:
-        """A single extra.* key still produces a nested extra dict."""
-        pairs = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "extra.role", "value": "ADMIN"},
-        ]
-        result = _pairs_to_flat(pairs)
-        assert result == {"host": "db.example.com", "extra": {"role": "ADMIN"}}
-
-    def test_malformed_pair_raises_key_error(self) -> None:
-        """Pairs missing 'key' or 'value' raise KeyError."""
-        import pytest
-
-        with pytest.raises(KeyError):
-            _pairs_to_flat([{"key": "host"}])  # missing "value"
-        with pytest.raises(KeyError):
-            _pairs_to_flat([{"value": "db.example.com"}])  # missing "key"
-
-    def test_round_trip_with_flatten_to_pairs(self) -> None:
-        """_pairs_to_flat reverses _flatten_to_pairs for string values."""
-        original = {
-            "host": "snow.example.com",
-            "authType": "basic",
-            "username": "admin",
-            "password": "secret",
-            "extra": {
-                "role": "ACCOUNTADMIN",
-                "warehouse": "COMPUTE_WH",
-                "database": "PROD",
-            },
-        }
-        pairs = _flatten_to_pairs(
-            dict(original)
-        )  # dict() because _flatten_to_pairs pops extra
-        restored = _pairs_to_flat(pairs)
-        assert restored == original
-
-    def test_round_trip_lossy_for_non_string_values(self) -> None:
-        """Non-string values are stringified by _flatten_to_pairs and stay strings."""
-        original = {"host": "db.example.com", "port": 5432, "ssl": True}
-        pairs = _flatten_to_pairs(dict(original))
-        restored = _pairs_to_flat(pairs)
-        # Values are stringified — not equal to original types
-        assert restored["port"] == "5432"  # int → str
-        assert restored["ssl"] == "true"  # bool → str (json.dumps)
-        assert restored["host"] == "db.example.com"  # str stays str
-
-
-class TestStartCredentialPersistence:
-    """Tests for inline credential save in /start handler.
-
-    The /start endpoint needs Temporal, so we test the normalization +
-    InMemorySecretStore interaction directly to verify the contract.
+    The /start endpoint strips credentials from the body before dispatching
+    to Temporal. No state store save or credential_guid injection occurs.
     """
 
-    def test_normalize_then_store_v2_dict_credentials(self) -> None:
-        """V2 dict credentials are normalized to v3 list before storage."""
-        from application_sdk.infrastructure.secrets import InMemorySecretStore
-
+    def test_normalize_v2_dict_credentials(self) -> None:
+        """V2 dict credentials are normalized to v3 list format."""
         body = {
             "credentials": {
                 "host": "db.example.com",
@@ -1246,34 +1447,17 @@ class TestStartCredentialPersistence:
             "other_field": "kept",
         }
 
-        # Normalize (same as /start handler does)
         body = _normalize_credentials(body)
 
-        # Verify normalization produced v3 list format
         assert isinstance(body["credentials"], list)
         keys = {item["key"] for item in body["credentials"]}
         assert "host" in keys
         assert "port" in keys
-
-        # Store in InMemorySecretStore (same as /start handler does)
-        store = InMemorySecretStore()
-        guid = "test-guid-123"
-        store.set(guid, json.dumps(body["credentials"]))
-
-        # Verify round-trip: read back and parse
-        raw = json.loads(store._secrets[guid])
-        assert isinstance(raw, list)
-        host_entry = next(item for item in raw if item["key"] == "host")
-        assert host_entry["value"] == "db.example.com"
-
-        # Verify other fields preserved
+        # Other fields preserved
         assert body["other_field"] == "kept"
-        assert "credentials" in body
 
-    def test_normalize_then_store_v3_list_credentials(self) -> None:
+    def test_normalize_v3_list_credentials(self) -> None:
         """V3 list credentials pass through normalization unchanged."""
-        from application_sdk.infrastructure.secrets import InMemorySecretStore
-
         body = {
             "credentials": [
                 {"key": "host", "value": "db.example.com"},
@@ -1283,43 +1467,528 @@ class TestStartCredentialPersistence:
 
         body = _normalize_credentials(body)
 
-        # Already v3 format — unchanged
         assert isinstance(body["credentials"], list)
         assert len(body["credentials"]) == 2
 
-        store = InMemorySecretStore()
-        guid = "test-guid-456"
-        store.set(guid, json.dumps(body["credentials"]))
-
-        raw = json.loads(store._secrets[guid])
-        assert raw[0]["key"] == "host"
-        assert raw[0]["value"] == "db.example.com"
-
-    def test_no_credentials_skips_store(self) -> None:
-        """Body without credentials is not stored."""
+    def test_no_credentials_passthrough(self) -> None:
+        """Body without credentials passes through unchanged."""
         body = {"name": "test-workflow"}
         body = _normalize_credentials(body)
         assert "credentials" not in body or not body.get("credentials")
 
-    async def test_credential_resolver_v3_path_reads_from_inmemory_store(self) -> None:
-        """CredentialResolver new path reads from InMemorySecretStore."""
-        from application_sdk.credentials.ref import CredentialRef
-        from application_sdk.credentials.resolver import CredentialResolver
-        from application_sdk.infrastructure.secrets import InMemorySecretStore
 
-        store = InMemorySecretStore()
-        creds = [
-            {"key": "host", "value": "db.example.com"},
-            {"key": "port", "value": "5432"},
-        ]
-        store.set("my-guid", json.dumps(creds))
+# ---------------------------------------------------------------------------
+# Entrypoint manifest resolution tests (Option B: name == folder name)
+# ---------------------------------------------------------------------------
 
-        resolver = CredentialResolver(secret_store=store)
-        ref = CredentialRef(name="my-guid", credential_type="basic")
 
-        # No credential_guid → takes v3 new path → secret_store.get("my-guid")
-        result = await resolver.resolve_raw(ref)
+class TestEntrypointManifestResolution:
+    """Tests for GET /workflows/v1/manifest?entrypoint={name}.
 
-        assert isinstance(result, list)
-        assert result[0]["key"] == "host"
-        assert result[0]["value"] == "db.example.com"
+    Option B: entrypoint name IS the folder name — no atlan.yaml parsing.
+    GET /manifest?entrypoint=X serves CONTRACT_GENERATED_DIR/X/manifest.json.
+    """
+
+    def test_manifest_with_entrypoint_returns_correct_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """GET /manifest?entrypoint=snowflake resolves to snowflake/manifest.json."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "snowflake"
+        ep_dir.mkdir(parents=True)
+        manifest_data = {"execution_mode": "dag", "app_name": "snowflake-extractor"}
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=snowflake")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["execution_mode"] == "dag"
+            assert body["app_name"] == "snowflake-extractor"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_manifest_substitutes_deployment_name_for_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """Entrypoint manifest replaces {deployment_name} placeholder."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "ep1"
+        ep_dir.mkdir(parents=True)
+        manifest_data = {"task_queue": "{deployment_name}-queue"}
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        original_dep = svc_module.DEPLOYMENT_NAME
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        svc_module.DEPLOYMENT_NAME = "prod-deploy"
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=ep1")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["task_queue"] == "prod-deploy-queue"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+            svc_module.DEPLOYMENT_NAME = original_dep
+
+    def test_valid_but_unknown_entrypoint_returns_404(self, tmp_path: Path) -> None:
+        """Well-formed name with no matching subdir on disk returns 404."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=unknown")
+            assert response.status_code == 404
+            assert "No manifest found" in response.json()["detail"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_entrypoint_with_missing_manifest_file_returns_404(
+        self, tmp_path: Path
+    ) -> None:
+        """Subdir exists but manifest.json is absent — returns 404."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        (contract_dir / "snowflake").mkdir(parents=True)  # dir, but no manifest.json
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=snowflake")
+            assert response.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_invalid_entrypoint_name_returns_400(self, tmp_path: Path) -> None:
+        """Entrypoint names with path-traversal or illegal chars return 400."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            for bad_name in ["../etc", "a/b", "name with spaces", "name@bad"]:
+                resp = client.get(f"/workflows/v1/manifest?entrypoint={bad_name}")
+                assert resp.status_code == 400, f"Expected 400 for {bad_name!r}"
+                assert resp.json()["detail"] == "Invalid entrypoint name"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_valid_name_not_in_registry_returns_404(self, tmp_path: Path) -> None:
+        """A well-formed name with no matching manifest on disk returns 404.
+
+        The glob-based registry only contains entrypoints whose manifest.json
+        exists; a valid-format name with no file returns 404, not 400. Path escape
+        is structurally impossible because glob() only yields paths under
+        CONTRACT_GENERATED_DIR — no is_relative_to guard is needed.
+        """
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            resp = client.get("/workflows/v1/manifest?entrypoint=valid")
+            assert resp.status_code == 404
+            assert "valid" in resp.json()["detail"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_legacy_manifest_alias_forwards_entrypoint(self, tmp_path: Path) -> None:
+        """GET /manifest?entrypoint=name uses the legacy alias correctly."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "snow"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"app_name": "snow-app"}))
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/manifest?entrypoint=snow")
+            assert response.status_code == 200
+            assert response.json()["app_name"] == "snow-app"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+    def test_no_entrypoint_param_serves_root_manifest(self, tmp_path: Path) -> None:
+        """Without entrypoint param, serves root manifest unchanged."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        contract_dir.mkdir(parents=True)
+        (contract_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear"})
+        )
+
+        original_dir = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            assert response.json()["execution_mode"] == "linear"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original_dir
+
+
+# ---------------------------------------------------------------------------
+# Configmaps deduplication tests
+# ---------------------------------------------------------------------------
+
+
+class TestConfigMapsDeduplication:
+    """Tests for list_configmaps deduplication across subdirectories."""
+
+    def test_configmaps_dedupes_across_subdirs(self, tmp_path: Path) -> None:
+        """Configmaps with same stem in different subdirs appear only once."""
+        from application_sdk.handler import service as svc_module
+
+        # Root-level configs
+        (tmp_path / "config-a.json").write_text("{}")
+        (tmp_path / "config-b.json").write_text("{}")
+
+        # Sub-directory with duplicate stem + new config
+        subdir = tmp_path / "snow-gen"
+        subdir.mkdir()
+        (subdir / "config-a.json").write_text("{}")  # duplicate of root
+        (subdir / "config-c.json").write_text("{}")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmaps")
+            assert response.status_code == 200
+            configmaps = response.json()["data"]["configmaps"]
+            # config-a should appear only once despite being in root and subdir
+            assert configmaps.count("config-a") == 1
+            assert "config-b" in configmaps
+            assert "config-c" in configmaps
+            assert "manifest" not in configmaps
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmaps_rglob_finds_nested_configs(self, tmp_path: Path) -> None:
+        """rglob finds JSON files in nested sub-directories."""
+        from application_sdk.handler import service as svc_module
+
+        # Only sub-directory configs, no root configs
+        subdir = tmp_path / "entrypoint-a"
+        subdir.mkdir()
+        (subdir / "nested-config.json").write_text("{}")
+
+        deep_subdir = tmp_path / "entrypoint-b" / "deep"
+        deep_subdir.mkdir(parents=True)
+        (deep_subdir / "deep-config.json").write_text("{}")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmaps")
+            assert response.status_code == 200
+            configmaps = response.json()["data"]["configmaps"]
+            assert "nested-config" in configmaps
+            assert "deep-config" in configmaps
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmaps_excludes_manifest_in_subdirs(self, tmp_path: Path) -> None:
+        """manifest.json in subdirectories is also excluded."""
+        from application_sdk.handler import service as svc_module
+
+        subdir = tmp_path / "ep-gen"
+        subdir.mkdir()
+        (subdir / "manifest.json").write_text("{}")
+        (subdir / "real-config.json").write_text("{}")
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmaps")
+            assert response.status_code == 200
+            configmaps = response.json()["data"]["configmaps"]
+            assert "manifest" not in configmaps
+            assert "real-config" in configmaps
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+
+# ---------------------------------------------------------------------------
+# Local vault credential provisioning tests
+# ---------------------------------------------------------------------------
+
+
+class TestProvisionLocalVault:
+    """Tests for POST /workflows/v1/dev/local-vault credential provisioning endpoint."""
+
+    def _make_local_vault_client(
+        self,
+        *,
+        deployment_name: str = "local",
+        local_environment: str = "local",
+        storage: object | None = None,
+    ) -> tuple[TestClient, dict[str, object]]:
+        """Create a TestClient with DEPLOYMENT_NAME and storage patched.
+
+        Returns (client, restore_dict) so the caller can restore module state.
+        """
+        from application_sdk.handler import service as svc_module
+
+        handler = _TestHandler()
+        app = create_app_handler_service(
+            handler, app_name="vault-test", storage=storage
+        )
+
+        original_dep = svc_module.DEPLOYMENT_NAME
+        original_local = svc_module.LOCAL_ENVIRONMENT
+        svc_module.DEPLOYMENT_NAME = deployment_name
+        svc_module.LOCAL_ENVIRONMENT = local_environment
+        client = TestClient(app, raise_server_exceptions=False)
+        restore = {
+            "dep": original_dep,
+            "local": original_local,
+            "module": svc_module,
+        }
+        return client, restore
+
+    def _restore(self, restore: dict[str, object]) -> None:
+        svc_module = restore["module"]
+        svc_module.DEPLOYMENT_NAME = restore["dep"]  # type: ignore[attr-defined]
+        svc_module.LOCAL_ENVIRONMENT = restore["local"]  # type: ignore[attr-defined]
+
+    def test_happy_path_returns_200_with_credential_guid(self, tmp_path: Path) -> None:
+        """POST full credential body returns 200 with credential_guid, writes secrets.json."""
+        import os
+
+        # storage=None means objectstore save is a no-op (returns False)
+        client, restore = self._make_local_vault_client(storage=None)
+
+        body = {
+            "username": "admin",
+            "password": "secret123",
+            "host": "db.example.com",
+            "port": 5432,
+            "extra": {"ssl": True},
+            "url": "jdbc:postgresql://db.example.com:5432",
+        }
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post("/workflows/v1/dev/local-vault", json=body)
+            finally:
+                os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            resp_body = response.json()
+            assert resp_body["success"] is True
+            guid = resp_body["data"]["credential_guid"]
+            # Verify it's a valid hex string (uuid4().hex)
+            assert len(guid) == 32
+            int(guid, 16)  # raises ValueError if not valid hex
+
+            # Verify secrets.json was written with sensitive fields
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            assert secrets_file.exists()
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            assert guid in all_secrets
+            stored_sensitive = all_secrets[guid]
+            assert stored_sensitive["username"] == "admin"
+            assert stored_sensitive["password"] == "secret123"
+            assert stored_sensitive["extra"] == {"ssl": True}
+            assert stored_sensitive["url"] == "jdbc:postgresql://db.example.com:5432"
+            # Non-sensitive fields should NOT be in secrets
+            assert "host" not in stored_sensitive
+            assert "port" not in stored_sensitive
+        finally:
+            self._restore(restore)
+
+    def test_dev_only_gate_rejects_non_local(self) -> None:
+        """When DEPLOYMENT_NAME != LOCAL_ENVIRONMENT, returns 403."""
+        client, restore = self._make_local_vault_client(
+            deployment_name="production", local_environment="local"
+        )
+        try:
+            response = client.post(
+                "/workflows/v1/dev/local-vault", json={"host": "db.example.com"}
+            )
+            assert response.status_code == 403
+            assert "Dev-only" in response.json()["detail"]
+        finally:
+            self._restore(restore)
+
+    def test_sensitive_nonsensitive_split(self, tmp_path: Path) -> None:
+        """Verify SENSITIVE_FIELDS go to secrets.json, everything else to object storage."""
+        import os
+        from unittest.mock import MagicMock, patch
+
+        mock_storage = MagicMock()  # non-None so objectstore save runs
+        client, restore = self._make_local_vault_client(storage=mock_storage)
+
+        body = {
+            "username": "user1",
+            "password": "pass1",
+            "extra": {"key": "val"},
+            "url": "jdbc://host",
+            "driverProperties": {"prop": "val"},
+            "sodaConnection": "soda://conn",
+            "host": "db.example.com",
+            "port": 5432,
+            "authType": "basic",
+        }
+
+        captured_config: dict = {}
+
+        async def capture_put_json(key, body_arg, store):
+            captured_config.update(body_arg)
+
+        try:
+            with patch(
+                "application_sdk.storage.ops.put_json",
+                side_effect=capture_put_json,
+            ):
+                original_cwd = os.getcwd()
+                os.chdir(tmp_path)
+                try:
+                    response = client.post("/workflows/v1/dev/local-vault", json=body)
+                finally:
+                    os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+
+            # Check secrets.json for sensitive fields
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            sensitive = all_secrets[guid]
+            assert set(sensitive.keys()) == {
+                "username",
+                "password",
+                "extra",
+                "url",
+                "driverProperties",
+                "sodaConnection",
+            }
+
+            # Non-sensitive fields should be in the captured config
+            assert "host" in captured_config
+            assert "port" in captured_config
+            assert "authType" in captured_config
+            assert captured_config["credentialSource"] == "direct"
+            # Sensitive fields should NOT be in config
+            assert "username" not in captured_config
+            assert "password" not in captured_config
+        finally:
+            self._restore(restore)
+
+    def test_auto_generates_uuid_hex(self, tmp_path: Path) -> None:
+        """Verify the returned guid is a valid 32-char hex string."""
+        import os
+
+        client, restore = self._make_local_vault_client(storage=None)
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post(
+                    "/workflows/v1/dev/local-vault", json={"host": "example.com"}
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+            assert isinstance(guid, str)
+            assert len(guid) == 32
+            # Must be valid hex
+            int(guid, 16)
+        finally:
+            self._restore(restore)
+
+    def test_empty_body_succeeds(self, tmp_path: Path) -> None:
+        """Empty body should still work — empty secrets + empty config."""
+        import os
+
+        client, restore = self._make_local_vault_client(storage=None)
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post("/workflows/v1/dev/local-vault", json={})
+            finally:
+                os.chdir(original_cwd)
+
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+
+            # secrets.json should exist with empty sensitive dict
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            assert all_secrets[guid] == {}
+        finally:
+            self._restore(restore)
+
+    def test_no_storage_still_writes_secrets(self, tmp_path: Path) -> None:
+        """When storage is None, secrets are written but objectstore save is a no-op."""
+        import os
+
+        client, restore = self._make_local_vault_client(storage=None)
+
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post(
+                    "/workflows/v1/dev/local-vault",
+                    json={"username": "u", "host": "h"},
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            # The endpoint still succeeds because _config_save_to_objectstore
+            # returns False (no-op) when storage is None, but doesn't raise.
+            assert response.status_code == 200
+            guid = response.json()["data"]["credential_guid"]
+
+            import orjson
+
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            all_secrets = orjson.loads(secrets_file.read_bytes())
+            assert all_secrets[guid] == {"username": "u"}
+        finally:
+            self._restore(restore)

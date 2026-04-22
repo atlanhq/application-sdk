@@ -57,10 +57,10 @@ Install DAPR using the following commands:
 
 ```bash
 # Install DAPR CLI
-wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.16.2
+wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.17.1
 
 # Initialize DAPR (slim mode)
-dapr init --runtime-version 1.16.0 --slim
+dapr init --runtime-version 1.17.3 --slim
 
 # Verify installation
 dapr --version
@@ -71,4 +71,4 @@ dapr --version
 > - Install project dependencies
 > - Run example applications
 
-For common setup issues, please see our [Troubleshooting Guide](https://github.com/atlanhq/application-sdk/blob/refactor-v3/docs/setup/troubleshooting.md).
+For common setup issues, please see our [Troubleshooting Guide](https://github.com/atlanhq/application-sdk/blob/main/docs/setup/troubleshooting.md).

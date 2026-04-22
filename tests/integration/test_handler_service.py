@@ -41,7 +41,6 @@ def _reset_service_globals():
 
     svc._temporal_client = None
     svc._workflow_config = svc.WorkflowClientConfig()
-    svc._state_store = None
     svc._secret_store = None
     svc._storage = None
     _infrastructure_ctx.set(None)
@@ -50,7 +49,6 @@ def _reset_service_globals():
 
     svc._temporal_client = None
     svc._workflow_config = svc.WorkflowClientConfig()
-    svc._state_store = None
     svc._secret_store = None
     svc._storage = None
     _infrastructure_ctx.set(None)
@@ -63,7 +61,7 @@ def _reset_service_globals():
 
 @pytest.fixture
 def mock_infra():
-    """Set up InMemory infrastructure with seeded secret store."""
+    """Set up mock infrastructure with seeded secret store."""
     from application_sdk.infrastructure.context import (
         InfrastructureContext,
         set_infrastructure,
@@ -234,30 +232,30 @@ async def test_handler_error_custom_http_status():
 
 
 @pytest.fixture
-def state_app():
-    """Create a handler service backed by a MockStateStore."""
+def config_app(tmp_path):
+    """Create a handler service backed by a local object store for config."""
     from application_sdk.handler.service import create_app_handler_service
-    from application_sdk.testing.mocks import MockStateStore
+    from application_sdk.storage.factory import create_local_store
 
-    state = MockStateStore()
+    store = create_local_store(tmp_path / "config-store")
     handler = DefaultHandler()
-    app = create_app_handler_service(handler, app_name="state-app", state_store=state)
-    return app, state
+    app = create_app_handler_service(handler, app_name="config-app", storage=store)
+    return app, store
 
 
 @pytest.fixture
-async def state_client(state_app):
-    app, state = state_app
+async def config_client(config_app):
+    app, store = config_app
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as c:
-        yield c, state
+        yield c, store
 
 
 @pytest.mark.integration
-async def test_config_round_trip(state_client):
-    """G6.5: POST /config/{id} saves to state store; GET /config/{id} returns it."""
-    client, state = state_client
+async def test_config_round_trip(config_client):
+    """G6.5: POST /config/{id} saves to object store; GET /config/{id} returns it."""
+    client, store = config_client
 
     payload = {"host": "db.example.com", "port": 5432, "database": "mydb"}
 
@@ -270,15 +268,11 @@ async def test_config_round_trip(state_client):
     assert data["host"] == "db.example.com"
     assert data["port"] == 5432
 
-    save_calls = state.get_save_calls()
-    assert len(save_calls) == 1
-    assert save_calls[0][0] == "workflows/test-cfg"
-
 
 @pytest.mark.integration
-async def test_config_not_found(state_client):
-    """G6.6: GET /config/{id} returns 404 when key is not in state store."""
-    client, _ = state_client
+async def test_config_not_found(config_client):
+    """G6.6: GET /config/{id} returns 404 when key is not in object store."""
+    client, _ = config_client
 
     resp = await client.get("/workflows/v1/config/nonexistent")
     assert resp.status_code == 404
@@ -498,46 +492,14 @@ async def test_start_and_stop(run_worker, long_running_workflow_app):
         assert final_resp.json()["data"]["status"] == "TERMINATED"
 
 
-@pytest.mark.integration
-async def test_start_saves_config_to_state_store(run_worker, trivial_wf_client):
-    """G6.11: Starting a workflow persists config (minus credentials) to state store."""
-    from application_sdk.handler import service as svc
-    from application_sdk.testing.mocks import MockStateStore
-
-    client, _ = trivial_wf_client
-
-    state = MockStateStore()
-    svc._state_store = state
-
-    async with run_worker():
-        resp = await client.post(
-            "/workflows/v1/start",
-            json={"name": "state-test"},
-        )
-        assert resp.status_code == 200
-        wf_id = resp.json()["data"]["workflow_id"]
-
-    save_calls = state.get_save_calls()
-    assert len(save_calls) == 1
-    key, saved = save_calls[0]
-    assert key == f"workflows/{wf_id}"
-    assert saved["workflow_id"] == wf_id
-    assert saved["name"] == "state-test"
-    # Safety guard: credentials must never be persisted to the state store,
-    # even if a migrating connector accidentally passes them in the /start body
-    assert "credentials" not in saved
-
-
 @pytest.fixture
 async def credential_wf_client(temporal_client, task_queue, reregister_app):
-    """Handler service configured with CredentialAwareApp and a live InMemorySecretStore."""
+    """Handler service configured with CredentialAwareApp for credential stripping tests."""
     from application_sdk.handler import service as svc
     from application_sdk.handler.service import create_app_handler_service
-    from application_sdk.infrastructure.secrets import InMemorySecretStore
 
     reregister_app(CredentialAwareApp)
 
-    secret_store = InMemorySecretStore()
     handler = DefaultHandler()
     app = create_app_handler_service(
         handler,
@@ -545,28 +507,25 @@ async def credential_wf_client(temporal_client, task_queue, reregister_app):
         app_class=CredentialAwareApp,
         temporal_host="localhost:7233",
         task_queue=task_queue,
-        secret_store=secret_store,
     )
     svc._temporal_client = temporal_client
 
-    return app, secret_store
+    return app
 
 
 @pytest.mark.integration
-async def test_start_intercepts_inline_credentials(
+async def test_start_strips_inline_credentials(
     run_worker, credential_wf_client, temporal_client
 ):
-    """G6.12: POST /start with inline credentials intercepts them into the secret store,
-    replaces with a UUID credential_guid, and dispatches to Temporal without raw credentials.
+    """G6.12: POST /start with inline credentials strips them from the body
+    before dispatching to Temporal.
 
     Verifies:
-    - credentials are stored in the secret store under a freshly generated UUID
-    - stored format is a flat dict {key: value}, matching production Dapr/Vault format
-    - Temporal start event payload carries credential_guid (not raw credentials)
+    - credentials are NOT present in the Temporal start event payload
+    - the workflow starts successfully despite credentials being stripped
     """
-    import json
 
-    app, secret_store = credential_wf_client
+    app = credential_wf_client
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -584,21 +543,7 @@ async def test_start_intercepts_inline_credentials(
     wf_id = resp.json()["data"]["workflow_id"]
     assert wf_id
 
-    # Secret store must have exactly one entry — the intercepted credential
-    stored_names = await secret_store.list_names()
-    assert len(stored_names) == 1
-    credential_guid = stored_names[0]
-
-    # The key must be a valid UUID
-    UUID(credential_guid)
-
-    # Stored value must be flat dict {key: value}, not the v3 list [{key, value}]
-    stored = json.loads(await secret_store.get(credential_guid))
-    assert stored == {"password": "s3cr3t"}
-
-    # Confirm the Temporal workflow start event carries credential_guid and no raw
-    # credentials. CredentialAwareInput declares credential_guid as a named field,
-    # so the UUID propagates through Pydantic into the serialised Temporal payload.
+    # Confirm the Temporal workflow start event does not carry raw credentials.
     handle = temporal_client.get_workflow_handle(wf_id)
     history = await handle.fetch_history()
     start_payload_data = b"".join(
@@ -607,7 +552,6 @@ async def test_start_intercepts_inline_credentials(
             0
         ].workflow_execution_started_event_attributes.input.payloads
     )
-    assert credential_guid.encode() in start_payload_data
     assert b'"credentials"' not in start_payload_data
 
 

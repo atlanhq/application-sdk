@@ -35,7 +35,6 @@ from typing import Annotated
 from application_sdk.contracts import Input, Output
 from application_sdk.contracts.types import MaxItems, FileReference
 
-@dataclass
 class ProcessInput(Input):
     # SAFE: bounded list
     records: Annotated[list[dict[str, str]], MaxItems(1000)]
@@ -49,7 +48,6 @@ class ProcessInput(Input):
 
 **Escape hatch** for exceptional cases:
 ```python
-@dataclass
 class LegacyInput(Input, allow_unbounded_fields=True):
     """Use with caution — large payloads will fail at runtime."""
     data: dict[str, Any]

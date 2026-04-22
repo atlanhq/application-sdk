@@ -6,15 +6,9 @@ using a real local obstore (no mocks, no Temporal).
 
 from __future__ import annotations
 
-import warnings
-
 import pytest
 
 import application_sdk.constants as constants
-from application_sdk.infrastructure.context import (
-    InfrastructureContext,
-    set_infrastructure,
-)
 from application_sdk.storage.batch import (
     delete_prefix,
     download_prefix,
@@ -23,7 +17,6 @@ from application_sdk.storage.batch import (
     upload_prefix,
 )
 from application_sdk.storage.factory import create_local_store
-from application_sdk.storage.formats.utils import download_files
 from application_sdk.storage.ops import download_file, upload_file
 
 
@@ -154,33 +147,6 @@ async def test_list_keys_suffix_filter(store, tmp_path):
 
 
 # ------------------------------------------------------------------
-# download_files deprecation warning
-# ------------------------------------------------------------------
-
-
-@pytest.mark.integration
-async def test_download_files_emits_deprecation_warning(store, staging):
-    """download_files() should emit a DeprecationWarning."""
-    set_infrastructure(InfrastructureContext(storage=store))
-
-    # Upload a file so download_files has something to find
-    src = staging / "test.parquet"
-    src.write_bytes(b"parquet-data")
-    await upload_file("depwarn/test.parquet", src, store)
-
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        try:
-            await download_files(str(staging / "depwarn/test.parquet"), ".parquet")
-        except Exception:
-            pass  # may fail on infra setup, we only care about the warning
-
-        dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-        assert len(dep_warnings) >= 1
-        assert "storage.transfer.download" in str(dep_warnings[0].message)
-
-
-# ------------------------------------------------------------------
 # upload_prefix (parallel directory upload)
 # ------------------------------------------------------------------
 
@@ -284,3 +250,93 @@ async def test_delete_prefix_empty(store):
     """delete_prefix on nonexistent prefix returns 0."""
     deleted = await delete_prefix("nonexistent-prefix", store)
     assert deleted == 0
+
+
+# ------------------------------------------------------------------
+# transfer.upload / download — concurrent directory path
+# ------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_transfer_upload_directory_concurrent(store, tmp_path):
+    """transfer.upload handles multi-file directories via asyncio.gather."""
+    from application_sdk.storage.transfer import upload
+
+    src = tmp_path / "src"
+    src.mkdir()
+    for i in range(15):
+        (src / f"part_{i}.csv").write_text(f"row-{i}")
+
+    out = await upload(str(src), "transfer-conc/", store=store)
+
+    assert out.ref.file_count == 15
+    assert out.synced is True
+    assert out.reason == "uploaded"
+
+    # Verify all data keys exist in the store (excludes .sha256 sidecars)
+    keys = await list_keys("transfer-conc", store, suffix=".csv")
+    assert len(keys) == 15
+
+
+@pytest.mark.integration
+async def test_transfer_upload_download_directory_roundtrip(store, tmp_path):
+    """Full roundtrip: upload a directory concurrently, download and verify."""
+    from application_sdk.storage.transfer import download, upload
+
+    src = tmp_path / "src"
+    src.mkdir()
+    sub = src / "nested"
+    sub.mkdir()
+    (src / "root.txt").write_bytes(b"root-content")
+    (sub / "child.txt").write_bytes(b"child-content")
+
+    await upload(str(src), "rt-dir/", store=store)
+
+    dest = tmp_path / "dest"
+    dl = await download("rt-dir/", str(dest), store=store)
+
+    assert dl.ref.file_count == 2
+    assert dl.synced is True
+    assert (dest / "root.txt").read_bytes() == b"root-content"
+    assert (dest / "nested" / "child.txt").read_bytes() == b"child-content"
+
+
+@pytest.mark.integration
+async def test_transfer_upload_directory_skip_partial(store, tmp_path):
+    """skip_if_exists skips unchanged files and re-uploads changed ones."""
+    from application_sdk.storage.transfer import upload
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "stable.txt").write_bytes(b"same")
+    (src / "changing.txt").write_bytes(b"v1")
+
+    out1 = await upload(str(src), "partial/", store=store, skip_if_exists=True)
+    assert out1.synced is True
+
+    # Second upload with same content → all skipped
+    out2 = await upload(str(src), "partial/", store=store, skip_if_exists=True)
+    assert out2.synced is False
+    assert out2.reason == "skipped:hash_match"
+
+    # Change one file → partial transfer
+    (src / "changing.txt").write_bytes(b"v2")
+    out3 = await upload(str(src), "partial/", store=store, skip_if_exists=True)
+    assert out3.synced is True
+    assert out3.reason == "uploaded"
+
+
+@pytest.mark.integration
+async def test_transfer_upload_directory_max_concurrency(store, tmp_path):
+    """max_concurrency parameter is respected (runs with low concurrency)."""
+    from application_sdk.storage.transfer import upload
+
+    src = tmp_path / "src"
+    src.mkdir()
+    for i in range(8):
+        (src / f"f{i}.bin").write_bytes(f"data-{i}".encode())
+
+    out = await upload(str(src), "low-conc/", store=store, max_concurrency=2)
+
+    assert out.ref.file_count == 8
+    assert out.synced is True

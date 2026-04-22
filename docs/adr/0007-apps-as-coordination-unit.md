@@ -1,7 +1,11 @@
 # ADR-0007: Apps as the Unit of Inter-App Coordination
 
+> **⚠️ Status: Under Review — [BLDX-878](https://linear.app/atlan-epd/issue/BLDX-878/clarify-inter-app-calls-in-sdk-v3)**
+>
+> Inter-app `call()` / `call_by_name()` is **deactivated** in the SDK pending resolution of the duplication with Automation-Engine DAG orchestration. The content below captures the original decision and may be revised.
+
 ## Status
-**Accepted**
+**Under Review** — see BLDX-878
 
 ## Context
 
@@ -47,7 +51,7 @@ class Orchestrator(App):
 
 **Cons:**
 - **Overhead**: Child workflows have more overhead than activities
-- **Type checking**: `call_by_name()` is string-based — mitigated by importing only contract dataclasses (not the child's implementation class)
+- **Type checking**: `call_by_name()` is string-based — mitigated by importing only contract models (not the child's implementation class)
 
 ### Option 2: Activity-Based Coordination (Not Chosen)
 
@@ -89,11 +93,11 @@ Require Apps to directly import each other's App classes.
 **Negative:**
 - Child workflow overhead higher than activities
 - Must handle child workflow failure modes
-- `call_by_name()` is string-based — import child's contract dataclasses to preserve type safety
+- `call_by_name()` is string-based — import child's contract models to preserve type safety
 
 ## Implementation
 
-Child workflow invocation lives in `application_sdk/app/client.py`. The `App` exposes it through `self.context` inside `run()`. Import only the target app's contract dataclasses — not the app class itself — to maintain type safety while keeping deployments independent:
+Child workflow invocation lives in `application_sdk/app/client.py`. The `App` exposes it through `self.context` inside `run()`. Import only the target app's contract models — not the app class itself — to maintain type safety while keeping deployments independent:
 
 ```python
 # Import ONLY the contracts from the target app's package

@@ -55,14 +55,13 @@ async def convert_data_files(
     input_file_type = input_file_paths[0].split(".")[-1]
     convert_file = ConvertFile(f"{input_file_type}_to_{output_file_type.value}")
     converter_func = file_converter_registry.registry.get(convert_file)
-    converted_files = []
-    try:
-        for file in input_file_paths:
-            converted_file = converter_func(file)
-            if converted_file:
-                converted_files.append(converted_file)
-    except KeyError:
+    if converter_func is None:
         raise ValueError(f"No converter found for file type: {convert_file}")
+    converted_files = []
+    for file in input_file_paths:
+        converted_file = converter_func(file)
+        if converted_file:
+            converted_files.append(converted_file)
 
     return converted_files
 

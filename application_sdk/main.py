@@ -67,7 +67,7 @@ if hasattr(signal, "SIGUSR1"):
     signal.signal(signal.SIGUSR1, _debug_dump_handler)
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
     from pathlib import Path
 
     from application_sdk.app.base import App
@@ -176,6 +176,13 @@ class AppConfig:
 
         app_module = app_module_raw.strip()
 
+        if "," in app_module:
+            raise ValueError(
+                f"ATLAN_APP_MODULE contains a comma: {app_module!r}. "
+                "The multi-app pattern is not supported in v3. "
+                "Define multiple @entrypoint methods on a single App subclass instead."
+            )
+
         service_name = (
             getattr(args, "service_name", None)
             or _env("ATLAN_SERVICE_NAME")
@@ -183,6 +190,7 @@ class AppConfig:
             or _derive_service_name(app_module)
         )
 
+        # v2-compat: remove when all deployments use ATLAN_TEMPORAL_HOST instead.
         # v2 fallback: combine ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT into host:port
         _v2_workflow_host = _env("ATLAN_WORKFLOW_HOST")
         _v2_temporal_host = (
@@ -382,20 +390,20 @@ async def _create_infrastructure(
     """Create infrastructure services based on environment.
 
     If ``DAPR_HTTP_PORT`` is set (Dapr sidecar present), creates Dapr-backed
-    implementations. Otherwise creates InMemory implementations suitable for
-    local development and testing.
+    implementations. Otherwise raises ``RuntimeError`` — the Dapr sidecar is
+    required for all runtime modes.
 
     Args:
-        credential_stores: Optional mapping of store name → SecretStore. When
-            provided (e.g., from ``run_dev_combined``), the first value is used
-            as the secret store instead of a blank ``InMemorySecretStore``.
+        credential_stores: Optional mapping of store name → SecretStore.
+            Reserved for future use; currently unused.
 
     Returns:
         Configured InfrastructureContext.
+
+    Raises:
+        RuntimeError: If DAPR_HTTP_PORT is not set (no Dapr sidecar).
     """
     from application_sdk.infrastructure.context import InfrastructureContext
-    from application_sdk.infrastructure.secrets import InMemorySecretStore
-    from application_sdk.infrastructure.state import InMemoryStateStore
 
     if os.environ.get("DAPR_HTTP_PORT"):
         from pathlib import Path
@@ -433,25 +441,11 @@ async def _create_infrastructure(
             _dapr_client=dapr_client,
         )
     else:
-        # No Dapr — use InMemory implementations
-        secret_store: SecretStore
-        if credential_stores:
-            secret_store = next(iter(credential_stores.values()))
-        else:
-            secret_store = InMemorySecretStore()
-
-        storage_root = os.environ.get("APP_STORAGE_ROOT", "./local/dapr/objectstore")
-        from application_sdk.storage import create_local_store
-
-        logger.info(
-            "No Dapr sidecar — using InMemory + LocalStore infrastructure",
-            storage_root=storage_root,
-        )
-        return InfrastructureContext(
-            state_store=InMemoryStateStore(),
-            secret_store=secret_store,
-            storage=create_local_store(storage_root),
-            event_binding=None,
+        # No Dapr sidecar — require it for all modes
+        raise RuntimeError(
+            "Dapr sidecar not detected (DAPR_HTTP_PORT not set). "
+            "Run 'poe start-deps' to start local Dapr + Temporal, "
+            "or set DAPR_HTTP_PORT if running daprd manually."
         )
 
 
@@ -479,27 +473,6 @@ def _derive_task_queue(app_module: str) -> str:
     if app_name:
         return app_name
     return f"{_derive_service_name(app_module)}-queue"
-
-
-def _load_extra_app_modules(extra_app_modules: list[str] | None) -> list[str]:
-    """Load additional app modules so they register with AppRegistry.
-
-    Returns:
-        List of loaded app names.
-    """
-    names: list[str] = []
-    if not extra_app_modules:
-        return names
-    for module_path in extra_app_modules:
-        app_cls = load_app_class(module_path)
-        validate_app_class(app_cls)
-        names.append(app_cls._app_name)  # type: ignore[attr-defined]
-        logger.info(
-            "Loaded extra app %s version %s",
-            app_cls._app_name,  # type: ignore[attr-defined]
-            app_cls._app_version,  # type: ignore[attr-defined]
-        )
-    return names
 
 
 async def _flush_observability() -> None:
@@ -555,6 +528,24 @@ def _install_excepthook() -> None:
         _orig(exc_type, exc_value, exc_traceback)
 
     sys.excepthook = _hook
+
+
+def _install_graceful_signal_handlers(
+    loop: asyncio.AbstractEventLoop,
+    handler: Callable[[], None],
+) -> None:
+    """Register SIGINT/SIGTERM handlers, with a fallback for platforms that
+    don't support loop.add_signal_handler() (e.g. Windows).
+    """
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, handler)
+        except (NotImplementedError, OSError):
+            logger.warning(
+                "loop.add_signal_handler() not supported on this platform "
+                "(signal=%s); graceful shutdown via signals is unavailable",
+                sig.name,
+            )
 
 
 async def run_worker_mode(config: AppConfig) -> None:
@@ -655,8 +646,7 @@ async def run_worker_mode(config: AppConfig) -> None:
 
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _signal_handler)
+    _install_graceful_signal_handlers(loop, _signal_handler)
 
     from application_sdk.server.health import WorkerHealthServer
 
@@ -684,10 +674,6 @@ def run_handler_mode(config: AppConfig) -> None:
 
     Loads the handler class (or DefaultHandler) and runs the FastAPI
     server via uvicorn. This is synchronous — uvicorn manages its own loop.
-
-    Note: extra_app_modules are intentionally NOT loaded here. Handler mode
-    only serves HTTP for the primary app — no Temporal worker, so secondary
-    apps don't need to register.
     """
     import asyncio
 
@@ -749,7 +735,6 @@ def run_handler_mode(config: AppConfig) -> None:
         auth_token_url=config.auth_token_url,
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
-        state_store=infra.state_store,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
@@ -891,7 +876,6 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_token_url=config.auth_token_url,
         auth_base_url=config.auth_base_url,
         auth_scopes=config.auth_scopes,
-        state_store=infra.state_store,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
@@ -915,8 +899,7 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _signal_handler)
+    _install_graceful_signal_handlers(loop, _signal_handler)
 
     from application_sdk.server.health import WorkerHealthServer
 
@@ -951,6 +934,7 @@ async def run_dev_combined(
     app_class: type[App],
     *,
     credential_stores: Mapping[str, SecretStore] | None = None,
+    credentials: dict[str, Any] | None = None,
     example_input: dict[str, Any] | None = None,
     host: str = "127.0.0.1",
     port: int = 8000,
@@ -967,7 +951,15 @@ async def run_dev_combined(
     Args:
         app_class: The App class to serve (must already be imported).
         credential_stores: Optional mapping of store name → SecretStore.
-        example_input: Optional dict shown as curl example in startup banner.
+        credentials: Optional credential dict (host, port, username, password,
+            authType, extra, etc.). If provided, credentials are auto-provisioned
+            via ``POST /workflows/v1/dev/local-vault`` once the handler is ready, and the
+            returned ``credential_guid`` is injected into ``example_input``.
+            This mimics the production flow where Heracles provisions credentials
+            before starting a workflow.
+        example_input: Optional dict used as the workflow input. If ``credentials``
+            is also provided, ``credential_guid`` is auto-injected before the
+            workflow starts.
         host: Bind host (default: "127.0.0.1").
         port: Handler HTTP port.
         temporal_host: Temporal server address.
@@ -978,7 +970,18 @@ async def run_dev_combined(
 
         import asyncio
         from my_app import MyApp
-        asyncio.run(run_dev_combined(MyApp, example_input={"key": "value"}))
+
+        asyncio.run(run_dev_combined(
+            MyApp,
+            credentials={
+                "host": "localhost", "port": "5432", "authType": "basic",
+                "username": "admin", "password": "secret",
+                "extra": {"database": "mydb"},
+            },
+            example_input={
+                "connection": {"connection_name": "test", "connection_qualified_name": "default/app/1234"},
+            },
+        ))
     """
     import json as _json
 
@@ -1008,24 +1011,79 @@ async def run_dev_combined(
     infra = await _create_infrastructure(credential_stores=credential_stores)
     set_infrastructure(infra)
 
-    print(f"\nDev server running at http://{host}:{port}")
-    print("  POST /workflows/v1/start                         - Start workflow")
-    print("  POST /workflows/v1/stop/{workflow_id}/{run_id}   - Stop workflow")
-    print("  GET  /workflows/v1/result/{workflow_id}          - Get result")
-    print("  GET  /workflows/v1/status/{workflow_id}/{run_id} - Get status")
-    print("  GET  /health                                      - Health check")
-    print("\nExample:")
-    if example_input is not None:
-        example_json = _json.dumps(example_input, indent=2)
-        print(f"  curl -X POST http://{host}:{port}/workflows/v1/start \\")
-        print('    -H "Content-Type: application/json" \\')
-        print(f"    -d '{example_json}'")
+    # Auto-provision credentials if provided (mimics Heracles writing to
+    # /workflows/v1/dev/local-vault before starting the workflow). This writes non-sensitive
+    # config to object storage and sensitive secrets to the local secrets file.
+    if credentials is not None:
+        import httpx
+
+        async def _provision_and_start() -> None:
+            """Wait for handler, provision creds, start workflow — mimics prod."""
+            base = f"http://{host}:{port}"
+            async with httpx.AsyncClient() as client:
+                # Wait for the handler to be ready
+                for _ in range(30):
+                    try:
+                        resp = await client.get(f"{base}/health", timeout=2)
+                        if resp.status_code == 200:
+                            break
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1)
+
+                # Step 1: Provision credentials (mimics Heracles)
+                resp = await client.post(
+                    f"{base}/workflows/v1/dev/local-vault",
+                    json=credentials,
+                    timeout=10,
+                )
+                result = resp.json()
+                credential_guid = result.get("data", {}).get(
+                    "credential_guid"
+                ) or result.get("credential_guid")
+                logger.info("Auto-provisioned credentials: guid=%s", credential_guid)
+
+                # Step 2: Start workflow (mimics Heracles/AE)
+                workflow_input = dict(example_input or {})
+                workflow_input["credential_guid"] = credential_guid
+                resp = await client.post(
+                    f"{base}/workflows/v1/start",
+                    json=workflow_input,
+                    timeout=30,
+                )
+                start_result = resp.json()
+                wf_data = start_result.get("data", {})
+                workflow_id = wf_data.get("workflow_id", "")
+                run_id = wf_data.get("run_id", "")
+                logger.info(
+                    "Auto-started workflow: id=%s run_id=%s",
+                    workflow_id,
+                    run_id,
+                )
+
+            print(f"\n  Credentials provisioned: credential_guid={credential_guid}")
+            print(f"  Workflow started: workflow_id={workflow_id} run_id={run_id}")
+            print(f"\n  curl {base}/workflows/v1/result/{workflow_id}\n")
+
+        # Schedule provisioning + start as a background task — runs after the server starts
+        asyncio.create_task(_provision_and_start())
     else:
+        print(f"\nDev server running at http://{host}:{port}")
         print(
-            f"  curl -X POST http://{host}:{port}/workflows/v1/start"
-            f' -H "Content-Type: application/json" -d \'{{"name": "World"}}\''
+            "  POST /workflows/v1/dev/local-vault                            - Provision credentials"
         )
-    print(f"\n  curl http://{host}:{port}/workflows/v1/result/{{workflow_id}}\n")
+        print("  POST /workflows/v1/start                         - Start workflow")
+        print("  POST /workflows/v1/stop/{workflow_id}/{run_id}   - Stop workflow")
+        print("  GET  /workflows/v1/result/{workflow_id}          - Get result")
+        print("  GET  /workflows/v1/status/{workflow_id}/{run_id} - Get status")
+        print("  GET  /health                                      - Health check")
+        if example_input is not None:
+            print("\nExample:")
+            example_json = _json.dumps(example_input, indent=2)
+            print(f"  curl -X POST http://{host}:{port}/workflows/v1/start \\")
+            print('    -H "Content-Type: application/json" \\')
+            print(f"    -d '{example_json}'")
+        print(f"\n  curl http://{host}:{port}/workflows/v1/result/{{workflow_id}}\n")
 
     await run_combined_mode(config)
 
@@ -1052,9 +1110,8 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 Environment Variables:
   ATLAN_APP_MODE           Execution mode (worker, handler, or combined)
-  ATLAN_APP_MODULE         App class path(s), comma-separated for multi-app
-                           First is primary (HTTP handler), rest register on worker
-                           (e.g., app.main:MainApp,app.secondary:SecondaryApp)
+  ATLAN_APP_MODULE         App class path in 'module:ClassName' form (e.g. app.main:MyApp)
+                           Apps expose multiple workflows via @entrypoint methods
   ATLAN_HANDLER_MODULE     Optional custom handler module path
   ATLAN_TEMPORAL_HOST      Temporal server address (default: localhost:7233)
                            Falls back to ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT (v2)
@@ -1085,7 +1142,7 @@ Examples:
     parser.add_argument(
         "--app",
         "-a",
-        help="App module path(s), comma-separated for multi-app (e.g., app.main:MainApp,app.secondary:SecondaryApp). First is primary (HTTP handler), rest register on worker.",
+        help="App class path in 'module:ClassName' form (e.g. app.main:MyApp). Use @entrypoint methods to expose multiple workflows from one App.",
     )
     parser.add_argument(
         "--handler",

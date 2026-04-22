@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.0.0"
+version = "3.1.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -23,7 +23,6 @@ dependencies = [
     "aiohttp>=3.10.0,<3.14.0",
     "opentelemetry-exporter-otlp==1.39.1",
     "opentelemetry-exporter-prometheus==0.60b1",
-    "psutil>=7.0.0,<7.3.0",
     "fastapi[standard]==0.127.0",
     "pyatlan>=9,<10",
     "httpx-retries>=0.4.0,<0.5.0",
@@ -33,10 +32,9 @@ dependencies = [
     "python-dotenv>=1.1.0,<1.3.0",
     "pyyaml>=6.0.2,<6.1.0",
     "obstore>=0.9.1,<0.10.0",
-    "duckdb>=1.1.3,<1.5.0",
-    "duckdb-engine>=0.17.0,<0.18.0",
-    "pandas>=2.2.3,<2.4.0",
-    "pyarrow>=20.0.0,<23.0.0",
+    # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
+    "temporalio>=1.7.1,<1.24.0",
+    "orjson>=3.11.6,<3.12.0",
 ]
 
 [project.scripts]
@@ -45,18 +43,24 @@ application-sdk = "application_sdk.main:main"
 [project.urls]
 Repository = "https://github.com/atlanhq/application-sdk"
 Documentation = "https://github.com/atlanhq/application-sdk/README.md"
-"Changelog" = "https://github.com/atlanhq/application-sdk/blob/refactor-v3/CHANGELOG.md"
+"Changelog" = "https://github.com/atlanhq/application-sdk/blob/main/CHANGELOG.md"
 
-# Optional dependencies for specific functionality - Install using: uv sync --extra workflows
+# Optional dependencies for specific functionality
 [project.optional-dependencies]
+# Backwards-compatibility shims (dapr/temporalio/orjson promoted to core in v3.1)
 workflows = [
     "temporalio>=1.7.1,<1.24.0",
     "orjson>=3.11.6,<3.12.0",
 ]
-pandas = [
+# SQL connectors: SqlMetadataExtractor, SqlQueryExtractor, and any SQL-based connector
+sql = [
     "pandas>=2.2.3,<2.4.0",
     "pyarrow>=20.0.0,<23.0.0",
+    "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
+    "duckdb>=1.1.3,<1.5.0",
+    "duckdb-engine>=0.17.0,<0.18.0",
 ]
+# Daft transformer engine
 daft = [
     "daft>=0.7.1,<0.8.0",
 ]
@@ -64,9 +68,17 @@ lakehouse = [
     "pyiceberg>=0.7.0,<0.9.0",
     "daft>=0.7.1,<0.8.0",
 ]
-sqlalchemy = [
+# Incremental extraction: sql + daft + RocksDB state store
+incremental = [
+    "pandas>=2.2.3,<2.4.0",
+    "pyarrow>=20.0.0,<23.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
+    "duckdb>=1.1.3,<1.5.0",
+    "duckdb-engine>=0.17.0,<0.18.0",
+    "daft>=0.7.1,<0.8.0",
+    "rocksdict>=0.3.0",
 ]
+# AWS IAM authentication for RDS/Redshift
 iam_auth = [
     "boto3>=1.38.6,<1.43.0",
 ]
@@ -74,6 +86,12 @@ azure = [
     "azure-identity>=1.15.0",
     "azure-storage-blob>=12.19.0",
     "azure-storage-file-datalake>=12.19.0",
+]
+distributed_lock = [
+    "redis[hiredis]>=5.2.0,<7.2.0",
+]
+mcp = [
+    "fastmcp>=3.2.0",
 ]
 tests = [
     "pytest-order>=1.3.0,<1.4.0",
@@ -84,17 +102,14 @@ scale_data_generator = [
     "faker>=37.1.0,<39.1.0",
     "numpy>=1.23.5,<2.5.0",
 ]
-
-distributed_lock = [
-    "redis[hiredis]>=5.2.0,<7.2.0",
+# Removed in v3.1 — use sql extra instead
+sqlalchemy = [
+    "sqlalchemy[asyncio]>=2.0.36,<2.1.0",
 ]
-
-mcp = [
-    "fastmcp>=3.2.0",
-]
-
-incremental = [
-    "rocksdict>=0.3.0",
+# Removed in v3.1 — use sql extra instead
+pandas = [
+    "pandas>=2.2.3,<2.4.0",
+    "pyarrow>=20.0.0,<23.0.0",
 ]
 
 # Development dependencies - Install using: uv sync --group dev
@@ -113,6 +128,7 @@ test = [
     "pytest-asyncio>=0.26.0,<1.4.0",
     "pytest-timeout>=2.3.0,<3.0.0",
     "hypothesis>=6.114.0,<6.149.0",
+    "trustme>=1.2.1,<1.3.0",
 ]
 examples = [
     "snowflake-sqlalchemy>=1.7.0,<1.9.0",
@@ -121,15 +137,12 @@ examples = [
 docs = [
     "mkdocs>=1.6.1,<1.7.0",
     "mkdocs-material>=9.6.4,<9.8.0",
-    "pymdown-extensions>=10.14.3,<10.15.0",
+    "pymdown-extensions>=10.15.0,<11.0.0",
     "pydoctor>=24.11.2,<25.11.0",
     "mike>=2.1.3,<2.2.0",
 ]
 
 [tool.poe.tasks]
-# Contract generation
-generate.shell = "cd contract && pkl eval -m generated app.pkl && mkdir -p ../app/contracts && mv generated/input.py ../app/contracts/_input.py"
-
 download-components.shell = "ls -l components/*.yaml"
 # Dapr and Temporal service tasks
 start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
@@ -139,8 +152,13 @@ start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app
 
 start-temporal = "temporal server start-dev --db-filename ./temporal.db"
 start-deps.shell = "poe start-dapr & poe start-temporal &"
-stop-deps.shell = "lsof -ti:3000,3500,7233,50001 | xargs kill -9 2>/dev/null || true"
+stop-deps.shell = "lsof -ti:3000,3500,7233,8233,50001 | xargs kill -9 2>/dev/null || true"
 test-integration.shell = "temporal server start-dev --db-filename /tmp/temporal-integ.db &>/tmp/temporal-integ.log & sleep 3 && uv run pytest tests/integration/ -m integration -v --timeout=120; EXIT=$?; kill %1 2>/dev/null; exit $EXIT"
+
+# Local credential provisioning
+[tool.poe.tasks.provision-credentials]
+help = "Provision credentials for local development"
+cmd = "python -m application_sdk.tools.provision_credentials"
 
 # API docs
 generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api application_sdk --docformat=google"
@@ -151,9 +169,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["application_sdk"]
-
-[tool.hatch.version]
-path = "application_sdk/__init__.py"
 
 [tool.pyright]
 venvPath = "."
@@ -218,11 +233,13 @@ extend-select = [
 ".github/**" = ["G004", "T201"]
 "tests/**" = ["G004"]
 "tools/**" = ["T201"]
+"application_sdk/tools/**" = ["T201"]
+"examples/**" = ["T201"]
 
 [tool.uv]
 default-groups = ["dev", "test"]
 constraint-dependencies = [
-    "python-multipart>=0.0.22",  # CVE-2026-24486
+    "python-multipart>=0.0.26",  # CVE-2026-24486, CVE-2026-40347
     "protobuf>=6.33.5",          # CVE-2026-0994
     "authlib>=1.6.7",            # CVE-2026-28802
     "black>=26.3.1",             # CVE-2026-32274

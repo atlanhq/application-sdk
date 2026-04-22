@@ -15,25 +15,19 @@ Pass ``normalize=False`` to bypass normalisation and use the key exactly as
 supplied (useful for callers that already hold a clean store key and want to
 avoid the constant import overhead, or for tests that need exact key control).
 
-Internal helpers (small payloads)
-----------------------------------
-* ``_put(key, data)``    — write bytes (sidecars, metadata, JSON configs)
+Public helpers (small payloads)
+--------------------------------
+* ``put_json(key, obj)`` — serialise to JSON and write (configs, metadata)
 * ``_get_bytes(key)``    — read bytes (sidecars, metadata, JSON configs)
-* ``_get_content(key)``  — v2-compatible alias for ``_get_bytes``
+
+Internal helpers
+----------------
+* ``_put(key, data)``    — write raw bytes (use ``put_json`` for JSON)
 
 Streaming API (large files)
 ----------------------------
 * ``upload_file(key, local_path)``   — streaming upload with adaptive multipart
 * ``download_file(key, local_path)`` — streaming download with optional hash
-
-Migration from v2
------------------
-* ``objectstore.get_content(key)``  →  ``upload_file`` / ``download_file``
-* ``objectstore.upload_bytes(key, data)``  →  ``_put(key, data)`` (internal)
-* ``objectstore.delete(key)``  →  ``delete(key)``
-* ``objectstore.exists(key)``  →  ``exists(key)``
-* ``objectstore.list_keys(prefix)``  →  ``list_keys(prefix)``
-* ``objectstore.delete_prefix(prefix)``  →  ``delete_prefix(prefix)``
 
 All calls that previously went through the implicit singleton store now
 resolve from the infrastructure context automatically.  Pass ``store=my_store``
@@ -50,9 +44,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import obstore
+import orjson
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from obstore.store import ObjectStore
+
+    JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 # stdlib logger: cannot use get_logger here due to circular import
 # (observability -> storage -> batch -> ops -> observability)
@@ -351,10 +350,6 @@ async def _get_bytes(
         raise StorageError(f"Failed to get key '{key}'", key=key, cause=exc) from exc
 
 
-#: v2-compatible alias for :func:`_get_bytes` — internal use only.
-_get_content = _get_bytes
-
-
 async def _put(
     key: str,
     data: bytes,
@@ -391,6 +386,33 @@ async def _put(
         from application_sdk.storage.errors import StorageError
 
         raise StorageError(f"Failed to put key '{key}'", key=key, cause=exc) from exc
+
+
+async def put_json(
+    key: str,
+    obj: JsonValue,
+    store: "ObjectStore | None" = None,
+    *,
+    normalize: bool = True,
+) -> None:
+    """Serialise *obj* to JSON and write to *key*.
+
+    Convenience wrapper around :func:`_put` for small JSON payloads such as
+    workflow configs and sidecar metadata.  For large files use
+    :func:`upload_file` instead.
+
+    Args:
+        key: Object key / path.  Normalised by default (see :func:`normalize_key`).
+        obj: A JSON-serialisable value (dict, list, str, int, float, bool, or None).
+        store: An obstore-compatible store instance, or ``None`` to use the
+            store from the current infrastructure context.
+        normalize: When ``True`` (default), normalise *key* before use.
+
+    Raises:
+        StorageError: If the write fails.
+        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    await _put(key, orjson.dumps(obj), store, normalize=normalize)
 
 
 async def delete(
@@ -473,7 +495,3 @@ async def exists(
         raise StorageError(
             f"Failed to check existence of key '{key}'", key=key, cause=exc
         ) from exc
-
-
-#: v2-compatible alias for :func:`delete`.
-delete_file = delete

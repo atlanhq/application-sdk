@@ -11,6 +11,7 @@ from httpx._types import (
 )
 
 from application_sdk.clients import ClientInterface
+from application_sdk.clients.ssl_utils import get_ssl_context
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -184,8 +185,9 @@ class BaseClient(ClientInterface):
             ...     params={"limit": 100}
             ... )
         """
+        ssl_context = get_ssl_context()
         async with httpx.AsyncClient(
-            timeout=timeout, transport=self.http_retry_transport
+            timeout=timeout, transport=self.http_retry_transport, verify=ssl_context
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:
@@ -218,7 +220,6 @@ class BaseClient(ClientInterface):
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[AuthTypes] = None,
         follow_redirects: bool = True,
-        verify: bool = True,
         timeout: int = 30,
     ) -> Optional[httpx.Response]:
         """
@@ -239,7 +240,6 @@ class BaseClient(ClientInterface):
             cookies (Optional[Dict[str, str]]): Cookies to include in the request
             auth (Optional[AuthTypes]): Authentication to use for the request. Supports BasicAuth, DigestAuth, custom auth classes, or tuples for basic auth.
             follow_redirects (bool): Whether to follow HTTP redirects. Defaults to True.
-            verify (bool): Whether to verify SSL certificates. Defaults to True.
             timeout (int): Request timeout in seconds. Defaults to 30.
 
         Returns:
@@ -264,8 +264,9 @@ class BaseClient(ClientInterface):
             ...         auth=("username", "password")
             ... )
         """
+        ssl_context = get_ssl_context()
         async with httpx.AsyncClient(
-            timeout=timeout, transport=self.http_retry_transport, verify=verify
+            timeout=timeout, transport=self.http_retry_transport, verify=ssl_context
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:

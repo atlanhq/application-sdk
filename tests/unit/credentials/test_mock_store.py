@@ -129,6 +129,6 @@ class TestMockCredentialStore:
         assert ref.name == "my-creds"
 
     def test_secret_store_property(self, mock_store):
-        from application_sdk.infrastructure.secrets import InMemorySecretStore
+        from application_sdk.testing.mocks import MockSecretStore
 
-        assert isinstance(mock_store.secret_store, InMemorySecretStore)
+        assert isinstance(mock_store.secret_store, MockSecretStore)

@@ -56,6 +56,7 @@ class InterceptorSettings:
 
 def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables."""
+    # v2-compat: remove ATLAN_WORKFLOW_HOST/PORT fallbacks when all deployments use TEMPORAL_HOST.
     # Prefer TEMPORAL_HOST (v3). Fall back to ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT (v2).
     _v2_host = os.environ.get("ATLAN_WORKFLOW_HOST", "")
     _v2_port = os.environ.get("ATLAN_WORKFLOW_PORT", "7233")

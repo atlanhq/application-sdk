@@ -12,7 +12,7 @@ What it handles
                                           separate lines if they map to
                                           different new modules
 - ``from X import *``                   → rewrites module path only
-- Imports with ``structural=True``      → adds a ``# TODO(v3-migration)``
+- Imports with ``structural=True``      → adds a ``# TODO(upgrade-v3)``
                                           comment on the preceding line
 
 What it does NOT do
@@ -232,7 +232,7 @@ class V3ImportRewriter(cst.CSTTransformer):
             todo = todo[:117] + "..."
         comment_line = cst.EmptyLine(
             indent=True,
-            comment=cst.Comment(f"# TODO(v3-migration): {todo}"),
+            comment=cst.Comment(f"# TODO(upgrade-v3): {todo}"),
         )
         # Append after any existing leading blank lines so the comment sits
         # immediately above the import.

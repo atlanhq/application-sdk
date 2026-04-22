@@ -15,24 +15,21 @@ The challenge is that Temporal may have workflows running for hours, days, or we
 
 ## Decision
 
-We chose **single-dataclass contracts with base classes**: every `run()` method and every `@task` method accepts exactly one dataclass extending `Input` and returns exactly one dataclass extending `Output`. Evolution follows strict rules: ADD new fields with defaults, NEVER remove or change types.
+We chose **single-model contracts with base classes**: every `run()` method and every `@task` method accepts exactly one Pydantic model extending `Input` and returns exactly one model extending `Output`. Evolution follows strict rules: ADD new fields with defaults, NEVER remove or change types.
 
 This approach is **advocated by Temporal as a best practice**. Temporal's documentation recommends using single-object parameters for workflow and activity signatures to enable backwards-compatible evolution.
 
 ## Options Considered
 
-### Option 1: Single-Dataclass Pattern with Base Classes (Chosen)
+### Option 1: Single-Model Pattern with Base Classes (Chosen)
 
 ```python
-from dataclasses import dataclass
 from application_sdk.contracts import Input, Output
 
-@dataclass
 class ExtractInput(Input):
     source_url: str
     max_records: int = 1000          # Optional with default
 
-@dataclass
 class ExtractOutput(Output):
     records_processed: int
     checkpoint_path: str
@@ -44,7 +41,6 @@ class Extractor(App):
 
 **Safe evolution example:**
 ```python
-@dataclass
 class ExtractInput(Input):
     source_url: str
     max_records: int = 1000
@@ -58,8 +54,8 @@ class ExtractInput(Input):
 - **Named fields**: Self-documenting contracts, visible in Temporal UI
 - **Extensible**: Can always add context without signature changes
 - **Type inference**: pyright can track types through the entire call chain
-- **Serialization**: Plain dataclasses serialize cleanly through Temporal's JSON converter
-- **Validation hooks**: Base class `__init_subclass__` enables import-time payload safety validation
+- **Serialization**: Pydantic models serialize cleanly through Temporal's JSON data converter
+- **Validation**: Pydantic field validation plus import-time payload safety checks from the base class
 
 **Cons:**
 - **Verbosity**: Simple operations need input/output wrapper classes
@@ -89,7 +85,7 @@ async def extract(self, url: str, max_records: int = 1000) -> list[dict]:
 
 1. **Temporal best practice**: Temporal's own documentation recommends wrapping workflow and activity parameters in a single object. This pattern is proven across the Temporal ecosystem.
 2. **Version coexistence**: When deploying a new app version, old workflows continue running with old workers. If the new version adds a field with a default, old inputs (without that field) still deserialize correctly.
-3. **Observability**: Temporal UI displays workflow/activity inputs and outputs. Named dataclass fields like `{source_url: "...", max_records: 1000}` are far more readable than positional tuples or raw dicts.
+3. **Observability**: Temporal UI displays workflow/activity inputs and outputs. Named Pydantic model fields like `{source_url: "...", max_records: 1000}` are far more readable than positional tuples or raw dicts.
 4. **Contract documentation**: The `Input`/`Output` base class inheritance clearly marks "this is a contract boundary."
 
 ## Consequences

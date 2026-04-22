@@ -3,6 +3,8 @@
 import json
 from typing import Any
 
+import orjson
+
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import BindingError, BindingResponse
 from application_sdk.infrastructure.pubsub import MessageHandler, PubSubError
@@ -52,7 +54,7 @@ class DaprStateStore:
             await self._client.save_state(
                 store_name=self._store_name,
                 key=key,
-                value=json.dumps(value),
+                value=value,
             )
         except Exception as e:
             raise StateStoreError(
@@ -127,15 +129,34 @@ class DaprSecretStore:
         self._store_name = store_name
 
     async def get(self, name: str) -> str:
-        """Get a secret via Dapr."""
+        """Get a secret via Dapr.
+
+        Handles both Dapr response formats:
+
+        * **Single-key** (default): ``{"secret-name": "{\"user\":\"u\",...}"}``
+          — returns the JSON string value directly.
+        * **Multi-key** (``multiValued: true`` in Dapr component config):
+          ``{"user": "u", "pass": "p"}`` — serialises the dict as a JSON
+          string so callers can ``json.loads`` it uniformly.
+
+        This mirrors v2's ``SecretStore._process_secret_data`` which
+        handled both formats transparently.
+        """
         try:
             result = await self._client.get_secret(
                 store_name=self._store_name,
                 key=name,
             )
+            if not result:
+                raise SecretNotFoundError(name)
+            # Single-key: the secret name is a key in the response dict.
+            # The value is the raw secret string (often a JSON blob).
             if name in result:
                 return result[name]
-            raise SecretNotFoundError(name)
+            # Multi-key: Dapr returned individual key-value pairs
+            # (e.g. {"username": "real", "password": "pw"}).
+            # Serialise as JSON so the caller can parse uniformly.
+            return orjson.dumps(result).decode()
         except SecretNotFoundError:
             raise
         except Exception as e:
@@ -223,7 +244,7 @@ class DaprPubSub:
             await self._client.publish_event(
                 pubsub_name=self._pubsub_name,
                 topic=topic,
-                data=json.dumps(data),
+                data=orjson.dumps(data).decode(),
                 metadata=metadata or {},
             )
         except Exception as e:

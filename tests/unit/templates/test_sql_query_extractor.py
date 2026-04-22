@@ -81,16 +81,16 @@ class TestSqlQueryExtractorSubclass:
         # Verify the base class itself is a proper App subclass.
         assert issubclass(SqlQueryExtractor, App)
 
-    def test_get_query_batches_raises_not_implemented_by_default(self) -> None:
+    async def test_get_query_batches_raises_not_implemented_by_default(
+        self,
+    ) -> None:
+        extractor = SqlQueryExtractor.__new__(SqlQueryExtractor)
+        with pytest.raises(
+            NotImplementedError, match="must implement get_query_batches"
+        ):
+            await extractor.get_query_batches(QueryBatchInput())
+
+    async def test_fetch_queries_raises_not_implemented_by_default(self) -> None:
         extractor = SqlQueryExtractor.__new__(SqlQueryExtractor)
         with pytest.raises(NotImplementedError):
-            import asyncio
-
-            asyncio.run(extractor.get_query_batches(QueryBatchInput()))
-
-    def test_fetch_queries_raises_not_implemented_by_default(self) -> None:
-        extractor = SqlQueryExtractor.__new__(SqlQueryExtractor)
-        with pytest.raises(NotImplementedError):
-            import asyncio
-
-            asyncio.run(extractor.fetch_queries(QueryFetchInput()))
+            await extractor.fetch_queries(QueryFetchInput())

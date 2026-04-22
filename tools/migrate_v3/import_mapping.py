@@ -9,7 +9,7 @@ whose symbol names are unchanged).
 Entries with ``structural=True`` represent imports that, in addition to the
 path change, require manual structural refactoring (e.g. merging a Workflow +
 Activities pair into a single App subclass). The rewriter adds a
-``# TODO(v3-migration)`` comment above those lines so reviewers know where
+``# TODO(upgrade-v3)`` comment above those lines so reviewers know where
 follow-up work is needed.
 """
 

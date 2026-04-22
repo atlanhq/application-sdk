@@ -119,23 +119,40 @@ class SQLClient(BaseSQLClient):
 
 
 class SnowflakeQueryExtractor(SqlQueryExtractor):
-    """Snowflake query miner.
+    """Snowflake query miner — example skeleton, not a production implementation.
 
-    Overrides get_query_batches and fetch_queries to implement
-    Snowflake-specific query history extraction.
+    In a real connector:
+    - ``get_query_batches`` queries QUERY_HISTORY to count rows and returns
+      the total batch count + batch size.
+    - ``fetch_queries`` pages through QUERY_HISTORY using ``fetch_queries_sql``
+      and writes results to the object store.
     """
 
     fetch_queries_sql = FETCH_QUERIES_SQL
 
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
-        """Determine batch count from Snowflake query history."""
-        return await super().get_query_batches(input)
+        """Determine batch count from Snowflake query history.
+
+        TODO: replace with real implementation — connect via sql_client_class,
+        COUNT rows in QUERY_HISTORY, and return total_batches / batch_size.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__}.get_query_batches() is a skeleton — "
+            "replace with a real implementation before running."
+        )
 
     @task(timeout_seconds=3600, heartbeat_timeout_seconds=60, auto_heartbeat_seconds=10)
     async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
-        """Fetch one batch of queries from Snowflake."""
-        return await super().fetch_queries(input)
+        """Fetch one batch of queries from Snowflake.
+
+        TODO: replace with real implementation — page through QUERY_HISTORY
+        using fetch_queries_sql and write results to the object store.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__}.fetch_queries() is a skeleton — "
+            "replace with a real implementation before running."
+        )
 
 
 class SampleSnowflakeHandler(Handler):

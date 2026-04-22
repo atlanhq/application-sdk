@@ -1,3 +1,13 @@
+---
+name: migrate-to-native
+description: "[v2-only] Migrate a v2 connector app from Argo to native orchestration. For v3 migrations, use /upgrade-v3."
+---
+
+> **⚠ v2-only skill — NOT for `refactor-v3`.**
+> This skill targets the Argo → native orchestration migration for v2 connectors.
+> The classes, decorators, and directory layout referenced below (`BaseSQLMetadataExtractionApplication`, `@activity.defn`, `get_workflow_args`, `app/activities/metadata_extraction/`, etc.) **do not exist on the `refactor-v3` branch** — invoking this skill against a v3 codebase will fail.
+> For v3 migrations, use `/upgrade-v3` instead.
+
 # Skill: Migrate App to Native Orchestration
 
 You are helping migrate an Atlan connector app from Argo-based orchestration to **native orchestration** — where workflows run via Temporal through the Automation Engine instead of Argo Workflows.

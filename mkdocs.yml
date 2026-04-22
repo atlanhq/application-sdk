@@ -97,7 +97,7 @@ nav:
       - Monitoring: concepts/monitoring.md
   - Migration:
       - What's New in v3: whats-new-v3.md
-      - Migration Guide v3: migration-guide-v3.md
+      - Upgrade Guide v3: upgrade-guide-v3.md
   - Agent Guides:
       - Project Structure: agents/project-structure.md
       - Development Commands: agents/dev-commands.md
@@ -120,5 +120,18 @@ nav:
       - Setup: standards/setup.md
       - DeepWiki MCP: standards/deepwiki.md
       - Review Checklist: standards/review-checklist.md
+  - Architecture Decisions:
+      - adr/index.md
+      - adr/0001-per-app-handlers.md
+      - adr/0002-per-app-workers.md
+      - adr/0003-per-app-observability.md
+      - adr/0004-build-time-type-safety.md
+      - adr/0005-infrastructure-abstraction.md
+      - adr/0006-schema-driven-contracts.md
+      - adr/0007-apps-as-coordination-unit.md
+      - adr/0008-payload-safe-bounded-types.md
+      - adr/0009-separate-handler-worker-deployments.md
+      - adr/0010-async-first-blocking-code.md
+      - adr/0011-logging-level-guidelines.md
   - Configuration Reference: configuration.md
   - API Reference: https://k.atlan.dev/application-sdk/main/api

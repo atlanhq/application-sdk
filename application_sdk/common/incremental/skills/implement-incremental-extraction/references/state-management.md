@@ -34,11 +34,13 @@ Run 2 (Incremental Extraction):
      b. Download previous current-state (becomes "previous state")
      c. Detect table scope (which tables are CREATED/UPDATED/NO CHANGE)
      d. Copy non-column entities (table, schema, database) to new current-state
-     e. Ancestral column merge:
-        - CREATED/UPDATED tables: Use current run's fresh columns
-        - NO CHANGE tables: Carry forward ancestral columns from previous state
-        - Tables removed from scope: Drop ancestral columns
-     f. Create incremental-diff (only changed assets)
+     e. Lightweight column copy:
+        - Copy columns from current run's transformed output only
+        - NO CHANGE table columns are NOT carried forward
+        - Publish-cache is the source of truth for complete column state
+     f. Create incremental-diff (only changed assets, with deletion detection):
+        - delete/table/: Tables in previous state but absent from current scope
+        - delete/column/: Cascade from deleted tables + columns missing from UPDATED tables
      g. Upload new current-state/ to S3
   9. update_marker: Writes next_marker_timestamp → marker.txt
 ```
@@ -106,60 +108,53 @@ Each JSON file contains Atlas-format entities:
 }
 ```
 
-## Ancestral Column Merge
+## Lightweight Column Copy
 
-The most complex part of state management. Ensures unchanged tables keep their
-columns from the previous run without re-extracting.
+Columns are copied directly from the current run's transformed output. There is
+no ancestral merge — NO CHANGE table columns are not carried forward into
+current-state. Publish-cache is the source of truth for complete column state
+across all runs.
 
 ### Algorithm
 
 ```python
-# Simplified from ancestral_merge.py
+# Simplified from state_writer.py
 
-def merge_ancestral_columns(
-    current_column_dir,        # Columns from this run (CREATED/UPDATED tables)
-    previous_column_dir,       # Columns from previous state
-    current_state_column_dir,  # Output directory
-    table_scope,               # Which tables are in scope and their states
-    column_chunk_size,         # Output file chunk size
+def _copy_columns_from_transformed(
+    transformed_dir,      # Current run's transformed output
+    current_state_dir,    # Output directory (current-state/column/)
+    copy_workers=4,
 ):
-    # Step 1: Copy current columns (from CREATED/UPDATED tables)
-    for json_file in current_column_dir.glob("*.json"):
-        for entity in read_json(json_file):
-            table_qn = extract_table_qn(entity)
-            if table_qn in table_scope.table_qualified_names:
-                write_to_output(entity)
-                columns_from_current += 1
-
-    # Step 2: Carry forward ancestral columns (from NO CHANGE tables)
-    for json_file in previous_column_dir.glob("*.json"):
-        for entity in read_json(json_file):
-            table_qn = extract_table_qn(entity)
-
-            # Skip if table was extracted this run (fresh columns exist)
-            if table_qn in table_scope.tables_with_extracted_columns:
-                excluded_already_extracted += 1
-                continue
-
-            # Skip if table no longer in extraction scope
-            if table_qn not in table_scope.table_qualified_names:
-                excluded_table_removed += 1
-                continue
-
-            # Carry forward this ancestral column
-            write_to_output(entity)
-            columns_from_ancestral += 1
+    column_dir = transformed_dir / "column"
+    if not column_dir.exists():
+        return 0
+    # Parallel copy of all column files from this run
+    return copy_directory_parallel(column_dir, current_state_dir / "column",
+                                   max_workers=copy_workers)
 ```
 
-### Merge Decision Matrix
+### Column Handling by Table State
 
-| Table State | Has Current Columns? | Action |
-|-------------|---------------------|--------|
-| CREATED | Yes | Use current columns |
-| UPDATED | Yes | Use current columns |
-| BACKFILL | Yes | Use current columns |
-| NO CHANGE | No | Carry ancestral columns |
-| Removed from scope | N/A | Drop ancestral columns |
+| Table State | Columns in transformed output? | Action |
+|-------------|-------------------------------|--------|
+| CREATED | Yes | Copied to current-state |
+| UPDATED | Yes | Copied to current-state |
+| BACKFILL | Yes | Copied to current-state |
+| NO CHANGE | No | Not copied (not re-extracted) |
+| Deleted | N/A | Emitted to incremental-diff delete/column/ |
+
+### Deletion Detection
+
+`create_incremental_diff()` in `incremental_diff.py` detects two deletion
+scenarios using DuckDB set-difference operations:
+
+1. **Table-level deletions**: Tables present in the previous current-state but
+   absent from the current extraction scope → written to `delete/table/`
+2. **Column-level cascade**: All columns of deleted tables → written to
+   `delete/column/`
+3. **Column-level diff for UPDATED tables**: Columns in previous state but
+   missing from the current extraction of a re-extracted (UPDATED) table →
+   written to `delete/column/`
 
 ## Incremental Diff
 
@@ -167,10 +162,14 @@ The incremental diff contains only changed assets from this specific run:
 
 ```
 incremental-diff/
-├── table/     # Only CREATED/UPDATED/BACKFILL tables
-├── column/    # Only columns for CREATED/UPDATED/BACKFILL tables
-├── schema/    # All schemas (always included)
-└── database/  # All databases (always included)
+├── table/          # Only CREATED/UPDATED/BACKFILL tables
+├── column/         # Only columns for CREATED/UPDATED/BACKFILL tables
+├── schema/         # All schemas (always included)
+├── database/       # All databases (always included)
+├── delete/
+│   ├── table/      # Tables deleted since previous run
+│   └── column/     # Columns deleted (cascade from table + UPDATED table diffs)
+└── metadata.json   # Entity counts for Argo routing
 ```
 
 ### Purpose

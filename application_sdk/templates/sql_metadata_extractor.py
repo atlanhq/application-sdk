@@ -1,20 +1,4 @@
-"""SQL metadata extraction App — v3 implementation.
-
-Replaces the v2 ``BaseSQLMetadataExtractionWorkflow`` +
-``BaseSQLMetadataExtractionActivities`` split with a single typed ``App`` class.
-
-Migration from v2::
-
-    # v2: separate workflow + activities, all Dict[str, Any]
-    from application_sdk.workflows.metadata_extraction.sql import (
-        BaseSQLMetadataExtractionWorkflow,
-    )
-    from application_sdk.activities.metadata_extraction.sql import (
-        BaseSQLMetadataExtractionActivities,
-    )
-
-    # v3: single App class with typed contracts
-    from application_sdk.templates import SqlMetadataExtractor
+"""SQL metadata extraction App.
 
 Subclass ``SqlMetadataExtractor`` to implement connector-specific logic::
 
@@ -25,25 +9,38 @@ Subclass ``SqlMetadataExtractor`` to implement connector-specific logic::
     from application_sdk.app import task
 
     class MyConnectorExtractor(SqlMetadataExtractor):
+        sql_client_class = MySQLClient
+
+        fetch_database_sql = "SELECT db_name FROM databases"
+
         @task(timeout_seconds=1800)
         async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
-            # connector-specific implementation
+            return await super().fetch_databases(input)
+
+Alternatively, override the method entirely without calling super():
+
+    class MyConnectorExtractor(SqlMetadataExtractor):
+        @task(timeout_seconds=1800)
+        async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
             return FetchDatabasesOutput(chunk_count=1, total_record_count=10)
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.task import task
 from application_sdk.common.exc_utils import rewrap
+from application_sdk.credentials import CredentialResolver, legacy_credential_ref
+from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.base_metadata_extraction import UploadInput
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
+    ExtractionTaskInput,
     FetchColumnsInput,
     FetchColumnsOutput,
     FetchDatabasesInput,
@@ -58,7 +55,34 @@ from application_sdk.templates.contracts.sql_metadata import (
     TransformOutput,
 )
 
+if TYPE_CHECKING:
+    from application_sdk.clients.sql import BaseSQLClient
+    from application_sdk.credentials.ref import CredentialRef
+
 logger = get_logger(__name__)
+
+_ET = TypeVar("_ET", bound=ExtractionTaskInput)
+
+
+def _task_input(
+    input_cls: type[_ET],
+    src: ExtractionInput,
+    *,
+    cred_ref: "CredentialRef | None",
+) -> _ET:
+    """Build a typed task input from the top-level extraction input."""
+    return input_cls(
+        workflow_id=src.workflow_id,
+        connection=src.connection,
+        credential_guid=src.credential_guid,
+        credential_ref=cred_ref,
+        output_prefix=src.output_prefix,
+        output_path=src.output_path,
+        exclude_filter=src.exclude_filter,
+        include_filter=src.include_filter,
+        temp_table_regex=src.temp_table_regex,
+        source_tag_prefix=src.source_tag_prefix,
+    )
 
 
 class SqlMetadataExtractor(BaseMetadataExtractor):
@@ -75,43 +99,228 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         @task(timeout_seconds=3600)
         async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
             ...
+
+    SQL-string pattern: set ``sql_client_class`` and the ``fetch_*_sql``
+    class attributes on your subclass, then call ``super()`` from each
+    ``@task`` override to use the default SQL execution provided here.
     """
 
     # Prevent auto-registration: SqlMetadataExtractor is a base template, not a
     # concrete app. Concrete subclasses (e.g. CloudSqlApp) register themselves.
     _app_registered: ClassVar[bool] = True
 
+    # Set this to a BaseSQLClient subclass to enable default SQL execution.
+    sql_client_class: ClassVar[type[BaseSQLClient] | None] = None
+
+    # SQL templates — set in subclasses to use default execution via super().
+    fetch_database_sql: ClassVar[str] = ""
+    fetch_schema_sql: ClassVar[str] = ""
+    fetch_table_sql: ClassVar[str] = ""
+    fetch_column_sql: ClassVar[str] = ""
+
+    # SQL fragments substituted into fetch_table_sql / fetch_column_sql when
+    # temp_table_regex is set on the extraction input.
+    extract_temp_table_regex_table_sql: ClassVar[str] = ""
+    extract_temp_table_regex_column_sql: ClassVar[str] = ""
+
+    # Column names expected in query result rows. Override in subclasses when
+    # the connector SQL aliases these columns differently.
+    database_name_column: ClassVar[str] = "database_name"
+    schema_name_column: ClassVar[str] = "schema_name"
+    table_name_column: ClassVar[str] = "table_name"
+
+    # ------------------------------------------------------------------
+    # Credential / client helpers (not @task — run in activity context)
+    # ------------------------------------------------------------------
+
+    async def _get_credentials(self, input: ExtractionTaskInput) -> dict[str, Any]:
+        """Resolve credentials from the task input via CredentialResolver."""
+        cred_guid = input.credential_guid
+
+        infra = get_infrastructure()
+
+        ref = input.credential_ref or (
+            legacy_credential_ref(cred_guid) if cred_guid else None
+        )
+        if ref is None:
+            raise ValueError("No credential reference or GUID available in task input")
+
+        secret_store = infra.secret_store if infra else None
+        if secret_store is None:
+            raise ValueError("No secret store available for credential resolution")
+
+        resolver = CredentialResolver(secret_store)
+        return await resolver.resolve_raw(ref)
+
+    async def _load_sql_client(self, input: ExtractionTaskInput) -> BaseSQLClient:
+        """Create and load a SQL client using resolved credentials.
+
+        Raises:
+            NotImplementedError: If ``sql_client_class`` is not set.
+        """
+        if self.sql_client_class is None:
+            raise NotImplementedError(
+                f"{type(self).__name__} must set sql_client_class to use "
+                "default SQL execution from super()."
+            )
+        credentials = await self._get_credentials(input)
+        client = self.sql_client_class()
+        await client.load(credentials)
+        return client
+
+    def _prepare_sql(
+        self, sql: str, input: ExtractionTaskInput, *, column_mode: bool = False
+    ) -> str:
+        """Substitute filter placeholders in a SQL template.
+
+        Replaces ``{normalized_exclude_regex}``, ``{normalized_include_regex}``,
+        and ``{temp_table_regex_sql}`` with values derived from *input*.
+        Uses str.replace() to avoid conflicts with any other curly braces.
+
+        Warning:
+            SQL templates that use these placeholders MUST wrap each substitution
+            in single quotes, e.g. ``WHERE name !~ '{normalized_exclude_regex}'``.
+            The ``_SAFE_FILTER_PATTERN`` guard blocks single quotes in filter
+            values but only prevents injection when this wrapping is present.
+            Templates that omit the surrounding quotes are not protected.
+        """
+        exclude_regex = input.exclude_filter or "^$"
+        include_regex = input.include_filter or ".*"
+
+        temp_table_sql = ""
+        if input.temp_table_regex:
+            fragment = (
+                self.extract_temp_table_regex_column_sql
+                if column_mode
+                else self.extract_temp_table_regex_table_sql
+            )
+            if fragment:
+                temp_table_sql = fragment.replace(
+                    "{exclude_table_regex}", input.temp_table_regex
+                )
+
+        return (
+            sql.replace("{normalized_exclude_regex}", exclude_regex)
+            .replace("{normalized_include_regex}", include_regex)
+            .replace("{temp_table_regex_sql}", temp_table_sql)
+        )
+
+    # ------------------------------------------------------------------
+    # Fetch tasks — default implementations using SQL class attributes
+    # ------------------------------------------------------------------
+
     @task(timeout_seconds=1800)
     async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
         """Fetch databases from the source system.
 
-        Override this method in your connector subclass.
+        Default implementation executes ``self.fetch_database_sql`` via
+        ``self.sql_client_class``.  Override in your subclass — or set those
+        two class attributes and call ``super()`` — to use this default.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_databases(). "
-            "See application_sdk.templates.sql_metadata_extractor for examples."
-        )
+        if not self.fetch_database_sql:
+            raise NotImplementedError(
+                f"{type(self).__name__} must implement fetch_databases() "
+                "or set fetch_database_sql. "
+                "See application_sdk.templates.sql_metadata_extractor for examples."
+            )
+        client = await self._load_sql_client(input)
+        try:
+            sql = self._prepare_sql(self.fetch_database_sql.strip(), input)
+            key = self.database_name_column
+            databases: list[str] = []
+            async for batch in client.run_query(sql):
+                for row in batch:
+                    val = row.get(key)
+                    if val:
+                        databases.append(str(val))
+            return FetchDatabasesOutput(
+                databases=databases,
+                chunk_count=1,
+                total_record_count=len(databases),
+            )
+        finally:
+            await client.close()
 
     @task(timeout_seconds=1800)
     async def fetch_schemas(self, input: FetchSchemasInput) -> FetchSchemasOutput:
-        """Fetch schemas from the source system."""
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_schemas()."
-        )
+        """Fetch schemas from the source system.
+
+        Default implementation executes ``self.fetch_schema_sql``.
+        """
+        if not self.fetch_schema_sql:
+            raise NotImplementedError(
+                f"{type(self).__name__} must implement fetch_schemas() "
+                "or set fetch_schema_sql."
+            )
+        client = await self._load_sql_client(input)
+        try:
+            sql = self._prepare_sql(self.fetch_schema_sql.strip(), input)
+            key = self.schema_name_column
+            schemas: list[str] = []
+            async for batch in client.run_query(sql):
+                for row in batch:
+                    val = row.get(key)
+                    if val:
+                        schemas.append(str(val))
+            return FetchSchemasOutput(
+                schemas=schemas,
+                chunk_count=1,
+                total_record_count=len(schemas),
+            )
+        finally:
+            await client.close()
 
     @task(timeout_seconds=1800)
     async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
-        """Fetch tables from the source system."""
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_tables()."
-        )
+        """Fetch tables from the source system.
+
+        Default implementation executes ``self.fetch_table_sql``.
+        """
+        if not self.fetch_table_sql:
+            raise NotImplementedError(
+                f"{type(self).__name__} must implement fetch_tables() "
+                "or set fetch_table_sql."
+            )
+        client = await self._load_sql_client(input)
+        try:
+            sql = self._prepare_sql(self.fetch_table_sql.strip(), input)
+            key = self.table_name_column
+            tables: list[str] = []
+            async for batch in client.run_query(sql):
+                for row in batch:
+                    val = row.get(key)
+                    if val:
+                        tables.append(str(val))
+            return FetchTablesOutput(
+                tables=tables,
+                chunk_count=1,
+                total_record_count=len(tables),
+            )
+        finally:
+            await client.close()
 
     @task(timeout_seconds=1800)
     async def fetch_columns(self, input: FetchColumnsInput) -> FetchColumnsOutput:
-        """Fetch columns from the source system."""
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_columns()."
-        )
+        """Fetch columns from the source system.
+
+        Default implementation executes ``self.fetch_column_sql``.
+        """
+        if not self.fetch_column_sql:
+            raise NotImplementedError(
+                f"{type(self).__name__} must implement fetch_columns() "
+                "or set fetch_column_sql."
+            )
+        client = await self._load_sql_client(input)
+        try:
+            sql = self._prepare_sql(
+                self.fetch_column_sql.strip(), input, column_mode=True
+            )
+            total = 0
+            async for batch in client.run_query(sql):
+                total += len(batch)
+            return FetchColumnsOutput(chunk_count=1, total_record_count=total)
+        finally:
+            await client.close()
 
     @task(timeout_seconds=1800)
     async def fetch_procedures(
@@ -156,11 +365,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         logger.info("Starting SQL metadata extraction: %s", workflow_id)
 
         try:
+            # TODO(v3-cleanup): remove credential_guid fallback when all connectors use credential_ref.
             # Prefer credential_ref; fall back to legacy credential_guid
             cred_ref = input.credential_ref
             if cred_ref is None and input.credential_guid:
-                from application_sdk.credentials import legacy_credential_ref
-
                 cred_ref = legacy_credential_ref(input.credential_guid)
 
             # Fetch all metadata types in parallel
@@ -171,71 +379,34 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 column_result,
             ) = await asyncio.gather(
                 self.fetch_databases(
-                    FetchDatabasesInput(
-                        workflow_id=workflow_id,
-                        connection=input.connection,
-                        credential_guid=input.credential_guid,
-                        credential_ref=cred_ref,
-                        output_prefix=input.output_prefix,
-                        output_path=input.output_path,
-                        exclude_filter=input.exclude_filter,
-                        include_filter=input.include_filter,
-                        temp_table_regex=input.temp_table_regex,
-                        source_tag_prefix=input.source_tag_prefix,
-                    )
+                    _task_input(FetchDatabasesInput, input, cred_ref=cred_ref)
                 ),
                 self.fetch_schemas(
-                    FetchSchemasInput(
-                        workflow_id=workflow_id,
-                        connection=input.connection,
-                        credential_guid=input.credential_guid,
-                        credential_ref=cred_ref,
-                        output_prefix=input.output_prefix,
-                        output_path=input.output_path,
-                        exclude_filter=input.exclude_filter,
-                        include_filter=input.include_filter,
-                        temp_table_regex=input.temp_table_regex,
-                        source_tag_prefix=input.source_tag_prefix,
-                    )
+                    _task_input(FetchSchemasInput, input, cred_ref=cred_ref)
                 ),
                 self.fetch_tables(
-                    FetchTablesInput(
-                        workflow_id=workflow_id,
-                        connection=input.connection,
-                        credential_guid=input.credential_guid,
-                        credential_ref=cred_ref,
-                        output_prefix=input.output_prefix,
-                        output_path=input.output_path,
-                        exclude_filter=input.exclude_filter,
-                        include_filter=input.include_filter,
-                        temp_table_regex=input.temp_table_regex,
-                        source_tag_prefix=input.source_tag_prefix,
-                    )
+                    _task_input(FetchTablesInput, input, cred_ref=cred_ref)
                 ),
                 self.fetch_columns(
-                    FetchColumnsInput(
-                        workflow_id=workflow_id,
-                        connection=input.connection,
-                        credential_guid=input.credential_guid,
-                        credential_ref=cred_ref,
-                        output_prefix=input.output_prefix,
-                        output_path=input.output_path,
-                        exclude_filter=input.exclude_filter,
-                        include_filter=input.include_filter,
-                        temp_table_regex=input.temp_table_regex,
-                        source_tag_prefix=input.source_tag_prefix,
-                    )
+                    _task_input(FetchColumnsInput, input, cred_ref=cred_ref)
                 ),
             )
 
             logger.info(
-                "Metadata extraction completed",
-                workflow_id=workflow_id,
-                databases=db_result.total_record_count,
-                schemas=schema_result.total_record_count,
-                tables=table_result.total_record_count,
-                columns=column_result.total_record_count,
+                "Metadata extraction completed: workflow_id=%s dbs=%d schemas=%d tables=%d cols=%d",
+                workflow_id,
+                db_result.total_record_count,
+                schema_result.total_record_count,
+                table_result.total_record_count,
+                column_result.total_record_count,
             )
+
+            # Extract connection_qualified_name from the input connection.
+            # PublishInputMixin auto-derives publish_state_prefix and
+            # current_state_prefix from this value.
+            connection_qn = ""
+            if input.connection and input.connection.attributes:
+                connection_qn = input.connection.attributes.qualified_name or ""
 
             # Upload extracted data to Atlan
             if input.output_path:
@@ -254,6 +425,9 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 tables_extracted=table_result.total_record_count,
                 columns_extracted=column_result.total_record_count,
                 records_uploaded=records_uploaded,
+                connection_qualified_name=connection_qn,
+                output_path=input.output_path,
+                output_prefix=input.output_prefix,
             )
 
         except Exception as e:
