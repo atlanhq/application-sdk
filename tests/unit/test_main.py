@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
 from pathlib import Path
 from unittest import mock
@@ -418,6 +419,86 @@ class TestRunDevCombined:
             await run_dev_combined(MyApp)
 
         assert captured["config"].health_port == 8081
+
+
+    async def test_disables_prometheus_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """run_dev_combined() should disable Prometheus metrics when the
+        env var is not explicitly set, to avoid port collisions on reload."""
+        monkeypatch.delenv("ATLAN_ENABLE_PROMETHEUS_METRICS", raising=False)
+
+        class MyApp:
+            _app_name = "my-app"
+
+        async def _fake_create_infrastructure(
+            *args: object, **kwargs: object
+        ) -> object:
+            return object()
+
+        async def _fake_run_combined_mode(config: AppConfig) -> None:
+            pass
+
+        import application_sdk.constants as _constants
+
+        with (
+            patch(
+                "application_sdk.main._create_infrastructure",
+                new=_fake_create_infrastructure,
+            ),
+            patch("application_sdk.infrastructure.context.set_infrastructure"),
+            patch(
+                "application_sdk.main.run_combined_mode",
+                new=_fake_run_combined_mode,
+            ),
+        ):
+            await run_dev_combined(MyApp)
+
+        assert os.environ.get("ATLAN_ENABLE_PROMETHEUS_METRICS") == "false"
+        assert _constants.ENABLE_PROMETHEUS_METRICS is False
+
+        # Cleanup: restore the constant so other tests aren't affected
+        monkeypatch.delenv("ATLAN_ENABLE_PROMETHEUS_METRICS", raising=False)
+        _constants.ENABLE_PROMETHEUS_METRICS = True
+
+    async def test_honors_explicit_prometheus_opt_in(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When ATLAN_ENABLE_PROMETHEUS_METRICS is explicitly set to true,
+        run_dev_combined() should not override it."""
+        monkeypatch.setenv("ATLAN_ENABLE_PROMETHEUS_METRICS", "true")
+
+        class MyApp:
+            _app_name = "my-app"
+
+        async def _fake_create_infrastructure(
+            *args: object, **kwargs: object
+        ) -> object:
+            return object()
+
+        async def _fake_run_combined_mode(config: AppConfig) -> None:
+            pass
+
+        import application_sdk.constants as _constants
+
+        original = _constants.ENABLE_PROMETHEUS_METRICS
+
+        with (
+            patch(
+                "application_sdk.main._create_infrastructure",
+                new=_fake_create_infrastructure,
+            ),
+            patch("application_sdk.infrastructure.context.set_infrastructure"),
+            patch(
+                "application_sdk.main.run_combined_mode",
+                new=_fake_run_combined_mode,
+            ),
+        ):
+            await run_dev_combined(MyApp)
+
+        assert os.environ.get("ATLAN_ENABLE_PROMETHEUS_METRICS") == "true"
+        # Constant should not have been touched
+        assert _constants.ENABLE_PROMETHEUS_METRICS == original
 
 
 class TestParseArgs:

@@ -989,6 +989,18 @@ async def run_dev_combined(
     effective_task_queue = task_queue or f"{app_name}-queue"
     app_module = f"{app_class.__module__}:{app_class.__name__}"
 
+    # Disable Prometheus metrics in local dev by default to avoid port
+    # collisions during hot-reload.  Developers can still opt-in by
+    # explicitly setting ATLAN_ENABLE_PROMETHEUS_METRICS=true.
+    if "ATLAN_ENABLE_PROMETHEUS_METRICS" not in os.environ:
+        os.environ["ATLAN_ENABLE_PROMETHEUS_METRICS"] = "false"
+        # Update the already-imported module constant so the Temporal
+        # runtime (which reads the constant, not the env var) also
+        # respects the override.
+        import application_sdk.constants as _constants
+
+        _constants.ENABLE_PROMETHEUS_METRICS = False
+
     config = AppConfig(
         mode="combined",
         app_module=app_module,

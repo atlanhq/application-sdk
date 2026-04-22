@@ -168,9 +168,7 @@ def test_export_record_with_otlp_disabled():
     ):
         with create_metrics_adapter() as metrics_adapter:
             with mock.patch.object(metrics_adapter, "_send_to_otel") as mock_send:
-                with mock.patch.object(
-                    metrics_adapter, "_log_to_console"
-                ) as mock_log:
+                with mock.patch.object(metrics_adapter, "_log_to_console") as mock_log:
                     record = MetricRecord(
                         timestamp=datetime.now().timestamp(),
                         name="test_metric",
