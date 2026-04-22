@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from application_sdk.contracts.types import FileReference, StorageTier
@@ -359,7 +359,8 @@ async def download(
         transferred_count = 0
         for key in data_keys:
             rel = key[len(strip) :] if key.startswith(strip) else key
-            local_file = dest_dir / rel
+            # S3 keys use forward slashes; convert to OS-native path for local filesystem
+            local_file = dest_dir / Path(*PurePosixPath(rel.lstrip("/")).parts)
             ok, _ = await _download_one(
                 resolved, key, local_file, skip_if_exists=skip_if_exists
             )

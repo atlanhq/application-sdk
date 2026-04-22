@@ -19,7 +19,7 @@ both follow this — the data source is always the first positional argument.
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import obstore
@@ -162,7 +162,8 @@ async def download_prefix(
 
     keys = await list_keys(prefix, store, suffix=suffix, normalize=normalize)
     local = Path(local_dir)
-    destinations = [str(local / key) for key in keys]
+    # S3 keys use forward slashes; convert to OS-native path for local filesystem
+    destinations = [str(local / Path(*PurePosixPath(key).parts)) for key in keys]
 
     sem = asyncio.Semaphore(max_concurrency)
 
@@ -217,7 +218,9 @@ async def upload_prefix(
             if file_path.is_symlink():
                 continue
             rel = file_path.relative_to(local)
-            key = f"{prefix}/{rel}" if prefix else str(rel)
+            # Use PurePosixPath to ensure forward slashes in S3 keys (Windows uses backslash)
+            rel_posix = PurePosixPath(*rel.parts)
+            key = f"{prefix}/{rel_posix}" if prefix else str(rel_posix)
             files.append((key, file_path))
 
     sem = asyncio.Semaphore(max_concurrency)
