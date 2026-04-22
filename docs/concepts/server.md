@@ -10,7 +10,7 @@ The handler service auto-wires routes from your `Handler` methods:
 from application_sdk.handler import create_app_handler_service
 from my_package.handlers import MyHandler
 
-app = create_app_handler_service(handler_class=MyHandler)
+app = create_app_handler_service(handler=MyHandler())
 ```
 
 When started (via the CLI `--mode handler` or `--mode combined`), this creates a FastAPI application with:
@@ -67,10 +67,9 @@ For integration tests or custom setups:
 ```python
 from application_sdk.main import run_dev_combined
 from my_package.apps import MyExtractor
-from my_package.handlers import MyHandler
 
 import asyncio
-asyncio.run(run_dev_combined(MyExtractor, handler_class=MyHandler))
+asyncio.run(run_dev_combined(MyExtractor))
 ```
 
 ## Error Handling
