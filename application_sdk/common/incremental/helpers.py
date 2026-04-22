@@ -8,6 +8,7 @@ This module contains helper functions for:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import shutil
@@ -236,8 +237,6 @@ async def download_s3_prefix_with_structure(
 
     # Normalize source prefix for path stripping
     source_prefix = s3_prefix.rstrip("/")
-
-    import asyncio
 
     MAX_CONCURRENT_DOWNLOADS = 20
     sem = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)

@@ -11,13 +11,14 @@ Tests cover public functions with real business logic:
 
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
     count_json_files_recursive,
+    download_s3_prefix_with_structure,
     extract_epoch_id_from_qualified_name,
     get_persistent_s3_prefix,
     normalize_marker_timestamp,
@@ -248,3 +249,127 @@ class TestCopyDirectoryParallel:
 
             count = copy_directory_parallel(src, Path(temp_dir) / "dest")
             assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# download_s3_prefix_with_structure
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadS3PrefixWithStructure:
+    """Tests for parallel S3 prefix download with structure preservation."""
+
+    @pytest.mark.asyncio
+    async def test_downloads_all_listed_files_to_correct_paths(self):
+        """All listed files are downloaded to correct local paths preserving structure."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_dest = Path(temp_dir) / "output"
+            s3_prefix = "bucket/tenant/data/"
+            file_list = [
+                "bucket/tenant/data/subdir/file1.json",
+                "bucket/tenant/data/file2.json",
+            ]
+
+            mock_download = AsyncMock()
+            mock_list_keys = AsyncMock(return_value=file_list)
+
+            with (
+                patch(
+                    "application_sdk.common.incremental.helpers.list_keys",
+                    mock_list_keys,
+                ),
+                patch(
+                    "application_sdk.common.incremental.helpers.download_file",
+                    mock_download,
+                ),
+            ):
+                await download_s3_prefix_with_structure(s3_prefix, local_dest)
+
+            mock_list_keys.assert_awaited_once_with(prefix=s3_prefix)
+            assert mock_download.await_count == 2
+            mock_download.assert_any_await(
+                key="bucket/tenant/data/subdir/file1.json",
+                local_path=str(local_dest / "subdir" / "file1.json"),
+            )
+            mock_download.assert_any_await(
+                key="bucket/tenant/data/file2.json",
+                local_path=str(local_dest / "file2.json"),
+            )
+
+    @pytest.mark.asyncio
+    async def test_concurrency_bounded_by_semaphore(self):
+        """No more than 20 concurrent downloads run at once."""
+        import asyncio
+
+        max_concurrent = 0
+        current_concurrent = 0
+        lock = asyncio.Lock()
+
+        async def _tracking_download(**kwargs):
+            nonlocal max_concurrent, current_concurrent
+            async with lock:
+                current_concurrent += 1
+                if current_concurrent > max_concurrent:
+                    max_concurrent = current_concurrent
+            await asyncio.sleep(0.01)
+            async with lock:
+                current_concurrent -= 1
+
+        file_list = [f"prefix/file{i}.json" for i in range(50)]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch(
+                    "application_sdk.common.incremental.helpers.list_keys",
+                    AsyncMock(return_value=file_list),
+                ),
+                patch(
+                    "application_sdk.common.incremental.helpers.download_file",
+                    side_effect=_tracking_download,
+                ),
+            ):
+                await download_s3_prefix_with_structure("prefix/", Path(temp_dir))
+
+        assert max_concurrent <= 20
+
+    @pytest.mark.asyncio
+    async def test_empty_file_list(self):
+        """No downloads when prefix has no files."""
+        mock_download = AsyncMock()
+        with (
+            patch(
+                "application_sdk.common.incremental.helpers.list_keys",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "application_sdk.common.incremental.helpers.download_file",
+                mock_download,
+            ),
+        ):
+            await download_s3_prefix_with_structure("prefix/", Path("/tmp/out"))
+
+        mock_download.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_path_without_prefix_used_as_is(self):
+        """Files not starting with the prefix are used as relative path directly."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_dest = Path(temp_dir) / "output"
+            mock_download = AsyncMock()
+
+            with (
+                patch(
+                    "application_sdk.common.incremental.helpers.list_keys",
+                    AsyncMock(return_value=["other/path/file.json"]),
+                ),
+                patch(
+                    "application_sdk.common.incremental.helpers.download_file",
+                    mock_download,
+                ),
+            ):
+                await download_s3_prefix_with_structure("prefix/", local_dest)
+
+            mock_download.assert_awaited_once_with(
+                key="other/path/file.json",
+                local_path=str(local_dest / "other" / "path" / "file.json"),
+            )
