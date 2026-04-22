@@ -3,6 +3,8 @@
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+import orjson
+
 import pytest
 
 from application_sdk.infrastructure._dapr.client import (
@@ -181,7 +183,7 @@ class TestDaprPubSub:
         self.client.publish_event.assert_awaited_once_with(
             pubsub_name="mypubsub",
             topic="orders",
-            data=json.dumps(data),
+            data=orjson.dumps(data).decode(),
             metadata={},
         )
 
@@ -192,7 +194,7 @@ class TestDaprPubSub:
         self.client.publish_event.assert_awaited_once_with(
             pubsub_name="mypubsub",
             topic="orders",
-            data=json.dumps(data),
+            data=orjson.dumps(data).decode(),
             metadata=meta,
         )
 
