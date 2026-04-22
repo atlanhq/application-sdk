@@ -42,6 +42,9 @@ from application_sdk.errors import (
     APP_NON_RETRYABLE,
     ErrorCode,
 )
+from application_sdk.observability.logger_adaptor import get_logger
+
+_task_logger = get_logger(__name__)
 
 try:
     _FRAMEWORK_VERSION = importlib.metadata.version("application-sdk")
@@ -1080,8 +1083,7 @@ class App(ABC):
                                     os.remove(p)
                             path_results[p] = True
                         except Exception:
-                            _safe_log(
-                                "warning",
+                            _task_logger.warning(
                                 "Failed to delete local path during cleanup",
                                 exc_info=True,
                             )
@@ -1104,8 +1106,7 @@ class App(ABC):
                         os.remove(base_path)
                 path_results[base_path] = True
             except Exception:
-                _safe_log(
-                    "warning",
+                _task_logger.warning(
                     "Failed to delete temp directory during cleanup",
                     exc_info=True,
                 )
@@ -1168,8 +1169,7 @@ class App(ABC):
                     await delete(key, store, normalize=False)
                     return True
                 except Exception:
-                    _safe_log(
-                        "warning",
+                    _task_logger.warning(
                         "Object store delete failed during cleanup",
                         exc_info=True,
                     )

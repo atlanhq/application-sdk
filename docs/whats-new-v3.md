@@ -341,7 +341,6 @@ from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
-    handler_class=MyHandler,
     secret_store=MockSecretStore({"my-api-key": "dev-secret"}),
 ))
 ```
@@ -390,7 +389,7 @@ class MyHandler(Handler):
         return PreflightOutput(status=PreflightStatus.READY)
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
-        return MetadataOutput(fields=[])
+        return MetadataOutput(objects=[])
 ```
 
 **What changed and why:**
@@ -456,7 +455,7 @@ application-sdk --mode combined --app my_package.apps:MyExtractor
 # Programmatic (local dev, integration tests)
 from application_sdk.main import run_dev_combined
 
-asyncio.run(run_dev_combined(MyExtractor, handler_class=MyHandler))
+asyncio.run(run_dev_combined(MyExtractor))
 ```
 
 **Three modes:**
