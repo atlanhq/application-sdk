@@ -34,6 +34,7 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - 'examples/**'
+              - '.github/**'
 
   # Conventional Commits (skipped on fork PRs — no org PAT available)
   commits:
