@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
 
 if TYPE_CHECKING:
@@ -169,7 +170,7 @@ async def upload(
     store: "ObjectStore | None" = None,
     _app_prefix: str = "",
     _tier: StorageTier = StorageTier.RETAINED,
-    max_concurrency: int = 4,
+    max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
 ) -> "UploadOutput":
     """Upload a local file or directory to the object store.
 
@@ -190,7 +191,8 @@ async def upload(
         skip_if_exists: Skip files whose SHA-256 matches the stored sidecar.
         store: Object store to use, or ``None`` to resolve from infrastructure.
         _app_prefix: Internal prefix injected by the ``App.upload`` task.
-        max_concurrency: Maximum parallel uploads for directory mode (default 4).
+        max_concurrency: Maximum parallel uploads for directory mode
+            (default :data:`~application_sdk.constants.MAX_CONCURRENT_STORAGE_TRANSFERS`).
 
     Returns:
         :class:`~application_sdk.contracts.storage.UploadOutput`
