@@ -17,6 +17,7 @@ identically for single files and directories.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import tempfile
@@ -168,6 +169,7 @@ async def upload(
     store: "ObjectStore | None" = None,
     _app_prefix: str = "",
     _tier: StorageTier = StorageTier.RETAINED,
+    max_concurrency: int = 4,
 ) -> "UploadOutput":
     """Upload a local file or directory to the object store.
 
@@ -188,6 +190,7 @@ async def upload(
         skip_if_exists: Skip files whose SHA-256 matches the stored sidecar.
         store: Object store to use, or ``None`` to resolve from infrastructure.
         _app_prefix: Internal prefix injected by the ``App.upload`` task.
+        max_concurrency: Maximum parallel uploads for directory mode (default 4).
 
     Returns:
         :class:`~application_sdk.contracts.storage.UploadOutput`
@@ -249,10 +252,7 @@ async def upload(
         else:
             prefix = src.name
 
-        import asyncio
-
-        MAX_CONCURRENT_UPLOADS = 20
-        sem = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
+        sem = asyncio.Semaphore(max_concurrency)
 
         files = [p for p in src.rglob("*") if p.is_file()]
 
@@ -269,8 +269,12 @@ async def upload(
             keys.append(f"{prefix}/{relative}" if prefix else relative)
 
         results = await asyncio.gather(
-            *[_bounded_upload(fp, k) for fp, k in zip(files, keys)]
+            *[_bounded_upload(fp, k) for fp, k in zip(files, keys)],
+            return_exceptions=True,
         )
+        errors = [r for r in results if isinstance(r, BaseException)]
+        if errors:
+            raise errors[0]
         transferred_count = sum(1 for ok in results if ok)
 
         store_prefix = (prefix.rstrip("/") + "/") if prefix else ""
