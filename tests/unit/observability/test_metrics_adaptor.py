@@ -161,22 +161,28 @@ def test_export_record_with_otlp_enabled():
 
 
 def test_export_record_with_otlp_disabled():
-    """Test export_record() method when OTLP is disabled."""
-    with create_metrics_adapter() as metrics_adapter:
-        with mock.patch.object(metrics_adapter, "_send_to_otel") as mock_send:
-            with mock.patch.object(metrics_adapter, "_log_to_console") as mock_log:
-                record = MetricRecord(
-                    timestamp=datetime.now().timestamp(),
-                    name="test_metric",
-                    value=42.0,
-                    type=MetricType.COUNTER,
-                    labels={"test": "label"},
-                    description="Test metric",
-                    unit="count",
-                )
-                metrics_adapter.export_record(record)
-                mock_send.assert_not_called()
-                mock_log.assert_called_once_with(record)
+    """Test export_record() method when OTLP and Prometheus are both disabled."""
+    with mock.patch(
+        "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+        False,
+    ):
+        with create_metrics_adapter() as metrics_adapter:
+            with mock.patch.object(metrics_adapter, "_send_to_otel") as mock_send:
+                with mock.patch.object(
+                    metrics_adapter, "_log_to_console"
+                ) as mock_log:
+                    record = MetricRecord(
+                        timestamp=datetime.now().timestamp(),
+                        name="test_metric",
+                        value=42.0,
+                        type=MetricType.COUNTER,
+                        labels={"test": "label"},
+                        description="Test metric",
+                        unit="count",
+                    )
+                    metrics_adapter.export_record(record)
+                    mock_send.assert_not_called()
+                    mock_log.assert_called_once_with(record)
 
 
 def test_send_to_otel_counter():
@@ -450,24 +456,28 @@ class TestPython314EventLoopCompat:
                 "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
             },
         ):
-            with mock.patch("opentelemetry.metrics.set_meter_provider"):
-                with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                    with mock.patch(
-                        "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
-                        side_effect=RuntimeError("no running event loop"),
-                    ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                False,
+            ):
+                with mock.patch("opentelemetry.metrics.set_meter_provider"):
+                    with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
                         with mock.patch(
-                            "application_sdk.observability.metrics_adaptor.threading.Thread"
-                        ) as mock_thread:
-                            mock_thread_instance = mock.MagicMock()
-                            mock_thread.return_value = mock_thread_instance
+                            "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
+                            side_effect=RuntimeError("no running event loop"),
+                        ):
+                            with mock.patch(
+                                "application_sdk.observability.metrics_adaptor.threading.Thread"
+                            ) as mock_thread:
+                                mock_thread_instance = mock.MagicMock()
+                                mock_thread.return_value = mock_thread_instance
 
-                            _ = AtlanMetricsAdapter()
+                                _ = AtlanMetricsAdapter()
 
-                            mock_thread.assert_called_once()
-                            _, kwargs = mock_thread.call_args
-                            assert kwargs.get("daemon") is True
-                            mock_thread_instance.start.assert_called_once()
+                                mock_thread.assert_called_once()
+                                _, kwargs = mock_thread.call_args
+                                assert kwargs.get("daemon") is True
+                                mock_thread_instance.start.assert_called_once()
 
     def test_flush_task_uses_running_loop_when_available(self):
         """When a running event loop exists, the adapter should create
@@ -481,19 +491,23 @@ class TestPython314EventLoopCompat:
                 "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
             },
         ):
-            with mock.patch("opentelemetry.metrics.set_meter_provider"):
-                with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
-                    with mock.patch(
-                        "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
-                        return_value=mock_loop,
-                    ):
+            with mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_PROMETHEUS_METRICS",
+                False,
+            ):
+                with mock.patch("opentelemetry.metrics.set_meter_provider"):
+                    with mock.patch("opentelemetry.sdk.metrics.MeterProvider"):
                         with mock.patch(
-                            "application_sdk.observability.metrics_adaptor.threading.Thread"
-                        ) as mock_thread:
-                            _ = AtlanMetricsAdapter()
+                            "application_sdk.observability.metrics_adaptor.asyncio.get_running_loop",
+                            return_value=mock_loop,
+                        ):
+                            with mock.patch(
+                                "application_sdk.observability.metrics_adaptor.threading.Thread"
+                            ) as mock_thread:
+                                _ = AtlanMetricsAdapter()
 
-                            mock_loop.create_task.assert_called_once()
-                            mock_thread.assert_not_called()
+                                mock_loop.create_task.assert_called_once()
+                                mock_thread.assert_not_called()
 
 
 class TestPrometheusMetrics:
