@@ -77,7 +77,6 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "error_type",
         "error_class",
         "error_message",
-        "is_retriable",
         "error_cause_chain",
         "stack_trace",
         "error_fingerprint",

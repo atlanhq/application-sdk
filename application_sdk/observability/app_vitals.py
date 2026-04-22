@@ -38,7 +38,6 @@ from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.error_classifier import (
     classify_error,
     extract_cause_chain,
-    is_retriable,
 )
 from application_sdk.observability.resource_sampler import compute_deltas, sample
 from application_sdk.observability.trace_context import get_trace_context
@@ -317,7 +316,7 @@ async def _track_activity_completion(record: dict[str, Any], awaitable: Any) -> 
         record["status"] = "failed"
         record["error_type"] = classify_error(exc)
         record["error_class"] = type(exc).__name__
-        record["error_message"] = str(exc)[:500]
+        record["error_message"] = str(exc)
         record["error_cause_chain"] = extract_cause_chain(exc)
         record["end_ns"] = time.monotonic_ns()
         record["duration_ms"] = round(
@@ -429,7 +428,6 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         error_message = ""
         error_class = ""
         cause_chain: list[str] = []
-        retriable = False
         stack_trace = ""
 
         try:
@@ -438,10 +436,9 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         except Exception as exc:
             status = "failed"
             error_type = classify_error(exc)
-            error_message = str(exc)[:500]
+            error_message = str(exc)
             error_class = type(exc).__name__
             cause_chain = extract_cause_chain(exc)
-            retriable = is_retriable(exc, error_type)
             stack_trace = _format_stack_trace(exc)
             raise
         finally:
@@ -463,7 +460,6 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     error_message,
                     error_class,
                     cause_chain,
-                    retriable,
                     stack_trace,
                 )
 
@@ -476,7 +472,6 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         error_message: str,
         error_class: str,
         cause_chain: list[str],
-        retriable: bool,
         stack_trace: str,
     ) -> None:
         """Emit workflow completed + summary events. Extracted to avoid return-in-finally."""
@@ -520,7 +515,6 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         if error_message:
             event_attrs["error_message"] = error_message
             event_attrs["error_class"] = error_class
-            event_attrs["is_retriable"] = retriable
             event_attrs["error_fingerprint"] = _compute_error_fingerprint(
                 info.workflow_type or "", error_type, error_class
             )
@@ -607,7 +601,6 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
         error_message = ""
         error_class = ""
         cause_chain: list[str] = []
-        retriable = False
         stack_trace = ""
         assets_processed: int | None = None
 
@@ -618,10 +611,9 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
         except Exception as exc:
             status = "failed"
             error_type = classify_error(exc)
-            error_message = str(exc)[:500]
+            error_message = str(exc)
             error_class = type(exc).__name__
             cause_chain = extract_cause_chain(exc)
-            retriable = is_retriable(exc, error_type)
             stack_trace = _format_stack_trace(exc)
             raise
         finally:
@@ -676,7 +668,6 @@ class _AppVitalsActivityInboundInterceptor(ActivityInboundInterceptor):
             if error_message:
                 event_attrs["error_message"] = error_message
                 event_attrs["error_class"] = error_class
-                event_attrs["is_retriable"] = retriable
                 event_attrs["error_fingerprint"] = _compute_error_fingerprint(
                     info.activity_type or "", error_type, error_class
                 )

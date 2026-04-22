@@ -2,8 +2,8 @@
 
 Maps exceptions to a fixed set of error_type values so that failure
 breakdowns can be grouped in dashboards and alerts. Also extracts the
-exception cause chain and a retriable-heuristic so downstream debugging
-tools have structured context without reading stack traces manually.
+exception cause chain so downstream debugging tools have structured
+context without reading stack traces manually.
 
 Error types:
   timeout    — TimeoutError, deadline exceeded
@@ -125,10 +125,6 @@ def classify_error(exc: BaseException) -> str:
     return "internal"
 
 
-# Error types that never benefit from retry
-_NON_RETRIABLE_TYPES = frozenset({"cancelled"})
-
-
 def extract_cause_chain(exc: BaseException, limit: int = 5) -> list[str]:
     """Walk the exception cause chain and return a list of cause descriptions.
 
@@ -151,19 +147,3 @@ def extract_cause_chain(exc: BaseException, limit: int = 5) -> list[str]:
     return causes
 
 
-def is_retriable(exc: BaseException, error_type: str | None = None) -> bool:
-    """Heuristic for whether this error is worth retrying.
-
-    - ``cancelled`` errors don't benefit from retry.
-    - Everything else is retriable by default (retry policy caps attempts).
-
-    Respects an explicit ``non_retryable`` flag on the exception if present
-    (Temporal's ApplicationError pattern).
-    """
-    if getattr(exc, "non_retryable", False):
-        return False
-
-    if error_type is None:
-        error_type = classify_error(exc)
-
-    return error_type not in _NON_RETRIABLE_TYPES

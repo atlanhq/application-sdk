@@ -14,7 +14,6 @@ from temporalio.api.common.v1 import Payload
 from application_sdk.observability.error_classifier import (
     classify_error,
     extract_cause_chain,
-    is_retriable,
 )
 from application_sdk.observability.resource_sampler import (
     ResourceSample,
@@ -577,12 +576,12 @@ class TestAppVitalsTraceIdAttachment:
 
 
 # ---------------------------------------------------------------------------
-# L3: Rich Error Schema (cause chain, is_retriable, timeout budget)
+# L3: Rich Error Schema (cause chain, timeout budget)
 # ---------------------------------------------------------------------------
 
 
 class TestErrorClassifierRichFields:
-    """Tests for cause chain extraction and is_retriable heuristic."""
+    """Tests for cause chain extraction."""
 
     def test_extract_cause_chain_explicit(self):
         try:
@@ -626,29 +625,11 @@ class TestErrorClassifierRichFields:
         chain = extract_cause_chain(e, limit=3)
         assert len(chain) == 3
 
-    def test_is_retriable_internal_error(self):
-        # ValueError is now "internal" (retriable) — no longer "config"
-        assert is_retriable(ValueError("bad input")) is True
 
-    def test_is_retriable_timeout(self):
-        assert is_retriable(TimeoutError("timed out")) is True
-
-    def test_is_retriable_upstream(self):
-        assert is_retriable(ConnectionError("refused")) is True
-
-    def test_is_retriable_cancelled(self):
-        import asyncio
-
-        assert is_retriable(asyncio.CancelledError()) is False
-
-    def test_is_retriable_respects_non_retryable_flag(self):
-        e = Exception("app error")
-        e.non_retryable = True  # Temporal ApplicationError pattern
-        assert is_retriable(e) is False
 
 
 class TestAppVitalsRichErrorFields:
-    """Tests that activity failure events include cause chain + is_retriable + timeout budget."""
+    """Tests that activity failure events include cause chain + timeout budget."""
 
     @pytest.fixture
     def mock_next_activity(self):
@@ -660,7 +641,7 @@ class TestAppVitalsRichErrorFields:
         return MockActivityInfo()
 
     @pytest.mark.asyncio
-    async def test_failure_carries_error_class_and_retriable(
+    async def test_failure_carries_error_class_and_type(
         self, mock_next_activity, activity_info
     ):
         from application_sdk.observability.app_vitals import (
@@ -696,7 +677,6 @@ class TestAppVitalsRichErrorFields:
             )
             log_attrs = completed_call[0][1]
             assert log_attrs["error_class"] == "TimeoutError"
-            assert log_attrs["is_retriable"] is True
 
     @pytest.mark.asyncio
     async def test_failure_carries_cause_chain(self, mock_next_activity, activity_info):
@@ -1050,7 +1030,6 @@ class TestLoggerAdaptorExtraKeysAllowlist:
         "error_type",
         "error_class",
         "error_message",
-        "is_retriable",
         "error_cause_chain",
         # Metric classification
         "dimension",
@@ -1106,7 +1085,6 @@ class TestLoggerAdaptorExtraKeysAllowlist:
             "status": "failed",
             "error_type": "timeout",
             "error_class": "TimeoutError",
-            "is_retriable": True,
             "duration_ms": 30000,
             "cpu_seconds": 0.5,
             "assets_processed": 50000,
