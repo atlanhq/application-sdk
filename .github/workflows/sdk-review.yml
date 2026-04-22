@@ -9,6 +9,7 @@
 #   @sdk-review challenge: <reason>   → Re-evaluate disputed findings
 #   @sdk-review override: <reason>    → Admin force-pass
 #   @sdk-review stop / cancel         → Cancel in-progress review
+#   @sdk-review retrospect            → Learn from recent PR patterns
 
 name: SDK Review
 
@@ -32,6 +33,10 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Prevent double-dispatch: only one review per PR at a time
+    concurrency:
+      group: sdk-review-${{ github.event.issue.number }}
+      cancel-in-progress: true
     steps:
       - name: Parse command
         id: parse
@@ -47,6 +52,8 @@ jobs:
 
             if (/\bstop\b/i.test(body) || /\bcancel\b/i.test(body)) {
               command = 'stop';
+            } else if (/\bretrospect\b/i.test(body)) {
+              command = 'retrospect';
             } else if (/\bauto-complete\b/i.test(body) || /\bresolve all\b/i.test(body)) {
               command = 'auto-complete';
               const after = body.replace(/@sdk-review\s*(auto-complete|resolve all\s*issues?)\s*/i, '').trim();
@@ -79,13 +86,14 @@ jobs:
             });
 
       - name: Connect to VPN
+        id: vpn
         uses: atlanhq/github-actions/globalprotect-connect-action@main
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
-      - name: Dispatch to mothership
+      - name: Verify VPN and dispatch
         env:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
@@ -94,6 +102,22 @@ jobs:
           COMMAND_CONTEXT: ${{ steps.parse.outputs.context }}
           COMMENTER: ${{ steps.parse.outputs.commenter }}
         run: |
+          # Retry VPN connectivity check (mothership may take a moment after VPN connects)
+          for attempt in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${MOTHERSHIP_URL}/health" 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "VPN connected, mothership reachable (attempt $attempt)"
+              break
+            fi
+            echo "Mothership unreachable (status=$STATUS), retrying in 5s (attempt $attempt/5)..."
+            sleep 5
+          done
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cannot reach mothership after 5 attempts. VPN may have failed."
+            exit 1
+          fi
+
           # Build JSON payload safely using jq
           PAYLOAD=$(jq -n \
             --arg pr_url "https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" \
@@ -112,16 +136,32 @@ jobs:
               commenter: $commenter
             }')
 
-          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
-            -X POST "${MOTHERSHIP_URL}/api/pr-review/dispatch" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${HARNESS_TOKEN}" \
-            -d "$PAYLOAD")
+          # Dispatch with retry (mothership may be restarting)
+          for attempt in 1 2 3; do
+            STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" --max-time 30 \
+              -X POST "${MOTHERSHIP_URL}/api/pr-review/dispatch" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${HARNESS_TOKEN}" \
+              -d "$PAYLOAD")
 
-          echo "Dispatch status: $STATUS"
-          cat /tmp/response.json
+            echo "Dispatch attempt $attempt: status=$STATUS"
 
-          if [ "$STATUS" -ge 400 ]; then
-            echo "::error::Dispatch failed with status $STATUS"
-            exit 1
-          fi
+            if [ "$STATUS" = "202" ]; then
+              echo "Dispatched successfully"
+              cat /tmp/response.json
+              exit 0
+            fi
+
+            if [ "$STATUS" -ge 400 ] && [ "$STATUS" -lt 500 ]; then
+              echo "::error::Client error $STATUS — not retrying"
+              cat /tmp/response.json
+              exit 1
+            fi
+
+            echo "Server error or timeout (status=$STATUS), retrying in 5s..."
+            sleep 5
+          done
+
+          echo "::error::Dispatch failed after 3 attempts"
+          cat /tmp/response.json 2>/dev/null
+          exit 1
