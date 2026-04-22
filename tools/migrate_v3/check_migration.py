@@ -402,7 +402,9 @@ def check_file(path: Path, *, is_test: bool = False) -> list[CheckResult]:
                     file=path,
                 )
             )
-        if _RE_PREFLIGHT_CHECK_DEF.search(full_text) and not _re_preflight_v3.search(full_text):
+        if _RE_PREFLIGHT_CHECK_DEF.search(full_text) and not _re_preflight_v3.search(
+            full_text
+        ):
             results.append(
                 CheckResult(
                     level=WARN,
@@ -518,7 +520,15 @@ def check_directory(
                 continue
             # Skip non-source directories that legitimately contain "workflows"
             rel = subdir.relative_to(root)
-            skip_prefixes = (".github", ".venv", "local", "node_modules", ".out", "artifacts", ".cache")
+            skip_prefixes = (
+                ".github",
+                ".venv",
+                "local",
+                "node_modules",
+                ".out",
+                "artifacts",
+                ".cache",
+            )
             if rel.parts and rel.parts[0] in skip_prefixes:
                 continue
             advisories.append(
