@@ -1,5 +1,36 @@
 # Changelog
 
+## v3.1.0 (April 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.0.1...v3.1.0
+
+### Features
+
+- SDK version tracking + migration metrics on dashboard (#1513) (by @mananjain99 in [3158790](https://github.com/atlanhq/application-sdk/commit/3158790))
+- DISTR-370 add resolve_credential_file for base64 secret support (#1514) (by @Lalit3716-atlan in [3cd7cef](https://github.com/atlanhq/application-sdk/commit/3cd7cef))
+- use orjson for pub/sub serialization [BLDX-1090] (#1488) (by @vaibhavatlan in [e52f5f1](https://github.com/atlanhq/application-sdk/commit/e52f5f1))
+- parallelize directory upload in transfer.upload() [BLDX-1089] (#1504) (by @vaibhavatlan in [0446357](https://github.com/atlanhq/application-sdk/commit/0446357))
+- parallelize S3 prefix download [BLDX-1088] (#1503) (by @vaibhavatlan in [9693aaf](https://github.com/atlanhq/application-sdk/commit/9693aaf))
+
+### Bug Fixes
+
+- pass github.triggering_actor as created_by in publish payload (#1509) (by @adityachoudhury-cloud in [64f302f](https://github.com/atlanhq/application-sdk/commit/64f302f))
+- warn on unknown-extra keys in Input payloads [ARUN-527] (#1515) (by @SanilK2108 in [7457f99](https://github.com/atlanhq/application-sdk/commit/7457f99))
+- set connection_qualified_name on ExtractionOutput (#1512) (by @SwarnadeepChatterjee in [4ddd957](https://github.com/atlanhq/application-sdk/commit/4ddd957))
+- remove internal error details from 500 response [BLDX-1081] (#1486) (by @vaibhavatlan in [e230d76](https://github.com/atlanhq/application-sdk/commit/e230d76))
+- check converter existence before calling [BLDX-1084] (#1487) (by @vaibhavatlan in [463bb9a](https://github.com/atlanhq/application-sdk/commit/463bb9a))
+- correct API drift in handler service and run_dev_combined examples [BLDX-1086] (#1507) (by @vaibhavatlan in [abc727c](https://github.com/atlanhq/application-sdk/commit/abc727c))
+- remove legacy helm/atlan-app chart [BLDX-1116] (#1519) (by @vaibhavatlan in [7dfe00a](https://github.com/atlanhq/application-sdk/commit/7dfe00a))
+- use module logger in @task cleanup methods [BLDX-1083] (#1508) (by @vaibhavatlan in [f62f07f](https://github.com/atlanhq/application-sdk/commit/f62f07f))
+- ARUN-533 config/non-config SLA classification (#1516) (by @EuclidStellar in [7cffa9f](https://github.com/atlanhq/application-sdk/commit/7cffa9f))
+- handle Windows path separators in object store operations [BLDX-1114] (#1522) (by @Aryamanz29 in [83d1694](https://github.com/atlanhq/application-sdk/commit/83d1694))
+- tools - eliminate false positive warnings in v3 readiness check [BLDX-1115] (#1517) (by @Aryamanz29 in [4009ea8](https://github.com/atlanhq/application-sdk/commit/4009ea8))
+- skip dashboard deploy when scan artifacts expired (#1523) (by @mananjain99 in [58ed0c3](https://github.com/atlanhq/application-sdk/commit/58ed0c3))
+- ci - skip secret-dependent jobs on fork PRs [BLDX-1113] (#1521) (by @Aryamanz29 in [94a499f](https://github.com/atlanhq/application-sdk/commit/94a499f))
+- one-time reset of trend history (remove after 2026-04-23) (#1525) (by @mananjain99 in [04da1a4](https://github.com/atlanhq/application-sdk/commit/04da1a4))
+- switch default versioning behavior from AUTO_UPGRADE to PINNED (#1526) (by @anuj-atlan in [79f96f3](https://github.com/atlanhq/application-sdk/commit/79f96f3))
+
+
 ## v3.0.1 (April 21, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.0.0...v3.0.1
