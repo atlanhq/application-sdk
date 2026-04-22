@@ -1,9 +1,10 @@
 """Unit tests for application_sdk.contracts.base."""
 
+import logging
 from typing import Annotated, Any, Optional
 
 import pytest
-from pydantic import Field, ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 
 from application_sdk.contracts.base import (
     ContractMetadata,
@@ -490,3 +491,119 @@ class TestContractMetadata:
         )
         with pytest.raises((ValidationError, AttributeError, TypeError)):
             meta.name = "other"  # type: ignore[misc]
+
+
+# =============================================================================
+# Unknown-key warning (ARUN-527)
+# =============================================================================
+
+
+@pytest.fixture(autouse=False)
+def _reset_unknown_keys_seen() -> Any:
+    """Isolate the class-level dedup set so tests don't leak into each other."""
+    original = Input._unknown_keys_seen.copy()
+    Input._unknown_keys_seen.clear()
+    try:
+        yield
+    finally:
+        Input._unknown_keys_seen.clear()
+        Input._unknown_keys_seen.update(original)
+
+
+class TestUnknownKeyWarning:
+    def test_kebab_case_extra_warns_with_snake_case_hint(
+        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
+    ) -> None:
+        class ExtractionInput(Input):
+            credential_guid: str = ""
+            include_filter: str = "{}"
+
+        payload = {
+            "credential-guid": "abc-123",
+            "include-filter": '{"^qa$":[".*"]}',
+        }
+        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+            obj = ExtractionInput.model_validate(payload)
+
+        # Silent drop still happens — we only observe, not normalize.
+        assert obj.credential_guid == ""
+        assert obj.include_filter == "{}"
+
+        assert len(caplog.records) == 1
+        msg = caplog.records[0].getMessage()
+        assert "ExtractionInput" in msg
+        assert "credential-guid" in msg
+        assert "include-filter" in msg
+        assert "credential_guid" in msg
+        assert "include_filter" in msg
+
+    def test_arbitrary_extras_warn_without_kebab_hint(
+        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
+    ) -> None:
+        class MyInput(Input):
+            name: str = ""
+
+        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+            MyInput.model_validate({"name": "ok", "stray_key": 1})
+
+        assert len(caplog.records) == 1
+        msg = caplog.records[0].getMessage()
+        assert "stray_key" in msg
+        assert "Kebab-case" not in msg
+
+    def test_no_warning_when_all_keys_known(
+        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
+    ) -> None:
+        class MyInput(Input):
+            name: str = ""
+
+        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+            MyInput.model_validate({"name": "ok", "workflow_id": "wf-1"})
+
+        assert caplog.records == []
+
+    def test_no_warning_when_extra_allow(
+        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
+    ) -> None:
+        class PermissiveInput(Input):
+            model_config = ConfigDict(extra="allow")
+
+            name: str = ""
+
+        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+            PermissiveInput.model_validate({"name": "ok", "anything": 1})
+
+        assert caplog.records == []
+
+    def test_non_dict_input_does_not_crash(self, _reset_unknown_keys_seen: Any) -> None:
+        class MyInput(Input):
+            name: str = ""
+
+        # Passing an existing instance through model_validate should be a no-op
+        # for our validator (data is not a dict at that stage).
+        original = MyInput(name="x")
+        assert MyInput.model_validate(original).name == "x"
+
+    def test_same_extras_logged_once_per_process(
+        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
+    ) -> None:
+        class MyInput(Input):
+            name: str = ""
+
+        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+            for _ in range(5):
+                MyInput.model_validate({"name": "ok", "stray": 1})
+
+        assert len(caplog.records) == 1
+
+    def test_different_extras_each_warn_once(
+        self, caplog: pytest.LogCaptureFixture, _reset_unknown_keys_seen: Any
+    ) -> None:
+        class MyInput(Input):
+            name: str = ""
+
+        with caplog.at_level(logging.WARNING, logger="application_sdk.contracts.base"):
+            MyInput.model_validate({"name": "ok", "a": 1})
+            MyInput.model_validate({"name": "ok", "b": 2})
+
+        assert len(caplog.records) == 2
