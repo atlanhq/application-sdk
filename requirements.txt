@@ -231,7 +231,7 @@ pytest-asyncio==1.3.0
 pytest-timeout==2.4.0
 python-dateutil==2.9.0.post0
     # via pyatlan
-python-dotenv==1.2.1
+python-dotenv==1.2.2
     # via
     #   atlan-application-sdk
     #   pydantic-settings
