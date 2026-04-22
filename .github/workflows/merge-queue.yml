@@ -104,6 +104,26 @@ jobs:
                 return;
               }
 
+              if (prData.mergeable_state === 'unstable') {
+                // CI failed after branch update — check if required checks are failing
+                const hasApprovedLabel = pr.labels.some(l => l.name === 'sdk-review-approved');
+                if (hasApprovedLabel) {
+                  // Approval may be stale — CI failed on the merged code
+                  await github.rest.issues.createComment({
+                    owner, repo, issue_number: pr.number,
+                    body: 'Merge queue: CI failing after branch update. The merged code may have issues. Comment `@sdk-review` to re-review, or check the failing checks manually.',
+                  });
+                  try {
+                    await github.rest.issues.removeLabel({
+                      owner, repo, issue_number: pr.number,
+                      name: 'sdk-review-approved',
+                    });
+                  } catch (_) {}
+                  console.log(`PR #${pr.number}: CI unstable after update, removed approval label`);
+                }
+                continue;
+              }
+
               console.log(`PR #${pr.number}: ${prData.mergeable_state}, skipping`);
             }
 
