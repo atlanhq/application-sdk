@@ -159,6 +159,11 @@ WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
 #: Maximum number of activities that can run concurrently
 MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
 
+#: Maximum concurrent object-store transfers (uploads / downloads)
+MAX_CONCURRENT_STORAGE_TRANSFERS = int(
+    os.getenv("ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", "4")
+)
+
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
 #: route tasks to the correct version during versioned deployments.
