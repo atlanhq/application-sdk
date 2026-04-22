@@ -125,7 +125,9 @@ class TestUploadDirectory:
         async def _failing_upload_one(st, local_file, store_key, *, skip_if_exists):
             if "fail.txt" in str(local_file):
                 raise RuntimeError("simulated upload failure")
-            return await _original(st, local_file, store_key, skip_if_exists=skip_if_exists)
+            return await _original(
+                st, local_file, store_key, skip_if_exists=skip_if_exists
+            )
 
         monkeypatch.setattr(transfer_mod, "_upload_one", _failing_upload_one)
 
