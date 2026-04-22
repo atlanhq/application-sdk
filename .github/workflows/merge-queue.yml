@@ -105,21 +105,22 @@ jobs:
               }
 
               if (prData.mergeable_state === 'unstable') {
-                // CI failed after branch update — check if required checks are failing
                 const hasApprovedLabel = pr.labels.some(l => l.name === 'sdk-review-approved');
                 if (hasApprovedLabel) {
-                  // Approval may be stale — CI failed on the merged code
-                  await github.rest.issues.createComment({
-                    owner, repo, issue_number: pr.number,
-                    body: 'Merge queue: CI failing after branch update. The merged code may have issues. Comment `@sdk-review` to re-review, or check the failing checks manually.',
-                  });
+                  // CI failed after branch update on an approved PR.
+                  // Auto-trigger @sdk-review — Phase 0 will fix CI (Sonnet),
+                  // update branch, and re-review. Zero human intervention.
                   try {
                     await github.rest.issues.removeLabel({
                       owner, repo, issue_number: pr.number,
                       name: 'sdk-review-approved',
                     });
                   } catch (_) {}
-                  console.log(`PR #${pr.number}: CI unstable after update, removed approval label`);
+                  await github.rest.issues.createComment({
+                    owner, repo, issue_number: pr.number,
+                    body: '@sdk-review CI failing after branch update — auto-triggered re-review with CI fix.',
+                  });
+                  console.log(`PR #${pr.number}: CI unstable after update, auto-triggered @sdk-review`);
                 }
                 continue;
               }
