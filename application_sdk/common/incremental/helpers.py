@@ -228,6 +228,7 @@ async def download_s3_prefix_with_structure(
     Args:
         s3_prefix: S3 prefix path to download from
         local_destination: Local directory to download files into
+        max_concurrency: Maximum number of concurrent downloads (default: MAX_CONCURRENT_STORAGE_TRANSFERS).
 
     Raises:
         Exception: If listing or downloading fails

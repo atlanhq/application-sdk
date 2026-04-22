@@ -9,6 +9,7 @@ Tests cover public functions with real business logic:
 - copy_directory_parallel: Parallel file copy operations
 """
 
+import asyncio
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -259,7 +260,6 @@ class TestCopyDirectoryParallel:
 class TestDownloadS3PrefixWithStructure:
     """Tests for parallel S3 prefix download with structure preservation."""
 
-    @pytest.mark.asyncio
     async def test_downloads_all_listed_files_to_correct_paths(self):
         """All listed files are downloaded to correct local paths preserving structure."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -296,10 +296,8 @@ class TestDownloadS3PrefixWithStructure:
                 local_path=str(local_dest / "file2.json"),
             )
 
-    @pytest.mark.asyncio
     async def test_concurrency_bounded_by_semaphore(self):
-        """No more than 20 concurrent downloads run at once."""
-        import asyncio
+        """No more than MAX_CONCURRENT_STORAGE_TRANSFERS (4) concurrent downloads run at once."""
 
         max_concurrent = 0
         current_concurrent = 0
@@ -332,7 +330,6 @@ class TestDownloadS3PrefixWithStructure:
 
         assert max_concurrent <= 4
 
-    @pytest.mark.asyncio
     async def test_empty_file_list(self):
         """No downloads when prefix has no files."""
         mock_download = AsyncMock()
@@ -350,7 +347,6 @@ class TestDownloadS3PrefixWithStructure:
 
         mock_download.assert_not_awaited()
 
-    @pytest.mark.asyncio
     async def test_path_without_prefix_used_as_is(self):
         """Files not starting with the prefix are used as relative path directly."""
         with tempfile.TemporaryDirectory() as temp_dir:
