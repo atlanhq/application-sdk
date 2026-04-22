@@ -77,7 +77,6 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "error_type",
         "error_class",
         "error_message",
-        "is_retriable",
         "error_cause_chain",
         "stack_trace",
         "error_fingerprint",
@@ -119,6 +118,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "total_child_workflows",
         "first_failure_activity_type",
         "first_failure_error_type",
+        "preflight_passed",
+        "circuit_breaker_tripped",
         "bottleneck_activity_type",
         "bottleneck_duration_ms",
     }
