@@ -420,7 +420,6 @@ class TestRunDevCombined:
 
         assert captured["config"].health_port == 8081
 
-
     async def test_disables_prometheus_by_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
