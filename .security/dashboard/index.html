@@ -171,6 +171,7 @@
             <div class="filter-group"><label>Severity</label><select id="fSev"><option value="all">All</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option></select></div>
             <div class="filter-group"><label>Status</label><select id="fStatus"><option value="all">All</option><option value="new">New</option><option value="allowlisted">Allowlisted</option><option value="expired">Expired</option></select></div>
             <div class="filter-group"><label>Source</label><select id="fSource"><option value="all">All</option><option value="base_image">Base image</option><option value="app">App dep</option></select></div>
+            <div class="filter-group"><label>SDK</label><select id="fSdk"><option value="all">All</option></select></div>
             <div class="filter-group"><label>Search</label><input type="text" id="fSearch" placeholder="CVE or package..." style="width:160px"></div>
             <button class="btn-clear" onclick="clearFilters()">Clear</button>
         </div>
@@ -179,7 +180,7 @@
             <table><thead><tr>
                 <th data-s="severity" class="sorted">Severity <span class="arrow">&#9650;</span></th>
                 <th data-s="id">ID</th><th data-s="package">Package</th><th data-s="scanner">Scanner</th>
-                <th data-s="source_type">Source</th><th data-s="status">Status</th><th>Repos</th><th data-s="fixed">Fix</th>
+                <th data-s="source_type">Source</th><th data-s="status">Status</th><th>SDK</th><th>Repos</th><th data-s="fixed">Fix</th>
             </tr></thead><tbody id="tbl"></tbody></table>
         </div>
         <div class="empty" id="empty" style="display:none">No vulnerabilities match filters.</div>
@@ -274,7 +275,10 @@ function getFiltered(){
     let vs=Object.values(VM);const r=document.getElementById('fRepo').value,sv=document.getElementById('fSev').value,st=document.getElementById('fStatus').value,src=document.getElementById('fSource').value,q=document.getElementById('fSearch').value.toLowerCase();
     if(r!=='all')vs=vs.filter(v=>v.repos.includes(r));if(sv!=='all')vs=vs.filter(v=>v.severity===sv);
     if(st!=='all')vs=vs.filter(v=>{if(r!=='all')return v.statuses[r]===st;return Object.values(v.statuses).includes(st);});
-    if(src!=='all')vs=vs.filter(v=>v.source_type===src);if(q)vs=vs.filter(v=>v.id.toLowerCase().includes(q)||v.package.toLowerCase().includes(q));
+    if(src!=='all')vs=vs.filter(v=>v.source_type===src);
+    const sdk=document.getElementById('fSdk').value;
+    if(sdk!=='all')vs=vs.filter(v=>v.repos.some(repo=>D.repos[repo]&&(D.repos[repo].sdk_version||'')==sdk));
+    if(q)vs=vs.filter(v=>v.id.toLowerCase().includes(q)||v.package.toLowerCase().includes(q));
     const ord={CRITICAL:0,HIGH:1};vs.sort((a,b)=>{let av,bv;if(sortCol==='severity'){av=ord[a.severity]||9;bv=ord[b.severity]||9;}else{av=(a[sortCol]||'').toString().toLowerCase();bv=(b[sortCol]||'').toString().toLowerCase();}
         return av<bv?(sortDir==='asc'?-1:1):av>bv?(sortDir==='asc'?1:-1):0;});return vs;
 }
@@ -282,6 +286,10 @@ function getFiltered(){
 function renderTable(){
     const repos=Object.keys(D.repos),sel=document.getElementById('fRepo'),cur=sel.value;
     sel.innerHTML=`<option value="all">All repos (${repos.length})</option>`;repos.forEach(r=>{const o=document.createElement('option');o.value=r;o.textContent=r.split('/').pop();if(r===cur)o.selected=true;sel.appendChild(o);});
+    // Populate SDK filter
+    const sdkSel=document.getElementById('fSdk'),curSdk=sdkSel.value;
+    const sdkVersions=[...new Set(repos.map(r=>D.repos[r].sdk_version||'unknown').filter(s=>s!=='unknown'))].sort();
+    sdkSel.innerHTML='<option value="all">All</option>';sdkVersions.forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent=s;if(s===curSdk)o.selected=true;sdkSel.appendChild(o);});
     const vs=getFiltered(),sr=document.getElementById('fRepo').value;
     document.getElementById('tblCount').textContent=vs.length+' vulnerabilities';const tb=document.getElementById('tbl');tb.innerHTML='';
     if(!vs.length){document.getElementById('empty').style.display='block';return;}document.getElementById('empty').style.display='none';
@@ -293,11 +301,12 @@ function renderTable(){
             <td><span class="badge b-${v.scanner}">${v.scanner}</span></td>
             <td><span class="badge b-${v.source_type==='base_image'?'base':'app'}">${v.source_type==='base_image'?'Base':'App'}</span></td>
             <td><span class="badge b-${status}">${status}</span></td>
+            <td>${[...new Set(v.repos.map(r=>(D.repos[r]||{}).sdk_version||'?'))].map(s=>{const isV3=s.startsWith('3')||s.includes('v3');return'<span class="badge" style="'+(isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c')+'">'+esc(s)+'</span>';}).join(' ')}</td>
             <td><div class="repos-cell">${v.repos.length<=3?v.repos.map(r=>'<span class="repo-tag">'+esc(r.split('/').pop())+'</span>').join(''):'<span class="repo-tag">'+esc(v.repos[0].split('/').pop())+'</span><span class="repo-tag">'+esc(v.repos[1].split('/').pop())+'</span><span class="repo-tag" style="background:#e0e2ff;color:#6366f1;cursor:default" title="'+v.repos.map(r=>r.split('/').pop()).join(', ')+'">+'+(v.repos.length-2)+' more</span>'}</div></td>
             <td>${v.fixed?esc(v.fixed):'<span style="color:#b0b3c6">None</span>'}</td>`;
         tb.appendChild(r);
         const dr=document.createElement('tr');dr.className='detail-row';dr.id='d'+i;
-        dr.innerHTML=`<td colspan="8"><div class="detail-grid">
+        dr.innerHTML=`<td colspan="9"><div class="detail-grid">
             <div class="detail-item"><label>Full ID</label><span><code>${esc(v.id)}</code></span></div>
             <div class="detail-item"><label>Installed</label><span>${esc(v.installed||'N/A')}</span></div>
             <div class="detail-item"><label>Fix Version</label><span>${esc(v.fixed||'No fix')}</span></div>
@@ -310,7 +319,7 @@ function renderTable(){
 }
 
 function toggle(i){document.getElementById('d'+i).classList.toggle('show');document.getElementById('d'+i).previousElementSibling.classList.toggle('expanded');}
-function clearFilters(){['fRepo','fSev','fStatus','fSource'].forEach(id=>document.getElementById(id).value='all');document.getElementById('fSearch').value='';renderTable();}
+function clearFilters(){['fRepo','fSev','fStatus','fSource','fSdk'].forEach(id=>document.getElementById(id).value='all');document.getElementById('fSearch').value='';renderTable();}
 document.querySelectorAll('th[data-s]').forEach(th=>th.addEventListener('click',()=>{const c=th.dataset.s;if(sortCol===c)sortDir=sortDir==='asc'?'desc':'asc';else{sortCol=c;sortDir='asc';}renderTable();}));
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active');}));
 document.querySelectorAll('.filters-bar select,.filters-bar input').forEach(el=>{el.addEventListener('change',renderTable);el.addEventListener('input',renderTable);});
