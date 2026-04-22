@@ -288,7 +288,7 @@ def create_worker(
                 build_id=APP_BUILD_ID,
             ),
             use_worker_versioning=True,
-            default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
+            default_versioning_behavior=VersioningBehavior.PINNED,
         )
         logger.info(
             "Worker Deployment versioning enabled: deployment=%s build_id=%s",
@@ -302,7 +302,7 @@ def create_worker(
                 build_id=APP_BUILD_ID,
             ),
             use_worker_versioning=True,
-            default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
+            default_versioning_behavior=VersioningBehavior.PINNED,
         )
         logger.info("Worker versioning enabled: build_id=%s", APP_BUILD_ID)
 

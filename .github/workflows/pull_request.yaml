@@ -34,10 +34,12 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - 'examples/**'
+              - '.github/**'
 
-  # Conventional Commits
+  # Conventional Commits (skipped on fork PRs — no org PAT available)
   commits:
     name: Conventional Commits
+    if: github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -74,7 +76,7 @@ jobs:
   trivy-container:
     name: Trivy Container Scan
     needs: changes
-    if: needs.changes.outputs.container == 'true'
+    if: needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -252,7 +254,7 @@ jobs:
   run-examples:
     name: Run Examples
     needs: matrix-builder
-    if: ((github.event.action == 'labeled' && github.event.label.name == 'run-examples') || contains(github.event.pull_request.labels.*.name, 'run-examples'))
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'run-examples') || contains(github.event.pull_request.labels.*.name, 'run-examples')) && github.event.pull_request.head.repo.fork != true
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -274,7 +276,7 @@ jobs:
   e2e-apps:
     name: E2E (Apps)
     needs: [changes, matrix-builder]
-    if: ((github.event.action == 'labeled' && github.event.label.name == 'e2e-test') || contains(github.event.pull_request.labels.*.name, 'e2e-test'))
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'e2e-test') || contains(github.event.pull_request.labels.*.name, 'e2e-test')) && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

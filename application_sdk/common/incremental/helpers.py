@@ -8,6 +8,7 @@ This module contains helper functions for:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import shutil
@@ -19,6 +20,7 @@ from typing import Optional
 from application_sdk.constants import (
     APPLICATION_NAME,
     MARKER_TIMESTAMP_FORMAT,
+    MAX_CONCURRENT_STORAGE_TRANSFERS,
     PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE,
     TEMPORARY_PATH,
 )
@@ -216,6 +218,7 @@ async def download_marker_from_s3(
 async def download_s3_prefix_with_structure(
     s3_prefix: str,
     local_destination: Path,
+    max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
 ) -> None:
     """Download files from S3 preserving relative directory structure.
 
@@ -225,6 +228,7 @@ async def download_s3_prefix_with_structure(
     Args:
         s3_prefix: S3 prefix path to download from
         local_destination: Local directory to download files into
+        max_concurrency: Maximum number of concurrent downloads (default: MAX_CONCURRENT_STORAGE_TRANSFERS).
 
     Raises:
         Exception: If listing or downloading fails
@@ -237,26 +241,26 @@ async def download_s3_prefix_with_structure(
     # Normalize source prefix for path stripping
     source_prefix = s3_prefix.rstrip("/")
 
-    # Download each file with correct relative path
-    for file_path in file_list:
+    sem = asyncio.Semaphore(max_concurrency)
+
+    async def _download_one(file_path: str) -> None:
         # Strip source prefix to get relative path
         if file_path.startswith(source_prefix):
             relative_path = file_path[len(source_prefix) :].lstrip("/")
         else:
-            # If path doesn't start with prefix, use it as-is
             relative_path = file_path
 
-        # Build local destination path
         local_file_path = local_destination.joinpath(relative_path)
-
-        # Ensure parent directory exists
         local_file_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Download file from Object Store to local
-        await download_file(
-            key=file_path,
-            local_path=str(local_file_path),
-        )
+        async with sem:
+            await download_file(
+                key=file_path,
+                local_path=str(local_file_path),
+            )
+
+    # Download all files concurrently with bounded parallelism
+    await asyncio.gather(*[_download_one(fp) for fp in file_list])
 
 
 # =============================================================================
