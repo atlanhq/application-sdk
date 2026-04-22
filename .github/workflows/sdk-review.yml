@@ -60,6 +60,10 @@ jobs:
 
             if (/\bstop\b/i.test(body) || /\bcancel\b/i.test(body)) {
               command = 'stop';
+            } else if (/\bci-fix\b/i.test(body)) {
+              command = 'ci-fix';
+              const after = body.replace(/@sdk-review\s*ci-fix\s*/i, '').trim();
+              if (after) commandContext = after;
             } else if (/\bretrospect\b/i.test(body)) {
               command = 'retrospect';
             } else if (/\bauto-complete\b/i.test(body) || /\bresolve all\b/i.test(body)) {

@@ -118,7 +118,7 @@ jobs:
                   } catch (_) {}
                   await github.rest.issues.createComment({
                     owner, repo, issue_number: pr.number,
-                    body: '@sdk-review CI failing after branch update — auto-triggered re-review with CI fix.',
+                    body: '@sdk-review ci-fix CI failing after branch update — fix CI and do minimal delta review only.',
                   });
                   console.log(`PR #${pr.number}: CI unstable after update, auto-triggered @sdk-review`);
                 }
