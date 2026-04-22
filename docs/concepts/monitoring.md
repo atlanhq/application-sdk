@@ -4,11 +4,17 @@ The Application SDK exposes built-in metrics for monitoring workflow execution h
 
 ## Temporal Prometheus Metrics
 
-Every application that uses `create_temporal_client()` automatically exposes ~40 built-in Temporal SDK metrics. No code changes are required.
+Applications that use `create_temporal_client()` can expose ~40 built-in Temporal SDK metrics when Prometheus metrics are explicitly enabled.
+
+Enable the exporter with:
+
+```bash
+ATLAN_ENABLE_PROMETHEUS_METRICS=true
+```
 
 ### Endpoint
 
-The metrics endpoint is bound at startup when `create_temporal_client()` is called:
+When `ATLAN_ENABLE_PROMETHEUS_METRICS=true`, the metrics endpoint is bound at startup when `create_temporal_client()` is called:
 
 ```
 http://<host>:9464/metrics
@@ -21,6 +27,8 @@ Override with `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS`:
 ```bash
 ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS=0.0.0.0:9464
 ```
+
+For local auto-reload workflows, set `ATLAN_ENABLE_PROMETHEUS_METRICS=false` or leave it unset so the Temporal SDK does not bind a Prometheus socket on each restart.
 
 ### Available Metrics
 

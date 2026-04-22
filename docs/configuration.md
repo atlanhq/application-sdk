@@ -35,6 +35,7 @@ The Application SDK uses environment variables for configuration. These can be s
 | `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | Maximum duration an activity can run before timing out (in seconds) | `7200` | Prevents activities from running indefinitely |
 | `ATLAN_AUTH_ENABLED` | Whether to enable authentication for Temporal workflows | `false` | Used in production deployments with secure Temporal clusters |
 | `ATLAN_DEPLOYMENT_SECRET_PATH` | Path to deployment secrets in secret store | `ATLAN_DEPLOYMENT_SECRETS` | Contains authentication credentials for production |
+| `ATLAN_ENABLE_PROMETHEUS_METRICS` | Whether to enable Prometheus metrics exporters, including the Temporal SDK runtime exporter | `false` | Opt in when you want Prometheus scraping; leave unset in local reload loops to avoid binding a fixed metrics port on each restart |
 | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | Bind address for the Temporal SDK Prometheus metrics endpoint | `0.0.0.0:9464` | Exposes ~40 built-in Temporal SDK metrics (workflow latency, activity retries, worker capacity, etc.) for Prometheus scraping |
 
 ## SQL Client Configuration
@@ -130,6 +131,7 @@ For local development, most defaults work out of the box. Key configurations to 
 - `ATLAN_APPLICATION_NAME`: Set to a descriptive name for your application
 - `ATLAN_TENANT_ID`: Set to identify your development environment
 - `LOG_LEVEL`: Set to `DEBUG` for detailed logging during development
+- `ATLAN_HEALTH_PORT`: Optional for `run_dev_combined()`; when unset, local dev uses an ephemeral worker health port to avoid reload collisions on `8081`
 
 ### Production Deployment
 For production deployments, consider these essential configurations:

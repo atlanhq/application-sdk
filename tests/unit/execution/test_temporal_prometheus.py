@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from temporalio.runtime import Runtime
+from temporalio.runtime import Runtime, TelemetryConfig
 
 import application_sdk.execution._temporal.backend as backend_module
 from application_sdk.execution._temporal.backend import (
@@ -30,6 +30,36 @@ def test_get_prometheus_runtime_creates_singleton(_reset_singleton):
     rt2 = _get_prometheus_runtime()
     assert rt1 is rt2
     _reset_singleton.assert_called_once()
+
+
+def test_get_prometheus_runtime_skips_prometheus_when_disabled(_reset_singleton):
+    """Prometheus-disabled runtimes should not bind a metrics listener."""
+    with patch.object(backend_module, "ENABLE_PROMETHEUS_METRICS", False):
+        runtime = _get_prometheus_runtime()
+
+    assert runtime is backend_module._prometheus_runtime
+    _reset_singleton.assert_called_once()
+    telemetry = _reset_singleton.call_args.kwargs["telemetry"]
+    assert isinstance(telemetry, TelemetryConfig)
+    assert telemetry.metrics is None
+
+
+def test_get_prometheus_runtime_enables_prometheus_when_configured(_reset_singleton):
+    """Prometheus-enabled runtimes should bind the configured metrics address."""
+    bind_address = "127.0.0.1:12345"
+
+    with (
+        patch.object(backend_module, "ENABLE_PROMETHEUS_METRICS", True),
+        patch.object(backend_module, "TEMPORAL_PROMETHEUS_BIND_ADDRESS", bind_address),
+    ):
+        runtime = _get_prometheus_runtime()
+
+    assert runtime is backend_module._prometheus_runtime
+    _reset_singleton.assert_called_once()
+    telemetry = _reset_singleton.call_args.kwargs["telemetry"]
+    assert isinstance(telemetry, TelemetryConfig)
+    assert telemetry.metrics is not None
+    assert telemetry.metrics.bind_address == bind_address
 
 
 @patch(

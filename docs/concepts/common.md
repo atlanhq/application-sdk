@@ -156,4 +156,5 @@ token = generate_aws_rds_token_with_iam_user(
 
 | Constant | Env Var | Default | Description |
 |----------|---------|---------|-------------|
+| `ENABLE_PROMETHEUS_METRICS` | `ATLAN_ENABLE_PROMETHEUS_METRICS` | `false` | Enables Prometheus metrics exporters, including the Temporal SDK runtime metrics listener |
 | `TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `0.0.0.0:9464` | Bind address for Temporal SDK Prometheus metrics |

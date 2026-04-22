@@ -11,7 +11,10 @@ from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 
-from application_sdk.constants import TEMPORAL_PROMETHEUS_BIND_ADDRESS
+from application_sdk.constants import (
+    ENABLE_PROMETHEUS_METRICS,
+    TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+)
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -22,27 +25,31 @@ _prometheus_lock = threading.Lock()
 
 
 def _get_prometheus_runtime() -> Runtime:
-    """Get or create the process-level Temporal Runtime with Prometheus metrics.
+    """Get or create the process-level Temporal Runtime.
 
-    The Runtime binds a Prometheus metrics endpoint on the configured address.
-    It is created at most once per process — subsequent calls return the same
-    instance. This prevents port-already-in-use errors when create_temporal_client
-    is called more than once (e.g., after a reconnect or in tests).
+    When Prometheus metrics are enabled, the Runtime binds the configured
+    Prometheus metrics endpoint. It is created at most once per process;
+    subsequent calls return the same instance. This prevents duplicate runtime
+    creation when create_temporal_client is called more than once in a process
+    (e.g., after a reconnect or in tests).
     """
     global _prometheus_runtime
     with _prometheus_lock:
         if _prometheus_runtime is None:
-            _prometheus_runtime = Runtime(
-                telemetry=TelemetryConfig(
-                    metrics=PrometheusConfig(
-                        bind_address=TEMPORAL_PROMETHEUS_BIND_ADDRESS
+            if not ENABLE_PROMETHEUS_METRICS:
+                _prometheus_runtime = Runtime(telemetry=TelemetryConfig())
+            else:
+                _prometheus_runtime = Runtime(
+                    telemetry=TelemetryConfig(
+                        metrics=PrometheusConfig(
+                            bind_address=TEMPORAL_PROMETHEUS_BIND_ADDRESS
+                        )
                     )
                 )
-            )
-            logger.info(
-                "Temporal Prometheus metrics enabled on %s",
-                TEMPORAL_PROMETHEUS_BIND_ADDRESS,
-            )
+                logger.info(
+                    "Temporal Prometheus metrics enabled on %s",
+                    TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+                )
     return _prometheus_runtime
 
 
@@ -334,7 +341,7 @@ async def create_temporal_client(
     if api_key:
         kwargs["api_key"] = api_key
 
-    # Configure Temporal runtime with Prometheus metrics (process-level singleton)
+    # Configure the process-level Temporal runtime, optionally with Prometheus metrics.
     kwargs["runtime"] = _get_prometheus_runtime()
 
     last_exc: Exception | None = None

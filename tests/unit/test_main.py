@@ -18,6 +18,7 @@ from application_sdk.main import (
     _install_graceful_signal_handlers,
     _log_dapr_components,
     parse_args,
+    run_dev_combined,
     run_main,
 )
 
@@ -349,6 +350,74 @@ class TestRunMain:
                 mock_run.side_effect = lambda coro: None
                 run_main(config)
                 mock_run.assert_called_once()
+
+
+class TestRunDevCombined:
+    """Tests for run_dev_combined()."""
+
+    async def test_defaults_health_port_to_ephemeral(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_HEALTH_PORT", raising=False)
+        captured: dict[str, AppConfig] = {}
+
+        class MyApp:
+            _app_name = "my-app"
+
+        async def _fake_create_infrastructure(
+            *args: object, **kwargs: object
+        ) -> object:
+            return object()
+
+        async def _fake_run_combined_mode(config: AppConfig) -> None:
+            captured["config"] = config
+
+        with (
+            patch(
+                "application_sdk.main._create_infrastructure",
+                new=_fake_create_infrastructure,
+            ),
+            patch("application_sdk.infrastructure.context.set_infrastructure"),
+            patch(
+                "application_sdk.main.run_combined_mode",
+                new=_fake_run_combined_mode,
+            ),
+        ):
+            await run_dev_combined(MyApp)
+
+        assert captured["config"].health_port == 0
+
+    async def test_honors_health_port_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_HEALTH_PORT", "8081")
+        captured: dict[str, AppConfig] = {}
+
+        class MyApp:
+            _app_name = "my-app"
+
+        async def _fake_create_infrastructure(
+            *args: object, **kwargs: object
+        ) -> object:
+            return object()
+
+        async def _fake_run_combined_mode(config: AppConfig) -> None:
+            captured["config"] = config
+
+        with (
+            patch(
+                "application_sdk.main._create_infrastructure",
+                new=_fake_create_infrastructure,
+            ),
+            patch("application_sdk.infrastructure.context.set_infrastructure"),
+            patch(
+                "application_sdk.main.run_combined_mode",
+                new=_fake_run_combined_mode,
+            ),
+        ):
+            await run_dev_combined(MyApp)
+
+        assert captured["config"].health_port == 8081
 
 
 class TestParseArgs:

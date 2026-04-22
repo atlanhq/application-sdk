@@ -998,6 +998,7 @@ async def run_dev_combined(
         task_queue=effective_task_queue,
         handler_host=host,
         handler_port=port,
+        health_port=int(os.environ.get("ATLAN_HEALTH_PORT", "0")),
         log_level="DEBUG",
         service_name=_derive_service_name(app_module),
         frontend_assets_path=os.environ.get(
