@@ -258,10 +258,10 @@ function renderRepos(){
     const repoSdkSel=document.getElementById('fRepoSdk'),curRepoSdk=repoSdkSel.value;
     const allRepos=Object.keys(D.repos);
     const sdkVers=[...new Set(allRepos.map(r=>D.repos[r].sdk_version||'unknown').filter(s=>s!=='unknown'))].sort();
-    repoSdkSel.innerHTML='<option value="all">All ('+allRepos.length+')</option>';sdkVers.forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent=s;if(s===curRepoSdk)o.selected=true;repoSdkSel.appendChild(o);});
+    repoSdkSel.innerHTML='<option value="all">All ('+allRepos.length+')</option>';sdkVers.forEach(s=>{const cnt=allRepos.filter(r=>(D.repos[r].sdk_version||'')==s).length;const o=document.createElement('option');o.value=s;o.textContent=s+' ('+cnt+')';if(s===curRepoSdk)o.selected=true;repoSdkSel.appendChild(o);});
     // Filter repos
     const filteredRepos=curRepoSdk==='all'?allRepos:allRepos.filter(r=>(D.repos[r].sdk_version||'')==curRepoSdk);
-    document.getElementById('repoCards').innerHTML=filteredRepos.map(r=>{
+    document.getElementById('repoCards').innerHTML='<div style="font-size:13px;color:#5c5f77;margin-bottom:10px;font-weight:600">'+filteredRepos.length+' repos</div>'+filteredRepos.map(r=>{
         const d=D.repos[r],t=d.total||1,hasNew=(d.new||0)>0;
         const sdk=d.sdk_version||'unknown';
         const isV3=sdk.startsWith('3')||sdk.includes('v3')||sdk.includes('refactor-v3');
