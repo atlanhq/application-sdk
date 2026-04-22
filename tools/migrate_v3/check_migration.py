@@ -384,10 +384,13 @@ def check_file(path: Path, *, is_test: bool = False) -> list[CheckResult]:
         )
 
     # ── WARN: response format changed in v3 ──────────────────────────────
-    # Only fires for Handler subclasses — reminds developer to update
-    # frontend consumers and e2e tests that expect the v2 response shape.
+    # Only fires for Handler subclasses that haven't migrated to v3 typed
+    # contracts yet. If the signature already uses MetadataInput/PreflightInput,
+    # the handler is properly migrated and no warning is needed.
     if _RE_HANDLER_BASE.search(full_text):
-        if _RE_FETCH_METADATA_DEF.search(full_text):
+        _re_metadata_v3 = re.compile(r"async\s+def\s+fetch_metadata\s*\([^)]*MetadataInput")
+        _re_preflight_v3 = re.compile(r"async\s+def\s+preflight_check\s*\([^)]*PreflightInput")
+        if _RE_FETCH_METADATA_DEF.search(full_text) and not _re_metadata_v3.search(full_text):
             results.append(
                 CheckResult(
                     level=WARN,
@@ -399,7 +402,7 @@ def check_file(path: Path, *, is_test: bool = False) -> list[CheckResult]:
                     file=path,
                 )
             )
-        if _RE_PREFLIGHT_CHECK_DEF.search(full_text):
+        if _RE_PREFLIGHT_CHECK_DEF.search(full_text) and not _re_preflight_v3.search(full_text):
             results.append(
                 CheckResult(
                     level=WARN,
@@ -511,12 +514,18 @@ def check_directory(
     # ── WARN: v2 directory structure still present ────────────────────────
     if root.is_dir():
         for subdir in sorted(root.rglob("*")):
-            if subdir.is_dir() and subdir.name in ("activities", "workflows"):
-                advisories.append(
-                    f"WARN [no-v2-directory-structure]: v2 directory '{subdir}' still "
-                    "present. Consolidate into app/<app_name>.py and delete the empty "
-                    "directory. See Phase 2c of the migration skill."
-                )
+            if not subdir.is_dir() or subdir.name not in ("activities", "workflows"):
+                continue
+            # Skip non-source directories that legitimately contain "workflows"
+            rel = subdir.relative_to(root)
+            skip_prefixes = (".github", ".venv", "local", "node_modules", ".out", "artifacts", ".cache")
+            if rel.parts and rel.parts[0] in skip_prefixes:
+                continue
+            advisories.append(
+                f"WARN [no-v2-directory-structure]: v2 directory '{subdir}' still "
+                "present. Consolidate into app/<app_name>.py and delete the empty "
+                "directory. See Phase 2c of the migration skill."
+            )
 
     return all_results, advisories
 
