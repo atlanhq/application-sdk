@@ -536,7 +536,6 @@ Agent tool call:
     - `application_sdk/infrastructure/` — protocol implementations
     - `application_sdk/credentials/` — credential system
     - `application_sdk/storage/` — object storage
-    - `helm/` — deployment templates
     - `examples/` — example apps
 
     Check against ALL 11 ADRs:
@@ -753,7 +752,6 @@ Agent tool call:
 
     EXPLICITLY SCAN THESE FILES (do not skip):
     - `Dockerfile` and `.github/workflows/` for supply chain issues
-    - `helm/` for security misconfigurations
     - `application_sdk/constants.py` for hardcoded values
 
     Security issues are always Critical or Important — never Minor.

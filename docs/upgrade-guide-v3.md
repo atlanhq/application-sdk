@@ -406,7 +406,7 @@ For local dev, pass the class directly — `run_dev_combined` derives the module
 ```python
 from application_sdk.main import run_dev_combined
 
-asyncio.run(run_dev_combined(MyMetadataExtractor, handler_class=MyHandler))
+asyncio.run(run_dev_combined(MyMetadataExtractor))
 ```
 
 Three modes are available:
@@ -1084,7 +1084,6 @@ from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
-    handler_class=MyHandler,
     secret_store=MockSecretStore({"my-api-key": "test-value"}),
     state_store=MockStateStore(),
 ))
