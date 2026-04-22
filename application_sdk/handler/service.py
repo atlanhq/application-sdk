@@ -534,6 +534,20 @@ def create_app_handler_service(
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
         body = _normalize_credentials(await request.json())
+        credential_guid = body.get("credential_guid")
+        if credential_guid and not body.get("credentials"):
+            from application_sdk.infrastructure import (
+                AsyncDaprClient,
+                DaprCredentialVault,
+            )
+
+            dapr_client = AsyncDaprClient()
+            try:
+                vault = DaprCredentialVault(dapr_client)
+                resolved = await vault.get_credentials(credential_guid)
+                body["credentials"] = _flatten_to_pairs(resolved)
+            finally:
+                await dapr_client.close()
         preflight_input = PreflightInput.model_validate(body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
