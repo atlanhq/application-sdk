@@ -312,6 +312,17 @@ jobs:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
 
+      - name: One-time history reset
+        run: |
+          # Only reset if marker file doesn't exist yet
+          if ! aws s3 ls "s3://kryptonite-store/${{ inputs.dashboard_path }}/history/.reset_done" 2>/dev/null; then
+            aws s3 rm "s3://kryptonite-store/${{ inputs.dashboard_path }}/history/" --recursive 2>/dev/null || true
+            echo "reset" | aws s3 cp - "s3://kryptonite-store/${{ inputs.dashboard_path }}/history/.reset_done"
+            echo "History reset complete"
+          else
+            echo "History already reset — skipping"
+          fi
+
       - name: Deploy to Kryptonite
         env:
           REPO_SLUG: ${{ github.repository }}
