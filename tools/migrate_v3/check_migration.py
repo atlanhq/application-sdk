@@ -520,22 +520,13 @@ def check_directory(
         )
 
     # ── WARN: v2 directory structure still present ────────────────────────
-    if root.is_dir():
-        for subdir in sorted(root.rglob("*")):
+    # Only check inside app/ — that's where v2 activities/ and workflows/ dirs live.
+    # Checking the entire repo root would false-positive on .github/workflows,
+    # virtual environments, local Dapr artifacts, node_modules, etc.
+    app_dir = root / "app"
+    if app_dir.is_dir():
+        for subdir in sorted(app_dir.rglob("*")):
             if not subdir.is_dir() or subdir.name not in ("activities", "workflows"):
-                continue
-            # Skip non-source directories that legitimately contain "workflows"
-            rel = subdir.relative_to(root)
-            skip_prefixes = (
-                ".github",
-                ".venv",
-                "local",
-                "node_modules",
-                ".out",
-                "artifacts",
-                ".cache",
-            )
-            if rel.parts and rel.parts[0] in skip_prefixes:
                 continue
             advisories.append(
                 f"WARN [no-v2-directory-structure]: v2 directory '{subdir}' still "
