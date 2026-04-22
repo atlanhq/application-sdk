@@ -208,6 +208,51 @@ def _emit_log_event(
         pass
 
 
+_PREFLIGHT_KEYWORDS = ("preflight", "setup", "connection_check")
+_CB_KEYWORDS = ("circuit breaker", "circuit_breaker", "circuitbreaker")
+
+
+def _detect_preflight_passed(acts: list[dict[str, Any]]) -> bool | None:
+    """Determine whether preflight activities passed, failed, or didn't run.
+
+    Returns:
+        True  — all preflight activities succeeded.
+        False — at least one preflight activity failed.
+        None  — no preflight activities in this workflow, or status is incomplete.
+    """
+    preflight_acts = [
+        a
+        for a in acts
+        if any(kw in a.get("activity_type", "").lower() for kw in _PREFLIGHT_KEYWORDS)
+    ]
+    if not preflight_acts:
+        return None
+
+    statuses = [a.get("status") for a in preflight_acts]
+    if any(s == "failed" for s in statuses):
+        return False
+    if all(s == "succeeded" for s in statuses):
+        return True
+    # Incomplete (pending/cancelled mid-preflight) — don't misclassify
+    return None
+
+
+def _detect_circuit_breaker(failed_acts: list[dict[str, Any]]) -> bool:
+    """Check if any failed activity indicates a circuit breaker trip.
+
+    Scans error_class and error_message of failed activities for circuit
+    breaker keywords.
+    """
+    return any(
+        any(
+            kw in str(a.get("error_class", "")).lower()
+            or kw in str(a.get("error_message", "")).lower()
+            for kw in _CB_KEYWORDS
+        )
+        for a in failed_acts
+    )
+
+
 class _AppVitalsWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
     """Tracks each activity/child-workflow call so the inbound interceptor
     can emit a workflow summary on completion (L1).
@@ -322,31 +367,8 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             sum(a.get("duration_ms", 0) for a in acts_with_duration), 1
         )
 
-        # Preflight detection — any activity with "preflight", "setup", or
-        # "connection_check" in its name is considered a preflight step.
-        # If ANY preflight activity failed → preflight_passed = False (config issue).
-        # If ALL passed → True. If none exist → None (not applicable).
-        _PREFLIGHT_KEYWORDS = ("preflight", "setup", "connection_check")
-        preflight_acts = [
-            a for a in acts
-            if any(kw in a.get("activity_type", "").lower() for kw in _PREFLIGHT_KEYWORDS)
-        ]
-        if preflight_acts:
-            preflight_passed = all(a.get("status") == "succeeded" for a in preflight_acts)
-        else:
-            preflight_passed = None
-
-        # Circuit breaker detection — scan failed activities for circuit breaker
-        # signals in error_class or error_message.
-        _CB_KEYWORDS = ("circuit breaker", "circuit_breaker", "circuitbreaker")
-        circuit_breaker_tripped = any(
-            any(
-                kw in str(a.get("error_class", "")).lower()
-                or kw in str(a.get("error_message", "")).lower()
-                for kw in _CB_KEYWORDS
-            )
-            for a in failed
-        )
+        preflight_passed = _detect_preflight_passed(acts)
+        circuit_breaker_tripped = _detect_circuit_breaker(failed)
 
         summary: dict[str, Any] = {
             **common,
@@ -358,12 +380,15 @@ class _AppVitalsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             "failed_activities": len(failed),
             "total_child_workflows": len(self._child_workflow_records),
             "sum_activity_duration_ms": sum_activity_duration_ms,
-            "preflight_passed": preflight_passed,
             "circuit_breaker_tripped": circuit_breaker_tripped,
             "dimension": "reliability",
             "source": "temporal",
             "metric_name": "app_vitals.reliability.wf_summary",
         }
+        # Only emit preflight_passed when it has a definitive value (True/False).
+        # None = no preflight activities → omit to avoid "None" string in OTLP.
+        if preflight_passed is not None:
+            summary["preflight_passed"] = preflight_passed
         if first_failure is not None:
             summary["first_failure_activity_type"] = first_failure.get(
                 "activity_type", ""

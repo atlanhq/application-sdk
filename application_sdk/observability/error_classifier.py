@@ -8,7 +8,7 @@ tools have structured context without reading stack traces manually.
 Error types:
   timeout    — TimeoutError, deadline exceeded
   oom        — MemoryError, OOMKilled
-  connection — ConnectionError, ConnectionRefused, SSLError (network/infra)
+  connection — ConnectionError, ConnectionRefusedError, SSLError (network/infra)
   auth       — authentication failures, 401/403 (credentials rejected)
   cancelled  — CancelledError, KeyboardInterrupt
   internal   — everything else (includes ValueError, KeyError, TypeError)

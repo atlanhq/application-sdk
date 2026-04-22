@@ -1137,78 +1137,148 @@ class TestPreflightAndCircuitBreaker:
         from application_sdk.observability.app_vitals import (
             _AppVitalsWorkflowInboundInterceptor,
         )
+
         mock_next = mock.AsyncMock()
         return _AppVitalsWorkflowInboundInterceptor(mock_next)
 
     def test_preflight_passed_true(self):
         interceptor = self._make_interceptor()
         interceptor._activity_records = [
-            {"activity_type": "preflight_check", "status": "succeeded",
-             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
-            {"activity_type": "fetch_databases", "status": "succeeded",
-             "start_ns": 1000, "end_ns": 2000, "duration_ms": 1.0},
+            {
+                "activity_type": "preflight_check",
+                "status": "succeeded",
+                "start_ns": 0,
+                "end_ns": 1000,
+                "duration_ms": 1.0,
+            },
+            {
+                "activity_type": "fetch_databases",
+                "status": "succeeded",
+                "start_ns": 1000,
+                "end_ns": 2000,
+                "duration_ms": 1.0,
+            },
         ]
         common = {"app_name": "test"}
-        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "succeeded", 100.0)
+        summary = interceptor._build_summary_attrs(
+            common, MockWorkflowInfo(), "succeeded", 100.0
+        )
         assert summary["preflight_passed"] is True
         assert summary["circuit_breaker_tripped"] is False
 
     def test_preflight_passed_false(self):
         interceptor = self._make_interceptor()
         interceptor._activity_records = [
-            {"activity_type": "preflight_check", "status": "failed",
-             "error_type": "connection", "error_class": "ConnectionRefusedError",
-             "error_message": "Connection refused",
-             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
+            {
+                "activity_type": "preflight_check",
+                "status": "failed",
+                "error_type": "connection",
+                "error_class": "ConnectionRefusedError",
+                "error_message": "Connection refused",
+                "start_ns": 0,
+                "end_ns": 1000,
+                "duration_ms": 1.0,
+            },
         ]
         common = {"app_name": "test"}
-        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "failed", 100.0)
+        summary = interceptor._build_summary_attrs(
+            common, MockWorkflowInfo(), "failed", 100.0
+        )
         assert summary["preflight_passed"] is False
 
-    def test_preflight_passed_none_when_no_preflight(self):
+    def test_preflight_passed_omitted_when_no_preflight(self):
         interceptor = self._make_interceptor()
         interceptor._activity_records = [
-            {"activity_type": "parse_sql", "status": "succeeded",
-             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
+            {
+                "activity_type": "parse_sql",
+                "status": "succeeded",
+                "start_ns": 0,
+                "end_ns": 1000,
+                "duration_ms": 1.0,
+            },
         ]
         common = {"app_name": "test"}
-        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "succeeded", 100.0)
-        assert summary["preflight_passed"] is None
+        summary = interceptor._build_summary_attrs(
+            common, MockWorkflowInfo(), "succeeded", 100.0
+        )
+        assert (
+            "preflight_passed" not in summary
+        )  # omitted, not None — avoids "None" string in OTLP
+
+    def test_preflight_passed_none_when_incomplete(self):
+        """Preflight with pending status (e.g. cancelled mid-preflight) → omitted."""
+        interceptor = self._make_interceptor()
+        interceptor._activity_records = [
+            {
+                "activity_type": "preflight_check",
+                "status": "pending",
+                "start_ns": 0,
+                "end_ns": 1000,
+                "duration_ms": 1.0,
+            },
+        ]
+        common = {"app_name": "test"}
+        summary = interceptor._build_summary_attrs(
+            common, MockWorkflowInfo(), "failed", 100.0
+        )
+        assert "preflight_passed" not in summary  # incomplete → don't misclassify
 
     def test_circuit_breaker_tripped_via_class(self):
         interceptor = self._make_interceptor()
         interceptor._activity_records = [
-            {"activity_type": "calculate_diff", "status": "failed",
-             "error_type": "internal", "error_class": "CircuitBreakerError",
-             "error_message": "Failure rate exceeded 80%",
-             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
+            {
+                "activity_type": "calculate_diff",
+                "status": "failed",
+                "error_type": "internal",
+                "error_class": "CircuitBreakerError",
+                "error_message": "Failure rate exceeded 80%",
+                "start_ns": 0,
+                "end_ns": 1000,
+                "duration_ms": 1.0,
+            },
         ]
         common = {"app_name": "test"}
-        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "failed", 100.0)
+        summary = interceptor._build_summary_attrs(
+            common, MockWorkflowInfo(), "failed", 100.0
+        )
         assert summary["circuit_breaker_tripped"] is True
 
     def test_circuit_breaker_tripped_via_message(self):
         interceptor = self._make_interceptor()
         interceptor._activity_records = [
-            {"activity_type": "publish_entities", "status": "failed",
-             "error_type": "internal", "error_class": "RuntimeError",
-             "error_message": "circuit breaker: diff exceeded 80% threshold",
-             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
+            {
+                "activity_type": "publish_entities",
+                "status": "failed",
+                "error_type": "internal",
+                "error_class": "RuntimeError",
+                "error_message": "circuit breaker: diff exceeded 80% threshold",
+                "start_ns": 0,
+                "end_ns": 1000,
+                "duration_ms": 1.0,
+            },
         ]
         common = {"app_name": "test"}
-        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "failed", 100.0)
+        summary = interceptor._build_summary_attrs(
+            common, MockWorkflowInfo(), "failed", 100.0
+        )
         assert summary["circuit_breaker_tripped"] is True
 
     def test_circuit_breaker_not_tripped(self):
         interceptor = self._make_interceptor()
         interceptor._activity_records = [
-            {"activity_type": "fetch_tables", "status": "failed",
-             "error_type": "connection", "error_class": "ConnectionError",
-             "error_message": "Connection refused",
-             "start_ns": 0, "end_ns": 1000, "duration_ms": 1.0},
+            {
+                "activity_type": "fetch_tables",
+                "status": "failed",
+                "error_type": "connection",
+                "error_class": "ConnectionError",
+                "error_message": "Connection refused",
+                "start_ns": 0,
+                "end_ns": 1000,
+                "duration_ms": 1.0,
+            },
         ]
         common = {"app_name": "test"}
-        summary = interceptor._build_summary_attrs(common, MockWorkflowInfo(), "failed", 100.0)
+        summary = interceptor._build_summary_attrs(
+            common, MockWorkflowInfo(), "failed", 100.0
+        )
         assert summary["circuit_breaker_tripped"] is False
-
-
