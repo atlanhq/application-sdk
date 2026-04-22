@@ -199,8 +199,6 @@ protobuf==6.33.5
     #   googleapis-common-protos
     #   opentelemetry-proto
     #   temporalio
-psutil==7.2.1
-    # via atlan-application-sdk
 pyatlan==9.3.1
     # via atlan-application-sdk
 pycparser==2.23 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
