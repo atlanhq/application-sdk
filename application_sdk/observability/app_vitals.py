@@ -256,11 +256,13 @@ def _detect_circuit_breaker(failed_acts: list[dict[str, Any]]) -> bool:
     """
     for a in failed_acts:
         # Build a single searchable string from all error fields
-        searchable = " ".join([
-            str(a.get("error_class", "")).lower(),
-            str(a.get("error_message", "")).lower(),
-            " ".join(str(c).lower() for c in a.get("error_cause_chain", [])),
-        ])
+        searchable = " ".join(
+            [
+                str(a.get("error_class", "")).lower(),
+                str(a.get("error_message", "")).lower(),
+                " ".join(str(c).lower() for c in a.get("error_cause_chain", [])),
+            ]
+        )
         if any(kw in searchable for kw in _CB_KEYWORDS):
             return True
     return False

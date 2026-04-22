@@ -25,11 +25,10 @@ class TestSample:
         assert result.rss_bytes > 0
 
     def test_sample_returns_none_when_resource_unavailable(self):
-        """If resource module can't be imported, return None gracefully."""
+        """If resource module can't be imported, return None."""
         with patch.dict("sys.modules", {"resource": None}):
-            # sample() should never raise, always return None or ResourceSample
             result = sample()
-            assert result is None or isinstance(result, ResourceSample)
+            assert result is None
 
     def test_sample_handles_exception_gracefully(self):
         """If getrusage raises, return None."""

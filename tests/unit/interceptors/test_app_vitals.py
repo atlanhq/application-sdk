@@ -626,8 +626,6 @@ class TestErrorClassifierRichFields:
         assert len(chain) == 3
 
 
-
-
 class TestAppVitalsRichErrorFields:
     """Tests that activity failure events include cause chain + timeout budget."""
 

@@ -16,9 +16,12 @@ but the sum remains correct.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from dataclasses import dataclass
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,7 @@ def _read_proc_rss() -> int | None:
         page_size = os.sysconf("SC_PAGE_SIZE")
         return rss_pages * page_size
     except Exception:
+        _logger.debug("Failed to read /proc/self/stat for RSS", exc_info=True)
         return None
 
 
@@ -68,6 +72,7 @@ def sample() -> ResourceSample | None:
 
         return ResourceSample(cpu_time_s=cpu_time, rss_bytes=rss)
     except Exception:
+        _logger.debug("Resource sampling unavailable", exc_info=True)
         return None
 
 

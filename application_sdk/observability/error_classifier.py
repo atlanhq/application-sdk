@@ -145,5 +145,3 @@ def extract_cause_chain(exc: BaseException, limit: int = 5) -> list[str]:
         current = current.__cause__ or current.__context__
 
     return causes
-
-
