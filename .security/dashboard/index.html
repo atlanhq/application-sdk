@@ -131,6 +131,19 @@
         code{background:#f0f2f5;padding:2px 7px;border-radius:6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;font-weight:500;}
 
         .empty{text-align:center;padding:60px;color:#8c8fa3;font-size:14px;}
+        .trend-line{position:relative;height:200px;display:flex;align-items:flex-end;gap:2px;padding:0 4px;}
+        .trend-bar{flex:1;border-radius:4px 4px 0 0;transition:height 0.5s ease;position:relative;min-width:20px;cursor:pointer;}
+        .trend-bar:hover{opacity:0.8;}
+        .trend-bar .tip{display:none;position:absolute;bottom:100%;left:50%;transform:translateX(-50%);background:#1a1a2e;color:#fff;padding:4px 8px;border-radius:6px;font-size:10px;white-space:nowrap;z-index:10;}
+        .trend-bar:hover .tip{display:block;}
+        .trend-labels{display:flex;gap:2px;padding:4px 4px 0;border-top:1px solid #f0f2f5;}
+        .trend-labels span{flex:1;text-align:center;font-size:9px;color:#8c8fa3;min-width:20px;}
+        .trend-change{display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid #f5f6f8;font-size:13px;}
+        .trend-change:last-child{border:none;}
+        .trend-delta{font-weight:700;font-size:14px;}
+        .trend-delta.up{color:#ef4444;}
+        .trend-delta.down{color:#22c55e;}
+        .trend-delta.flat{color:#8c8fa3;}
 
         .tabs{display:flex;gap:0;margin-bottom:24px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 1px 3px rgba(0,0,0,0.04);display:inline-flex;}
         .tab{padding:10px 22px;font-size:13px;font-weight:600;color:#8c8fa3;cursor:pointer;border-radius:8px;transition:all 0.2s;}
@@ -152,6 +165,7 @@
     <div class="stats-row" id="stats"></div>
     <div class="tabs">
         <div class="tab active" data-tab="overview">Overview</div>
+        <div class="tab" data-tab="trends">Trends</div>
         <div class="tab" data-tab="repos">Repos</div>
         <div class="tab" data-tab="vulns">Vulnerabilities</div>
     </div>
@@ -163,6 +177,31 @@
         <div class="grid-2">
             <div class="card"><div class="card-title">Top Packages</div><div id="pkgBars"></div></div>
             <div class="card"><div class="card-title">Per Repo</div><div id="repoBars"></div></div>
+        </div>
+    </div>
+    <div class="tab-panel" id="tab-trends">
+        <div class="filters-bar" style="margin-bottom:14px">
+            <div class="filter-group"><label>Time Range</label><select id="fTrendDays" onchange="renderTrends()">
+                <option value="1">Last 1 day</option><option value="3">Last 3 days</option><option value="7" selected>Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option>
+            </select></div>
+            <div class="filter-group"><label>Repo</label><select id="fTrendRepo" onchange="renderTrends()"><option value="all">All repos</option></select></div>
+            <div class="filter-group"><label>Metric</label><select id="fTrendMetric" onchange="renderTrends()">
+                <option value="total">Total CVEs</option><option value="new">New (blocking)</option><option value="app">App deps</option><option value="base_image">Base image</option><option value="allowlisted">Allowlisted</option><option value="critical">Critical</option>
+            </select></div>
+        </div>
+        <div class="card">
+            <div class="card-title">Vulnerability Trend</div>
+            <div id="trendChart" style="min-height:250px;position:relative;"></div>
+        </div>
+        <div class="grid-2" style="margin-top:16px">
+            <div class="card">
+                <div class="card-title">Change Summary</div>
+                <div id="trendSummary"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">Per Repo Change</div>
+                <div id="trendRepoChanges"></div>
+            </div>
         </div>
     </div>
     <div class="tab-panel" id="tab-repos">
@@ -334,7 +373,111 @@ function clearFilters(){['fRepo','fSev','fStatus','fSource','fSdk'].forEach(id=>
 document.querySelectorAll('th[data-s]').forEach(th=>th.addEventListener('click',()=>{const c=th.dataset.s;if(sortCol===c)sortDir=sortDir==='asc'?'desc':'asc';else{sortCol=c;sortDir='asc';}renderTable();}));
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active');}));
 document.querySelectorAll('.filters-bar select,.filters-bar input').forEach(el=>{el.addEventListener('change',renderTable);el.addEventListener('input',renderTable);});
-load();
+// Trend data
+let historyData={};
+
+async function loadHistory(){
+    try{
+        const mr=await fetch('repos.json');
+        if(!mr.ok)return;
+        const files=await mr.json();
+        for(const f of files){
+            const repo=f.replace('.json','').replace('atlanhq_','atlanhq/');
+            try{
+                const r=await fetch('history/'+f.replace('.json','.jsonl'));
+                if(r.ok){const txt=await r.text();historyData[repo]=txt.trim().split('\n').filter(l=>l).map(l=>JSON.parse(l));}
+            }catch(e){}
+        }
+    }catch(e){}
+    // If no history, generate from current data as day-0
+    if(!Object.keys(historyData).length){
+        Object.keys(D.repos).forEach(r=>{
+            const d=D.repos[r];
+            historyData[r]=[{date:new Date().toISOString().slice(0,10),repo:r,sdk_version:d.sdk_version||'unknown',total:d.total,critical:d.critical,high:d.high,base_image:d.base_image_count||0,app:d.app_count||0,allowlisted:d.allowlisted,new:d.new||0}];
+        });
+    }
+}
+
+function renderTrends(){
+    const days=parseInt(document.getElementById('fTrendDays').value);
+    const repoFilter=document.getElementById('fTrendRepo').value;
+    const metric=document.getElementById('fTrendMetric').value;
+    const colors={total:'#6366f1',new:'#ef4444',app:'#f97316',base_image:'#8b949e',allowlisted:'#22c55e',critical:'#ef4444'};
+
+    // Populate repo filter
+    const sel=document.getElementById('fTrendRepo'),cur=sel.value;
+    const repos=Object.keys(historyData);
+    sel.innerHTML='<option value="all">All repos</option>';
+    repos.forEach(r=>{const o=document.createElement('option');o.value=r;o.textContent=r.split('/').pop();if(r===cur)o.selected=true;sel.appendChild(o);});
+
+    // Get date range
+    const now=new Date();const cutoff=new Date(now);cutoff.setDate(cutoff.getDate()-days);
+    const cutoffStr=cutoff.toISOString().slice(0,10);
+
+    // Aggregate data by date
+    const dateMap={};
+    const filteredRepos=repoFilter==='all'?repos:[repoFilter];
+    filteredRepos.forEach(r=>{
+        (historyData[r]||[]).forEach(e=>{
+            if(e.date>=cutoffStr){
+                if(!dateMap[e.date])dateMap[e.date]={total:0,new:0,app:0,base_image:0,allowlisted:0,critical:0,repos:0};
+                dateMap[e.date].total+=e.total||0;
+                dateMap[e.date].new+=e.new||0;
+                dateMap[e.date].app+=e.app||0;
+                dateMap[e.date].base_image+=e.base_image||0;
+                dateMap[e.date].allowlisted+=e.allowlisted||0;
+                dateMap[e.date].critical+=e.critical||0;
+                dateMap[e.date].repos++;
+            }
+        });
+    });
+
+    const dates=Object.keys(dateMap).sort();
+    const values=dates.map(d=>dateMap[d][metric]||0);
+    const max=Math.max(...values,1);
+    const color=colors[metric]||'#6366f1';
+
+    // Render bar chart
+    if(!dates.length){
+        document.getElementById('trendChart').innerHTML='<div class="empty" style="padding:40px">No history data yet. Trends will appear after a few merges.</div>';
+    }else{
+        const bars=dates.map((d,i)=>{
+            const h=Math.max(4,Math.round((values[i]/max)*200));
+            return`<div class="trend-bar" style="height:${h}px;background:${color}"><div class="tip">${d}: ${values[i]}</div></div>`;
+        }).join('');
+        const labels=dates.map(d=>`<span>${d.slice(5)}</span>`).join('');
+        document.getElementById('trendChart').innerHTML=`<div class="trend-line">${bars}</div><div class="trend-labels">${labels}</div>`;
+    }
+
+    // Change summary
+    if(dates.length>=2){
+        const first=values[0],last=values[values.length-1];
+        const delta=last-first;
+        const cls=delta>0?'up':delta<0?'down':'flat';
+        const arrow=delta>0?'&#9650;':delta<0?'&#9660;':'&#8212;';
+        document.getElementById('trendSummary').innerHTML=`
+            <div class="trend-change"><span>${metric.replace('_',' ')}</span><span class="trend-delta ${cls}">${arrow} ${Math.abs(delta)} (${first} → ${last})</span></div>
+            <div class="trend-change"><span>Period</span><span style="color:#5c5f77">${dates[0]} → ${dates[dates.length-1]}</span></div>
+            <div class="trend-change"><span>Data points</span><span style="color:#5c5f77">${dates.length} days</span></div>`;
+    }else{
+        document.getElementById('trendSummary').innerHTML='<div class="empty" style="padding:20px">Need at least 2 data points for comparison.</div>';
+    }
+
+    // Per repo changes
+    const repoChanges=filteredRepos.map(r=>{
+        const entries=(historyData[r]||[]).filter(e=>e.date>=cutoffStr).sort((a,b)=>a.date.localeCompare(b.date));
+        if(entries.length<1)return null;
+        const first=entries[0],last=entries[entries.length-1];
+        const delta=(last[metric]||0)-(first[metric]||0);
+        const cls=delta>0?'up':delta<0?'down':'flat';
+        const arrow=delta>0?'&#9650;':delta<0?'&#9660;':'&#8212;';
+        return`<div class="trend-change"><span class="repo-tag">${r.split('/').pop()}</span><span style="color:#8c8fa3;font-size:11px">${last.sdk_version||'?'}</span><span class="trend-delta ${cls}" style="margin-left:auto">${arrow} ${Math.abs(delta)} (${first[metric]||0} → ${last[metric]||0})</span></div>`;
+    }).filter(Boolean).join('');
+    document.getElementById('trendRepoChanges').innerHTML=repoChanges||'<div class="empty" style="padding:20px">No data.</div>';
+}
+
+async function init(){await load();await loadHistory();renderTrends();}
+init();
 </script>
 </body>
 </html>
