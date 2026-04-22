@@ -227,14 +227,34 @@ jobs:
                   unique.append(v)
 
           # Write per-repo data file (not shared data.json)
+          # Extract SDK version from Dockerfile
+          import re as _re
+          sdk_version = "unknown"
+          try:
+              with open("Dockerfile") as f:
+                  for line in f:
+                      if line.strip().startswith("FROM "):
+                          image = line.strip().split()[1]
+                          # Extract tag after ':'
+                          if ":" in image:
+                              sdk_version = image.split(":")[-1]
+                          break
+          except FileNotFoundError:
+              pass
+
           repo_slug = repo_name.replace("/", "_")
+          app_count = sum(1 for v in unique if v["source_type"] == "app")
+          base_count = sum(1 for v in unique if v["source_type"] == "base_image")
           repo_data = {
               "repo": repo_name,
+              "sdk_version": sdk_version,
               "vulnerabilities": unique,
               "scanned_at": datetime.now().isoformat() + "Z",
               "total": len(unique),
               "critical": sum(1 for v in unique if v["severity"] == "CRITICAL"),
               "high": sum(1 for v in unique if v["severity"] == "HIGH"),
+              "base_image_count": base_count,
+              "app_count": app_count,
               "allowlisted": sum(1 for v in unique if v["status"] == "allowlisted"),
               "new": sum(1 for v in unique if v["status"] == "new"),
           }
@@ -254,12 +274,30 @@ jobs:
           app_count = sum(1 for v in unique if v['source_type'] == 'app')
           base_count = sum(1 for v in unique if v['source_type'] == 'base_image')
           print(f"Dashboard data generated: {len(unique)} vulnerabilities for {repo_name}")
+          print(f"  SDK version: {sdk_version}")
           print(f"  CRITICAL: {repo_data['critical']}")
           print(f"  HIGH: {repo_data['high']}")
           print(f"  Base image: {base_count}")
           print(f"  App dep: {app_count}")
           print(f"  Allowlisted: {repo_data['allowlisted']}")
           print(f"  New: {repo_data['new']}")
+
+          # Append to history for trend tracking
+          history_entry = {
+              "date": datetime.now().strftime("%Y-%m-%d"),
+              "repo": repo_name,
+              "sdk_version": sdk_version,
+              "total": len(unique),
+              "critical": repo_data["critical"],
+              "high": repo_data["high"],
+              "base_image": base_count,
+              "app": app_count,
+              "allowlisted": repo_data["allowlisted"],
+              "new": repo_data["new"],
+          }
+          os.makedirs("/tmp/dashboard-deploy", exist_ok=True)
+          with open(f"/tmp/dashboard-deploy/history_{repo_slug}.jsonl", "a") as f:
+              f.write(json.dumps(history_entry) + "\n")
           PYEOF
 
       - name: Setup AWS Credentials
@@ -294,5 +332,11 @@ jobs:
 
           # Remove stale legacy data.json
           aws s3 rm "s3://kryptonite-store/${{ inputs.dashboard_path }}/data.json" 2>/dev/null || true
+
+          # Append history (download existing, append, re-upload)
+          HISTORY_FILE="history/${SLUG}.jsonl"
+          aws s3 cp "s3://kryptonite-store/${{ inputs.dashboard_path }}/${HISTORY_FILE}" /tmp/existing_history.jsonl 2>/dev/null || true
+          cat /tmp/existing_history.jsonl /tmp/dashboard-deploy/history_${SLUG}.jsonl 2>/dev/null | sort -u > /tmp/merged_history.jsonl
+          aws s3 cp /tmp/merged_history.jsonl "s3://kryptonite-store/${{ inputs.dashboard_path }}/${HISTORY_FILE}"
 
           echo "Dashboard updated at https://k.atlan.dev/${{ inputs.dashboard_path }}/"
