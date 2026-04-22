@@ -20,6 +20,7 @@ from typing import Optional
 from application_sdk.constants import (
     APPLICATION_NAME,
     MARKER_TIMESTAMP_FORMAT,
+    MAX_CONCURRENT_STORAGE_TRANSFERS,
     PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE,
     TEMPORARY_PATH,
 )
@@ -217,6 +218,7 @@ async def download_marker_from_s3(
 async def download_s3_prefix_with_structure(
     s3_prefix: str,
     local_destination: Path,
+    max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
 ) -> None:
     """Download files from S3 preserving relative directory structure.
 
@@ -238,8 +240,7 @@ async def download_s3_prefix_with_structure(
     # Normalize source prefix for path stripping
     source_prefix = s3_prefix.rstrip("/")
 
-    MAX_CONCURRENT_DOWNLOADS = 20
-    sem = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+    sem = asyncio.Semaphore(max_concurrency)
 
     async def _download_one(file_path: str) -> None:
         # Strip source prefix to get relative path

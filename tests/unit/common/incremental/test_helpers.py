@@ -330,7 +330,7 @@ class TestDownloadS3PrefixWithStructure:
             ):
                 await download_s3_prefix_with_structure("prefix/", Path(temp_dir))
 
-        assert max_concurrent <= 20
+        assert max_concurrent <= 4
 
     @pytest.mark.asyncio
     async def test_empty_file_list(self):
