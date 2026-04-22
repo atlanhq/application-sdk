@@ -111,7 +111,7 @@ Scenario(
 | `metadata` | `/workflows/v1/metadata` | Fetch metadata |
 | `preflight` | `/workflows/v1/check` | Validate configuration |
 | `workflow` | `/workflows/v1/start` (default) | Start workflow |
-| `config` | `/workflows/v1/config/{id}` | Get or update workflow config |
+| `config` | `/workflows/v1/config/{id}` | Get or update credential config (object store backed) |
 
 **v3 Response Shapes:**
 

@@ -8,6 +8,8 @@ Application SDK v3.0 introduces three major improvements:
 
 v3.0 is a clean break from v2. All v2 modules and APIs have been removed — there is no deprecation shim or compatibility layer. Update all imports to their v3 equivalents using the quick reference below.
 
+> **Shipping an app?** Run through [`standards/v3-readiness.md`](standards/v3-readiness.md) before declaring the upgrade complete — it's the sign-off checklist for app owners and reviewers.
+
 ---
 
 ## Quick Reference
@@ -404,7 +406,7 @@ For local dev, pass the class directly — `run_dev_combined` derives the module
 ```python
 from application_sdk.main import run_dev_combined
 
-asyncio.run(run_dev_combined(MyMetadataExtractor, handler_class=MyHandler))
+asyncio.run(run_dev_combined(MyMetadataExtractor))
 ```
 
 Three modes are available:
@@ -677,7 +679,7 @@ You do not need to create `DaprClient` instances in your code.
 | v2 | v3 (`self.context` in handler methods) |
 |----|----------------------------------------|
 | `services.secretstore.SecretStore.get_credentials(...)` | `await self.context.get_secret(name)` |
-| `/workflows/v1/config/{id}` (503 error) | Works automatically (state store wired) |
+| `/workflows/v1/config/{id}` (503 error) | Works automatically (object store wired) |
 | `/workflows/v1/file` (503 error) | Works automatically (storage binding wired) |
 
 ### Upgrading ObjectStore calls
@@ -1082,7 +1084,6 @@ from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
-    handler_class=MyHandler,
     secret_store=MockSecretStore({"my-api-key": "test-value"}),
     state_store=MockStateStore(),
 ))

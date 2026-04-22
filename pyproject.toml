@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.0.0"
+version = "3.0.1"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -23,7 +23,6 @@ dependencies = [
     "aiohttp>=3.10.0,<3.14.0",
     "opentelemetry-exporter-otlp==1.39.1",
     "opentelemetry-exporter-prometheus==0.60b1",
-    "psutil>=7.0.0,<7.3.0",
     "fastapi[standard]==0.127.0",
     "pyatlan>=9,<10",
     "httpx-retries>=0.4.0,<0.5.0",
@@ -152,6 +151,11 @@ start-deps.shell = "poe start-dapr & poe start-temporal &"
 stop-deps.shell = "lsof -ti:3000,3500,7233,8233,50001 | xargs kill -9 2>/dev/null || true"
 test-integration.shell = "temporal server start-dev --db-filename /tmp/temporal-integ.db &>/tmp/temporal-integ.log & sleep 3 && uv run pytest tests/integration/ -m integration -v --timeout=120; EXIT=$?; kill %1 2>/dev/null; exit $EXIT"
 
+# Local credential provisioning
+[tool.poe.tasks.provision-credentials]
+help = "Provision credentials for local development"
+cmd = "python -m application_sdk.tools.provision_credentials"
+
 # API docs
 generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api application_sdk --docformat=google"
 
@@ -225,6 +229,7 @@ extend-select = [
 ".github/**" = ["G004", "T201"]
 "tests/**" = ["G004"]
 "tools/**" = ["T201"]
+"application_sdk/tools/**" = ["T201"]
 "examples/**" = ["T201"]
 
 [tool.uv]

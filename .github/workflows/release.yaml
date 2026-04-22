@@ -90,6 +90,7 @@ jobs:
             - application_sdk/version.py
             - CHANGELOG.md
 
-            Version: ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}" --label "release"
+            Version: ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}" --label "release" || \
+            echo "PR already exists for bump-version-${{ github.ref_name }}, skipping creation."
 
           # gh pr merge --squash --admin

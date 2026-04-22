@@ -5,6 +5,7 @@ If you know v2 well, this guide will orient you quickly — it explains *what* c
 and shows each change side-by-side.
 
 > For a step-by-step upgrade checklist, see [`upgrade-guide-v3.md`](upgrade-guide-v3.md).
+> For the ship-it sign-off checklist, see [`standards/v3-readiness.md`](standards/v3-readiness.md).
 > For automated tooling, see [`tools/migrate_v3/`](../tools/migrate_v3/README.md).
 
 ---
@@ -340,7 +341,6 @@ from application_sdk.main import run_dev_combined
 
 asyncio.run(run_dev_combined(
     MyConnector,
-    handler_class=MyHandler,
     secret_store=MockSecretStore({"my-api-key": "dev-secret"}),
 ))
 ```
@@ -389,7 +389,7 @@ class MyHandler(Handler):
         return PreflightOutput(status=PreflightStatus.READY)
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
-        return MetadataOutput(fields=[])
+        return MetadataOutput(objects=[])
 ```
 
 **What changed and why:**
@@ -455,7 +455,7 @@ application-sdk --mode combined --app my_package.apps:MyExtractor
 # Programmatic (local dev, integration tests)
 from application_sdk.main import run_dev_combined
 
-asyncio.run(run_dev_combined(MyExtractor, handler_class=MyHandler))
+asyncio.run(run_dev_combined(MyExtractor))
 ```
 
 **Three modes:**

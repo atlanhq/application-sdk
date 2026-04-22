@@ -1,0 +1,271 @@
+name: v3 Readiness Check
+
+# Runs docs/standards/v3-readiness.md against an external app repo.
+#
+# Usage (manual):
+#   GitHub UI → Actions → "v3 Readiness Check" → Run workflow, supply:
+#     app_repo = atlanhq/atlan-openapi-app   (or full https://github.com/... URL)
+#     branch   = main                        (any ref — branch, tag, or SHA)
+#
+# Usage (from another workflow):
+#   jobs:
+#     check:
+#       uses: atlanhq/application-sdk/.github/workflows/v3-readiness-check.yaml@main
+#       with:
+#         app_repo: atlanhq/atlan-openapi-app
+#         branch: main
+#       secrets:
+#         app_repo_token: ${{ secrets.APP_REPO_READ_TOKEN }}
+#
+# Secret requirements:
+#   APP_REPO_READ_TOKEN — PAT (or GitHub App installation token) with
+#   `contents: read` access to the target app repo. Required for private
+#   repos; public repos can pass GITHUB_TOKEN instead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_repo:
+        description: "App repo (e.g. atlanhq/atlan-openapi-app or full github.com URL)"
+        required: true
+        type: string
+      branch:
+        description: "Branch, tag, or SHA to check"
+        required: true
+        type: string
+        default: main
+  workflow_call:
+    inputs:
+      app_repo:
+        required: true
+        type: string
+      branch:
+        required: true
+        type: string
+    secrets:
+      app_repo_token:
+        description: "Token with contents:read on the target repo"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v3-readiness-${{ inputs.app_repo }}-${{ inputs.branch }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ inputs.app_repo }}@${{ inputs.branch }}
+    runs-on: ubuntu-latest
+    steps:
+      # --------------------------------------------------------------------
+      # Normalize inputs — accept "owner/repo", "https://github.com/owner/repo",
+      # or "...owner/repo.git" and reduce to canonical "owner/repo".
+      # --------------------------------------------------------------------
+      - name: Parse app_repo
+        id: parse
+        env:
+          RAW_APP_REPO: ${{ inputs.app_repo }}
+        run: |
+          set -euo pipefail
+          raw="$RAW_APP_REPO"
+          repo="${raw#https://github.com/}"
+          repo="${repo#http://github.com/}"
+          repo="${repo%.git}"
+          repo="${repo%/}"
+          if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::app_repo must be 'owner/repo' or a github.com URL; got '$raw'"
+            exit 1
+          fi
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "Checking v3 readiness for $repo @ ${{ inputs.branch }}"
+
+      - name: Checkout application-sdk (this repo)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: sdk
+
+      - name: Checkout target app
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ steps.parse.outputs.repo }}
+          ref: ${{ inputs.branch }}
+          # Token fallback chain:
+          #   1. secrets.app_repo_token — passed by workflow_call callers
+          #   2. secrets.APP_REPO_READ_TOKEN — repo secret, used on workflow_dispatch
+          #   3. secrets.GITHUB_TOKEN — only works for public targets
+          token: ${{ secrets.app_repo_token || secrets.APP_REPO_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          path: app
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install application-sdk
+        working-directory: sdk
+        run: uv sync --all-extras --all-groups
+
+      # --------------------------------------------------------------------
+      # All checks below use `continue-on-error: true` so every check runs
+      # even when an earlier one fails. The "Aggregate results" step at the
+      # end reads each step's outcome and fails the job if any check failed —
+      # so app owners see every fix they need to make in a single run.
+      # --------------------------------------------------------------------
+
+      - name: "§1 Static check — tools.migrate_v3.check_migration"
+        id: static
+        continue-on-error: true
+        working-directory: sdk
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/report"
+          report="$RUNNER_TEMP/report/check_migration.txt"
+          if uv run python -m tools.migrate_v3.check_migration --no-color ../app | tee "$report"; then
+            exit 0
+          else
+            echo "::error::check_migration reported FAILs — see the uploaded report artifact"
+            exit 1
+          fi
+
+      - name: "§1 SDK pin — atlan-application-sdk[...]==3.0.0"
+        id: sdk_pin
+        continue-on-error: true
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [[ ! -f pyproject.toml ]]; then
+            echo "::error::app repo has no pyproject.toml at root"
+            exit 1
+          fi
+          if ! grep -E '^[^#]*\batlan-application-sdk[^"'\'' ]*==[[:space:]]*3\.0\.0\b' pyproject.toml; then
+            echo "::error::pyproject.toml must pin atlan-application-sdk[...]==3.0.0 (exact version)"
+            echo "Found atlan-application-sdk entries:"
+            grep -n atlan-application-sdk pyproject.toml || true
+            exit 1
+          fi
+
+      - name: "§3 Dockerfile base — app-runtime-base:3.0.0"
+        id: dockerfile_base
+        continue-on-error: true
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [[ ! -f Dockerfile ]]; then
+            echo "No Dockerfile — skipping §3 check"
+            exit 0
+          fi
+          if ! grep -E '^FROM[[:space:]]+registry\.atlan\.com/public/app-runtime-base:3\.0\.0[[:space:]]*$' Dockerfile; then
+            echo "::error::Dockerfile must 'FROM registry.atlan.com/public/app-runtime-base:3.0.0' (exact tag)"
+            grep -n '^FROM' Dockerfile || true
+            exit 1
+          fi
+
+      - name: "§3 Dockerfile entry — no CMD/ENTRYPOINT override"
+        id: dockerfile_entry
+        continue-on-error: true
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [[ ! -f Dockerfile ]]; then
+            exit 0
+          fi
+          failed=0
+          if grep -Ein '^[[:space:]]*(CMD|ENTRYPOINT)[[:space:]]' Dockerfile; then
+            echo "::error::Dockerfile must NOT override CMD or ENTRYPOINT — the base image's entrypoint launches the SDK CLI and co-runs daprd with graceful-shutdown handling"
+            failed=1
+          fi
+          if ! grep -Eq '^[[:space:]]*ENV[[:space:]]+ATLAN_APP_MODULE\b' Dockerfile; then
+            echo "::error::Dockerfile must set 'ENV ATLAN_APP_MODULE=<module>:<AppClass>' so the base entrypoint knows what to load"
+            failed=1
+          fi
+          exit $failed
+
+      - name: "§2 Contract drift — poe generate must be a no-op"
+        id: contract_drift
+        continue-on-error: true
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [[ ! -f contract/app.pkl ]]; then
+            echo "No contract/app.pkl — skipping §2 check"
+            exit 0
+          fi
+          if ! uv run --project . poe --help >/dev/null 2>&1; then
+            echo "::warning::'poe' task runner not available in app — cannot run drift check"
+            exit 0
+          fi
+          uv run --project . poe generate || {
+            echo "::error::'poe generate' failed"
+            exit 1
+          }
+          if ! git -C . diff --exit-code -- app/generated/; then
+            echo "::error::app/generated artifacts are stale — run 'poe generate' locally and commit"
+            exit 1
+          fi
+
+      # --------------------------------------------------------------------
+      # Aggregate — single place that fails the job, after all checks ran.
+      # --------------------------------------------------------------------
+      - name: Aggregate results
+        if: always()
+        working-directory: sdk
+        env:
+          STATIC_OUTCOME: ${{ steps.static.outcome }}
+          SDK_PIN_OUTCOME: ${{ steps.sdk_pin.outcome }}
+          DOCKERFILE_BASE_OUTCOME: ${{ steps.dockerfile_base.outcome }}
+          DOCKERFILE_ENTRY_OUTCOME: ${{ steps.dockerfile_entry.outcome }}
+          CONTRACT_DRIFT_OUTCOME: ${{ steps.contract_drift.outcome }}
+          TARGET_REPO: ${{ steps.parse.outputs.repo }}
+          TARGET_REF: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+          summary="$RUNNER_TEMP/report/summary.md"
+          failed=0
+          render() {
+            local name="$1" outcome="$2"
+            case "$outcome" in
+              success)  icon="✅" ;;
+              failure)  icon="❌" ; failed=1 ;;
+              skipped)  icon="➖" ;;
+              *)        icon="❓" ;;
+            esac
+            echo "- $icon **$name** — $outcome"
+          }
+          {
+            echo "# v3 Readiness — \`$TARGET_REPO\`@\`$TARGET_REF\`"
+            echo ""
+            echo "Checklist: [docs/standards/v3-readiness.md](./docs/standards/v3-readiness.md)"
+            echo ""
+            echo "## Results"
+            echo ""
+            render "§1 Static check (check_migration)" "$STATIC_OUTCOME"
+            render "§1 SDK pin (atlan-application-sdk[...]==3.0.0)" "$SDK_PIN_OUTCOME"
+            render "§3 Dockerfile base (app-runtime-base:3.0.0)" "$DOCKERFILE_BASE_OUTCOME"
+            render "§3 Dockerfile entry (no CMD/ENTRYPOINT override)" "$DOCKERFILE_ENTRY_OUTCOME"
+            render "§2 Contract drift (poe generate)" "$CONTRACT_DRIFT_OUTCOME"
+            echo ""
+            echo "## check_migration output"
+            echo ""
+            echo '```'
+            cat "$RUNNER_TEMP/report/check_migration.txt" 2>/dev/null || echo "(no report)"
+            echo '```'
+          } | tee "$summary" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$failed" -eq 1 ]]; then
+            echo "::error::One or more v3-readiness checks failed — see the step summary and report artifact"
+            exit 1
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v3-readiness-report
+          path: ${{ runner.temp }}/report/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -89,7 +89,7 @@ The uber-handler's efficiency gains don't justify the coupling and risk it intro
 
 **Negative:**
 - Higher baseline resource consumption
-- More Kubernetes manifests to maintain (mitigated by the `helm/atlan-app/` chart)
+- More Kubernetes manifests to maintain (mitigated by platform deployment tooling)
 
 ## Implementation
 

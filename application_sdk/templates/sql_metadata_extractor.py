@@ -28,7 +28,6 @@ Alternatively, override the method entirely without calling super():
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.task import task
@@ -135,31 +134,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     # ------------------------------------------------------------------
 
     async def _get_credentials(self, input: ExtractionTaskInput) -> dict[str, Any]:
-        """Resolve credentials from the task input.
-
-        Checks the Dapr state store first (local dev / combined mode), then
-        falls back to the full CredentialResolver for production.
-        """
+        """Resolve credentials from the task input via CredentialResolver."""
         cred_guid = input.credential_guid
-        is_local_dev = os.environ.get("ATLAN_LOCAL_DEVELOPMENT", "").lower() in (
-            "true",
-            "1",
-        )
 
         infra = get_infrastructure()
-
-        if cred_guid and is_local_dev and infra and infra.state_store:
-            data = await infra.state_store.load(f"cred:{cred_guid}")
-            if data is not None:
-                return data
-            logger.debug(
-                "credential state-store miss for guid=%s (local_dev=%s, state_store=%s); falling back to secret store",
-                cred_guid,
-                is_local_dev,
-                infra.state_store is not None,
-            )
-
-        # Production path: use CredentialResolver
 
         ref = input.credential_ref or (
             legacy_credential_ref(cred_guid) if cred_guid else None
@@ -423,6 +401,13 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 column_result.total_record_count,
             )
 
+            # Extract connection_qualified_name from the input connection.
+            # PublishInputMixin auto-derives publish_state_prefix and
+            # current_state_prefix from this value.
+            connection_qn = ""
+            if input.connection and input.connection.attributes:
+                connection_qn = input.connection.attributes.qualified_name or ""
+
             # Upload extracted data to Atlan
             if input.output_path:
                 upload_result = await self.upload_to_atlan(
@@ -440,6 +425,9 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 tables_extracted=table_result.total_record_count,
                 columns_extracted=column_result.total_record_count,
                 records_uploaded=records_uploaded,
+                connection_qualified_name=connection_qn,
+                output_path=input.output_path,
+                output_prefix=input.output_prefix,
             )
 
         except Exception as e:

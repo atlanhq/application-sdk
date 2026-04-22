@@ -108,7 +108,20 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
         max_locks: int,
         ttl_seconds: int,
     ) -> workflow.ActivityHandle[Any]:
-        """Execute activity with distributed lock orchestration."""
+        """Execute activity with distributed lock orchestration.
+
+        Return-type contract: This method intentionally awaits the activity handle
+        and returns the raw result rather than the handle itself. This is necessary
+        because the lock must be held for the full duration of the activity — if we
+        returned the handle immediately, the ``finally`` block would release the lock
+        before the activity finishes, defeating mutual exclusion.
+
+        This is safe because the lock interceptor is the outermost interceptor in
+        the chain. No downstream interceptor or workflow code depends on receiving
+        an ``ActivityHandle`` back from this method; callers always ``await`` the
+        return value, so they observe no difference between an awaited result and
+        an unawaited handle.
+        """
         owner_id = f"{APPLICATION_NAME}:{workflow.info().run_id}"
         lock_result = None
 
@@ -134,8 +147,12 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
                 input.activity,
             )
 
-            # Step 2: Execute the business activity and return its handle
-            return await self.next.start_activity(input)
+            # Step 2: Execute the business activity and await its completion
+            # We must hold the lock until the activity finishes, so we await
+            # the handle rather than returning it immediately.
+            handle = await self.next.start_activity(input)
+            result = await handle
+            return result  # type: ignore[return-value]  # Returns awaited result, not handle — lock must be held until activity completion
 
         finally:
             # Step 3: Release lock (fire-and-forget with short timeout)

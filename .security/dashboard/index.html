@@ -20,7 +20,7 @@
 
         .container{max-width:1360px;margin:0 auto;padding:24px 32px;}
 
-        .stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:28px;}
+        .stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:28px;}
         .stat{background:#fff;border-radius:16px;padding:20px;cursor:pointer;transition:all 0.3s cubic-bezier(0.34,1.56,0.64,1);border:2px solid transparent;position:relative;overflow:hidden;}
         .stat:hover{transform:translateY(-4px) scale(1.02);box-shadow:0 12px 32px rgba(0,0,0,0.08);}
         .stat.active{border-color:#6366f1;}
@@ -91,7 +91,8 @@
         .btn-clear{background:linear-gradient(135deg,#f5f7fa,#eef1f5);border:1px solid #e2e6ea;color:#5c5f77;padding:7px 16px;border-radius:10px;font-size:11px;font-weight:600;cursor:pointer;margin-left:auto;transition:all 0.2s;}
         .btn-clear:hover{background:#e2e6ea;transform:translateY(-1px);}
 
-        .table-wrap{background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.04);}
+        .table-wrap{background:#fff;border-radius:16px;overflow-x:auto;box-shadow:0 1px 4px rgba(0,0,0,0.04);}
+        table{min-width:900px;}
         .table-top{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;border-bottom:1px solid #f0f2f5;}
         .table-count{font-size:13px;font-weight:600;color:#5c5f77;}
         .table-hint{font-size:11px;color:#b0b3c6;}
@@ -124,11 +125,25 @@
         .b-expired{background:linear-gradient(135deg,#fffbeb,#fef3c7);color:#d97706;}
         .b-base{background:#f0f2f5;color:#5c5f77;}
         .b-app{background:linear-gradient(135deg,#fffbeb,#fef3c7);color:#d97706;}
-        .repo-tag{display:inline-block;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:600;background:#f0f2f5;color:#5c5f77;margin:1px 2px;transition:all 0.2s;}
+        .repo-tag{display:inline-block;padding:3px 8px;border-radius:20px;font-size:9px;font-weight:600;background:#f0f2f5;color:#5c5f77;margin:1px 2px;transition:all 0.2s;white-space:nowrap;}
         .repo-tag:hover{background:#e2e6ea;transform:scale(1.05);}
+        .repos-cell{max-width:200px;display:flex;flex-wrap:wrap;gap:2px;}
         code{background:#f0f2f5;padding:2px 7px;border-radius:6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;font-weight:500;}
 
         .empty{text-align:center;padding:60px;color:#8c8fa3;font-size:14px;}
+        .trend-line{position:relative;height:200px;display:flex;align-items:flex-end;gap:2px;padding:0 4px;}
+        .trend-bar{flex:1;border-radius:4px 4px 0 0;transition:height 0.5s ease;position:relative;min-width:20px;cursor:pointer;}
+        .trend-bar:hover{opacity:0.8;}
+        .trend-bar .tip{display:none;position:absolute;bottom:100%;left:50%;transform:translateX(-50%);background:#1a1a2e;color:#fff;padding:4px 8px;border-radius:6px;font-size:10px;white-space:nowrap;z-index:10;}
+        .trend-bar:hover .tip{display:block;}
+        .trend-labels{display:flex;gap:2px;padding:4px 4px 0;border-top:1px solid #f0f2f5;}
+        .trend-labels span{flex:1;text-align:center;font-size:9px;color:#8c8fa3;min-width:20px;}
+        .trend-change{display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid #f5f6f8;font-size:13px;}
+        .trend-change:last-child{border:none;}
+        .trend-delta{font-weight:700;font-size:14px;}
+        .trend-delta.up{color:#ef4444;}
+        .trend-delta.down{color:#22c55e;}
+        .trend-delta.flat{color:#8c8fa3;}
 
         .tabs{display:flex;gap:0;margin-bottom:24px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 1px 3px rgba(0,0,0,0.04);display:inline-flex;}
         .tab{padding:10px 22px;font-size:13px;font-weight:600;color:#8c8fa3;cursor:pointer;border-radius:8px;transition:all 0.2s;}
@@ -150,6 +165,7 @@
     <div class="stats-row" id="stats"></div>
     <div class="tabs">
         <div class="tab active" data-tab="overview">Overview</div>
+        <div class="tab" data-tab="trends">Trends</div>
         <div class="tab" data-tab="repos">Repos</div>
         <div class="tab" data-tab="vulns">Vulnerabilities</div>
     </div>
@@ -163,13 +179,44 @@
             <div class="card"><div class="card-title">Per Repo</div><div id="repoBars"></div></div>
         </div>
     </div>
-    <div class="tab-panel" id="tab-repos"><div class="repo-grid" id="repoCards"></div></div>
+    <div class="tab-panel" id="tab-trends">
+        <div class="filters-bar" style="margin-bottom:14px">
+            <div class="filter-group"><label>Time Range</label><select id="fTrendDays" onchange="renderTrends()">
+                <option value="1">Last 1 day</option><option value="3">Last 3 days</option><option value="7" selected>Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option>
+            </select></div>
+            <div class="filter-group"><label>Repo</label><select id="fTrendRepo" onchange="renderTrends()"><option value="all">All repos</option></select></div>
+            <div class="filter-group"><label>Metric</label><select id="fTrendMetric" onchange="renderTrends()">
+                <option value="total">Total CVEs</option><option value="new">New (blocking)</option><option value="app">App deps</option><option value="base_image">Base image</option><option value="allowlisted">Allowlisted</option><option value="critical">Critical</option>
+            </select></div>
+        </div>
+        <div class="card">
+            <div class="card-title">Vulnerability Trend</div>
+            <div id="trendChart" style="min-height:250px;position:relative;"></div>
+        </div>
+        <div class="grid-2" style="margin-top:16px">
+            <div class="card">
+                <div class="card-title">Change Summary</div>
+                <div id="trendSummary"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">Per Repo Change</div>
+                <div id="trendRepoChanges"></div>
+            </div>
+        </div>
+    </div>
+    <div class="tab-panel" id="tab-repos">
+        <div class="filters-bar" style="margin-bottom:14px">
+            <div class="filter-group"><label>SDK Version</label><select id="fRepoSdk" onchange="renderRepos()"><option value="all">All</option></select></div>
+        </div>
+        <div class="repo-grid" id="repoCards"></div>
+    </div>
     <div class="tab-panel" id="tab-vulns">
         <div class="filters-bar">
             <div class="filter-group"><label>Repo</label><select id="fRepo"></select></div>
             <div class="filter-group"><label>Severity</label><select id="fSev"><option value="all">All</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option></select></div>
             <div class="filter-group"><label>Status</label><select id="fStatus"><option value="all">All</option><option value="new">New</option><option value="allowlisted">Allowlisted</option><option value="expired">Expired</option></select></div>
             <div class="filter-group"><label>Source</label><select id="fSource"><option value="all">All</option><option value="base_image">Base image</option><option value="app">App dep</option></select></div>
+            <div class="filter-group"><label>SDK</label><select id="fSdk"><option value="all">All</option></select></div>
             <div class="filter-group"><label>Search</label><input type="text" id="fSearch" placeholder="CVE or package..." style="width:160px"></div>
             <button class="btn-clear" onclick="clearFilters()">Clear</button>
         </div>
@@ -178,7 +225,7 @@
             <table><thead><tr>
                 <th data-s="severity" class="sorted">Severity <span class="arrow">&#9650;</span></th>
                 <th data-s="id">ID</th><th data-s="package">Package</th><th data-s="scanner">Scanner</th>
-                <th data-s="source_type">Source</th><th data-s="status">Status</th><th>Repos</th><th data-s="fixed">Fix</th>
+                <th data-s="source_type">Source</th><th data-s="status">Status</th><th>SDK</th><th>Repos</th><th data-s="fixed">Fix</th>
             </tr></thead><tbody id="tbl"></tbody></table>
         </div>
         <div class="empty" id="empty" style="display:none">No vulnerabilities match filters.</div>
@@ -193,10 +240,9 @@ function animateCount(el,target){let cur=0;const step=Math.max(1,Math.ceil(targe
 
 async function load(){
     try{
-        const r=await fetch('repos/');
-        if(r.ok){const h=await r.text();const fs=[...h.matchAll(/href="([^"]+\.json)"/g)].map(m=>m[1]);
-            for(const f of fs){try{const rr=await fetch('repos/'+f);const d=await rr.json();if(d.repo){D.repos[d.repo]=d;D.generated_at=d.scanned_at;}}catch(e){}}}
-        if(!Object.keys(D.repos).length){const r2=await fetch('data.json');D=await r2.json();}
+        const mr=await fetch('repos.json');
+        if(mr.ok){const files=await mr.json();
+            for(const f of files){try{const rr=await fetch('repos/'+f);const d=await rr.json();if(d.repo){D.repos[d.repo]=d;D.generated_at=d.scanned_at;}}catch(e){}}}
         buildVM();renderAll();
     }catch(e){document.getElementById('empty').style.display='block';document.getElementById('empty').textContent='No data yet.';}
 }
@@ -208,12 +254,15 @@ function renderAll(){renderStats();renderOverview();renderRepos();renderTable();
 
 function renderStats(){
     const vs=Object.values(VM);
+    const repos=Object.keys(D.repos);
     const c=vs.filter(v=>v.severity==='CRITICAL').length,h=vs.filter(v=>v.severity==='HIGH').length;
     const nw=vs.filter(v=>Object.values(v.statuses).includes('new')).length,al=vs.length-nw;
+    // SDK version breakdown
+    let v2=0,v3=0;
+    repos.forEach(r=>{const sdk=(D.repos[r].sdk_version||'');if(sdk.startsWith('3')||sdk.includes('v3')||sdk.includes('refactor-v3'))v3++;else if(sdk!=='unknown')v2++;});
     document.getElementById('stats').innerHTML=`
         <div class="stat s-total" onclick="qf('all')"><div class="stat-glow"></div><div class="stat-icon">&#128202;</div><div class="stat-value" data-count="${vs.length}">0</div><div class="stat-label">Total CVEs</div><div class="stat-bar" style="width:100%;background:linear-gradient(90deg,#6366f1,#a855f7)"></div></div>
         <div class="stat s-crit" onclick="qf('CRITICAL')"><div class="stat-glow"></div><div class="stat-icon">&#9888;&#65039;</div><div class="stat-value" data-count="${c}">0</div><div class="stat-label">Critical</div><div class="stat-bar" style="width:${pct(c,vs.length)}%;background:#ef4444"></div></div>
-        <div class="stat s-high" onclick="qf('HIGH')"><div class="stat-glow"></div><div class="stat-icon">&#9650;</div><div class="stat-value" data-count="${h}">0</div><div class="stat-label">High</div><div class="stat-bar" style="width:${pct(h,vs.length)}%;background:#f97316"></div></div>
         <div class="stat s-new" onclick="qf('new')"><div class="stat-glow"></div><div class="stat-icon">&#10060;</div><div class="stat-value" data-count="${nw}">0</div><div class="stat-label">Blocking</div><div class="stat-bar" style="width:${pct(nw,vs.length)}%;background:#ef4444"></div></div>
         <div class="stat s-ok" onclick="qf('allowlisted')"><div class="stat-glow"></div><div class="stat-icon">&#10004;&#65039;</div><div class="stat-value" data-count="${al}">0</div><div class="stat-label">Allowlisted</div><div class="stat-bar" style="width:${pct(al,vs.length)}%;background:#22c55e"></div></div>`;
     document.querySelectorAll('.stat-value[data-count]').forEach(el=>animateCount(el,parseInt(el.dataset.count)));
@@ -244,10 +293,19 @@ function renderOverview(){
 }
 
 function renderRepos(){
-    document.getElementById('repoCards').innerHTML=Object.keys(D.repos).map(r=>{
+    // Populate SDK filter for repos tab
+    const repoSdkSel=document.getElementById('fRepoSdk'),curRepoSdk=repoSdkSel.value;
+    const allRepos=Object.keys(D.repos);
+    const sdkVers=[...new Set(allRepos.map(r=>D.repos[r].sdk_version||'unknown').filter(s=>s!=='unknown'))].sort();
+    repoSdkSel.innerHTML='<option value="all">All ('+allRepos.length+')</option>';sdkVers.forEach(s=>{const cnt=allRepos.filter(r=>(D.repos[r].sdk_version||'')==s).length;const o=document.createElement('option');o.value=s;o.textContent=s+' ('+cnt+')';if(s===curRepoSdk)o.selected=true;repoSdkSel.appendChild(o);});
+    // Filter repos
+    const filteredRepos=curRepoSdk==='all'?allRepos:allRepos.filter(r=>(D.repos[r].sdk_version||'')==curRepoSdk);
+    document.getElementById('repoCards').innerHTML='<div style="font-size:13px;color:#5c5f77;margin-bottom:10px;font-weight:600">'+filteredRepos.length+' repos</div>'+filteredRepos.map(r=>{
         const d=D.repos[r],t=d.total||1,hasNew=(d.new||0)>0;
+        const sdk=d.sdk_version||'unknown';
+        const isV3=sdk.startsWith('3')||sdk.includes('v3')||sdk.includes('refactor-v3');
         return`<div class="repo-card" onclick="selectRepo('${r}')">
-            <div class="repo-name"><div class="health-dot ${hasNew?'red':'green'}"></div>${esc(r.split('/').pop())}</div>
+            <div class="repo-name"><div class="health-dot ${hasNew?'red':'green'}"></div>${esc(r.split('/').pop())}<span class="badge" style="margin-left:auto;${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'}">${esc(sdk)}</span></div>
             <div class="repo-stats">
                 <div class="repo-stat"><div class="repo-stat-val">${d.total}</div><div class="repo-stat-lbl">Total</div></div>
                 <div class="repo-stat"><div class="repo-stat-val" style="color:#ef4444">${d.critical}</div><div class="repo-stat-lbl">Critical</div></div>
@@ -267,7 +325,10 @@ function getFiltered(){
     let vs=Object.values(VM);const r=document.getElementById('fRepo').value,sv=document.getElementById('fSev').value,st=document.getElementById('fStatus').value,src=document.getElementById('fSource').value,q=document.getElementById('fSearch').value.toLowerCase();
     if(r!=='all')vs=vs.filter(v=>v.repos.includes(r));if(sv!=='all')vs=vs.filter(v=>v.severity===sv);
     if(st!=='all')vs=vs.filter(v=>{if(r!=='all')return v.statuses[r]===st;return Object.values(v.statuses).includes(st);});
-    if(src!=='all')vs=vs.filter(v=>v.source_type===src);if(q)vs=vs.filter(v=>v.id.toLowerCase().includes(q)||v.package.toLowerCase().includes(q));
+    if(src!=='all')vs=vs.filter(v=>v.source_type===src);
+    const sdk=document.getElementById('fSdk').value;
+    if(sdk!=='all')vs=vs.filter(v=>v.repos.some(repo=>D.repos[repo]&&(D.repos[repo].sdk_version||'')==sdk));
+    if(q)vs=vs.filter(v=>v.id.toLowerCase().includes(q)||v.package.toLowerCase().includes(q));
     const ord={CRITICAL:0,HIGH:1};vs.sort((a,b)=>{let av,bv;if(sortCol==='severity'){av=ord[a.severity]||9;bv=ord[b.severity]||9;}else{av=(a[sortCol]||'').toString().toLowerCase();bv=(b[sortCol]||'').toString().toLowerCase();}
         return av<bv?(sortDir==='asc'?-1:1):av>bv?(sortDir==='asc'?1:-1):0;});return vs;
 }
@@ -275,6 +336,10 @@ function getFiltered(){
 function renderTable(){
     const repos=Object.keys(D.repos),sel=document.getElementById('fRepo'),cur=sel.value;
     sel.innerHTML=`<option value="all">All repos (${repos.length})</option>`;repos.forEach(r=>{const o=document.createElement('option');o.value=r;o.textContent=r.split('/').pop();if(r===cur)o.selected=true;sel.appendChild(o);});
+    // Populate SDK filter
+    const sdkSel=document.getElementById('fSdk'),curSdk=sdkSel.value;
+    const sdkVersions=[...new Set(repos.map(r=>D.repos[r].sdk_version||'unknown').filter(s=>s!=='unknown'))].sort();
+    sdkSel.innerHTML='<option value="all">All</option>';sdkVersions.forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent=s;if(s===curSdk)o.selected=true;sdkSel.appendChild(o);});
     const vs=getFiltered(),sr=document.getElementById('fRepo').value;
     document.getElementById('tblCount').textContent=vs.length+' vulnerabilities';const tb=document.getElementById('tbl');tb.innerHTML='';
     if(!vs.length){document.getElementById('empty').style.display='block';return;}document.getElementById('empty').style.display='none';
@@ -286,11 +351,12 @@ function renderTable(){
             <td><span class="badge b-${v.scanner}">${v.scanner}</span></td>
             <td><span class="badge b-${v.source_type==='base_image'?'base':'app'}">${v.source_type==='base_image'?'Base':'App'}</span></td>
             <td><span class="badge b-${status}">${status}</span></td>
-            <td>${v.repos.map(r=>'<span class="repo-tag">'+esc(r.split('/').pop())+'</span>').join(' ')}</td>
+            <td>${[...new Set(v.repos.map(r=>(D.repos[r]||{}).sdk_version||'?'))].map(s=>{const isV3=s.startsWith('3')||s.includes('v3');return'<span class="badge" style="'+(isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c')+'">'+esc(s)+'</span>';}).join(' ')}</td>
+            <td><div class="repos-cell">${v.repos.length<=3?v.repos.map(r=>'<span class="repo-tag">'+esc(r.split('/').pop())+'</span>').join(''):'<span class="repo-tag">'+esc(v.repos[0].split('/').pop())+'</span><span class="repo-tag">'+esc(v.repos[1].split('/').pop())+'</span><span class="repo-tag" style="background:#e0e2ff;color:#6366f1;cursor:default" title="'+v.repos.map(r=>r.split('/').pop()).join(', ')+'">+'+(v.repos.length-2)+' more</span>'}</div></td>
             <td>${v.fixed?esc(v.fixed):'<span style="color:#b0b3c6">None</span>'}</td>`;
         tb.appendChild(r);
         const dr=document.createElement('tr');dr.className='detail-row';dr.id='d'+i;
-        dr.innerHTML=`<td colspan="8"><div class="detail-grid">
+        dr.innerHTML=`<td colspan="9"><div class="detail-grid">
             <div class="detail-item"><label>Full ID</label><span><code>${esc(v.id)}</code></span></div>
             <div class="detail-item"><label>Installed</label><span>${esc(v.installed||'N/A')}</span></div>
             <div class="detail-item"><label>Fix Version</label><span>${esc(v.fixed||'No fix')}</span></div>
@@ -303,11 +369,115 @@ function renderTable(){
 }
 
 function toggle(i){document.getElementById('d'+i).classList.toggle('show');document.getElementById('d'+i).previousElementSibling.classList.toggle('expanded');}
-function clearFilters(){['fRepo','fSev','fStatus','fSource'].forEach(id=>document.getElementById(id).value='all');document.getElementById('fSearch').value='';renderTable();}
+function clearFilters(){['fRepo','fSev','fStatus','fSource','fSdk'].forEach(id=>document.getElementById(id).value='all');document.getElementById('fSearch').value='';renderTable();}
 document.querySelectorAll('th[data-s]').forEach(th=>th.addEventListener('click',()=>{const c=th.dataset.s;if(sortCol===c)sortDir=sortDir==='asc'?'desc':'asc';else{sortCol=c;sortDir='asc';}renderTable();}));
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active');}));
 document.querySelectorAll('.filters-bar select,.filters-bar input').forEach(el=>{el.addEventListener('change',renderTable);el.addEventListener('input',renderTable);});
-load();
+// Trend data
+let historyData={};
+
+async function loadHistory(){
+    try{
+        const mr=await fetch('repos.json');
+        if(!mr.ok)return;
+        const files=await mr.json();
+        for(const f of files){
+            const repo=f.replace('.json','').replace('atlanhq_','atlanhq/');
+            try{
+                const r=await fetch('history/'+f.replace('.json','.jsonl'));
+                if(r.ok){const txt=await r.text();historyData[repo]=txt.trim().split('\n').filter(l=>l).map(l=>JSON.parse(l));}
+            }catch(e){}
+        }
+    }catch(e){}
+    // If no history, generate from current data as day-0
+    if(!Object.keys(historyData).length){
+        Object.keys(D.repos).forEach(r=>{
+            const d=D.repos[r];
+            historyData[r]=[{date:new Date().toISOString().slice(0,10),repo:r,sdk_version:d.sdk_version||'unknown',total:d.total,critical:d.critical,high:d.high,base_image:d.base_image_count||0,app:d.app_count||0,allowlisted:d.allowlisted,new:d.new||0}];
+        });
+    }
+}
+
+function renderTrends(){
+    const days=parseInt(document.getElementById('fTrendDays').value);
+    const repoFilter=document.getElementById('fTrendRepo').value;
+    const metric=document.getElementById('fTrendMetric').value;
+    const colors={total:'#6366f1',new:'#ef4444',app:'#f97316',base_image:'#8b949e',allowlisted:'#22c55e',critical:'#ef4444'};
+
+    // Populate repo filter
+    const sel=document.getElementById('fTrendRepo'),cur=sel.value;
+    const repos=Object.keys(historyData);
+    sel.innerHTML='<option value="all">All repos</option>';
+    repos.forEach(r=>{const o=document.createElement('option');o.value=r;o.textContent=r.split('/').pop();if(r===cur)o.selected=true;sel.appendChild(o);});
+
+    // Get date range
+    const now=new Date();const cutoff=new Date(now);cutoff.setDate(cutoff.getDate()-days);
+    const cutoffStr=cutoff.toISOString().slice(0,10);
+
+    // Aggregate data by date
+    const dateMap={};
+    const filteredRepos=repoFilter==='all'?repos:[repoFilter];
+    filteredRepos.forEach(r=>{
+        (historyData[r]||[]).forEach(e=>{
+            if(e.date>=cutoffStr){
+                if(!dateMap[e.date])dateMap[e.date]={total:0,new:0,app:0,base_image:0,allowlisted:0,critical:0,repos:0};
+                dateMap[e.date].total+=e.total||0;
+                dateMap[e.date].new+=e.new||0;
+                dateMap[e.date].app+=e.app||0;
+                dateMap[e.date].base_image+=e.base_image||0;
+                dateMap[e.date].allowlisted+=e.allowlisted||0;
+                dateMap[e.date].critical+=e.critical||0;
+                dateMap[e.date].repos++;
+            }
+        });
+    });
+
+    const dates=Object.keys(dateMap).sort();
+    const values=dates.map(d=>dateMap[d][metric]||0);
+    const max=Math.max(...values,1);
+    const color=colors[metric]||'#6366f1';
+
+    // Render bar chart
+    if(!dates.length){
+        document.getElementById('trendChart').innerHTML='<div class="empty" style="padding:40px">No history data yet. Trends will appear after a few merges.</div>';
+    }else{
+        const bars=dates.map((d,i)=>{
+            const h=Math.max(4,Math.round((values[i]/max)*200));
+            return`<div class="trend-bar" style="height:${h}px;background:${color}"><div class="tip">${d}: ${values[i]}</div></div>`;
+        }).join('');
+        const labels=dates.map(d=>`<span>${d.slice(5)}</span>`).join('');
+        document.getElementById('trendChart').innerHTML=`<div class="trend-line">${bars}</div><div class="trend-labels">${labels}</div>`;
+    }
+
+    // Change summary
+    if(dates.length>=2){
+        const first=values[0],last=values[values.length-1];
+        const delta=last-first;
+        const cls=delta>0?'up':delta<0?'down':'flat';
+        const arrow=delta>0?'&#9650;':delta<0?'&#9660;':'&#8212;';
+        document.getElementById('trendSummary').innerHTML=`
+            <div class="trend-change"><span>${metric.replace('_',' ')}</span><span class="trend-delta ${cls}">${arrow} ${Math.abs(delta)} (${first} → ${last})</span></div>
+            <div class="trend-change"><span>Period</span><span style="color:#5c5f77">${dates[0]} → ${dates[dates.length-1]}</span></div>
+            <div class="trend-change"><span>Data points</span><span style="color:#5c5f77">${dates.length} days</span></div>`;
+    }else{
+        document.getElementById('trendSummary').innerHTML='<div class="empty" style="padding:20px">Need at least 2 data points for comparison.</div>';
+    }
+
+    // Per repo changes
+    const repoChanges=filteredRepos.map(r=>{
+        const entries=(historyData[r]||[]).filter(e=>e.date>=cutoffStr).sort((a,b)=>a.date.localeCompare(b.date));
+        if(entries.length<1)return null;
+        const first=entries[0],last=entries[entries.length-1];
+        const delta=(last[metric]||0)-(first[metric]||0);
+        const cls=delta>0?'up':delta<0?'down':'flat';
+        const arrow=delta>0?'&#9650;':delta<0?'&#9660;':'&#8212;';
+        return`<div class="trend-change"><span class="repo-tag">${r.split('/').pop()}</span><span style="color:#8c8fa3;font-size:11px">${last.sdk_version||'?'}</span><span class="trend-delta ${cls}" style="margin-left:auto">${arrow} ${Math.abs(delta)} (${first[metric]||0} → ${last[metric]||0})</span></div>`;
+    }).filter(Boolean).join('');
+    document.getElementById('trendRepoChanges').innerHTML=repoChanges||'<div class="empty" style="padding:20px">No data.</div>';
+}
+
+async function init(){await load();await loadHistory();renderTrends();}
+init();
 </script>
 </body>
 </html>

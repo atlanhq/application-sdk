@@ -131,14 +131,14 @@ class TestConvertDataFiles:
     @pytest.mark.asyncio
     @patch("application_sdk.common.file_converter.file_converter_registry")
     async def test_converter_not_found_error(self, mock_registry):
-        """Test that when converter function is None, AttributeError is raised."""
+        """Test that when converter function is None, ValueError is raised."""
         # Arrange - registry returns None for unknown converter
         mock_registry.registry.get.return_value = None
 
         input_files = ["/path/input.json"]
 
-        # Act & Assert - This should raise AttributeError when trying to call None
-        with pytest.raises(TypeError):  # calling None() raises TypeError
+        # Act & Assert - Should raise ValueError with descriptive message
+        with pytest.raises(ValueError, match="No converter found"):
             await convert_data_files(input_files, FileType.PARQUET)
 
     @pytest.mark.asyncio
