@@ -352,8 +352,13 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           TENANTS: ${{ inputs.tenants }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          GITHUB_ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
+
+          # Resolve triggering actor to email; fall back to GitHub username
+          GH_EMAIL=$(gh api "users/${GITHUB_ACTOR}" --jq '.email // empty' 2>/dev/null || true)
+          CREATED_BY="${GH_EMAIL:-${GITHUB_ACTOR}}"
 
           # Build JSON payload matching the CLI's registerInMarketplace format
           BODY=$(python3 - <<'PYEOF'
@@ -387,6 +392,10 @@ jobs:
               body["allowed_tenants"] = [t.strip() for t in tenants.split(",") if t.strip()]
           else:
               body["target_channel"] = os.environ.get("CHANNEL", "all") or "all"
+
+          created_by = os.environ.get("CREATED_BY", "").strip()
+          if created_by:
+              body["created_by"] = created_by
 
           print(json.dumps(body))
           PYEOF
