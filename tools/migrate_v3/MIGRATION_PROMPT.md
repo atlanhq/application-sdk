@@ -754,7 +754,7 @@ class TestMyConnector(BaseTest):
 ```python
 # TODO(upgrade-v3): human must validate this test is equivalent to the original
 import pytest
-from application_sdk.testing.e2e import AppConfig, AppDeployer, run_workflow, wait_for_workflow
+from application_sdk.testing.e2e import AppConfig, run_workflow, wait_for_workflow
 
 @pytest.fixture(scope="session")
 def app_config() -> AppConfig:
@@ -765,26 +765,18 @@ def app_config() -> AppConfig:
         image="ghcr.io/atlanhq/my-connector:latest",
     )
 
-@pytest.fixture(scope="session")
-async def deployed_app(app_config: AppConfig):
-    deployer = AppDeployer(app_config)
-    await deployer.deploy()
-    yield deployer
-    await deployer.undeploy()
-
-async def test_metadata_extraction(deployed_app: AppDeployer) -> None:
-    cfg = deployed_app.config
+async def test_metadata_extraction(app_config: AppConfig) -> None:
     workflow_id = await run_workflow(
-        namespace=cfg.namespace,
-        service=cfg.app_name,
-        port=cfg.handler_port,
+        namespace=app_config.namespace,
+        service=app_config.app_name,
+        port=app_config.handler_port,
         workflow_name="metadata_extraction",
         payload={"connection_id": "test-connection"},
     )
     result = await wait_for_workflow(
-        namespace=cfg.namespace,
-        service=cfg.app_name,
-        port=cfg.handler_port,
+        namespace=app_config.namespace,
+        service=app_config.app_name,
+        port=app_config.handler_port,
         workflow_id=workflow_id,
         timeout=300.0,
     )
@@ -795,12 +787,12 @@ async def test_metadata_extraction(deployed_app: AppDeployer) -> None:
 
 | v2 | v3 |
 |----|----|
-| `BaseTest` class | `AppConfig` + `AppDeployer` fixtures |
+| `BaseTest` class | `AppConfig` fixtures |
 | `self.run_workflow(name, payload)` | `run_workflow(namespace, service, port, name, payload)` |
 | Built-in wait/poll | `wait_for_workflow(namespace, service, port, workflow_id, timeout)` |
 | `self.default_payload()` | Explicit `payload` dict — extract values from the v2 method body |
 | `self.check_health()` / health-check step | `kube_http_call(namespace, service, port, "/healthz")` or skip if not applicable |
-| Ordered `test_*` methods in a class | Independent top-level `async def test_xxx(deployed_app)` functions |
+| Ordered `test_*` methods in a class | Independent top-level `async def test_xxx(app_config)` functions |
 | `assert result['authenticationCheck']` | `assert result.status == AuthStatus.SUCCESS` (update field names) |
 | `assert result['hostCheck']` | `assert result.status == PreflightStatus.READY` (update field names) |
 | `result['metadata']` hierarchical list | `result.fields` flat list — response shape changed |

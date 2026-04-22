@@ -108,7 +108,7 @@ With sidecar approach: 50+ pods minimum (can't scale to zero).
 - Consistent environment variable naming across all apps
 
 **Negative:**
-- Two deployments per app increases manifest complexity (mitigated by the `helm/atlan-app/` chart)
+- Two deployments per app increases manifest complexity (mitigated by platform deployment tooling)
 
 ## Implementation
 
