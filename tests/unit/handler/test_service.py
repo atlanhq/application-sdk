@@ -85,6 +85,23 @@ class _FailingHandler(Handler):
         raise HandlerError("metadata failed")
 
 
+class _CapturingPreflightHandler(Handler):
+    """Handler that records the PreflightInput credentials it received."""
+
+    def __init__(self) -> None:
+        self.received_credentials: list[tuple[str, str]] = []
+
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.SUCCESS)
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        self.received_credentials = [(c.key, c.value) for c in input.credentials]
+        return PreflightOutput(status=PreflightStatus.READY)
+
+    async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
 # ---------------------------------------------------------------------------
 # Module-level contract types for routing tests
 # (locally-defined dataclasses fail get_type_hints() when
@@ -214,6 +231,74 @@ class TestPreflightEndpoint:
             json={"credentials": []},
         )
         assert response.status_code == 500
+
+    def test_preflight_resolves_credential_guid_via_vault(self) -> None:
+        """credential_guid (no inline credentials) is resolved via the vault."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_vault = MagicMock()
+        mock_vault.get_credentials = AsyncMock(
+            return_value={
+                "host": "h.example.com",
+                "authType": "basic",
+                "extra": {"db": "prod"},
+            }
+        )
+        mock_dapr_client = MagicMock()
+        mock_dapr_client.close = AsyncMock()
+
+        handler = _CapturingPreflightHandler()
+        with (
+            patch(
+                "application_sdk.infrastructure.DaprCredentialVault",
+                return_value=mock_vault,
+            ),
+            patch(
+                "application_sdk.infrastructure.AsyncDaprClient",
+                return_value=mock_dapr_client,
+            ),
+        ):
+            client = _make_client(handler=handler)
+            response = client.post(
+                "/workflows/v1/check",
+                json={"credential_guid": "the-guid"},
+            )
+
+        assert response.status_code == 200
+        mock_vault.get_credentials.assert_awaited_once_with("the-guid")
+        received_keys = {k for k, _ in handler.received_credentials}
+        assert {"host", "authType", "extra.db"} <= received_keys
+
+    def test_preflight_inline_credentials_skip_vault(self) -> None:
+        """Inline credentials win over credential_guid — vault is not touched."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_vault = MagicMock()
+        mock_vault.get_credentials = AsyncMock(return_value={})
+        mock_dapr_client = MagicMock()
+        mock_dapr_client.close = AsyncMock()
+
+        with (
+            patch(
+                "application_sdk.infrastructure.DaprCredentialVault",
+                return_value=mock_vault,
+            ),
+            patch(
+                "application_sdk.infrastructure.AsyncDaprClient",
+                return_value=mock_dapr_client,
+            ),
+        ):
+            client = _make_client()
+            response = client.post(
+                "/workflows/v1/check",
+                json={
+                    "credentials": [{"key": "host", "value": "inline.example"}],
+                    "credential_guid": "ignored",
+                },
+            )
+
+        assert response.status_code == 200
+        mock_vault.get_credentials.assert_not_awaited()
 
 
 class TestMetadataEndpoint:
