@@ -312,6 +312,11 @@ jobs:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
 
+      - name: One-time history reset (remove after 2026-04-23)
+        run: |
+          aws s3 rm "s3://kryptonite-store/${{ inputs.dashboard_path }}/history/" --recursive 2>/dev/null || true
+          echo "History reset complete"
+
       - name: Deploy to Kryptonite
         env:
           REPO_SLUG: ${{ github.repository }}
