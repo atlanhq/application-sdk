@@ -86,7 +86,7 @@ jobs:
             core.setOutput('commenter', commenter);
             core.setOutput('pr_number', String(prNumber));
 
-      - name: React to comment
+      - name: React to comment + ensure labels exist
         uses: actions/github-script@v7
         with:
           script: |
@@ -96,6 +96,22 @@ jobs:
               comment_id: context.payload.comment.id,
               content: 'eyes',
             });
+
+            // Ensure SDK review labels exist (idempotent, --force updates if exists)
+            const labels = [
+              { name: 'sdk-review-approved', color: '0e8a16', description: 'PR passed SDK review' },
+              { name: 'needs-human-review', color: 'd93f0b', description: 'SDK review needs human decision' },
+              { name: 'needs-rebase', color: 'e4e669', description: 'PR has conflicts needing manual rebase' },
+              { name: 'auto-merge', color: '1d76db', description: 'Auto-merge when approved + CI passes' },
+              { name: 'sdk-review-stopped', color: '586069', description: 'SDK review cancelled by author' },
+            ];
+            for (const l of labels) {
+              try {
+                await github.rest.issues.createLabel({ owner: context.repo.owner, repo: context.repo.repo, ...l });
+              } catch (e) {
+                if (e.status !== 422) throw e; // 422 = already exists, fine
+              }
+            }
 
       - name: Connect to VPN
         id: vpn
